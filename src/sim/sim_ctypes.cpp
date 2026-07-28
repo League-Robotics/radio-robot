@@ -38,7 +38,9 @@
 //
 // ---- Command injection ----
 //   void sim_inject_twist(SimHandle h, float v_x, float omega, float duration, uint32_t corr);
-//   void sim_inject_stop(SimHandle h, uint32_t corr);
+//   void sim_inject_stop(SimHandle h, uint32_t corr);   // sends ESTOP -- see below
+//   void sim_inject_wheels(SimHandle h, float vLeft, float vRight,
+//                          float duration, uint32_t corr);
 //   void sim_inject_command(SimHandle h, const char* frame, int len);
 //     Raw, non-actuation escape hatch -- pushes ANY already-`<COMMAND>':'
 //     <COBS+CRC bytes>`-framed wire line (124-005; was a bare COBS+CRC frame
@@ -267,30 +269,31 @@ const char* sim_firmware_version() { return FIRMWARE_VERSION_STR; }
 // per-instance state).
 int sim_cycle_dt_us() { return static_cast<int>(TestSim::SimHarness::kCycleDtUs); }
 
-// Commanded per-wheel velocity (the velocity-PID SETPOINT) read DIRECTLY from
-// the firmware's live NezhaMotor -- Path B (2026-07-17). cmd_vel is NOT on
-// the wire at all (it never made it off TelemetrySecondary before that
-// message was deleted outright, 124-009 -- see Types::RobotState::Wheel::
-// cmdVelocity's own doc comment for the current, unwired state). The sim can
-// see this normally-invisible inner-loop command at full rate, which is
-// exactly what TestGUI's "commanded vs actual" wheel-speed graph plots.
-// Signed [mm/s].
-float sim_cmd_vel_left(SimHandle h) { return asHarness(h)->motorLeft().velocityTarget(); }
-float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->motorRight().velocityTarget(); }
+// Commanded per-wheel velocity (the interim PID SETPOINT App::Drive stages
+// -- 125-003: read from Drive's own driveTargetVelLeft/Right() accessor now,
+// NOT Devices::Motor::velocityTarget(), which is deleted -- the velocity
+// PID moved off NezhaMotor entirely, see drive.h's own header). cmd_vel is
+// NOT on the wire at all (it never made it off TelemetrySecondary before
+// that message was deleted outright, 124-009 -- see Types::RobotState::
+// Wheel::cmdVelocity's own doc comment for the current, unwired state). The
+// sim can see this normally-invisible inner-loop command at full rate,
+// which is exactly what TestGUI's "commanded vs actual" wheel-speed graph
+// plots. Signed [mm/s].
+float sim_cmd_vel_left(SimHandle h) { return asHarness(h)->driveTargetVelLeft(); }
+float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->driveTargetVelRight(); }
 
-// Velocity-PID enable/disable on BOTH live NezhaMotors (stakeholder
-// 2026-07-18, TestGUI "PID" checkbox next to the Test buttons) -- thin
-// call-through to Devices::NezhaMotor::setPidEnabled(), the same sim-only
-// direct-firmware-object surface as sim_cmd_vel_left/right() above (no wire
-// arm exists for PID enable; DEV-family bench verbs are text-plane only).
-// With PID off, a setVelocity()-staged command drives OPEN-LOOP: duty =
-// Gains::kff [duty per mm/s] * velocityTarget_ with every feedback term
-// bypassed (nezha_motor.cpp tick() step 4) -- Drive-driven motion
-// (twist/Move) keeps moving at the feedforward-nominal speed, uncorrected.
-void sim_set_pid_enabled(SimHandle h, int enabled) {
-  asHarness(h)->motorLeft().setPidEnabled(enabled != 0);
-  asHarness(h)->motorRight().setPidEnabled(enabled != 0);
-}
+// Velocity-PID enable/disable (stakeholder 2026-07-18, TestGUI "PID"
+// checkbox next to the Test buttons) -- 125-003: NOW A NO-OP. The velocity
+// PID this used to toggle on/off (Devices::NezhaMotor::setPidEnabled()) no
+// longer exists on the Motor interface at all (Decision 2, sprint.md --
+// PID is a control decision, not hardware protection, and relocated to
+// Motion::WheelVelocityPid). This C ABI export is kept (not deleted) purely
+// so host/robot_radio/io/sim_loop.py's ctypes symbol lookup at import time
+// does not break -- it has no effect on firmware behavior until a later
+// ticket exposes an equivalent enable/disable on whatever surface actually
+// owns the relocated PID (App::Drive's own interim instances this sprint,
+// Motion::MoveQueue's eventually).
+void sim_set_pid_enabled(SimHandle, int) {}
 
 // ---- Stepping ----
 
@@ -319,7 +322,23 @@ void sim_inject_twist(SimHandle h, float v_x, float omega, float duration, uint3
                             /*id=*/corr, corr);
 }
 
-void sim_inject_stop(SimHandle h, uint32_t corr) { asHarness(h)->injectStop(corr); }
+// sim_inject_stop -- retargeted at ESTOP (command-ingestion-ring-buffered-
+// comms-subsystem-routing-two-stops.md §2). The export's NAME and SIGNATURE
+// are unchanged, so sim_loop.py's own ctypes binding and every caller of
+// SimLoop.stop() keep working, but the WIRE COMMAND it sends is now ESTOP,
+// not STOP. That is the behavior-preserving choice, not a change of intent:
+// every existing caller of this entry point means "halt the drivetrain
+// now," which is exactly what ESTOP still does and what STOP no longer
+// does (STOP is now a planned, queued stop). A caller that genuinely wants
+// the planned stop builds it through sim_inject_command().
+void sim_inject_stop(SimHandle h, uint32_t corr) { asHarness(h)->injectEstop(corr); }
+
+// sim_inject_wheels -- the dumb teleop primitive (§2), straight to
+// App::Drive. `corr` doubles as the envelope corr_id and the command's own
+// completion id, matching sim_inject_twist()'s established convention here.
+void sim_inject_wheels(SimHandle h, float vLeft, float vRight, float duration, uint32_t corr) {
+  asHarness(h)->injectWheels(vLeft, vRight, duration, /*id=*/corr, corr);
+}
 
 void sim_inject_command(SimHandle h, const char* armoredLine, int len) {
   asHarness(h)->injectCommand(armoredLine, static_cast<size_t>(len));
@@ -438,27 +457,28 @@ void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm) {
 // header.
 
 // port: 1 = left, 2 = right. Starts from the motor's FULL live config
-// (NezhaMotor::config()) and overwrites ONLY port/velFiltAlpha/fwdSign --
-// the fields this Tier-2 surface owns -- before the configureMotor()
-// round trip. This function's original velGains-only merge (built on a
-// blank MotorConfig{}) predates 114-001 Revision 1, which made
-// MotorArmor::reconfigure() forward the WHOLE config to the wrapped
-// NezhaMotor: from that revision on, every un-merged field
-// (wheelTravelCalib/slewRate/outputDeadband/velDeadband/reversalDwell)
-// was silently zeroed by this call, killing the encoder mm decode
-// (nezha_motor.cpp gates position on wheelTravelCalib != 0) whenever
-// Tier 2 landed AFTER a Tier-1 ConfigDelta push -- the exact 2026-07-22
-// TestGUI-Sim wheels-never-move regression (exposed, not caused, by the
-// same-day set_config fire-and-poll fix that made Tier 1 complete BEFORE
-// Tier 2 for the first time). Full-config merge restores this function's
-// own documented "cannot clobber what Tier 1 already pushed" contract for
-// EVERY field, not just velGains.
-void sim_configure_motor(SimHandle h, int port, float velFiltAlpha, int fwdSign) {
+// (NezhaMotor::config()) and overwrites ONLY port/fwdSign -- the fields
+// this Tier-2 surface owns -- before the configureMotor() round trip. This
+// function's original velGains-only merge (built on a blank
+// MotorConfig{}) predates 114-001 Revision 1, which made MotorArmor::
+// reconfigure() forward the WHOLE config to the wrapped NezhaMotor: from
+// that revision on, every un-merged field (wheelTravelCalib/slewRate/
+// outputDeadband/reversalDwell) was silently zeroed by this call, killing
+// the encoder mm decode (nezha_motor.cpp gates position on
+// wheelTravelCalib != 0) whenever Tier 2 landed AFTER a Tier-1 ConfigDelta
+// push. Full-config merge preserves this function's own documented "cannot
+// clobber what Tier 1 already pushed" contract.
+//
+// `velFiltAlpha` (the parameter, kept for C ABI/ctypes-argtypes
+// compatibility with host/robot_radio/io/sim_loop.py) is now UNUSED --
+// 125-003 deleted Devices::MotorConfig::velFiltAlpha along with the EMA
+// velocity estimator it fed (pending ticket 004's App::WheelObserver,
+// which will need its own config surface for whatever replaces it).
+void sim_configure_motor(SimHandle h, int port, float /*velFiltAlpha*/, int fwdSign) {
   TestSim::SimHarness* harness = asHarness(h);
   Devices::NezhaMotor& motor = (port == 2) ? harness->motorRight() : harness->motorLeft();
   Devices::MotorConfig cfg = motor.config();  // full live config -- merge, don't clobber
   cfg.port = static_cast<uint32_t>(port);
-  cfg.velFiltAlpha = velFiltAlpha;
   cfg.fwdSign = fwdSign;
   harness->configureMotor(static_cast<uint32_t>(port), cfg);
 }
@@ -475,9 +495,12 @@ void sim_configure_motor(SimHandle h, int port, float velFiltAlpha, int fwdSign)
 // plannerConfig() no longer exists.
 
 // port: 1 = left, 2 = right (same convention as sim_configure_motor() above).
+// `*velFiltAlpha` (parameter kept for C ABI compatibility, see
+// sim_configure_motor()'s own comment) always reads back 0.0f -- there is
+// no live Devices::MotorConfig::velFiltAlpha field left to report.
 void sim_read_motor_config(SimHandle h, int port, float* velFiltAlpha, int* fwdSign) {
   const Devices::MotorConfig& cfg = asHarness(h)->motorConfig(static_cast<uint32_t>(port));
-  *velFiltAlpha = cfg.velFiltAlpha;
+  *velFiltAlpha = 0.0f;
   *fwdSign = cfg.fwdSign;
 }
 

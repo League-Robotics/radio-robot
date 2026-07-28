@@ -456,6 +456,63 @@ def shaper_config_for_config(cfg: dict):
             float(j_max), float(yaw_jerk_max))
 
 
+def wheel_correction_for_config(cfg: dict):
+    """Return the 8 commanded->actual correction values in the order
+    (gain, intercept) x (left, right) x (accel, decel) for
+    Config::DriveBootConfig.
+
+    measured = gain*commanded + intercept, per wheel per direction of
+    approach, from docs/design/wheel-speed-command-mapping.md. App::Drive
+    inverts it to seed the feedforward: command = (desired-intercept)/gain.
+
+    The correction is defined RELATIVE to the duty_per_speed constant it was
+    measured against, so both must come from the same characterization run.
+    gain 1 / intercept 0 is the identity (an uncalibrated robot); a gain of
+    0 or less is meaningless and aborts.
+
+    All REQUIRED -- same fail-closed posture as every other baked field."""
+    out = []
+    for wheel in ("left", "right"):
+        for direction in ("accel", "decel"):
+            gain = float(_require(cfg, "control", f"wheel_gain_{wheel}_{direction}"))
+            icpt = float(_require(cfg, "control", f"wheel_intercept_{wheel}_{direction}"))
+            if gain <= 0.0:
+                raise SystemExit(
+                    f"control.wheel_gain_{wheel}_{direction} must be > 0 (got {gain})")
+            out.append((gain, icpt))
+    return out
+
+
+def drive_config_for_config(cfg: dict):
+    """Return (duty_per_speed_left, duty_per_speed_right, crawl_pulse) for
+    Config::DriveBootConfig (command-ingestion-ring-buffered-comms-
+    subsystem-routing-two-stops.md §6) -- App::Drive's open-loop wheel
+    calibration and its crawl-shaper amplitude.
+
+    These were HARD-CODED in C++ before this change: the duty-per-speed pair
+    as member initializers on App::Drive itself, the crawl amplitude as a
+    bare setCrawlPulse() call in main.cpp. That made one robot's gearboxes,
+    on one battery, measured on one evening, the compiled-in default every
+    other robot silently inherited -- and changing it meant editing a class
+    definition and reflashing. The `kff` wire key was not an escape hatch
+    either: it sets BOTH wheels to one value, so a single config push
+    flattens the measured ~10% L/R asymmetry with no way to restore it short
+    of a rebuild.
+
+    All three REQUIRED, same fail-closed posture as every other field this
+    generator bakes: a robot JSON missing any of them fails codegen loudly
+    rather than shipping a boot image whose wheel calibration came from a
+    different robot. App::Drive itself now carries NO calibration defaults
+    at all -- an unconfigured Drive refuses to drive (drive.h), the same
+    posture RobotLoop's `configured_` gate already takes for motion
+    commands.
+    """
+    duty_left = _require(cfg, "control", "duty_per_speed_left")
+    duty_right = _require(cfg, "control", "duty_per_speed_right")
+    crawl = _require(cfg, "control", "crawl_pulse")
+    return (float(duty_left), float(duty_right), float(crawl))
+
+
 def profile_name_for_source(source_path: str) -> str:
     """The calibration-profile identifier `ID:` reports (sprint 124
     architecture Decision 4): the active robot JSON's own filename stem
@@ -503,6 +560,9 @@ def generate(cfg: dict, source_path: str) -> str:
          estimator_staleness) = estimator_config_for_config(cfg)
         (shaper_a_max, shaper_a_decel, shaper_alpha_max, shaper_alpha_decel,
          shaper_j_max, shaper_yaw_jerk_max) = shaper_config_for_config(cfg)
+        (drive_duty_per_speed_left, drive_duty_per_speed_right,
+         drive_crawl_pulse) = drive_config_for_config(cfg)
+        wheel_corr = wheel_correction_for_config(cfg)
     except MissingRobotConfigKeyError as e:
         raise e.with_source(source_path) from e
 
@@ -662,6 +722,33 @@ ShaperBootConfig defaultShaperConfig() {{
     cfg.alphaDecel = {_f(shaper_alpha_decel)};       // [rad/s^2]
     cfg.jMax = {_f(shaper_j_max)};                   // [mm/s^3]
     cfg.yawJerkMax = {_f(shaper_yaw_jerk_max)};      // [rad/s^3]
+    return cfg;
+}}
+
+DriveBootConfig defaultDriveConfig() {{
+    // command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
+    // §6 -- fail-closed baked from the robot JSON's
+    // control.duty_per_speed_left/duty_per_speed_right/crawl_pulse
+    // (data/robots/robot_config.schema.json). These were hard-coded in C++
+    // before that change (the duty pair as App::Drive member initializers,
+    // the crawl amplitude as a bare main.cpp setCrawlPulse() call); see
+    // gen_boot_config.py's drive_config_for_config() for why that was
+    // wrong. NOT a live SET/wire surface itself -- the `kff` CONFIG key
+    // still retargets the duty scale at runtime, but it sets BOTH wheels
+    // to one value, which is exactly why the per-wheel split has to be
+    // baked here rather than left to it.
+    DriveBootConfig cfg;
+    cfg.dutyPerSpeedLeft = {_f(drive_duty_per_speed_left)};    // [duty/(mm/s)]
+    cfg.dutyPerSpeedRight = {_f(drive_duty_per_speed_right)};  // [duty/(mm/s)]
+    cfg.crawlPulse = {_f(drive_crawl_pulse)};                  // [-1,1]; 0 = off
+    cfg.gainLeftAccel = {_f(wheel_corr[0][0])};
+    cfg.interceptLeftAccel = {_f(wheel_corr[0][1])};   // [mm/s]
+    cfg.gainLeftDecel = {_f(wheel_corr[1][0])};
+    cfg.interceptLeftDecel = {_f(wheel_corr[1][1])};   // [mm/s]
+    cfg.gainRightAccel = {_f(wheel_corr[2][0])};
+    cfg.interceptRightAccel = {_f(wheel_corr[2][1])};   // [mm/s]
+    cfg.gainRightDecel = {_f(wheel_corr[3][0])};
+    cfg.interceptRightDecel = {_f(wheel_corr[3][1])};   // [mm/s]
     return cfg;
 }}
 

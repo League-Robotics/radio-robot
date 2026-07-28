@@ -19,8 +19,10 @@ add_compile_options(-Wall -Wextra)
 
 add_library(planner STATIC
   profile.cpp
+  shape.cpp
   estimation.cpp
   wheel_pid.cpp
+  wheel_trim.cpp
   planner.cpp
 )
 # Two include roots: this tree, and src/firm for the ONE sanctioned shared
@@ -36,9 +38,9 @@ add_library(motionplanner SHARED capi.cpp)
 target_link_libraries(motionplanner PRIVATE planner)
 
 enable_testing()
-set(PLANNER_TESTS profile_test estimation_test planner_scenarios_test
-                  planner_noise_test wheel_pid_test
-                  planner_duty_scenarios_test)
+set(PLANNER_TESTS profile_test shape_test estimation_test
+                  planner_scenarios_test planner_noise_test ratio_lock_test
+                  wheel_trim_test wheel_pid_test planner_duty_scenarios_test)
 foreach(test_name IN LISTS PLANNER_TESTS)
   add_executable(${test_name} tests/${test_name}.cpp)
   target_link_libraries(${test_name} PRIVATE planner)

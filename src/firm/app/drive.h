@@ -1,44 +1,37 @@
-// drive.h -- App::Drive: the base's wheel-target sink. Stages a commanded
-// per-wheel target and applies it onto the two Devices::NezhaMotor leaves.
-// Implements Motion::WheelSink (motion/wheel_sink.h) so Motion::MoveQueue
-// can command it through that boundary interface rather than by concrete
-// type.
+// drive.h -- App::Drive: the wheel-drive subsystem and the owner of the
+// WHEELS command's whole lifecycle. Two responsibilities, and only two:
 //
-// Boundary: inside -- staging vL/vR onto the two NezhaMotor leaves' own
-// setVelocity() setter; outside -- the kinematics math (122-002: the twist
-// decomposition -- BodyKinematics::inverse() -- moved to Motion::MoveQueue,
-// which now calls the sink's setDuty() directly with already-decomposed
-// wheel targets; Drive never sees a twist) and the deadman decision (the
-// loop calls Drive::stop(); Drive never polls Deadman).
+//   1. The bounded wheel command (command-ingestion-ring-buffered-comms-
+//      subsystem-routing-two-stops.md §4). `WHEELS` is the dumb teleop
+//      primitive -- a per-wheel velocity pair held for a fixed duration --
+//      and Drive owns its targets, its deadline, and its completion event.
+//      Before this change those four pieces of state lived as loose members
+//      on App::RobotLoop and were overwritten in place by each arriving
+//      command, so a superseded command never completed and never acked.
+//   2. Actuation: commanded wheel SPEED -> motor duty, via the per-wheel
+//      open-loop calibration and the crawl shaper, then the leaf writes.
 //
-// 125-002 (RETOOL, PLACEHOLDER): Motion::WheelSink's boundary changed from
-// a velocity sink to a duty sink (setWheels(v_left, v_right) ->
-// setDuty(left, right)) -- a pure type/interface rename, no real duty
-// semantics land here yet. setDuty() below is a placeholder pass-through
-// (still stages whatever it is given, unclamped, exactly as setWheels()
-// did) so the tree keeps compiling AND behaving identically -- the real
-// implementation (the |duty|<=1/NaN->0 plausibility clamp, the
-// App::WheelObserver pair, motor-ownership reshuffle) is ticket 007. Until
-// then, callers still hand this method raw mm/s velocity values under the
-// new duty-shaped name; that mismatch is deliberate and documented, not a
-// silent lie -- ticket 006 is what starts actually passing real duty.
+// There is no controller here -- duty is open loop from calibrated speed.
+// Closed-loop wheel control lives in Motion::Planner's own duty stage.
 //
-// Drive is a PURE velocity follower (115-005, gut S1; 122-002 narrows it
-// further): setDuty()/stop() only STAGE a target; tick() stages the last
-// setDuty() target onto the leaves via setVelocity() -- it never calls
-// NezhaMotor::tick() itself, and it never touches the bus or sleeps, so the
-// loop can call it from anywhere in its own schedule.
+// Two-method contract, adopted from Motion::Planner (planner.h) so the two
+// motion deciders read the same way at their call sites:
+//   tick(speedLeft, speedRight)      -- DO THE WORK: shape and write duty.
+//   update(Types::RobotState&, now)  -- SAVE results into the blackboard:
+//                                       expire the armed command and
+//                                       publish this subsystem's targets,
+//                                       but only while Drive OWNS motion.
 //
-// fwdSign/port convention: each NezhaMotor leaf applies its OWN
-// config_.fwdSign correction internally, at both the encoder-decode and
-// duty-write boundary (nezha_motor.cpp's collectEncoder()/writeRawDuty()).
-// Drive therefore works entirely in logical "positive = forward"
-// body-relative mm/s and never touches fwdSign or the port-to-side
-// mapping itself -- which NezhaMotor instance is "left" vs "right" is
-// main.cpp's own construction-time wiring.
+// Exactly one subsystem owns motion at a time; that exclusivity is enforced
+// at routing (App::RobotLoop::routeCommand -- a WHEELS command clears the
+// planner, a MOVE clears Drive's armed command), and `owns()` below is how
+// the loop reads which one it currently is.
 #pragma once
 
+#include <cstdint>
+
 #include "devices/motor.h"
+#include "firm/types/robot_state.h"
 #include "motion/wheel_sink.h"
 
 namespace App {
@@ -46,60 +39,154 @@ namespace App {
 class Drive : public Motion::WheelSink {
  public:
   // left/right -- the two drive-wheel NezhaMotor leaves, in BodyKinematics'
-  // own L/R convention (Motion::MoveQueue's own inverse()-derived vL/vR
-  // order). trackWidth -- [mm], BodyKinematics::inverse()/forward()'s own
-  // `b` parameter -- Drive no longer uses it for its own kinematics (122-002
-  // moved that math to Motion::MoveQueue), but keeps holding/exposing it via
-  // trackWidth() below, since App::RobotLoop::updateTlm() still needs the
-  // SAME value to fuse the two leaves' measured velocities for telemetry
-  // (BodyKinematics::forward()), and Drive is where that value has always
-  // been constructed.
+  // own L/R convention. trackWidth -- [mm], BodyKinematics::inverse()/
+  // forward()'s own `b` parameter: Drive does no kinematics of its own, but
+  // holds and exposes this value because RobotLoop::publishPose() needs the
+  // SAME number to fuse the two leaves' measured velocities into the
+  // telemetry twist, and Drive is where it has always been constructed.
   Drive(Devices::Motor& left, Devices::Motor& right, float trackWidth);
 
-  // Stages left/right directly -- the ONE staging path left on Drive
-  // (122-002: the twist path, setTwist()/BodyKinematics::inverse(), moved to
-  // Motion::MoveQueue, which now calls this method with already-decomposed
-  // wheel targets instead). Does not itself reach into the leaves -- tick()
-  // is the only method that ever calls setVelocity(). 125-002 PLACEHOLDER:
-  // renamed from setWheels() (Motion::WheelSink's own retool) but still a
-  // straight pass-through stage, unclamped -- see this file's own header
-  // for why, and ticket 007 for the real duty implementation.
-  void setDuty(float left, float right) override;  // [-1,1] [-1,1] (placeholder: unclamped)
+  // Install this robot's own wheel calibration
+  // (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
+  // §6). Drive carries NO calibration defaults, so this MUST be called --
+  // by the composition root, from Config::defaultDriveConfig() -- before
+  // any motion is commanded; until it is, tick() writes nothing (see
+  // calibrated() below). dutyPerSpeed* is the inverse of the measured plant
+  // gain: duty = speed * dutyPerSpeed, per wheel because the two gearboxes
+  // genuinely differ ~10%.
+  void setDutyPerSpeed(float left, float right) {  // [duty/(mm/s)] x2
+    dutyPerSpeedLeft_ = left;
+    dutyPerSpeedRight_ = right;
+    calibrated_ = left != 0.0f && right != 0.0f;
+  }
 
-  // Stages a zero target. The next tick() call stages exactly 0 onto both
-  // leaves.
-  void stop() override;
+  // Commanded->actual correction, per wheel per direction of approach
+  // (docs/design/wheel-speed-command-mapping.md). Drive inverts the measured
+  // line to seed the feedforward. gain 1 / intercept 0 = no correction.
+  void setWheelCorrection(float gainLeftAccel, float interceptLeftAccel,
+                          float gainLeftDecel, float interceptLeftDecel,
+                          float gainRightAccel, float interceptRightAccel,
+                          float gainRightDecel, float interceptRightDecel);
 
-  // Stages the last setDuty()/stop() target onto the two leaves via their
-  // own setVelocity(). Bounded: two setVelocity() calls, no I2C traffic, no
-  // sleeps.
-  void tick();
+  // Crawl-mode pulse amplitude; 0 disables (per-robot breakaway property,
+  // and the shipped default -- see Config::DriveBootConfig's own doc
+  // comment for why 0.20 was wrong).
+  void setCrawlPulse(float crawlPulse) { crawlPulse_ = crawlPulse; }
 
-  // trackWidth -- read-only accessor (109-009: RobotLoop::updateTlm() needs
-  // it to fuse the two leaves' measured velocities into the primary frame's
-  // `twist` field via BodyKinematics::forward() -- see that method's own
-  // call site). No setter: trackWidth_ is fixed at construction, matching
-  // Drive's own "no live-reconfigure" contract.
+  // False until setDutyPerSpeed() has landed a real (nonzero) pair. An
+  // uncalibrated Drive REFUSES to drive: tick() writes no duty at all,
+  // rather than quietly running this robot's wheels on some other robot's
+  // numbers. Same fail-closed posture RobotLoop's own `configured_` gate
+  // already takes for motion commands.
+  bool calibrated() const { return calibrated_; }
+
+  // --- The WHEELS command lifecycle ---
+
+  // Arm a bounded wheel command: velocity targets + an expiry deadline +
+  // the id acked on completion (takeCompletion()). `duration` is REQUIRED
+  // and positive -- a wheel command is always time-bounded, so a dead host
+  // can never mean a runaway. Supersedes any command already armed; the
+  // superseded one does NOT emit a completion event (the caller that
+  // replaced it already knows, and RobotLoop acked its arrival).
+  void command(float vLeft, float vRight, float duration, uint32_t moveId,
+               uint32_t now);  // [mm/s] [mm/s] [ms] -- now [ms]
+
+  // Halt now: zero the targets, disarm, and emit NO completion ack for the
+  // discarded command (the ESTOP path -- the host asked for a stop, not for
+  // a report that the thing it cancelled finished). Also the takeover path
+  // RobotLoop uses when a MOVE hands motion to the planner.
+  void estop();
+
+  // True while an armed command is running -- i.e. while Drive, not the
+  // planner, owns motion.
+  bool owns() const { return commandActive_; }
+
+  // One-shot completion event for a command that reached its deadline; the
+  // loop acks it. False (and *moveId untouched) when there is none pending.
+  bool takeCompletion(uint32_t* moveId);
+
+  // --- The two-method contract ---
+
+  // Convert the commanded wheel speeds to duty (per-wheel calibration ->
+  // crawl shaping -> quiet-at-zero) and write the leaves. Takes the speeds
+  // as parameters rather than reading its own targets: the loop hands it
+  // whichever subsystem's targets the blackboard currently carries, so
+  // there is one actuation path regardless of who decided the motion.
+  void tick(float speedLeft, float speedRight);  // [mm/s] [mm/s] signed
+
+  // Expire an armed command whose deadline has passed (latching the
+  // completion event), then publish this subsystem's targets into
+  // state.wheelLeft/Right.cmdVelocity -- but ONLY while Drive owns motion.
+  // When the planner owns it, this is a no-op on the blackboard, so the
+  // planner's own update() is left as the single writer. Must therefore run
+  // AFTER Motion::Planner::update() in the cycle.
+  void update(Types::RobotState& state, uint32_t now);  // [ms]
+
+  // --- Motion::WheelSink (legacy boundary) ---
+  // The velocity-sink interface Motion::MoveQueue drives. RobotLoop no
+  // longer routes anything through it -- the live path is command()/tick()/
+  // update() above -- but the interface is still implemented so a MoveQueue
+  // -era harness keeps compiling. setDuty() stages targets with no deadline
+  // and no ownership claim; nothing in the live loop calls either method.
+  void setDuty(float left, float right) override;  // [mm/s] [mm/s] velocity targets
+  void stop() override;                            // == estop()
+
+  // Last-staged velocity targets (test observability; the blackboard's own
+  // copy is written by update()).
+  float targetLeft() const { return targetLeft_; }    // [mm/s] signed
+  float targetRight() const { return targetRight_; }  // [mm/s] signed
+
+  // trackWidth -- read-only accessor; fixed at construction, matching
+  // Drive's own "no live-reconfigure" contract. See the constructor's own
+  // doc comment for who reads it and why it lives here.
   float trackWidth() const { return trackWidth_; }  // [mm]
 
-  // vLeft/vRight -- read-only accessors onto the last-staged setDuty()/
-  // stop() target (124-009): Types::RobotState::Wheel::cmdVelocity's own
-  // source (robot_state.h's own doc comment: "writer: App::Drive::tick()'s
-  // own staged target") -- RobotLoop::cycle() reads these immediately after
-  // both wheels' collects to publish the wheel section's commanded-velocity
-  // field, mirroring trackWidth()'s own read-only-accessor shape. No
-  // setter, same reasoning as trackWidth(): staging stays exclusively
-  // through setDuty()/stop().
-  float vLeft() const { return vLeft_; }    // [mm/s] signed
-  float vRight() const { return vRight_; }  // [mm/s] signed
-
  private:
+  // Invert the measured line for one wheel: the command whose ACTUAL
+  // result is `desired`. `previous` picks the accel/decel branch.
+  float correctedCommand(float desired, float previous, bool leftWheel) const;
+
+  // Correction table [wheel][direction]: 0 = left/right, 0 = accel/decel.
+  float corrGain_[2][2] = {{1.0f, 1.0f}, {1.0f, 1.0f}};
+  float corrIntercept_[2][2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
+  // Speed last converted per wheel -- the accel/decel discriminator.
+  float lastSpeedLeft_ = 0.0f;   // [mm/s]
+  float lastSpeedRight_ = 0.0f;  // [mm/s]
+
+  // Crawl shaper (drive.cpp).
+  float crawlDuty(float duty, float& carry) const;
+
   Devices::Motor& left_;
   Devices::Motor& right_;
   float trackWidth_;  // [mm]
 
-  float vLeft_ = 0.0f;   // [mm/s]
-  float vRight_ = 0.0f;  // [mm/s]
+  float targetLeft_ = 0.0f;   // [mm/s]
+  float targetRight_ = 0.0f;  // [mm/s]
+
+  // Armed bounded command (command() -> update() expiry).
+  bool commandActive_ = false;
+  uint32_t commandDeadline_ = 0;  // [ms]
+  uint32_t commandMoveId_ = 0;
+  bool completionPending_ = false;
+  uint32_t completedMoveId_ = 0;
+
+  // Open-loop duty per commanded speed, per wheel. NO DEFAULTS (§6): zero
+  // until the composition root installs this robot's own measured pair via
+  // setDutyPerSpeed(), and zero means uncalibrated, which means tick()
+  // refuses to write. Baking a value here is what made one robot's
+  // gearboxes every robot's -- see Config::DriveBootConfig's own doc
+  // comment (config/boot_config.h) for the full history.
+  float dutyPerSpeedLeft_ = 0.0f;   // [duty/(mm/s)]
+  float dutyPerSpeedRight_ = 0.0f;  // [duty/(mm/s)]
+  bool calibrated_ = false;
+
+  float crawlPulse_ = 0.0f;  // [-1, 1] pulse amplitude; 0 = off
+  float crawlCarryLeft_ = 0.0f;   // Bresenham accumulators
+  float crawlCarryRight_ = 0.0f;
+
+  // Last duty pair actually written (quiet-at-zero baseline).
+  float writtenLeft_ = 0.0f;   // [-1, 1]
+  float writtenRight_ = 0.0f;  // [-1, 1]
 };
 
 }  // namespace App

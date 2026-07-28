@@ -6,40 +6,21 @@
 // `#include "messages/..."` or `#include "config/..."`). Every type below
 // is, like device_types.h's, a plain aggregate — default-constructible, no
 // virtuals/pointers/user-declared special member functions.
+//
+// 125-003 (sprint 125 Decision 2): `Gains`/`Opt<T>` and MotorConfig's three
+// PID-related fields (the gain set, the EMA smoothing coefficient, and the
+// integrator-freeze deadband) are DELETED — the closed-loop velocity
+// control law they fed relocated to the motion library
+// (src/motion/wheel_velocity_pid.h), which declares its own motion-local
+// gain-set type (isolation invariant: motion may not depend on devices/).
+// `Devices::Motor::applyTravelCalib(float)` replaced the old gain-apply
+// method — the one field this leaf still live-applies — so `Opt<T>`'s one
+// remaining caller is gone too.
 #pragma once
 
 #include <cstdint>
 
 namespace Devices {
-
-// Opt<T> — nullable wrapper for an optional config field. Devices-local
-// counterpart to msg::Opt<T> (messages/common.h): same bool-plus-value
-// shape, so it stays trivially copyable, but declared here instead of
-// included from messages/common.h (isolation invariant). Needed wherever an
-// explicit value (including an explicit 0) must stay distinguishable from
-// "field not present in this partial update, leave the current value alone"
-// — see Motor::applyGains()'s own `Opt<float> travelCalib` parameter below;
-// a zero-sentinel cannot serve the same purpose because an explicit 0 must
-// remain valid and distinct. (MotorConfig::reversalDwell/outputDeadband used
-// to need this same distinction for a ship-default substitution — sprint 114
-// made both required, plain `float` fields; see device_config.h's own
-// MotorConfig doc.)
-template <typename T>
-struct Opt {
-  bool has = false;
-  T val = T{};
-};
-
-// Gains — a generic PI(+feedforward+anti-windup) gain set. Devices-local
-// counterpart to msg::Gains (messages/common.h). Dimensionless (gain
-// coefficients carry no `// [unit]` tag).
-struct Gains {
-  float kp = 0.0f;
-  float ki = 0.0f;
-  float kff = 0.0f;
-  float iMax = 0.0f;
-  float kaw = 0.0f;
-};
 
 // MotorConfig — one motor channel's calibration plus the armor tuning
 // MotorArmor::configureArmor() caches. Devices-local counterpart to
@@ -51,20 +32,6 @@ struct MotorConfig {
   // +1 or -1: corrects a mirror-mounted wheel's encoder/duty sign
   // (dimensionless — no unit tag).
   int32_t fwdSign = 0;
-
-  Gains velGains = {};
-
-  // EMA smoothing coefficient applied to the raw velocity sample
-  // (dimensionless).
-  float velFiltAlpha = 0.0f;
-
-  // [mm/s] |target velocity| at/below this freezes the embedded PID's
-  // integrator. Named for what it actually gates, not the wire field it
-  // mirrors: msg::MotorConfig's wire key is `min_duty`, but this field
-  // thresholds the VELOCITY target, never a duty — wire keys are excluded
-  // from the renaming convention (coding-standards.md); this Devices-local
-  // field is not a wire key, so it is named for what it is.
-  float velDeadband = 0.0f;
 
   // Maximum |duty write step| per tick, in the leaf's own raw hardware
   // write domain (e.g. Nezha's int8 PWM-percent register) — a device-write

@@ -234,7 +234,13 @@ void scenarioStopAcksAndClearsActive() {
   sim.step(5);  // ramp a bit so there is real motion to stop
   (void)sim.drainTelemetry();
 
-  sim.injectStop(/*corrId=*/99);
+  // injectEstop(), not injectStop(): this scenario asserts that the
+  // drivetrain goes INACTIVE promptly, which is the ESTOP contract since
+  // the command-ingestion rework (command-ingestion-ring-buffered-comms-
+  // subsystem-routing-two-stops.md §2). STOP is now a QUEUED, planned stop
+  // -- it makes the planner active until it lands, so the very thing this
+  // scenario checks would (correctly) not hold for it.
+  sim.injectEstop(/*corrId=*/99);
   sim.step(3);  // dispatch cycle + emit-lag cycle(s) -- see sim_api.cpp's own one-cycle-lag notes
 
   std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());

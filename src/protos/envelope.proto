@@ -93,8 +93,55 @@ message Error {
 // Field 19 is reserved below, not reused.
 
 // Zero-field oneof arm (same "cannot be malformed" shape the pre-102 schema's
-// Stop already used) -- a panic-stop must have zero ways to be malformed.
-message Stop {}
+// Stop already used).
+//
+// MEANING CHANGE (command-ingestion-ring-buffered-comms-subsystem-routing-
+// two-stops.md §2): `Stop` is no longer the panic stop. It is now a PLANNED
+// stop -- it enters Motion::Planner's queue as an ordinary entry
+// (Motion::Move::Kind::Stop) and executes in sequence, draining to zero and
+// completing at rest, acking the envelope's own corr_id at enqueue and
+// `Move.id`-style completion via the planner's TickResult. "Halt everything
+// now" is `Estop` below. The zero-field shape is unchanged and the field
+// number (CommandEnvelope.stop = 13) is unchanged -- this is a semantic
+// change to an existing verb, not a schema migration.
+//
+// `id` is the one ADDITIVE field the meaning change requires: a planned
+// stop now has TWO outcomes to report -- "queued" (acked at enqueue,
+// echoing the envelope's corr_id) and "reached, robot at rest" (acked on
+// completion) -- and those need distinct keys for the same reason `Move`
+// carries its own `id` alongside `corr_id`. Without it a host could not
+// tell the two acks apart. Absent/0 is legal (proto3 implicit presence):
+// a caller that does not care about the completion ack sends nothing.
+message Stop {
+  uint32 id = 1;  // echoed in this stop's COMPLETION ack (the enqueue ack
+                  // echoes the envelope's own corr_id)
+}
+
+// Estop -- "halt now, everywhere" (§2/§3): zero App::Drive's targets AND
+// clear Motion::Planner's active + pending queue, discarding those entries
+// with NO completion acks. Zero-field for exactly the reason the old Stop
+// was: a panic stop must have zero ways to be malformed. This arm takes
+// over what `Stop` meant before this change; every caller that meant "halt
+// now" (bench scripts, the sim's injectStop) moves here.
+message Estop {}
+
+// Wheels -- the dumb teleop primitive (§2/§3), routed straight to
+// App::Drive, bypassing the planner entirely (and clearing it on arrival:
+// exactly one subsystem owns motion at a time, enforced at routing). This
+// is deliberately NOT a `Move`: a Move is a planned motion with a stop
+// CONDITION the planner ticks against odometry; a Wheels command is an
+// open-loop pair of wheel velocities held for a fixed window.
+//
+// `duration` is REQUIRED and always positive -- a Wheels command is always
+// time-bounded, so a dead host can never mean a runaway. There is no
+// separate timeout backstop because the duration IS the backstop.
+message Wheels {
+  float  v_left   = 1;  // [mm/s] signed
+  float  v_right  = 2;  // [mm/s] signed
+  float  duration = 3;  // [ms] REQUIRED hold window; <=0 -> ERR_BADARG
+  uint32 id       = 4;  // echoed in this command's COMPLETION ack (the
+                        // enqueue ack echoes the envelope's own corr_id)
+}
 
 // Move -- DELETED (115-003, gut-to-minimal-firmware S1 motion-stack
 // excision). The sprint-109 arc-command primitive (distance/delta_heading/
@@ -228,9 +275,20 @@ message CommandEnvelope {
     // arms, not new ones. move is genuinely new -- assigned a fresh,
     // never-before-used field number (21, never 20 -- see the reserved
     // list's own comment above), never one of the reserved numbers above.
+    //
+    // wheels/estop (22/23) are the command-ingestion rework's two new arms
+    // (command-ingestion-...-two-stops.md §2), also fresh, never-before-used
+    // numbers. Their ARM NAMES are load-bearing, not cosmetic: both host
+    // senders derive the wire line's `<COMMAND>':'` prefix -- and therefore
+    // the CRC's scope extension -- from `WhichOneof("cmd").upper()`
+    // (io/serial_conn.py / io/sim_config.py's own `_envelope_command_name()`),
+    // so `wheels`/`estop` MUST spell commands.proto's WHEELS/ESTOP verbs
+    // exactly. Renaming either arm silently breaks every frame's CRC.
     ConfigDelta config = 6;
     Stop        stop   = 13;
     Move        move   = 21;
+    Wheels      wheels = 22;
+    Estop       estop  = 23;
   }
 }
 

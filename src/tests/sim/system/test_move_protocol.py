@@ -49,10 +49,24 @@ _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _APP_SOURCES = [
     _SOURCE_DIR / "app" / "robot_loop.cpp",
     _SOURCE_DIR / "app" / "comms.cpp",
+    # configurator.cpp -- App::Configurator (command-ingestion-ring-buffered-
+    # comms-subsystem-routing-two-stops.md §6): the CONFIG lifecycle moved
+    # out of RobotLoop into its own module, which RobotLoop now holds a
+    # reference to -- so this graph must link it.
+    _SOURCE_DIR / "app" / "configurator.cpp",
     _SOURCE_DIR / "app" / "telemetry.cpp",
     # 116-006 (MOVE protocol cutover): App::MoveQueue replaces the deleted
     # App::Deadman -- this harness's own subject under test.
     _REPO_ROOT / "src" / "motion" / "move_queue.cpp",
+    # Planner integration (2026-07-26): the on-robot Motion::Planner now
+    # drives the loop -- its library core joins every RobotLoop-linking
+    # dependency graph.
+    _REPO_ROOT / "src" / "motion" / "planner" / "profile.cpp",
+    _REPO_ROOT / "src" / "motion" / "planner" / "estimation.cpp",
+    _REPO_ROOT / "src" / "motion" / "planner" / "wheel_pid.cpp",
+    _REPO_ROOT / "src" / "motion" / "planner" / "shape.cpp",
+    _REPO_ROOT / "src" / "motion" / "planner" / "wheel_trim.cpp",
+    _REPO_ROOT / "src" / "motion" / "planner" / "planner.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",
     _REPO_ROOT / "src" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
@@ -63,10 +77,12 @@ _APP_SOURCES = [
 _MOTION_SOURCES = [
     _REPO_ROOT / "src" / "motion" / "stop_condition.cpp",
     _REPO_ROOT / "src" / "motion" / "velocity_shaper.cpp",
+    # 125-003: relocated from devices/velocity_pid.cpp -- App::Drive's
+    # interim Motion::WheelVelocityPid instances this sprint.
+    _REPO_ROOT / "src" / "motion" / "wheel_velocity_pid.cpp",
 ]
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
-    _SOURCE_DIR / "devices" / "velocity_pid.cpp",
     _SOURCE_DIR / "devices" / "nezha_motor.cpp",
     _SOURCE_DIR / "devices" / "otos.cpp",
     _SOURCE_DIR / "devices" / "color_sensor.cpp",

@@ -41,6 +41,10 @@ static_assert(std::is_standard_layout<Stop>::value,
               "msg::Stop must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Move>::value,
               "msg::Move must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<Wheels>::value,
+              "msg::Wheels must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<Estop>::value,
+              "msg::Estop must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Ack>::value,
               "msg::Ack must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Error>::value,

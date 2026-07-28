@@ -475,7 +475,7 @@ def scenario_move_wheels_start_stop_and_climb(proto: NezhaProtocol, result: Resu
         detail = f"before={enc_before} after={enc_after} d_left={d_left:.1f}mm d_right={d_right:.1f}mm"
     result.record("encoder positions climbed in telemetry while the move ran", climbed, detail)
 
-    corr_stop = proto.stop()
+    corr_stop = proto.estop()
     ack_stop = proto.wait_for_ack(corr_stop, timeout=ACK_TIMEOUT)
     result.record("stop enqueue ack ok (stops the wheels)",
                   ack_stop is not None and ack_stop.ok, f"ack={ack_stop}")
@@ -506,7 +506,7 @@ def scenario_enqueue_and_completion_acks(proto: NezhaProtocol, result: Result,
     completion = _find_completion_ack(frames, move_id)
     result.record("completion ack observed (Move.id-keyed)",
                   completion is not None and completion.ok, f"completion={completion}")
-    proto.stop()
+    proto.estop()
 
 
 def scenario_embedded_0x0a_10_of_10(proto: NezhaProtocol, result: Result,
@@ -537,7 +537,7 @@ def scenario_embedded_0x0a_10_of_10(proto: NezhaProtocol, result: Result,
                       ok, f"v={v} ack={ack} completion={completion}")
     result.record("0x0A-embedding move_wheels repro went 10/10 over the relay (SUC-007)",
                   passes == 10, f"{passes}/10 passed")
-    proto.stop()
+    proto.estop()
 
 
 # ---------------------------------------------------------------------------
@@ -670,7 +670,7 @@ def main() -> int:
     finally:
         if proto is not None:
             try:
-                proto.stop()
+                proto.estop()
             except Exception:
                 pass
         try:

@@ -24,11 +24,17 @@ float brakeDistance(float velocity, float boundary, float decel, float dt) {
   return (mf * velocity - delta * (mf * (mf + 1.0f) * 0.5f)) * dt;
 }
 
+float planDecel(const AxisLimits& limits) {
+  if (limits.aDecelPlan <= 0.0f) return limits.aDecel;
+  return std::min(limits.aDecelPlan, limits.aDecel);
+}
+
 float maxEntryVelocity(float distance, float boundary, const AxisLimits& limits,
                        float dt) {
   if (distance <= 0.0f || dt <= 0.0f) return 0.0f;
+  const float decelPlan = planDecel(limits);
   auto fits = [&](float v) {
-    return v * dt + brakeDistance(v, boundary, limits.aDecel, dt) <= distance;
+    return v * dt + brakeDistance(v, boundary, decelPlan, dt) <= distance;
   };
   float hi = limits.vMax;
   if (fits(hi)) return hi;
@@ -57,10 +63,13 @@ ProfileResult profileStep(float remaining, float previous, float cruise,
     const float taper = std::sqrt(2.0f * limits.jMax * headroom);
     accelAllow = std::min(limits.aMax, std::min(grown, taper));
   }
-  float ceiling = std::min(std::min(cruise, limits.vMax),
-                           previous + accelAllow * dt);
+  const float cruiseCap = std::min(cruise, limits.vMax);
+  float ceiling = std::min(cruiseCap, previous + accelAllow * dt);
   const float floor = std::max(0.0f, previous - limits.aDecel * dt);
-  if (ceiling < floor) ceiling = floor;  // cruise below reachable: brake toward it
+  // Cruise below the reachable window: brake toward it. That is a decel
+  // regime even though the feasibility test below will accept the ceiling.
+  const bool brakingToCruise = ceiling < floor;
+  if (brakingToCruise) ceiling = floor;
 
   // Exact terminal step: one interval at remaining/dt closes the sum to
   // `remaining` exactly, when that velocity is inside the reachable window
@@ -71,25 +80,36 @@ ProfileResult profileStep(float remaining, float previous, float cruise,
   const float landing = r / dt;
   if (landing <= ceiling + kTiny && landing >= floor - kTiny &&
       landing <= boundary + limits.aDecel * dt + kTiny) {
-    return {std::clamp(landing, 0.0f, ceiling), true};
+    return {std::clamp(landing, 0.0f, ceiling), true, StepPhase::Closing};
   }
 
+  // Brake-START decision rides aDecelPlan (<= aDecel); the floor above and
+  // the landing test just made both keep the full aDecel authority.
+  const float decelPlan = planDecel(limits);
   auto feasible = [&](float v) {
-    return r - v * dt >= brakeDistance(v, boundary, limits.aDecel, dt);
+    return r - v * dt >= brakeDistance(v, boundary, decelPlan, dt);
   };
-  if (feasible(ceiling)) return {ceiling, false};
+  if (feasible(ceiling)) {
+    const StepPhase phase =
+        brakingToCruise
+            ? StepPhase::Decel
+            : ((ceiling >= cruiseCap - kTiny && previous >= cruiseCap - kTiny)
+                   ? StepPhase::Hold
+                   : StepPhase::Accel);
+    return {ceiling, false, phase};
+  }
   // The floor choice is always feasible when last tick's choice was (the
   // staircase from v-delta is exactly the tail of the staircase from v);
   // if we were handed an infeasible state (e.g. a replace at speed into a
   // short Move), brake as hard as allowed and let re-measurement recover.
-  if (!feasible(floor)) return {floor, false};
+  if (!feasible(floor)) return {floor, false, StepPhase::Decel};
   float lo = floor;
   float hi = ceiling;
   for (int i = 0; i < 48; ++i) {
     const float mid = 0.5f * (lo + hi);
     (feasible(mid) ? lo : hi) = mid;
   }
-  return {lo, false};
+  return {lo, false, StepPhase::Decel};
 }
 
 }  // namespace Motion

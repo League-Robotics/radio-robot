@@ -164,7 +164,20 @@ namespace App {
 //                                    defensive fallback engaged. Derived
 //                                    from Types::RobotState::Health::
 //                                    positionClamped inside update() (124-009).
-//   bits 18-31 -- reserved for future use.
+//   bit 18 (kFlagFaultCommandsDropped) -- command-ingestion-ring-buffered-
+//                                    comms-subsystem-routing-two-stops.md
+//                                    §1: a well-formed inbound command was
+//                                    dropped because App::Comms's command
+//                                    ring was full. Distinct in KIND from
+//                                    bit 9, not merely in count: bit 9 is a
+//                                    wire/link problem (a line arrived
+//                                    corrupt), this is firmware
+//                                    backpressure (commands arrived faster
+//                                    than one cycle's drain could route).
+//                                    Derived from Types::RobotState::
+//                                    Health::commandsDroppedCount inside
+//                                    update(), exactly like bit 9.
+//   bits 19-31 -- reserved for future use.
 constexpr uint32_t kFlagOtosPresent = 1u << 0;
 constexpr uint32_t kFlagOtosConnected = 1u << 1;
 constexpr uint32_t kFlagActive = 1u << 2;
@@ -183,6 +196,7 @@ constexpr uint32_t kFlagColorPresent = 1u << 14;
 constexpr uint32_t kFlagFaultMoveTimeout = 1u << 15;
 constexpr uint32_t kFlagFaultShapingDisabled = 1u << 16;
 constexpr uint32_t kFlagFaultPositionClamped = 1u << 17;
+constexpr uint32_t kFlagFaultCommandsDropped = 1u << 18;
 
 // Primary cadence target: primary period == cycle period (115-005, closes
 // kcycle-kprimaryperiod-mismatch.md -- the frame is emitted every loop
@@ -203,7 +217,15 @@ constexpr uint32_t kPrimaryPeriod = 40;  // [ms] ~25 Hz, matches robot_loop.cpp'
 // ERR_FULL ceiling by this ticket's own rapid-fire test -- see
 // sprint.md's Architecture Decision 1 for the full alternatives-considered
 // rationale.
-constexpr uint8_t kAckRingDepth = 4;
+//
+// 4 -> 12 (command-ingestion-ring-buffered-comms-subsystem-routing-two-
+// stops.md §1): the sizing constraint changed. With App::Comms's command
+// ring, RobotLoop drains up to App::kCmdRingDepth commands in a SINGLE
+// cycle and acks each one, so a burst that fits the command ring must also
+// fit here or it executes unobservably -- a host chaining on completion
+// acks would hang on a command that really did run. Kept EQUAL to
+// App::kCmdRingDepth (comms.h); change the two together.
+constexpr uint8_t kAckRingDepth = 12;
 
 class Telemetry {
  public:

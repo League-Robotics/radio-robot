@@ -65,7 +65,9 @@ _STATE_ESTIMATOR_SRC = _REPO_ROOT / "src" / "motion" / "state_estimator.cpp"
 # those sources are compiled into this harness any more.
 
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
-_VELOCITY_PID_SRC = _SOURCE_DIR / "devices" / "velocity_pid.cpp"
+# 125-003: relocated from devices/velocity_pid.cpp -- App::Drive's interim
+# Motion::WheelVelocityPid instances this sprint.
+_VELOCITY_PID_SRC = _REPO_ROOT / "src" / "motion" / "wheel_velocity_pid.cpp"
 _OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
 _COLOR_SENSOR_SRC = _SOURCE_DIR / "devices" / "color_sensor.cpp"
 _LINE_SENSOR_SRC = _SOURCE_DIR / "devices" / "line_sensor.cpp"

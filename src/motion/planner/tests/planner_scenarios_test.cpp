@@ -201,7 +201,7 @@ void testStopFlushes() {
   CHECK(planner.move(distanceMove(41, 5000.0f, 150.0f), false));
   for (int i = 0; i < 20; ++i) cycle(planner, state, plant, now, kPeriod);
   CHECK(planner.active());
-  planner.stop();
+  planner.estop();
   CHECK(!planner.active());
   CHECK(planner.pendingCount() == 0);
   cycle(planner, state, plant, now, kPeriod);
@@ -275,6 +275,11 @@ void testInvalidMovesRejected() {
   Move forwardWithStrafe = distanceMove(83, 100.0f, 150.0f);
   forwardWithStrafe.v_y = 150.0f;
   CHECK(planner.move(forwardWithStrafe, false));
+  // Wheels Moves accept every stop kind (firmware integration lifted v1's
+  // Time-only restriction): the wire protocol's move_wheels arm carries
+  // time, distance, and angle stops. The pair ramps and HOLDS; completion
+  // is the standard measured-threshold test; the post-completion drain
+  // ramps down.
   Move wheelsDistance;
   wheelsDistance.id = 81;
   wheelsDistance.kind = Move::Kind::Distance;
@@ -282,7 +287,8 @@ void testInvalidMovesRejected() {
   wheelsDistance.threshold = 100.0f;
   wheelsDistance.vLeft = 100.0f;
   wheelsDistance.vRight = 100.0f;
-  CHECK(!planner.move(wheelsDistance, false));
+  wheelsDistance.timeout = 10000.0f;
+  CHECK(planner.move(wheelsDistance, false));
 }
 
 void testTimeMoveRuns() {

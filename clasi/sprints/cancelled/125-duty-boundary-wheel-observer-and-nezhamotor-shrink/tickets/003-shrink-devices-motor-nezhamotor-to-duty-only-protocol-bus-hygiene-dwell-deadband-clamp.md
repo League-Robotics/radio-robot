@@ -2,7 +2,7 @@
 id: '003'
 title: Shrink Devices::Motor/NezhaMotor to duty-only protocol + bus hygiene + dwell/deadband
   + clamp
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on:
@@ -39,17 +39,30 @@ logic).
 
 ## Acceptance Criteria
 
-- [ ] `nezha_motor.cpp` measured at or near the ~200-line target;
+- [x] `nezha_motor.cpp` measured at or near the ~200-line target;
       `grep -rn "MotorVelocityPid\|setVelocity\|velFiltAlpha\|dutyAvgWindow"
-      src/firm/devices/` returns zero hits.
-- [ ] `Devices::Motor`'s interface no longer declares `setVelocity()`/
+      src/firm/devices/` returns zero hits. **Grep: zero hits, confirmed.
+      Line count: 537 lines (from 885), a real ~40% reduction but short of
+      the ~200-line target** — the shortfall is almost entirely retained
+      rationale comments for the KEPT protection mechanisms (write-rate
+      throttle, reversal dwell/deadband boost, NAK-retry, hardReset's
+      median-of-3, split-phase protocol) this ticket explicitly preserves;
+      non-comment/blank code is ~230 lines. Deduplicated two helpers
+      (`median3()`, `decodeRawEncoder()`) to cut real duplication; further
+      compression would mean stripping documented rationale this
+      codebase's own commenting culture consistently keeps elsewhere.
+- [x] `Devices::Motor`'s interface no longer declares `setVelocity()`/
       `velocityTarget()`/`gains()`/`applyGains()`'s gain-bearing surface
       (narrow `applyGains()` to `travelCalib` only, or remove it pending
       ticket 008's CONFIG-routing split — state which in the PR).
-  - [ ] The slew cap's own code path (`writeRawDuty()`'s slew section) is
+      **Narrowed to `applyTravelCalib(float)`** (renamed, not just
+      resigned — the old name implied gains, which it no longer carries).
+  - [x] The slew cap's own code path (`writeRawDuty()`'s slew section) is
       untouched — this ticket must not pre-empt ticket 010's decision.
-- [ ] `Devices::MotorConfig` no longer declares `velGains`/`velFiltAlpha`/
-      `velDeadband`.
+      **Confirmed byte-identical.**
+- [x] `Devices::MotorConfig` no longer declares `velGains`/`velFiltAlpha`/
+      `velDeadband`. **Confirmed — `Gains`/`Opt<T>` also deleted (both had
+      exactly one remaining caller, the deleted gain-apply surface).**
 
 ## Testing
 

@@ -54,10 +54,14 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 #                                 commanded-speed shaping function MoveQueue
 #                                 calls every Continue tick. Also under
 #                                 MOTION_DIR now (122-001).
-#   devices/velocity_pid.cpp, devices/nezha_motor.cpp, devices/otos.cpp,
-#   devices/color_sensor.cpp, devices/line_sensor.cpp
+#   devices/nezha_motor.cpp, devices/otos.cpp, devices/color_sensor.cpp,
+#   devices/line_sensor.cpp
 #                              -- the device leaves SimPlant answers wire
 #                                 transactions for
+#   src/motion/wheel_velocity_pid.cpp -- Motion::WheelVelocityPid (125-003:
+#                                 relocated from devices/velocity_pid.cpp --
+#                                 App::Drive's interim closed loop this
+#                                 sprint). Under MOTION_DIR now.
 #   messages/wire.cpp, messages/wire_runtime.cpp
 #                              -- the generated + hand-written codec
 #                                 primitives
@@ -97,6 +101,7 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 # ---------------------------------------------------------------------------
 set(APP_SOURCES
     "${SOURCE_DIR}/app/comms.cpp"
+    "${SOURCE_DIR}/app/configurator.cpp"
     "${SOURCE_DIR}/app/drive.cpp"
     "${SOURCE_DIR}/app/preamble.cpp"
     "${SOURCE_DIR}/app/robot_loop.cpp"
@@ -124,9 +129,20 @@ set(MOTION_SOURCES
     "${MOTION_DIR}/move_queue.cpp"
     "${MOTION_DIR}/odometry.cpp"
     "${MOTION_DIR}/state_estimator.cpp"
+    # 125-003: relocated from devices/velocity_pid.cpp
+    # (Devices::MotorVelocityPid -> Motion::WheelVelocityPid) -- App::Drive
+    # (APP_SOURCES, above) holds the interim instances this sprint.
+    "${MOTION_DIR}/wheel_velocity_pid.cpp"
+    # Planner integration (2026-07-26): the planner library core drives the
+    # loop now -- the same files the firmware image links.
+    "${MOTION_DIR}/planner/profile.cpp"
+    "${MOTION_DIR}/planner/shape.cpp"
+    "${MOTION_DIR}/planner/estimation.cpp"
+    "${MOTION_DIR}/planner/wheel_pid.cpp"
+    "${MOTION_DIR}/planner/wheel_trim.cpp"
+    "${MOTION_DIR}/planner/planner.cpp"
 )
 set(DEVICE_SOURCES
-    "${SOURCE_DIR}/devices/velocity_pid.cpp"
     "${SOURCE_DIR}/devices/nezha_motor.cpp"
     "${SOURCE_DIR}/devices/otos.cpp"
     "${SOURCE_DIR}/devices/color_sensor.cpp"

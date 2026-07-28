@@ -113,7 +113,24 @@ DecodedLine decodeOutboundLine(const std::string& line);
 // CommandEnvelope's twist(19) arm and envelope.proto's Twist message are
 // deleted, superseded by move(21)/Move below; field 19 is reserved on the
 // wire, not reused.
-std::string armorStopCommand(uint32_t corrId = 0);
+// armorStopCommand() -- the PLANNED stop since the command-ingestion
+// rework (command-ingestion-ring-buffered-comms-subsystem-routing-two-
+// stops.md §2): a planner queue entry, not a panic stop. `id` is the
+// COMPLETION-ack key (Stop.id); `corrId` is the enqueue ack's, as always.
+// For "halt now" use armorEstopCommand() below.
+std::string armorStopCommand(uint32_t corrId = 0, uint32_t id = 0);
+
+// armorEstopCommand() -- the PANIC stop (§2/§3): zero Drive AND clear the
+// planner's whole queue. This is what armorStopCommand() used to mean.
+std::string armorEstopCommand(uint32_t corrId = 0);
+
+// armorWheelsCommand() -- the dumb teleop primitive (§2): a per-wheel
+// velocity pair held for `duration` ms, routed straight to App::Drive with
+// no planner involvement. `duration` must be positive (the firmware acks
+// ERR_BADARG otherwise -- a wheel command is always time-bounded). `id` is
+// the COMPLETION-ack key, echoed when the duration expires.
+std::string armorWheelsCommand(float vLeft, float vRight, float duration,  // [mm/s] [mm/s] [ms]
+                                uint32_t id = 0, uint32_t corrId = 0);
 
 // MOVE stop-condition kind selector for armorMoveCommand() below -- mirrors
 // Move's own `stop` oneof arms (time=3/distance=4/angle=5 on the wire).

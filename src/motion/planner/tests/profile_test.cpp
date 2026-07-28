@@ -143,6 +143,126 @@ void testCruiseHold() {
   CHECK(atCruise > 500);  // the vast majority of a 5 m run cruises
 }
 
+void testPhaseReported() {
+  // A long move reports Accel* Hold* Decel* Closing, in that order and with
+  // no regression: the phase is what the velocity trim gates its integrator
+  // on, so a stray Hold inside a ramp would wind the integrator up.
+  const AxisLimits lim{600.0f, 400.0f, 300.0f};
+  double remaining = 5000.0;
+  float previous = 0.0f;
+  int accel = 0, hold = 0, decel = 0, closing = 0;
+  int lastRank = -1;
+  auto rank = [](Motion::StepPhase p) {
+    switch (p) {
+      case Motion::StepPhase::Accel: return 0;
+      case Motion::StepPhase::Hold: return 1;
+      case Motion::StepPhase::Decel: return 2;
+      case Motion::StepPhase::Closing: return 3;
+    }
+    return 0;
+  };
+  for (int i = 0; i < 1000; ++i) {
+    const ProfileResult step = profileStep(static_cast<float>(remaining),
+                                           previous, 150.0f, 0.0f, lim, kDt);
+    const int r = rank(step.phase);
+    CHECK(r >= lastRank);  // monotone: never back to Accel/Hold after Decel
+    lastRank = r;
+    switch (step.phase) {
+      case Motion::StepPhase::Accel: ++accel; break;
+      case Motion::StepPhase::Hold: ++hold; break;
+      case Motion::StepPhase::Decel: ++decel; break;
+      case Motion::StepPhase::Closing: ++closing; break;
+    }
+    // Hold means the command genuinely is not changing.
+    if (step.phase == Motion::StepPhase::Hold) {
+      CHECK_NEAR(step.velocity, previous, 1e-3);
+    }
+    remaining -= static_cast<double>(step.velocity) * kDt;
+    previous = step.velocity;
+    if (step.closing) break;
+  }
+  CHECK(accel > 0);
+  CHECK(hold > 0);
+  CHECK(decel > 0);
+  CHECK(closing == 1);
+
+  // A short move never cruises: Accel/Decel only, still landing exactly.
+  remaining = 20.0;
+  previous = 0.0f;
+  hold = 0;
+  for (int i = 0; i < 1000; ++i) {
+    const ProfileResult step = profileStep(static_cast<float>(remaining),
+                                           previous, 600.0f, 0.0f, lim, kDt);
+    if (step.phase == Motion::StepPhase::Hold) ++hold;
+    remaining -= static_cast<double>(step.velocity) * kDt;
+    previous = step.velocity;
+    if (step.closing) break;
+  }
+  CHECK(hold == 0);
+  CHECK_NEAR(remaining, 0.0, 1e-4);
+}
+
+void testDecelLeewayStartsBrakingEarlier() {
+  // aDecelPlan below aDecel must (a) leave landing exactness untouched,
+  // (b) begin braking no later than the full-authority profile, and
+  // (c) keep the reserve: the emitted ramp never uses more than the PLAN
+  // decel while it is riding the taper down.
+  AxisLimits tight{600.0f, 400.0f, 300.0f};
+  AxisLimits leeway = tight;
+  leeway.aDecelPlan = 200.0f;  // [mm/s^2] hold 100 in reserve
+
+  auto firstBrakeTick = [&](const AxisLimits& lim) {
+    double remaining = 2000.0;
+    float previous = 0.0f;
+    for (int i = 0; i < 10000; ++i) {
+      const ProfileResult step = profileStep(static_cast<float>(remaining),
+                                             previous, 400.0f, 0.0f, lim, kDt);
+      if (step.phase == Motion::StepPhase::Decel ||
+          step.phase == Motion::StepPhase::Closing) {
+        return i;
+      }
+      remaining -= static_cast<double>(step.velocity) * kDt;
+      previous = step.velocity;
+    }
+    return -1;
+  };
+  const int tightTick = firstBrakeTick(tight);
+  const int leewayTick = firstBrakeTick(leeway);
+  CHECK(tightTick > 0);
+  CHECK(leewayTick > 0);
+  CHECK(leewayTick < tightTick);  // braking starts strictly earlier
+
+  // Landing stays exact, and the ramp respects the plan decel while
+  // braking (the full aDecel stays available but is not spent).
+  double remaining = 2000.0;
+  float previous = 0.0f;
+  bool closed = false;
+  for (int i = 0; i < 10000; ++i) {
+    const ProfileResult step = profileStep(static_cast<float>(remaining),
+                                           previous, 400.0f, 0.0f, leeway, kDt);
+    if (step.phase == Motion::StepPhase::Decel) {
+      CHECK(step.velocity >= previous - leeway.aDecelPlan * kDt - 1e-3f);
+    }
+    // Full authority is always respected, plan or no plan.
+    CHECK(step.velocity >= previous - leeway.aDecel * kDt - 1e-3f);
+    remaining -= static_cast<double>(step.velocity) * kDt;
+    previous = step.velocity;
+    if (step.closing) {
+      closed = true;
+      break;
+    }
+  }
+  CHECK(closed);
+  CHECK_NEAR(remaining, 0.0, 1e-4);
+
+  // aDecelPlan above aDecel is clamped down, never up.
+  AxisLimits over = tight;
+  over.aDecelPlan = 9999.0f;
+  CHECK_NEAR(Motion::planDecel(over), tight.aDecel, 1e-6);
+  CHECK_NEAR(Motion::planDecel(tight), tight.aDecel, 1e-6);
+  CHECK_NEAR(Motion::planDecel(leeway), 200.0f, 1e-6);
+}
+
 }  // namespace
 
 int main() {
@@ -151,6 +271,8 @@ int main() {
   testSweepExactLanding();
   testShortMoveFromSpeed();
   testCruiseHold();
+  testPhaseReported();
+  testDecelLeewayStartsBrakingEarlier();
   std::printf("profile_test: all checks passed\n");
   return 0;
 }

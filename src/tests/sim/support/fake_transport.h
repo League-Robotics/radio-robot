@@ -30,10 +30,14 @@
 //
 // Design: two SEPARATE concerns, matching Transport's own two directions.
 //   - Inbound: a test calls enqueueInbound()/enqueueInboundBinary() to
-//     script complete lines; readLine() pops at most one per call
-//     (matches Comms::pump()'s own "at most one line per call" contract)
-//     and returns false, non-blocking, the instant the queue is empty --
-//     never populating buf.
+//     script complete lines; readLine() pops ONE per call and returns
+//     false, non-blocking, the instant the queue is empty -- never
+//     populating buf. That is Transport::readLine()'s own contract (one
+//     complete line per call), NOT a statement about pump(): since
+//     command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
+//     §1, Comms::pump() CALLS readLine() repeatedly and drains both
+//     transports into a command ring, so a test that scripts N lines and
+//     then steps once will have all N consumed by that step.
 //   - Outbound: send() (async, drop-on-full on the real transports) and
 //     sendReliable() (bounded-wait, must-not-drop) each append to their OWN
 //     capture -- this fake never actually drops anything (a host test wants

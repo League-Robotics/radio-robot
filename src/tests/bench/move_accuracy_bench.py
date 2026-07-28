@@ -453,7 +453,7 @@ def main() -> int:
 
     finally:
         try:
-            proto.stop()
+            proto.estop()
         except Exception:
             pass
         conn.disconnect()

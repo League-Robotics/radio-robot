@@ -143,7 +143,7 @@ def main() -> int:
                        f"before={enc_before} after={enc_after}")
 
         # --- stop() --------------------------------------------------------
-        stop_corr_id = proto.stop()
+        stop_corr_id = proto.estop()
         result.record("stop() returns a corr_id", stop_corr_id != 0,
                        f"corr_id={stop_corr_id}")
 
@@ -154,7 +154,7 @@ def main() -> int:
         # Guaranteed stop: motors must never be left running on an
         # exception or Ctrl-C, even if a check above already stopped them.
         try:
-            proto.stop()
+            proto.estop()
         except Exception:
             pass
         conn.disconnect()

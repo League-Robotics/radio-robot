@@ -70,11 +70,38 @@ enum Verb {
   // "VER:<version>"), echoing the command verb above -- not redeclared.
 
   // --- Binary command verbs (host -> robot) -- CommandEnvelope.cmd's
-  // existing three oneof arms (envelope.proto), now also named on the
-  // wire per the uniform grammar (e.g. "MOVE:<COBS+CRC frame>\n"). ---
+  // oneof arms (envelope.proto), also named on the wire per the uniform
+  // grammar (e.g. "MOVE:<COBS+CRC frame>\n"). ---
+  //
+  // A verb's name here MUST be the upper-cased spelling of its
+  // CommandEnvelope.cmd oneof arm name: both host senders derive the wire
+  // prefix -- and therefore the CRC scope -- from
+  // `WhichOneof("cmd").upper()` (io/serial_conn.py's and io/sim_config.py's
+  // own `_envelope_command_name()`), so `wheels` <-> WHEELS and
+  // `estop` <-> ESTOP is a hard correspondence, not a convention.
   MOVE   = 7 [(binary) = true];
   CONFIG = 8 [(binary) = true];
   STOP   = 9 [(binary) = true];
+
+  // WHEELS/ESTOP -- the command-ingestion rework's two new verbs
+  // (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
+  // §2). They split what used to be one overloaded pair of meanings:
+  //
+  //   WHEELS -- the dumb teleop primitive, routed straight to App::Drive:
+  //     per-wheel velocity plus a REQUIRED duration, so a dead host can
+  //     never mean a runaway. It supersedes whatever the planner was
+  //     doing (RobotLoop::routeCommand clears the planner on arrival).
+  //   ESTOP  -- "halt now, everywhere": zeroes App::Drive AND clears
+  //     Motion::Planner's active+pending queue, with no completion acks
+  //     for the discarded entries.
+  //
+  // STOP keeps its verb and its field number but CHANGES MEANING with
+  // this change: it is now a PLANNED stop that enters the planner's queue
+  // and executes in sequence. Callers that meant "halt now" move to
+  // ESTOP. That is a semantic wire change, not a schema one -- hence no
+  // renumbering here.
+  WHEELS = 13 [(binary) = true];
+  ESTOP  = 14 [(binary) = true];
 
   // --- Binary reply verbs (robot -> host) -- ReplyEnvelope.body's
   // existing three oneof arms (envelope.proto). TLM is the only one with

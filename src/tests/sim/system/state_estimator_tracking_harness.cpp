@@ -315,7 +315,9 @@ void scenarioTrackingAcrossVariedMovePatterns() {
   runPhase(sim, "chained_steps", /*cycles=*/40, /*wheelDistTolMm=*/5.0f, /*bodyPosTolMm=*/3.0f,
            /*bodyHeadingTolRad=*/0.02f);
 
-  sim.injectStop(/*corrId=*/199);
+  // injectEstop() -- this is the run's teardown "stop the robot now",
+  // which is ESTOP since the command-ingestion rework (§2).
+  sim.injectEstop(/*corrId=*/199);
   sim.step(3);
 
   // AC #3: explicitly report which pattern phase(s) showed the largest

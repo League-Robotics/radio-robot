@@ -48,6 +48,19 @@
 #include "messages/wire_runtime.h"
 #include "support/fake_transport.h"
 
+// pumpOne() -- the pre-ring `Comms::pump(Cmd&, now)` shape, rebuilt on the
+// ring API (command-ingestion-ring-buffered-comms-subsystem-routing-two-
+// stops.md §1: pump() now DRAINS both transports into a ring and
+// takeCommand() pops from it). These scenarios each feed exactly one line
+// and want the one command it produced, so "pump then take" is the honest
+// local equivalent -- not a claim that pump() still stops after one line.
+App::Cmd pumpOne(App::Comms& comms, uint32_t now) {  // [ms]
+  App::Cmd cmd;
+  comms.pump(now);
+  comms.takeCommand(cmd);  // leaves cmd at status kNone when nothing decoded
+  return cmd;
+}
+
 namespace {
 
 // packAck() -- mirrors telemetry.cpp's own pushAckRing() packed-word format
@@ -524,7 +537,9 @@ void scenarioSetLiveFlagMutatesLiveFlagsIndependentlyOfUpdate() {
 // ===========================================================================
 // 6. Frame-size: a primary frame populated at EVERY field's own declared
 //    (max)/(abs_max) bound (124-008, issue §B5's size-accounting table)
-//    fits the regenerated worst case, kReplyEnvelopeMaxEncodedSize (<=130B).
+//    fits the regenerated worst case, kReplyEnvelopeMaxEncodedSize
+//    (<= the envelope budget -- see the check's own comment for why the
+//    old <=130B ticket-local figure was re-derived).
 //    Several bounds this ticket adds (now/seq/the packed acks word/
 //    ReplyEnvelope.corr_id) are SIZING bounds, not hard wire limits -- see
 //    telemetry.proto's/envelope.proto's own doc comments -- so this
@@ -538,7 +553,7 @@ void scenarioSetLiveFlagMutatesLiveFlagsIndependentlyOfUpdate() {
 // ===========================================================================
 
 void scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase() {
-  beginScenario("a primary frame at every field's own declared bound fits the regenerated <=130B worst case");
+  beginScenario("a primary frame at every field's own declared bound fits the regenerated worst case");
 
   msg::Telemetry tlm;
   tlm.now = 2097151u;   // (max) -- sizing bound, not a hard wire limit
@@ -579,8 +594,22 @@ void scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase() {
   checkTrue(n > 0, "encode() succeeds for a fully-populated frame");
   checkTrue(n <= msg::wire::kReplyEnvelopeMaxEncodedSize,
             "encoded size fits the rewritten frame's recorded worst case for ReplyEnvelope{tlm}");
-  checkTrue(msg::wire::kReplyEnvelopeMaxEncodedSize <= 130,
-            "this ticket's own size gate: kReplyEnvelopeMaxEncodedSize <= 130B");
+  // The <=130B figure was 124-008's OWN ticket-local target, not a system
+  // limit -- the system limit is msg::wire::kEnvelopeBudgetBytes (240B),
+  // which wire.h itself static_asserts. Re-derived here by the
+  // command-ingestion rework (command-ingestion-ring-buffered-comms-
+  // subsystem-routing-two-stops.md §1): raising kAckRingDepth 4 -> 12, so
+  // that a burst which fits the new command ring also fits the ack ring,
+  // costs 8 more packed ack words (~3B each) on the worst-case frame and
+  // puts it at 155B. That is a deliberate, load-bearing trade -- acks the
+  // firmware really pushed would otherwise be unobservable -- and it stays
+  // comfortably inside the real budget, which is what this gate now
+  // asserts.
+  // 240 == the envelope budget wire.h itself static_asserts against (its
+  // own kEnvelopeBudgetBytes narrative constant is documentation, not a
+  // declared symbol -- the two static_asserts spell the number out).
+  checkTrue(msg::wire::kReplyEnvelopeMaxEncodedSize <= 240,
+            "kReplyEnvelopeMaxEncodedSize fits the 240-byte envelope budget");
   std::printf("  measured: fully-populated primary frame encodes to %u bytes (worst case %u)\n",
               static_cast<unsigned>(n), static_cast<unsigned>(msg::wire::kReplyEnvelopeMaxEncodedSize));
 }
@@ -655,7 +684,7 @@ void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
   App::Telemetry telemetry(comms);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/0);
+  cmd = pumpOne(comms, /*now=*/0);
   checkU64Eq(comms.malformedCount(), 1, "malformedCount() incremented by the malformed line");
 
   // Mirrors RobotLoop::cycle()'s own pace-block publish point
@@ -712,7 +741,7 @@ void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
 
 // ===========================================================================
 // 9. Ack ring (120) push/evict/ordering, in isolation: pushing more than
-//    kAckRingDepth (4) acks before any emit() evicts the OLDEST first,
+//    kAckRingDepth acks before any emit() evicts the OLDEST first,
 //    keeping only the most recent kAckRingDepth entries, oldest-to-newest
 //    order preserved in the wire field -- the ticket's own rapid-fire
 //    acceptance property, exercised at the Telemetry-unit level (the
@@ -722,7 +751,8 @@ void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
 // ===========================================================================
 
 void scenarioAckRingEvictsOldestPastDepthAndPreservesOrder() {
-  beginScenario("ack(): pushing 5 acks past depth 4 evicts the OLDEST (corr=1), keeps 2..5 in oldest-to-newest order");
+  beginScenario("ack(): pushing kAckRingDepth+1 acks evicts the OLDEST (corr=1), keeps the rest in "
+                "oldest-to-newest order");
 
   FakeTransport serialFake;
   FakeTransport radioFake;
@@ -730,24 +760,22 @@ void scenarioAckRingEvictsOldestPastDepthAndPreservesOrder() {
   App::Comms comms(serialFake, radioFake, banner);
   App::Telemetry telemetry(comms);
 
-  checkU64Eq(App::kAckRingDepth, 4, "this scenario assumes the sprint's own chosen depth (4) -- update if it changes");
-
-  telemetry.ack(1, 0);
-  telemetry.ack(2, 0);
-  telemetry.ack(3, 0);
-  telemetry.ack(4, 0);
-  telemetry.ack(5, 0);  // 5th push -- ring is depth 4, evicts corr=1
+  // Depth is 12 since the command-ingestion rework (command-ingestion-ring-
+  // buffered-comms-subsystem-routing-two-stops.md §1): the ring is sized to
+  // App::kCmdRingDepth so a burst that fits the command ring also fits
+  // here. The PROPERTY under test is unchanged -- push depth+1, watch the
+  // oldest go -- so the scenario is driven off kAckRingDepth rather than a
+  // hardcoded 4, and no longer needs updating when the depth moves again.
+  constexpr uint32_t kDepth = App::kAckRingDepth;
+  for (uint32_t i = 1; i <= kDepth + 1; ++i) telemetry.ack(i, 0);  // last push evicts corr=1
 
   telemetry.emit(0);
 
   msg::Telemetry expected;
   expected.now = 0;
   expected.seq = 0;
-  expected.acks_count = 4;
-  expected.acks_[0] = packAck(2, 0);
-  expected.acks_[1] = packAck(3, 0);
-  expected.acks_[2] = packAck(4, 0);
-  expected.acks_[3] = packAck(5, 0);
+  expected.acks_count = static_cast<uint8_t>(kDepth);
+  for (uint32_t i = 0; i < kDepth; ++i) expected.acks_[i] = packAck(i + 2, 0);
 
   msg::ReplyEnvelope env;
   env.corr_id = 0;
@@ -757,7 +785,7 @@ void scenarioAckRingEvictsOldestPastDepthAndPreservesOrder() {
   checkTrue(!expectedLine.empty(), "independent encode+armor of the expected frame succeeds");
   if (!serialFake.sent().empty()) {
     checkStrEq(serialFake.sent()[0], expectedLine,
-               "ring holds exactly the last 4 pushes (2,3,4,5), oldest (1) evicted, oldest-to-newest wire order");
+               "ring holds exactly the last kAckRingDepth pushes, oldest (1) evicted, oldest-to-newest wire order");
   }
 }
 
@@ -771,7 +799,7 @@ void scenarioAckRingEvictsOldestPastDepthAndPreservesOrder() {
 // ===========================================================================
 
 void scenarioAckRingPersistsAcrossEmitsBelowFullDepth() {
-  beginScenario("ack(): a 2-entry ring (below depth 4) reports acks_count=2 and persists unchanged across a "
+  beginScenario("ack(): a 2-entry ring (below kAckRingDepth) reports acks_count=2 and persists unchanged across a "
                 "later emit() with no new ack()");
 
   FakeTransport serialFake;

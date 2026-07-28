@@ -36,6 +36,19 @@
 #include "messages/wire_runtime.h"
 #include "support/fake_transport.h"
 
+// pumpOne() -- the pre-ring `Comms::pump(Cmd&, now)` shape, rebuilt on the
+// ring API (command-ingestion-ring-buffered-comms-subsystem-routing-two-
+// stops.md §1: pump() now DRAINS both transports into a ring and
+// takeCommand() pops from it). These scenarios each feed exactly one line
+// and want the one command it produced, so "pump then take" is the honest
+// local equivalent -- not a claim that pump() still stops after one line.
+App::Cmd pumpOne(App::Comms& comms, uint32_t now) {  // [ms]
+  App::Cmd cmd;
+  comms.pump(now);
+  comms.takeCommand(cmd);  // leaves cmd at status kNone when nothing decoded
+  return cmd;
+}
+
 namespace {
 
 using WireRuntime::WireType;
@@ -190,7 +203,7 @@ void scenarioMoveRoundTrip() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/0);
+  cmd = pumpOne(comms, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kDecoded, "cmd.status == kDecoded");
   checkU64Eq(cmd.env.corr_id, 7, "corr_id round-trips");
@@ -227,7 +240,7 @@ void scenarioMalformedUnrecognizedTextLineRejected() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/0);
+  cmd = pumpOne(comms, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
@@ -255,7 +268,7 @@ void scenarioMalformedCobsFrameRejected() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/0);
+  cmd = pumpOne(comms, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
@@ -292,7 +305,7 @@ void scenarioMalformedCrcMismatchRejected() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/0);
+  cmd = pumpOne(comms, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone -- corrupted frame never decodes");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once (CRC mismatch detected, not mis-parsed)");
@@ -324,7 +337,7 @@ void scenarioMalformedCorruptProtobufRejected() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/0);
+  cmd = pumpOne(comms, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
@@ -348,7 +361,7 @@ void scenarioHelloRepliesWithBannerViaSendReliable() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/0);
+  cmd = pumpOne(comms, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "HELLO never decodes a Cmd");
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
@@ -374,7 +387,7 @@ void scenarioPingRepliesOkPongViaSendReliable() {
   // "t= followed by the now value passed into Comms::pump()/
   // pumpTransport() for that call").
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/123456);
+  cmd = pumpOne(comms, /*now=*/123456);
 
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
   if (!serialFake.sentReliable().empty()) {
@@ -383,6 +396,19 @@ void scenarioPingRepliesOkPongViaSendReliable() {
   }
 }
 
+// ===========================================================================
+// 4. QUARANTINED -- DEPRECATED-COMMAND-INGEST
+//
+// This is the canonical statement of the contract the command-ingestion
+// rework REPLACED (command-ingestion-ring-buffered-comms-subsystem-routing-
+// two-stops.md §1, "Deferred: the rest of the test suite"): pump() no
+// longer stops after one transport, it DRAINS both into a command ring, so
+// every assertion below now asserts the opposite of the truth. Its
+// replacement -- a scenario asserting the drain contract, and the two
+// PING-reply-per-transport checks it also carried -- is explicitly deferred
+// to the later big-bang test pass this marker is the grep handle for.
+// ===========================================================================
+#if 0  // DEPRECATED-COMMAND-INGEST
 // ===========================================================================
 // 4. pump() bounded to one line per call -- even when BOTH FakeTransports
 //    have a line queued, only one is drained this call.
@@ -400,7 +426,7 @@ void scenarioPumpBoundedToOneTransportPerCall() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/1000);
+  cmd = pumpOne(comms, /*now=*/1000);
 
   checkU64Eq(serialFake.inboundSize(), 0, "serial's queued line was drained this call");
   checkU64Eq(radioFake.inboundSize(), 1, "radio's queued line was NOT touched this call (serial had one)");
@@ -416,7 +442,7 @@ void scenarioPumpBoundedToOneTransportPerCall() {
   // 001's own AC: "Verified on both the serial and radio-relay
   // transports").
   App::Cmd cmd2;
-  comms.pump(cmd2, /*now=*/2000);
+  cmd2 = pumpOne(comms, /*now=*/2000);
   checkU64Eq(radioFake.inboundSize(), 0, "radio's queued line is drained on the NEXT call");
   checkU64Eq(radioFake.sentReliable().size(), 1, "radio received the PING reply on the second call");
   if (!radioFake.sentReliable().empty()) {
@@ -424,6 +450,8 @@ void scenarioPumpBoundedToOneTransportPerCall() {
                "radio transport's PING reply also carries t=<now> (117, SUC-056; 124-005, issue §4)");
   }
 }
+
+#endif  // DEPRECATED-COMMAND-INGEST
 
 // ===========================================================================
 // 5. sendReply() round-trip: both transports' send() logs capture the exact
@@ -559,7 +587,7 @@ void scenarioDecodeBinaryFrameRejectsMismatchedCommandScope() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/0);
+  cmd = pumpOne(comms, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone -- scope-mismatched frame never decodes");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once (CRC-scope mismatch detected)");
@@ -582,7 +610,7 @@ void scenarioIdRepliesWithConfiguredIdentity() {
   App::Comms comms(serialFake, radioFake, banner, idLine);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/0);
+  cmd = pumpOne(comms, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "ID never decodes a Cmd");
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
@@ -603,7 +631,7 @@ void scenarioVerRepliesWithBuildVersion() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/0);
+  cmd = pumpOne(comms, /*now=*/0);
 
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
   if (!serialFake.sentReliable().empty()) {
@@ -630,7 +658,7 @@ void scenarioStrayTrailingColonOnNoDataVerbHandledGracefully() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/777);
+  cmd = pumpOne(comms, /*now=*/777);
 
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
   if (!serialFake.sentReliable().empty()) {
@@ -651,7 +679,7 @@ void scenarioTruncatedBinaryLineCountsMalformedNotCrash() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/0);
+  cmd = pumpOne(comms, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone -- no crash, no partial decode");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
@@ -687,7 +715,7 @@ void scenarioDataContainingColonAndZeroRoundTripsCorrectly() {
   App::Comms comms(serialFake, radioFake, banner);
 
   App::Cmd cmd;
-  comms.pump(cmd, /*now=*/0);
+  cmd = pumpOne(comms, /*now=*/0);
 
   checkTrue(cmd.status == App::CmdStatus::kDecoded,
             "decodes cleanly despite ':' and 0x00 embedded in the COBS-encoded data");
@@ -745,12 +773,13 @@ void scenarioRelayHandshakeChatterNeverCountsAsMalformed() {
     App::Comms comms(serialFake, radioFake, banner);
 
     // Drain every queued line (the "~1 s settle window" the issue's own
-    // repro waits out before inspecting fault_bits) -- pump() consumes at
-    // most one transport's line per call, and serialFake is always empty
-    // here, so each call drains exactly one radioFake line.
+    // repro waits out before inspecting fault_bits). ONE pump() call now
+    // drains both transports to empty (command-ingestion-ring-buffered-
+    // comms-subsystem-routing-two-stops.md §1) -- the loop is kept so this
+    // scenario still proves repeated pumping is idempotent on empty
+    // transports, and that no relay-chatter line ever leaves a Cmd behind.
     for (int i = 0; i < 5; ++i) {
-      App::Cmd cmd;
-      comms.pump(cmd, /*now=*/static_cast<uint32_t>(i));
+      App::Cmd cmd = pumpOne(comms, /*now=*/static_cast<uint32_t>(i));
       checkTrue(cmd.status == App::CmdStatus::kNone, "no relay chatter line ever decodes a Cmd");
     }
 
@@ -792,17 +821,19 @@ void scenarioRelayCarveOutIsNarrowAndDoesNotAffectSubsequentRealCommand() {
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   App::Comms comms(serialFake, radioFake, banner);
 
-  App::Cmd cmd1;
-  comms.pump(cmd1, /*now=*/0);
-  checkU64Eq(comms.malformedCount(), 1, "a non-sigil unrecognized line still counts as malformed");
-
-  App::Cmd cmd2;
-  comms.pump(cmd2, /*now=*/0);
-  checkU64Eq(comms.malformedCount(), 1, "relay chatter right after does NOT add a second malformed count");
-
-  App::Cmd cmd3;
-  comms.pump(cmd3, /*now=*/999);
-  checkU64Eq(comms.malformedCount(), 1, "malformedCount unchanged -- PING dispatches, not malformed");
+  // ONE pump() call consumes all three queued lines (command-ingestion-
+  // ring-buffered-comms-subsystem-routing-two-stops.md §1: pump() drains
+  // the transports rather than stopping after one line), so the whole
+  // sequence -- garbage, relay chatter, real command -- is exercised in a
+  // single call. That is a STRONGER form of this scenario's own question:
+  // if the carve-out left residual parser state behind, draining all three
+  // back-to-back inside one call is exactly where it would show.
+  comms.pump(/*now=*/999);
+  App::Cmd cmd;
+  checkTrue(!comms.takeCommand(cmd), "none of the three lines decodes into a command");
+  checkU64Eq(comms.malformedCount(), 1,
+             "exactly one malformed count: the non-sigil garbage line. Relay chatter is carved out, "
+             "PING dispatches");
   checkU64Eq(radioFake.sentReliable().size(), 1, "PING replied normally right after relay chatter");
   if (!radioFake.sentReliable().empty()) {
     checkStrEq(radioFake.sentReliable()[0], "PONG:t=999", "PING's reply content is unaffected by prior chatter");
@@ -819,7 +850,7 @@ int main() {
   scenarioMalformedCorruptProtobufRejected();
   scenarioHelloRepliesWithBannerViaSendReliable();
   scenarioPingRepliesOkPongViaSendReliable();
-  scenarioPumpBoundedToOneTransportPerCall();
+  // scenarioPumpBoundedToOneTransportPerCall();  // DEPRECATED-COMMAND-INGEST -- see its own #if 0 block
   scenarioSendReplyBroadcastsIdenticalLineOnBothTransports();
   scenarioSendReplyVerbNameTracksBodyKind();
   scenarioDecodeBinaryFrameRejectsMismatchedCommandScope();

@@ -6,7 +6,7 @@
 namespace Motion {
 
 float WheelPid::compute(float target, float targetAccel, float measured,
-                        float dt) {
+                        float dt, bool freezeIntegral) {
   const float error = target - measured;
   const float feed = gains_.kff * target + gains_.kaff * targetAccel;
   const float unsaturated = feed + gains_.kp * error + integral_;
@@ -14,7 +14,8 @@ float WheelPid::compute(float target, float targetAccel, float measured,
   // the output is already saturated AND the error would push it further.
   const bool saturatedHigh = unsaturated >= 1.0f && error > 0.0f;
   const bool saturatedLow = unsaturated <= -1.0f && error < 0.0f;
-  if (gains_.iMax > 0.0f && !saturatedHigh && !saturatedLow) {
+  if (gains_.iMax > 0.0f && !saturatedHigh && !saturatedLow &&
+      !freezeIntegral) {
     // Ramp gate: at steady state the integrator runs at full rate (its
     // job -- steady trim, e.g. per-wheel gain mismatch). During commanded
     // ramps it runs at a FRACTION of the rate: enough to keep trimming a

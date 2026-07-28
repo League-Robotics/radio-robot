@@ -225,7 +225,7 @@ class RetryingMoveTransport:
         return last_corr
 
     def stop(self) -> int:
-        return self._proto.stop()
+        return self._proto.estop()
 
     def read_pending_binary_tlm_frames(self) -> "list[TLMFrame]":
         """`run_tour()`'s own completion-ack polling entry point. Returns
@@ -317,7 +317,7 @@ def run_fake_otos_tour(port: str, tour_name: str) -> int:
         # release the port when done" -- unconditionally, whether the tour
         # closed cleanly, faulted, or this function raised.
         try:
-            NezhaProtocol(conn).stop()
+            NezhaProtocol(conn).estop()
         except Exception:
             pass
         conn.disconnect()

@@ -101,6 +101,7 @@ class Command(ctypes.Structure):
 class Health(ctypes.Structure):
     _fields_ = [("i2cSafetyNetCount", ctypes.c_uint32),
                 ("commsMalformedCount", ctypes.c_uint32),
+                ("commandsDroppedCount", ctypes.c_uint32),
                 ("wedgeLatch", ctypes.c_bool),
                 ("moveTimeout", ctypes.c_bool),
                 ("shapingDisabled", ctypes.c_bool),
@@ -115,7 +116,10 @@ class RobotState(ctypes.Structure):
                 ("command", Command), ("health", Health)]
 
 
-KIND_TIME, KIND_DISTANCE, KIND_ANGLE = 0, 1, 2
+# KIND_STOP -- the planned-stop queue entry (Move::Kind::Stop,
+# command-ingestion-...-two-stops.md §5); build one via
+# lib.plannerPlannedStop(), not by hand-filling a Move.
+KIND_TIME, KIND_DISTANCE, KIND_ANGLE, KIND_STOP = 0, 1, 2, 3
 VELOCITY_TWIST, VELOCITY_WHEELS = 0, 1
 
 
@@ -154,10 +158,32 @@ class PlannerLimits(ctypes.Structure):
                 ("velIMax", ctypes.c_float),  # [duty]
                 ("velKaff", ctypes.c_float),  # [duty/(mm/s^2)] accel feedforward
                 ("velIAccelGate", ctypes.c_float),  # [mm/s^2] integral ramp gate
+                ("dutyFloor", ctypes.c_float),   # [-1,1] stiction breakaway kick
+                ("settleEpsilonLinear", ctypes.c_float),   # [mm]
+                ("settleEpsilonAngular", ctypes.c_float),  # [rad]
                 ("jerkMax", ctypes.c_float),     # [mm/s^3] S-curve
                 ("yawJerkMax", ctypes.c_float),  # [rad/s^3]
                 ("settleRestVelocity", ctypes.c_float),  # [mm/s]
-                ("settleRestOmega", ctypes.c_float)]     # [rad/s]
+                ("settleRestOmega", ctypes.c_float),     # [rad/s]
+                # Velocity-domain trim (wheel_trim.h) -- the closed loop
+                # that actually reaches the wheels. No trimKff by design.
+                ("trimKp", ctypes.c_float),    # [1] dimensionless
+                ("trimKi", ctypes.c_float),    # [1/s]
+                ("trimIMax", ctypes.c_float),  # [mm/s]
+                ("trimKaff", ctypes.c_float),  # [s] ~= plant time constant
+                ("trimMax", ctypes.c_float),   # [mm/s] total trim authority
+                ("decelPlanFraction", ctypes.c_float)]  # [1] decel leeway
+
+
+# Motion::MovePhase, mirrored for the bench charts' phase shading.
+class MovePhase:
+    IDLE = 0
+    ACCEL = 1
+    HOLD = 2
+    DECEL = 3
+    SETTLE = 4
+
+    NAMES = {0: "idle", 1: "accel", 2: "hold", 3: "decel", 4: "settle"}
 
 
 class TickResult(ctypes.Structure):
@@ -185,15 +211,26 @@ def loadLibrary() -> ctypes.CDLL:
     lib.plannerMove.restype = ctypes.c_bool
     lib.plannerMove.argtypes = [ctypes.c_void_p, ctypes.POINTER(Move),
                                 ctypes.c_bool]
-    lib.plannerStop.argtypes = [ctypes.c_void_p]
+    lib.plannerEstop.argtypes = [ctypes.c_void_p]
+    lib.plannerPlannedStop.restype = ctypes.c_bool
+    lib.plannerPlannedStop.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
     lib.plannerTick.argtypes = [ctypes.c_void_p, ctypes.POINTER(RobotState),
                                 ctypes.POINTER(TickResult)]
     lib.plannerUpdate.argtypes = [ctypes.c_void_p, ctypes.POINTER(RobotState)]
     lib.plannerStructSizes.argtypes = [ctypes.POINTER(ctypes.c_uint32)] * 4
     lib.plannerDuty.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float),
                                 ctypes.POINTER(ctypes.c_float)]
+    lib.plannerTrim.argtypes = ([ctypes.c_void_p] +
+                                [ctypes.POINTER(ctypes.c_float)] * 6 +
+                                [ctypes.POINTER(ctypes.c_uint8)])
+    lib.plannerApplyTrimGains.argtypes = [ctypes.c_void_p] + \
+        [ctypes.c_float] * 5
 
-    # Layout guard: C++ sizeof must match the ctypes mirrors exactly.
+    lib.plannerLimitsOffsets.restype = ctypes.c_uint32
+    lib.plannerLimitsOffsets.argtypes = [ctypes.POINTER(ctypes.c_uint32),
+                                         ctypes.c_uint32]
+
+    # Layout guard, part 1: C++ sizeof must match the ctypes mirrors.
     sizes = [ctypes.c_uint32() for _ in range(4)]
     lib.plannerStructSizes(*[ctypes.byref(s) for s in sizes])
     expected = [RobotState, Move, PlannerLimits, TickResult]
@@ -201,6 +238,26 @@ def loadLibrary() -> ctypes.CDLL:
         assert cSize.value == ctypes.sizeof(pyType), (
             f"{pyType.__name__}: C++ sizeof {cSize.value} != "
             f"ctypes {ctypes.sizeof(pyType)} -- mirror out of date")
+
+    # Layout guard, part 2: per-field OFFSETS for PlannerLimits. Size alone
+    # does not catch a field inserted mid-struct on one side and appended
+    # on the other -- both totals match while every field after the
+    # insertion point reads a different member. That happened (the trim
+    # gains, 2026-07-27) and presented as a wildly mistuned controller
+    # rather than as a layout error, so check the offsets.
+    count = lib.plannerLimitsOffsets(None, 0)
+    buffer = (ctypes.c_uint32 * count)()
+    lib.plannerLimitsOffsets(buffer, count)
+    pyFields = [name for name, _ in PlannerLimits._fields_]
+    assert count == len(pyFields), (
+        f"PlannerLimits: C++ has {count} fields, ctypes mirror has "
+        f"{len(pyFields)} -- mirror out of date")
+    for index, name in enumerate(pyFields):
+        pyOffset = getattr(PlannerLimits, name).offset
+        assert buffer[index] == pyOffset, (
+            f"PlannerLimits.{name}: C++ offset {buffer[index]} != ctypes "
+            f"offset {pyOffset} -- field ORDER differs between "
+            f"planner_types.h and this mirror")
     return lib
 
 

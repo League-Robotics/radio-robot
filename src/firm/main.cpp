@@ -27,6 +27,7 @@
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "motion/move_queue.h"
+#include "motion/planner/planner.h"
 #include "motion/odometry.h"
 #include "motion/state_estimator.h"
 #include "types/version_generated.h"
@@ -40,17 +41,18 @@ namespace {
 // because main.cpp is the one place both types are reachable -- the
 // devices/ isolation invariant (DESIGN.md) forbids devices/ from including
 // messages/ or config/.
+//
+// 125-003: vel_gains/vel_filt_alpha/min_duty are NO LONGER copied here --
+// Devices::MotorConfig dropped those fields (the velocity PID they fed has
+// since been deleted outright -- see drive.h's own header). vel_filt_alpha
+// has no live consumer at all this sprint (the EMA estimator it fed was
+// deleted outright, pending ticket 004's App::WheelObserver) -- the wire
+// field itself is untouched (no protocol change), simply unread by
+// firmware for now.
 Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   Devices::MotorConfig cfg;
   cfg.wheelTravelCalib = src.travel_calib;
   cfg.fwdSign = src.fwd_sign;
-  cfg.velGains.kp = src.vel_gains.kp;
-  cfg.velGains.ki = src.vel_gains.ki;
-  cfg.velGains.kff = src.vel_gains.kff;
-  cfg.velGains.iMax = src.vel_gains.i_max;
-  cfg.velGains.kaw = src.vel_gains.kaw;
-  cfg.velFiltAlpha = src.vel_filt_alpha;
-  cfg.velDeadband = src.min_duty;
   cfg.slewRate = src.slew_rate;
   cfg.port = src.port;
   // Devices::MotorConfig's reversalDwell/outputDeadband are plain required
@@ -64,6 +66,13 @@ Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   cfg.polled = src.polled;
   return cfg;
 }
+
+// toMotionGains -- DELETED (command-ingestion-...-two-stops.md §4). It fed
+// App::Drive's interim Motion::WheelVelocityPid pair, which is gone: Drive
+// is open-loop duty from calibrated speed and holds no controller at all
+// (drive.h's own file header). The boot JSON's vel_gains reach the one
+// controller that still exists -- Motion::Planner's duty stage -- through
+// App::Configurator's pid.* wire keys, not through this seeding path.
 
 
 Motion::FusionWeights toFusionWeights(const Config::EstimatorBootConfig& src) {
@@ -85,10 +94,64 @@ Motion::ShaperLimits toShaperLimits(const Config::ShaperBootConfig& src) {
   return limits;
 }
 
+// The last digit of FIRMWARE_VERSION_STR ("0.20260726.1" -> '1'). Scans to
+// the end rather than indexing a fixed offset, so it survives any version
+// format gen_version.py might emit; '?' if the string somehow has no digit.
+char versionLastDigit() {
+  char last = '?';
+  for (const char* p = FIRMWARE_VERSION_STR; *p != '\0'; ++p) {
+    if (*p >= '0' && *p <= '9') last = *p;
+  }
+  return last;
+}
+
+// Boot identity on the LED matrix: heart, the last digit of the firmware
+// version, then the heart again -- and the heart STAYS LIT.
+//
+// This is the only way to tell WHICH build is actually on the board without
+// opening a serial session, and "did that flash land?" is a question that
+// has cost real debugging time. The trailing heart is the resting state: a
+// lit display through boot means "powered, flashed, and running"; a dark
+// one means it never got here.
+//
+// It is not left on forever. main() disables the display the instant boot
+// completes and before the first control cycle: the LED matrix driver
+// refreshes continuously off its own timer, and the loop runs to a measured
+// ~47 ms budget whose motion tuning assumes those cycles are not being
+// spent elsewhere. Boot is the one window where the cost is free.
+void showBootIdentity() {
+  // Pixel values are BRIGHTNESS 0..255, not booleans -- a 1 here renders
+  // at 1/255 duty, i.e. invisibly dim next to the font's full-bright
+  // digit (stakeholder observed "only the 1, no hearts", 2026-07-27).
+  constexpr uint8_t kOn = 255;
+  static const uint8_t kHeart[] = {
+      0,   kOn, 0,   kOn, 0,
+      kOn, kOn, kOn, kOn, kOn,
+      kOn, kOn, kOn, kOn, kOn,
+      0,   kOn, kOn, kOn, 0,
+      0,   0,   kOn, 0,   0,
+  };
+  constexpr int kHeartHold = 500;  // [ms]
+  constexpr int kDigitHold = 900;  // [ms] longer -- it is the payload
+
+  uBit.display.enable();
+  MicroBitImage heart(5, 5, kHeart);
+  uBit.display.print(heart);
+  uBit.sleep(kHeartHold);
+  uBit.display.clear();
+  uBit.display.printChar(versionLastDigit());
+  uBit.sleep(kDigitHold);
+  uBit.display.clear();
+  uBit.display.print(heart);  // resting state -- left lit through boot
+}
+
 }  // namespace
 
 int main() {
   uBit.init();
+
+  // Before anything touches the buses: say which build this is.
+  showBootIdentity();
 
   static SerialPort serial(uBit.serial);
   serial.begin();
@@ -161,6 +224,22 @@ int main() {
   // now deleted) -- comms already owns both transports internally.
   static App::Telemetry tlm(comms);
   static App::Drive drive(motorL, motorR, drivetrainConfig.trackwidth);
+  // Wheel calibration comes from the ROBOT JSON, never from C++
+  // (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
+  // §6): App::Drive carries no calibration defaults, and without this
+  // install it refuses to drive. gen_boot_config.py fails the build outright
+  // if the active robot's JSON is missing any of the three keys, so
+  // reaching here means they are real, measured, per-robot numbers.
+  {
+    const Config::DriveBootConfig driveConfig = Config::defaultDriveConfig();
+    drive.setDutyPerSpeed(driveConfig.dutyPerSpeedLeft, driveConfig.dutyPerSpeedRight);
+    drive.setWheelCorrection(
+        driveConfig.gainLeftAccel, driveConfig.interceptLeftAccel,
+        driveConfig.gainLeftDecel, driveConfig.interceptLeftDecel,
+        driveConfig.gainRightAccel, driveConfig.interceptRightAccel,
+        driveConfig.gainRightDecel, driveConfig.interceptRightDecel);
+    drive.setCrawlPulse(driveConfig.crawlPulse);
+  }
   static Motion::Odometry odom(drivetrainConfig.trackwidth, motorL.position(), motorR.position());
 
 
@@ -174,28 +253,167 @@ int main() {
   Config::EstimatorBootConfig estimatorBootConfig = Config::defaultEstimatorConfig();
   static Motion::StateEstimator stateEstimator(toFusionWeights(estimatorBootConfig));
 
-  Motion::ShaperLimits shaperLimits = toShaperLimits(Config::defaultShaperConfig());
 
-  static Motion::MoveQueue moveQueue(drive, odom, drivetrainConfig.trackwidth, shaperLimits);
+  // Planner integration (2026-07-26): the on-robot Motion::Planner replaces
+  // Motion::MoveQueue as the loop's motion decider. Limits assembled from
+  // the SAME boot-config sources the old stack used: shaper keys ->
+  // profile ceilings, vel_gains -> the planner's own duty-stage PID,
+  // vel_filt_alpha -> the planner's velocity-filter weight. controlPeriod
+  // is the loop's own kCycle; actuationDelay is the one-cycle staging
+  // latency (duty staged at the NEXT cycle top -- the exact shape the
+  // planner's duty scenario tier validates).
+  // Planner tuning: the PLANT-VALIDATED set from the measured-constants
+  // reference tour (motion checkout, square_tour_sim.py tourLimits() --
+  // plant ID 2026-07-26: gain ~1370 mm/s per duty, tau ~230 ms), NOT the
+  // boot JSON's vel_gains/shaper block: those numbers were bench-tuned
+  // for the DELETED NezhaMotor MotorVelocityPid (the JSON's own
+  // _vel_gains_domain note) and are wrong for this loop -- deployed as-is
+  // (kp 0.0016, aMax 800, jMax 5000) they limit-cycled the real wheels at
+  // ~2-3 Hz across the whole first on-robot tour (2026-07-27 plot). A
+  // planner-domain config surface can supersede these constants later;
+  // until then the JSON's old-loop gains must not reach this controller.
+  Motion::PlannerLimits plannerLimits;
+  plannerLimits.vMax = 400.0f;   // [mm/s]
+  plannerLimits.aMax = 300.0f;   // [mm/s^2]
+  plannerLimits.aDecel = 250.0f; // [mm/s^2]
+  plannerLimits.omegaMax = 3.0f;     // [rad/s]
+  plannerLimits.alphaMax = 6.0f;     // [rad/s^2]
+  plannerLimits.alphaDecel = 5.0f;   // [rad/s^2]
+  plannerLimits.jerkMax = 1500.0f;   // [mm/s^3] aMax reached in ~0.2 s
+  plannerLimits.yawJerkMax = 30.0f;  // [rad/s^3] alphaMax reached in ~0.2 s
+  plannerLimits.trackWidth = drivetrainConfig.trackwidth;
+  // MEASURED loop period, not the kCycle nominal: the schedule's real
+  // delivered cycle is 46-48 ms on the bench (tlm cycle-delta capture,
+  // 2026-07-27, after the 1 ms scheduler tick + overrun-yield fixes) --
+  // the vendor bus clearances outside the paced windows add ~7 ms the
+  // nominal does not include. The planner's discrete math (accel steps,
+  // braking sums, ramp tick counts) must use the period the loop actually
+  // delivers; telemetry cycle_period re-measures this on every frame if
+  // the schedule ever changes.
+  plannerLimits.controlPeriod = 47.0f;   // [ms]
+  plannerLimits.actuationDelay = 47.0f;  // [ms]
+  plannerLimits.velocityFilterWeight =
+      drivetrainConfig.vel_filt_alpha > 0.05f ? drivetrainConfig.vel_filt_alpha
+                                              : 1.0f;
+  // Settle-confirm OFF (stakeholder 2026-07-27): the creep/breakaway-kick
+  // landing machinery pulsed the wheels at ~0.18 duty against gearbox
+  // stiction after every move -- functional but unacceptable sawtooth.
+  // Landing residual (small at the measured 47 ms period) is instead
+  // absorbed by the NEXT chained move via the cumulative baseline ledger,
+  // at full speed where the plant is linear and no stiction compensation
+  // is needed. The last move of a chain keeps its own small residual.
+  plannerLimits.requireSettle = false;
+  // Rest floors sized to the measured hardware encoder-velocity noise
+  // (plant ID 2026-07-26: ~+-7 mm/s at rest) -- the rest-damping stage
+  // outputs exactly zero duty below the floor, so it must clear the
+  // noise band or the wheels twitch at rest forever.
+  plannerLimits.settleRestVelocity = 10.0f;  // [mm/s]
+  plannerLimits.settleRestOmega = 0.16f;     // [rad/s] 2*floor/trackWidth
+  plannerLimits.settleWindow = 2500.0f;  // [ms]
+  plannerLimits.headingHoldGain = 2.0f;  // [1/s] sim-validated
+  {
+    // Measured-plant duty-stage gains (square_tour_sim.py tourLimits()):
+    // kff = 1/gain, kaff = tau/gain -- physics-derived, per-robot only
+    // through the plant measurement, not the JSON's old-loop vel_gains.
+    constexpr float kPlantGain = 1370.0f;  // [mm/s per duty]
+    constexpr float kPlantTau = 0.23f;     // [s]
+    plannerLimits.velKff = 1.0f / kPlantGain;
+    plannerLimits.velKp = 0.0009f;
+    plannerLimits.velKi = 0.004f;
+    plannerLimits.velIMax = 0.25f;
+    plannerLimits.velKaff = kPlantTau / kPlantGain;
+    plannerLimits.velIAccelGate = 50.0f;  // [mm/s^2]
+    // Stiction floor: must clear the gearbox BREAKAWAY duty, not merely
+    // MotorArmor's write-suppression threshold (output_deadband 0.03 --
+    // a whine gate, not a friction model). 0.05 is estimated from the
+    // measured integral wind-up time to first motion during the stalled
+    // settle creep (2026-07-27 single-turn trace); replace with a proper
+    // plant-ID breakaway measurement when one exists.
+    plannerLimits.dutyFloor = 0.18f;
+    // Arrival tolerances sized to the stiction-limited creep resolution
+    // (one dutyFloor pulse per period ~= 2-4 deg of heading): tighter is
+    // unreachable and just burns the settle window at every landing.
+    plannerLimits.settleEpsilonLinear = 4.0f;      // [mm]
+    plannerLimits.settleEpsilonAngular = 0.035f;   // [rad] ~2 deg --
+    // the demonstrated one-sided-creep resolution (single-turn probe
+    // 2026-07-27 landed +1.76 deg; the right wheel does not reverse
+    // under the breakaway kick, so fine correction rides the left wheel)
+
+    // VELOCITY-DOMAIN TRIM (wheel_trim.h) -- the closed loop that actually
+    // reaches the wheels. The loop's one actuation contract is a wheel
+    // VELOCITY (RobotState::Wheel::cmdVelocity), which App::Drive converts
+    // through its measured per-wheel per-direction map; the duty-stage
+    // gains above are computed every tick and DISCARDED.
+    //
+    // COMMISSIONING VALUES, to be raised on the stand rather than trusted:
+    //   trimKp is DIMENSIONLESS (mm/s of trim per mm/s of error). The sim
+    //     tour ran 0.25 against a +-4.8% wheel mismatch; this robot's
+    //     residual after the 2026-07-27 calibration is ~2%, and measured
+    //     wheel velocity is a raw per-tick difference quotient, so start
+    //     at 0.15. An over-gained loop on THIS hardware limit-cycled at
+    //     2-3 Hz (see the tuning note above) -- the failure to watch for.
+    //   trimKaff is the plant time constant [s]. FULL tau measured
+    //     UNSTABLE in sim (closure 696 mm vs 16 mm at half) -- half it is.
+    plannerLimits.trimKp = 0.15f;            // [1]
+    plannerLimits.trimKi = 0.4f;             // [1/s]
+    plannerLimits.trimIMax = 40.0f;          // [mm/s]
+    plannerLimits.trimKaff = kPlantTau / 2;  // [s]
+    plannerLimits.trimMax = 80.0f;           // [mm/s]
+    // Plan the brake START at 40% of the decel ceiling, keeping the rest
+    // in reserve so the plant can TRACK the ramp down and arrives at each
+    // boundary already slow instead of coasting past (tau ~230 ms).
+    // Swept 0.0-0.6 in sim: 0.4 gave the best closure (16.0 vs 23.3 mm).
+    plannerLimits.decelPlanFraction = 0.4f;  // [1]
+  }
+  static Motion::Planner planner(plannerLimits);
+  // Mark shaping CONFIGURED through the same applyShaperLimits() entry the
+  // wire push uses, with the validated ceilings above (NOT the boot JSON's
+  // old-shaper block -- see the tuning comment) so
+  // kFlagFaultShapingDisabled (119-001) stays quiet.
+  planner.applyShaperLimits(plannerLimits.aMax, plannerLimits.aDecel,
+                            plannerLimits.alphaMax, plannerLimits.alphaDecel,
+                            plannerLimits.jerkMax, plannerLimits.yawJerkMax);
   static App::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
 
   static Config::MicroBitTuningStore tuningStore(uBit.storage);
 
 
+  // App::Configurator owns the CONFIG lifecycle and the persisted-tuning
+  // store (command-ingestion-...-two-stops.md §6); RobotLoop routes to it.
+  static App::Configurator configurator(drive, motorL, motorR, otos, planner,
+                                        stateEstimator, &tuningStore);
+
   static App::RobotLoop robotLoop(bus, motorL, motorR, otos, color, line,
-                                   comms, tlm, drive, odom, moveQueue, preamble,
-                                   stateEstimator, clock, sleeper, &tuningStore);
+                                   comms, tlm, drive, configurator, odom,
+                                   planner, preamble, stateEstimator, clock,
+                                   sleeper);
 
   uint32_t storedVersion = 0;
   Config::Blob storedBlob{};
   bool storeHadData = tuningStore.load(&storedVersion, &storedBlob);
   if (storeHadData && !Config::shouldWipe(storedVersion, Config::kConfigSchemaVersion)) {
-    robotLoop.reapplyPersistedTuning(Config::deserializeSnapshot(storedBlob));
+    configurator.reapplyPersistedTuning(Config::deserializeSnapshot(storedBlob));
   } else if (storeHadData) {
     tuningStore.wipe();
   }
 
   robotLoop.markConfigured();
-  robotLoop.run();
+
+  // RobotLoop::run() is boot() followed by cycle() forever; it is spelled
+  // out here instead so the display can be turned off in between. Both
+  // methods are already public and this changes neither -- the loop's own
+  // behavior is byte-identical to run().
+  robotLoop.boot();
+
+  // Boot is done and the first control cycle is next: give the LED matrix's
+  // refresh timer back to the loop. Everything from here runs to a measured
+  // ~47 ms budget (see PlannerLimits::controlPeriod), and the motion tuning
+  // assumes those cycles are the loop's.
+  uBit.display.clear();
+  uBit.display.disable();
+
+  for (;;) {
+    robotLoop.cycle();
+  }
 }

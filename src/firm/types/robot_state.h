@@ -271,6 +271,13 @@ struct RobotState {
   struct Health {
     uint32_t i2cSafetyNetCount = 0;    // Devices::I2CBus::clearanceSafetyNetCount()
     uint32_t commsMalformedCount = 0;  // App::Comms::malformedCount()
+    // commandsDroppedCount (command-ingestion-...-two-stops.md §1):
+    // App::Comms::commandsDroppedCount() -- a well-formed command that
+    // arrived at a full command ring and was never routed. Sits beside
+    // commsMalformedCount because both are "what the command plane lost,"
+    // but they lose it for opposite reasons -- see telemetry.h's own
+    // kFlagFaultCommandsDropped doc comment.
+    uint32_t commandsDroppedCount = 0;
     bool wedgeLatch = false;           // either bound motor's Devices::Motor::wedged()
     bool moveTimeout = false;          // MOVE timeout backstop fired THIS cycle
     bool shapingDisabled = false;      // active MOVE, both ShaperLimits axes disabled

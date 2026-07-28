@@ -1,126 +1,139 @@
 {
- "schema_version": 2,
- "identity": {
-  "robot_name": "tovez",
-  "uid": "tovez",
-  "hardware_model": "DFRobot Nezha",
-  "common_name": "classroom-bot"
- },
- "connection": {
-  "device_announcement_name": "tovez",
-  "serial_last_6": "f137c0",
-  "i2c_addresses": {}
- },
- "vision": {
-  "robot_tag_id": 100,
-  "tag_offset_mm": {
-   "x": 47.5,
-   "y": 0.0,
-   "z": 120.0,
-   "yaw_rad": 0.0
+  "schema_version": 2,
+  "identity": {
+    "robot_name": "tovez",
+    "uid": "tovez",
+    "hardware_model": "DFRobot Nezha",
+    "common_name": "classroom-bot"
   },
-  "camera_distance_scale": 1.0022
- },
- "geometry": {
-  "drive_axle_offset_mm": {
-   "x": 0.0,
-   "y": 0.0
+  "connection": {
+    "device_announcement_name": "tovez",
+    "serial_last_6": "f137c0",
+    "i2c_addresses": {}
   },
-  "odometry_offset_mm": {
-   "x": -47.7,
-   "y": 3.5,
-   "yaw_rad": 0.0
+  "vision": {
+    "robot_tag_id": 100,
+    "tag_offset_mm": {
+      "x": 47.5,
+      "y": 0.0,
+      "z": 120.0,
+      "yaw_rad": 0.0
+    },
+    "camera_distance_scale": 1.0022
   },
-  "odometry_chip_upside_down": false,
-  "otos_untrusted": true,
-  "trackwidth": 128,
-  "wheelbase_mm": null
- },
- "wheels": {
-  "wheel_diameter_mm": 80.77,
-  "ticks_per_rev": 360,
-  "ticks_per_mm": 1.4187
- },
- "encoders": {
-  "has_encoders": true,
-  "encoder_count": 2
- },
- "drive": {
-  "motor_deadband": null,
-  "max_cmd": null,
-  "cmd_to_mm_per_s": null,
-  "max_drive_mm_s": null,
-  "max_turn_deg_s": null,
-  "min_drive_mm_s": null,
-  "crawl_threshold_mm_s": null,
-  "crawl_cmd": null
- },
- "gripper": {
-  "has_gripper": false,
-  "gripper_offset_mm": null
- },
- "peripherals": {
-  "laser_port": 4
- },
- "calibration": {
-  "otos_linear_scale": 1.067,
-  "otos_angular_scale": 0.987,
-  "mm_per_wheel_deg_left": 0.7165,
-  "mm_per_wheel_deg_right": 0.7077,
-  "fwd_sign_left": 1,
-  "fwd_sign_right": -1,
-  "rotational_slip": 0.92,
-  "rotation_gain": 0.956,
-  "rotation_offset_deg": 1.045,
-  "rotation_gain_neg": 0.954,
-  "rotation_offset_deg_neg": 1.158,
-  "ekf_r_otos_theta": 0.01
- },
- "control": {
-  "_vel_gains_domain": "duty [-1,1] (NezhaMotor MotorVelocityPid); NOT the old PWM-percent scale",
-  "_sprint_114_note": "a_max/a_decel/v_body_max/j_max/yaw_jerk_max added 2026-07-20 (sprint 114 ticket 002, config-as-truth completion): gen_boot_config.py no longer carries these as Python-side *_DEFAULT fallback constants -- every value below is seeded with the exact former default, value-preserving (verified byte-identical boot_config.cpp regen). This note originally also covered a dozen sibling control.* keys (heading/lead/distance/model-tau) plus this profile's own pre-existing outer-loop/turn-rate keys -- ALL deleted (119-003, config-attic sweep): no living consumer survived 115-003's motion-stack excision.",
-  "_shaper_note": "decel-into-the-goal campaign (2026-07-22, follow-on to clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md's own 'Option 1... remains the path to closing that residual further'): a_max/a_decel/j_max/yaw_jerk_max were dead data (orphaned by 115-003's motion-stack excision, gen_boot_config.py's own docstring documented them 'unread') until THIS campaign made them live again via Motion::VelocityShaper -- gen_boot_config.py's shaper_config_for_config() now reads all six of a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max into Config::ShaperBootConfig, consumed by App::MoveQueue to taper the commanded speed toward each Move's own stop threshold (a_max/a_decel/j_max/yaw_jerk_max source VALUES UNCHANGED, still 800.0/800.0mm/s^2 and 5000.0mm/s^3/100.0rad/s^3 -- carried forward, not retuned, since they were already reasonable bench starting points). alpha_max/alpha_decel are NEW this campaign (a_max/a_decel's angular sibling, no prior msg::PlannerConfig field to inherit from): alpha_decel=7.0rad/s^2 is derived from the taper-distance formula VelocityShaper itself implements (angle = omega^2/(2*alpha)) targeted at the ticket's own '15-20deg taper from omega=2rad/s (the TestGUI cruise rate)' bound -- 2^2/(2*7.0) = 0.2857rad = 16.4deg, inside that band. alpha_max mirrors alpha_decel (symmetric ramp-up/taper), matching a_max/a_decel's own symmetric 800.0/800.0 precedent. jerk-limited S-curve stage (same day, stakeholder correction): the shaper's own commanded ACCELERATION is now itself slewed by at most j_max/yaw_jerk_max per second (velocity_shaper.h's own file header has the full algorithm) -- j_max=5000mm/s^3 means a_max=800mm/s^2 is reached from rest in 0.16s; yaw_jerk_max=100rad/s^2 means alpha_max=7rad/s^2 is reached in 0.07s -- both plausible, not yet independently bench-retuned this campaign (carried forward from their pre-existing sprint-114 values).",
-  "vel_kp": 0.0016,
-  "vel_ki": 0.005,
-  "vel_kff": 0.0008,
-  "vel_imax": 0.3,
-  "vel_kaw": 20.0,
-  "vel_filt": 0.3,
-  "output_deadband": 0.03,
-  "reversal_dwell_ms": 100.0,
-  "a_max": 800.0,
-  "a_decel": 800.0,
-  "alpha_max": 7.0,
-  "alpha_decel": 7.0,
-  "v_body_max": 1000.0,
-  "j_max": 5000.0,
-  "yaw_jerk_max": 100.0,
-  "v_wheel_max": 620.0,
-  "steer_headroom": 20.0,
-  "wheel_step_max": 150.0,
-  "track_k_s": 2.0,
-  "track_k_theta": 6.0,
-  "track_k_cross": 1.5e-5,
-  "trim_v_max": 120.0,
-  "trim_omega_max": 2.0,
-  "replan_err_pos": 40.0,
-  "replan_err_theta": 0.15,
-  "replan_hold": 0.2,
-  "replan_min_period": 0.3,
-  "replan_max": 3.0,
-  "handoff_tol_pos": 40.0,
-  "handoff_tol_v": 0.14,
-  "arrive_vel_tol": 15.0,
-  "_vel_kff_note": "1/650 -- from duty-saturated plateau measurements 2026-07-11 (620-740 mm/s across windows; window-to-window variance cause not established -- NOT power, per stakeholder). Do not lean on FF accuracy: the loop should be feedback-dominant (see motion_control.ipynb verdict).",
-  "_vel_ki_note": "kept 0.0018 in the 2026-07-11 session; motion_control.ipynb then showed the loop is FF-dominated with 40-50% step overshoot and weak steady-state correction -- a feedback-dominant retune (kp/ki up, acceptance via motion_control.ipynb) is the open next step.",
-  "_vel_gains_note": "2026-07-15 RESONANCE TAMED (106-002, live config() gain sweep -- P4 binary wire, tests/bench/velocity_step_response.py, no reflash between trials): vel_kp 0.0014->0.0016, vel_kff 0.00135->0.0008. History: the ORIGINAL 0.0018 loop had a ~140 mm/s overshoot RESONANCE (+24..+33% on a velocity step); the 2026-07-12 interim detune (vel_kp 0.0018->0.0014, vel_ki 0.008->0.005, vel_kaw 15->20) only halved it (~+11%, still over the <~10% bar) and cost rise time. This session's own bench grid at kp=0.0014/kff=0.00135 measured worst-case +25% at 140mm/s (reproducing the historical pattern -- the interim detune alone did not clear the bar this session either). Root cause, found by exhausting kp/ki/kff/iMax/kaw per architecture-update.md (106) Decision 4: kff (feedforward) was OVER-estimated -- raising it (tried 0.0016) made overshoot WORSE (kff*target is an immediate open-loop kick added on top of kp*error, so an over-large kff over-drives the plant right at the step) -- confirming the 2026-07-11 kff derivation's own flagged 620-740mm/s measurement variance was real drift, not noise. Lowering kff to 0.0008 (with kp still at 0.0014) killed the resonance (worst 2.1%) but slowed rise time by ~30-50% (0.9-1.5s vs the interim's 0.9-1.28s) -- kp=0.0016 restores it: 3 consecutive full-grid confirmation runs all passed the <~10% bar with FASTER rise times than the interim detune (worst overshoot 9.3%/4.3%/5.0%; rise times 0.28-0.98s vs the interim's 0.9-1.5s) -- both overshoot AND rise time improved over the shipped interim, not just traded off. vel_ki/vel_kaw unchanged (0.005/20.0) -- the fix lived entirely in kp/kff, ki/kaw were not the lever needed this time. Re-verified from a clean reflash (boot defaults only, no live config() call) after persisting -- see 106-002's own completion notes for the full before/after table. Endpoint-accuracy re-verification (turn_sweep.py-style angle grid) NOT re-run this session -- flagged as a follow-up if endpoint regressions are observed, per the interim detune's own precedent of trading a little endpoint accuracy for trajectory smoothness. vel_filt=0.3 unchanged. See clasi/sprints/106-host-trajectory-planner-profiled-twists-straights-and-turns/issues/heading-loop-output-clamp-and-velocity-resonance.md's own Part 2 (marked resolved by 106-002) for the fuller history.",
-  "_vel_filt_note": "kept 0.3: raising to 0.6 (2026-07-11) cut measurement lag but pushed step overshoot to ~11% and turns to +6/+9/+7 -- the decel-lag surplus just became an overshoot surplus. 0.3 is the verified optimum of that trade with the current gains.",
-  "_drive_limits_note": "2026-07-12 (sprint 100-001, motion-stack-v2 M1): starting values, not yet bench-tuned, for the new source/drive/ subsystem's Drive::Limits/tracker/policy tunables (PlannerConfig fields 15-31). v_wheel_max=620.0 is the one BENCH-MEASURED exception (mm/s plateau, matching the 2026-07-11 duty-saturated measurements already cited by _vel_kff_note -- NOT a starting guess). track_k_s/track_k_theta/track_k_cross/trim_v_max carry the issue's own Kanayama trim-law table verbatim (2.0/6.0/1.5e-5/120.0 -- track_k_theta=6.0 additionally matches heading_kp's own sprint-098 hardware-proven value, since both are the same physical outer-loop gain generalized). trim_omega_max=2.0 is the issue table's PIVOT-mode value ('1.0 arc / 2.0 pivot [rad/s]'); the lower arc-mode ceiling is left to the tracker's own per-mode logic (ticket 004), not a second wire field -- flagged. replan_err_pos=40.0/handoff_tol_pos=40.0 approximate BOTH the along-track envelope's flat term (40mm) and the cross-track bound (35mm/30mm respectively) with one shared value each -- flagged. handoff_tol_v=0.14 is the issue's flying-handoff formula's own velocity-coupling slope ('e_along <= 0.14*vExit + 40mm'), dimensionally a time constant despite the '_v' name -- flagged. steer_headroom=20.0/wheel_step_max=150.0 have no issue-table anchor at all; picked conservative placeholders (steer_headroom mirrors the old RobotConfig.steerHeadroom starting value; wheel_step_max is ~1.25x trim_v_max) -- flagged. replan_hold=0.2/replan_min_period=0.3/replan_max=3.0/replan_err_theta=0.15/arrive_vel_tol=15.0/arrive_dwell=0.15 are direct transcriptions of the issue's replan-envelope/terminal tables. See ticket 001's completion notes for the full field-by-field derivation; M11 (bench: arc_sweep grids) re-tunes all of these against the real plant."
- },
- "estimator": {
-  "_estimator_note": "117 (predict-to-now estimator v1): weight_heading_otos/weight_omega_otos committed 0.0 -- stakeholder's encoder-only-v1 decision, OTOS fusion is wired but not yet trusted with any nonzero weight. staleness_ms=60.0 is 3x Devices::Otos::kReadPeriod (20ms): generous headroom over the OTOS chip's own read cadence, small enough to exclude a genuinely stale reading before the next cycle's fresh one arrives. (118 ticket 004, land-at-zero-completion-delete-stop-lead.md: this section's own former fourth key -- a boot-time anticipation-lead constant with a four-retune history and no stable value -- is DELETED; the mechanism it fed no longer exists, see App::MoveQueue::tick()'s own doc comment for the land-at-zero completion predicate that replaces it.)",
-  "weight_heading_otos": 0.0,
-  "weight_omega_otos": 0.0,
-  "staleness_ms": 60.0
- }
+  "geometry": {
+    "drive_axle_offset_mm": {
+      "x": 0.0,
+      "y": 0.0
+    },
+    "odometry_offset_mm": {
+      "x": -47.7,
+      "y": 3.5,
+      "yaw_rad": 0.0
+    },
+    "odometry_chip_upside_down": false,
+    "otos_untrusted": true,
+    "trackwidth": 128,
+    "wheelbase_mm": null
+  },
+  "wheels": {
+    "wheel_diameter_mm": 80.77,
+    "ticks_per_rev": 360,
+    "ticks_per_mm": 1.4187
+  },
+  "encoders": {
+    "has_encoders": true,
+    "encoder_count": 2
+  },
+  "drive": {
+    "motor_deadband": null,
+    "max_cmd": null,
+    "cmd_to_mm_per_s": null,
+    "max_drive_mm_s": null,
+    "max_turn_deg_s": null,
+    "min_drive_mm_s": null,
+    "crawl_threshold_mm_s": null,
+    "crawl_cmd": null
+  },
+  "gripper": {
+    "has_gripper": false,
+    "gripper_offset_mm": null
+  },
+  "peripherals": {
+    "laser_port": 4
+  },
+  "calibration": {
+    "otos_linear_scale": 1.067,
+    "otos_angular_scale": 0.987,
+    "mm_per_wheel_deg_left": 0.7165,
+    "mm_per_wheel_deg_right": 0.7077,
+    "fwd_sign_left": 1,
+    "fwd_sign_right": -1,
+    "rotational_slip": 0.92,
+    "rotation_gain": 0.956,
+    "rotation_offset_deg": 1.045,
+    "rotation_gain_neg": 0.954,
+    "rotation_offset_deg_neg": 1.158,
+    "ekf_r_otos_theta": 0.01
+  },
+  "control": {
+    "_vel_gains_domain": "duty [-1,1] (NezhaMotor MotorVelocityPid); NOT the old PWM-percent scale",
+    "_sprint_114_note": "a_max/a_decel/v_body_max/j_max/yaw_jerk_max added 2026-07-20 (sprint 114 ticket 002, config-as-truth completion): gen_boot_config.py no longer carries these as Python-side *_DEFAULT fallback constants -- every value below is seeded with the exact former default, value-preserving (verified byte-identical boot_config.cpp regen). This note originally also covered a dozen sibling control.* keys (heading/lead/distance/model-tau) plus this profile's own pre-existing outer-loop/turn-rate keys -- ALL deleted (119-003, config-attic sweep): no living consumer survived 115-003's motion-stack excision.",
+    "_shaper_note": "decel-into-the-goal campaign (2026-07-22, follow-on to clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md's own 'Option 1... remains the path to closing that residual further'): a_max/a_decel/j_max/yaw_jerk_max were dead data (orphaned by 115-003's motion-stack excision, gen_boot_config.py's own docstring documented them 'unread') until THIS campaign made them live again via Motion::VelocityShaper -- gen_boot_config.py's shaper_config_for_config() now reads all six of a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max into Config::ShaperBootConfig, consumed by App::MoveQueue to taper the commanded speed toward each Move's own stop threshold (a_max/a_decel/j_max/yaw_jerk_max source VALUES UNCHANGED, still 800.0/800.0mm/s^2 and 5000.0mm/s^3/100.0rad/s^3 -- carried forward, not retuned, since they were already reasonable bench starting points). alpha_max/alpha_decel are NEW this campaign (a_max/a_decel's angular sibling, no prior msg::PlannerConfig field to inherit from): alpha_decel=7.0rad/s^2 is derived from the taper-distance formula VelocityShaper itself implements (angle = omega^2/(2*alpha)) targeted at the ticket's own '15-20deg taper from omega=2rad/s (the TestGUI cruise rate)' bound -- 2^2/(2*7.0) = 0.2857rad = 16.4deg, inside that band. alpha_max mirrors alpha_decel (symmetric ramp-up/taper), matching a_max/a_decel's own symmetric 800.0/800.0 precedent. jerk-limited S-curve stage (same day, stakeholder correction): the shaper's own commanded ACCELERATION is now itself slewed by at most j_max/yaw_jerk_max per second (velocity_shaper.h's own file header has the full algorithm) -- j_max=5000mm/s^3 means a_max=800mm/s^2 is reached from rest in 0.16s; yaw_jerk_max=100rad/s^2 means alpha_max=7rad/s^2 is reached in 0.07s -- both plausible, not yet independently bench-retuned this campaign (carried forward from their pre-existing sprint-114 values).",
+    "vel_kp": 0.0016,
+    "vel_ki": 0.005,
+    "vel_kff": 0.0008,
+    "vel_imax": 0.3,
+    "vel_kaw": 20.0,
+    "vel_filt": 0.3,
+    "output_deadband": 0.03,
+    "reversal_dwell_ms": 100.0,
+    "a_max": 800.0,
+    "a_decel": 800.0,
+    "alpha_max": 7.0,
+    "alpha_decel": 7.0,
+    "v_body_max": 1000.0,
+    "j_max": 5000.0,
+    "yaw_jerk_max": 100.0,
+    "v_wheel_max": 620.0,
+    "steer_headroom": 20.0,
+    "wheel_step_max": 150.0,
+    "track_k_s": 2.0,
+    "track_k_theta": 6.0,
+    "track_k_cross": 1.5e-05,
+    "trim_v_max": 120.0,
+    "trim_omega_max": 2.0,
+    "replan_err_pos": 40.0,
+    "replan_err_theta": 0.15,
+    "replan_hold": 0.2,
+    "replan_min_period": 0.3,
+    "replan_max": 3.0,
+    "handoff_tol_pos": 40.0,
+    "handoff_tol_v": 0.14,
+    "arrive_vel_tol": 15.0,
+    "_vel_kff_note": "1/650 -- from duty-saturated plateau measurements 2026-07-11 (620-740 mm/s across windows; window-to-window variance cause not established -- NOT power, per stakeholder). Do not lean on FF accuracy: the loop should be feedback-dominant (see motion_control.ipynb verdict).",
+    "_vel_ki_note": "kept 0.0018 in the 2026-07-11 session; motion_control.ipynb then showed the loop is FF-dominated with 40-50% step overshoot and weak steady-state correction -- a feedback-dominant retune (kp/ki up, acceptance via motion_control.ipynb) is the open next step.",
+    "_vel_gains_note": "2026-07-15 RESONANCE TAMED (106-002, live config() gain sweep -- P4 binary wire, tests/bench/velocity_step_response.py, no reflash between trials): vel_kp 0.0014->0.0016, vel_kff 0.00135->0.0008. History: the ORIGINAL 0.0018 loop had a ~140 mm/s overshoot RESONANCE (+24..+33% on a velocity step); the 2026-07-12 interim detune (vel_kp 0.0018->0.0014, vel_ki 0.008->0.005, vel_kaw 15->20) only halved it (~+11%, still over the <~10% bar) and cost rise time. This session's own bench grid at kp=0.0014/kff=0.00135 measured worst-case +25% at 140mm/s (reproducing the historical pattern -- the interim detune alone did not clear the bar this session either). Root cause, found by exhausting kp/ki/kff/iMax/kaw per architecture-update.md (106) Decision 4: kff (feedforward) was OVER-estimated -- raising it (tried 0.0016) made overshoot WORSE (kff*target is an immediate open-loop kick added on top of kp*error, so an over-large kff over-drives the plant right at the step) -- confirming the 2026-07-11 kff derivation's own flagged 620-740mm/s measurement variance was real drift, not noise. Lowering kff to 0.0008 (with kp still at 0.0014) killed the resonance (worst 2.1%) but slowed rise time by ~30-50% (0.9-1.5s vs the interim's 0.9-1.28s) -- kp=0.0016 restores it: 3 consecutive full-grid confirmation runs all passed the <~10% bar with FASTER rise times than the interim detune (worst overshoot 9.3%/4.3%/5.0%; rise times 0.28-0.98s vs the interim's 0.9-1.5s) -- both overshoot AND rise time improved over the shipped interim, not just traded off. vel_ki/vel_kaw unchanged (0.005/20.0) -- the fix lived entirely in kp/kff, ki/kaw were not the lever needed this time. Re-verified from a clean reflash (boot defaults only, no live config() call) after persisting -- see 106-002's own completion notes for the full before/after table. Endpoint-accuracy re-verification (turn_sweep.py-style angle grid) NOT re-run this session -- flagged as a follow-up if endpoint regressions are observed, per the interim detune's own precedent of trading a little endpoint accuracy for trajectory smoothness. vel_filt=0.3 unchanged. See clasi/sprints/106-host-trajectory-planner-profiled-twists-straights-and-turns/issues/heading-loop-output-clamp-and-velocity-resonance.md's own Part 2 (marked resolved by 106-002) for the fuller history.",
+    "_vel_filt_note": "kept 0.3: raising to 0.6 (2026-07-11) cut measurement lag but pushed step overshoot to ~11% and turns to +6/+9/+7 -- the decel-lag surplus just became an overshoot surplus. 0.3 is the verified optimum of that trade with the current gains.",
+    "_drive_limits_note": "2026-07-12 (sprint 100-001, motion-stack-v2 M1): starting values, not yet bench-tuned, for the new source/drive/ subsystem's Drive::Limits/tracker/policy tunables (PlannerConfig fields 15-31). v_wheel_max=620.0 is the one BENCH-MEASURED exception (mm/s plateau, matching the 2026-07-11 duty-saturated measurements already cited by _vel_kff_note -- NOT a starting guess). track_k_s/track_k_theta/track_k_cross/trim_v_max carry the issue's own Kanayama trim-law table verbatim (2.0/6.0/1.5e-5/120.0 -- track_k_theta=6.0 additionally matches heading_kp's own sprint-098 hardware-proven value, since both are the same physical outer-loop gain generalized). trim_omega_max=2.0 is the issue table's PIVOT-mode value ('1.0 arc / 2.0 pivot [rad/s]'); the lower arc-mode ceiling is left to the tracker's own per-mode logic (ticket 004), not a second wire field -- flagged. replan_err_pos=40.0/handoff_tol_pos=40.0 approximate BOTH the along-track envelope's flat term (40mm) and the cross-track bound (35mm/30mm respectively) with one shared value each -- flagged. handoff_tol_v=0.14 is the issue's flying-handoff formula's own velocity-coupling slope ('e_along <= 0.14*vExit + 40mm'), dimensionally a time constant despite the '_v' name -- flagged. steer_headroom=20.0/wheel_step_max=150.0 have no issue-table anchor at all; picked conservative placeholders (steer_headroom mirrors the old RobotConfig.steerHeadroom starting value; wheel_step_max is ~1.25x trim_v_max) -- flagged. replan_hold=0.2/replan_min_period=0.3/replan_max=3.0/replan_err_theta=0.15/arrive_vel_tol=15.0/arrive_dwell=0.15 are direct transcriptions of the issue's replan-envelope/terminal tables. See ticket 001's completion notes for the full field-by-field derivation; M11 (bench: arc_sweep grids) re-tunes all of these against the real plant.",
+    "duty_per_speed_left": 0.00187325,
+    "duty_per_speed_right": 0.00187325,
+    "crawl_pulse": 0.0,
+    "_drive_calibration_note": "duty_per_speed_* [duty/(mm/s)]: open-loop wheel calibration, the inverse of the measured plant gain (speed_sweep 2026-07-27: L ~560, R ~510 mm/s per duty; ceiling ~500 mm/s). Per-wheel because the two gearboxes differ ~10%. crawl_pulse [-1,1]: fixed pulse amplitude for sub-breakaway wheel speeds, Bresenham-dithered in App::Drive; 0 disables. Measured breakaway is 1-6% duty and state-dependent (src/tests/firmware/duty_min/RESULTS.md) -- the earlier 0.20 was sized against a duty_sweep criterion that the standalone prober disproved, so crawl ships OFF pending a re-measure of the low end.",
+    "wheel_gain_left_accel": 1.641,
+    "wheel_intercept_left_accel": 8.22,
+    "wheel_gain_left_decel": 1.6259,
+    "wheel_intercept_left_decel": 16.27,
+    "wheel_gain_right_accel": 1.5609,
+    "wheel_intercept_right_accel": 5.06,
+    "wheel_gain_right_decel": 1.5704,
+    "wheel_intercept_right_decel": 9.26,
+    "_wheel_correction_note": "wheel_gain_* / wheel_intercept_* [dimensionless, mm/s]: the measured commanded->actual line per wheel per direction of approach (measured = gain*commanded + intercept), from docs/design/wheel-speed-command-mapping.md. App::Drive inverts it: command = (desired - intercept)/gain. Measured against a SHARED duty_per_speed on both wheels -- recalibrate both wheels to one constant before re-characterizing, or the measurement inherits the mismatch. gain 1 / intercept 0 = no correction."
+  },
+  "estimator": {
+    "_estimator_note": "117 (predict-to-now estimator v1): weight_heading_otos/weight_omega_otos committed 0.0 -- stakeholder's encoder-only-v1 decision, OTOS fusion is wired but not yet trusted with any nonzero weight. staleness_ms=60.0 is 3x Devices::Otos::kReadPeriod (20ms): generous headroom over the OTOS chip's own read cadence, small enough to exclude a genuinely stale reading before the next cycle's fresh one arrives. (118 ticket 004, land-at-zero-completion-delete-stop-lead.md: this section's own former fourth key -- a boot-time anticipation-lead constant with a four-retune history and no stable value -- is DELETED; the mechanism it fed no longer exists, see App::MoveQueue::tick()'s own doc comment for the land-at-zero completion predicate that replaces it.)",
+    "weight_heading_otos": 0.0,
+    "weight_omega_otos": 0.0,
+    "staleness_ms": 60.0
+  }
 }

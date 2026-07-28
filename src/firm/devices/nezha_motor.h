@@ -1,36 +1,63 @@
 // nezha_motor.h — Devices::NezhaMotor: the BARE concrete leaf for one
 // channel of the PlanetX Nezha V2 motor controller, implementing the
 // Devices::Motor interface (motor.h). Owns the register map, split-phase
-// 0x46 encoder sequencing, the velocity PID, and ALL of the brick's own
-// write shaping — slew limiting, write throttle, write-on-change, reversal
-// dwell, and output deadband (see writeShapedDuty()/writeRawDuty() in
-// nezha_motor.cpp). Sprint 114 ticket 005: the output deadband BOOSTS a
-// genuine nonzero sub-deadband duty to the deadband floor instead of
-// zeroing it (an exact zero still stays an immediate hard stop) -- see
-// writeShapedDuty()'s own doc comment. Wedge OBSERVATION/RECOVERY policy
-// lives in the Devices::MotorArmor decorator (motor_armor.h), which a caller may wrap
-// this leaf in — or not (the sim composes the bare leaf directly).
-// Restructured 2026-07-18 (stakeholder): MotorArmor used to be this class's
-// base; it is now a composing decorator, and the dwell/deadband write gate
-// moved HERE because it is Nezha-brick wedge protection (the reversal
-// write train latches the 0x46 readback — see
-// docs/knowledge/2026-07-04-encoder-wedge.md), not generic motor policy.
+// 0x46 encoder sequencing, and ALL of the brick's own write shaping — slew
+// limiting, write throttle, write-on-change, reversal dwell, and output
+// deadband (see writeShapedDuty()/writeRawDuty() below). Sprint 114 ticket
+// 005: the output deadband BOOSTS a genuine nonzero sub-deadband duty to
+// the deadband floor instead of zeroing it (an exact zero still stays an
+// immediate hard stop) -- see writeShapedDuty()'s own doc comment. Wedge
+// OBSERVATION/RECOVERY policy lives in the Devices::MotorArmor decorator
+// (motor_armor.h), which a caller may wrap this leaf in — or not (the sim
+// composes the bare leaf directly).
+//
+// 125-003 (sprint 125, Decision 2 -- "protection vs. control", see
+// sprint.md): SHRUNK to its base-contract residue -- protocol + bus hygiene
+// + dwell/deadband + clamp, ~200 lines (from 885). Everything that was a
+// VELOCITY DECISION or MEASUREMENT-CONDITIONING mechanism is gone:
+//   - The staged-velocity setter, the embedded per-channel velocity
+//     control law, and the kff mapping -- DELETED. The closed-loop
+//     velocity control law relocated to the motion library
+//     (src/motion/wheel_velocity_pid.{h,cpp}) -- App::Drive holds the
+//     interim instances this sprint (see drive.h's own header). [The
+//     original rate argument -- "~80ms encoder freshness bounds the loop"
+//     -- was measured FALSE 2026-07-26 (docs/design/
+//     encoder-refresh-characterization.md); the relocation stands on
+//     one-estimate-one-controller and host tunability instead.]
+//   - The freshness gate, source-side glitch rejection, and the
+//     live-switchable EMA/least-squares velocity-estimator pair -- DELETED
+//     OUTRIGHT, not relocated. velocity()/position() below report a NAIVE
+//     per-tick difference quotient / the raw collected sample -- honest,
+//     and BETTER than its author feared: the register was measured LIVE
+//     at <=16 ms (docs/design/encoder-refresh-characterization.md -- the
+//     "~80ms refresh" was a pre-118 schedule artifact), so on the clean
+//     interleaved schedule every tick collects a genuinely fresh sample
+//     and the naive difference quotient is a real velocity every cycle.
+//     A wheel observer can still replace this with one principled
+//     predict-correct estimator (freshness + glitch/innovation rejection +
+//     the estimate, folded into a single model) -- this is the sprint's
+//     own accepted, disclosed interim (see sprint.md Migration Concerns).
+//   - Duty-boxcar smoothing (the bench-only output-averaging window and
+//     its setter) -- DELETED, no replacement planned (never shipped
+//     live-tuned).
+//
+// KEPT unchanged: the split-phase 0x46 protocol, hardReset()'s
+// median-of-3 + readback-verify + retry, connected()/failure-hold, bus/
+// write hygiene (fwdSign, clamp ±100%, integer-% quantization,
+// write-on-change, NAK retry, write-rate throttle), the slew cap
+// (UNMODIFIED -- ticket 010 owns its disposition, not this ticket),
+// reversal dwell + output deadband (writeShapedDuty()), wheelTravelCalib,
+// and the software-offset rebaseline mechanism (rebaseline()/
+// softRebaseline() -- the stakeholder ruling that encoders are NEVER reset
+// by device command stands unmodified; RobotLoop's position-rebaseline
+// policy, robot_loop.cpp, is untouched by this ticket).
 //
 // Deliberate scope-downs from a full motor abstraction:
 //   - No message-plane surface (apply()/state()/capabilities()/
 //     msg::MotorCommand) — msg:: is unreachable under the isolation
 //     invariant; the loop constructs and drives this leaf directly.
 //   - No POSITION mode (the onboard 0x5D absolute-angle move) — this leaf
-//     only covers velocity-PID and raw-duty modes (see DESIGN.md §3).
-//   - No additive velocity feedforward beyond Gains::kff — VELOCITY-mode
-//     duty is pid_.compute()'s output directly.
-//   - PID on/off: Mode::Active dispatches by which setter staged the
-//     command (activeSource_, stakeholder 2026-07-18): a setDuty()-staged
-//     command is ALWAYS raw passthrough; a setVelocity()-staged command is
-//     the PID chase while pidEnabled_, and the OPEN-LOOP feedforward duty
-//     (Gains::kff [duty per mm/s] * velocityTarget_) while disabled — "no
-//     PID" means drive the nominal duty for the target, not go dead. The
-//     write shaping (writeShapedDuty()) applies identically in every case.
+//     only covers raw-duty mode (see DESIGN.md §3, historical).
 //   - Time seam: tick() takes a single `uint64_t nowUs` [us] parameter
 //     rather than reading a clock internally — Devices::Clock (clock.h) is
 //     the fiber-level time seam, scoped to "the fiber's OWN cycle-level
@@ -38,12 +65,7 @@
 //     from I2CBus's own internal clearance-timer bookkeeping — see
 //     i2c_bus.h). This leaf takes "now" as a plain parameter supplied by
 //     its caller (ultimately the loop's own Clock instance) — fully
-//     deterministic for a host harness with zero clock coupling. Dwell
-//     timing runs in ms, matching MotorConfig's documented [ms]
-//     reversalDwell unit; the write-rate throttle inside writeRawDuty()
-//     runs in us, reading the SAME nowUs this tick already cached in
-//     lastTickUs_ before dispatch — see writeRawDuty()'s own comment for
-//     why that is exactly equivalent to a fresh clock read at that point.
+//     deterministic for a host harness with zero clock coupling.
 //
 // Design/rationale: DESIGN.md.
 #pragma once
@@ -54,7 +76,6 @@
 #include "devices/device_types.h"
 #include "devices/i2c_bus.h"
 #include "devices/motor.h"
-#include "devices/velocity_pid.h"
 
 namespace Devices {
 
@@ -78,10 +99,8 @@ class NezhaMotor : public Motor {
   void requestSample() override;
 
   // --- Primitive setters — stage the command; tick() executes it. ---
-  void setVelocity(float velocity) override;   // [mm/s] signed — PID target (open-loop kff mapping while PID is disabled)
-  void setDuty(float duty) override;           // [-1, 1] raw duty target (always passthrough; wins until the next setVelocity())
+  void setDuty(float duty) override;           // [-1, 1] raw duty target
   void setNeutral(Neutral mode) override;      // coast / brake — Nezha maps both to the same 0x60 speed-0 write (no distinct brake register)
-  void setPidEnabled(bool on) override;        // default true — write shaping applies in both modes
 
   // --- Resets (bare-motor semantics — see motor.h): resetPosition() acts
   // IMMEDIATELY (== hardReset()'s median-of-3 re-prime burst; the caller —
@@ -90,97 +109,56 @@ class NezhaMotor : public Motor {
   void resetPosition() override;
   void rebaseline() override;
 
-  // Live gain-apply: mutates this motor's velocity-PID gains (and,
-  // optionally, its wheel-travel calibration) in place -- no reflash, no
-  // I2C side effect (MotorVelocityPid::compute() reads config_.velGains
-  // fresh every tick). Parameters are exclusively Devices-local types
-  // (Gains, Opt<float>) -- never the wire msg::MotorConfigPatch --
-  // preserving the isolation invariant: RobotLoop (app/, which already
-  // includes messages/...) is the one legitimate translation boundary
-  // between the wire patch and this call. `travelCalib` defaults to absent
-  // (has=false) -- pass it only when the caller means to also update
-  // config_.wheelTravelCalib.
-  void applyGains(const Gains& gains, Opt<float> travelCalib = {}) override;
-
-  // Current live gains -- lets a caller (RobotLoop's CONFIG dispatch) merge
-  // a partially-populated wire patch against whatever this motor is
-  // actually running today, field by field, rather than clobbering an
-  // absent field back to some default.
-  const Gains& gains() const override { return config_.velGains; }
-
-  // Full live config readback -- the whole-config counterpart of gains(),
-  // for a caller that must MERGE a partial update onto everything this
-  // motor is actually running (sim_ctypes.cpp's sim_configure_motor():
-  // its Tier-2 velFiltAlpha/fwdSign push round-trips through
-  // reconfigure()'s whole-config replacement, so building the replacement
-  // from anything less than this live config clobbers every other field
-  // -- wheelTravelCalib/slewRate/outputDeadband/... -- back to zero; see
-  // that function's own comment). Kept non-virtual/NezhaMotor-local: the
-  // one caller holds a concrete NezhaMotor&, and the Motor interface
-  // deliberately exposes only the narrower gains() merge surface.
-  const MotorConfig& config() const { return config_; }
+  // applyTravelCalib -- 125-003 (motor.h's own header): narrowed from the
+  // pre-125-003 applyGains(Gains, Opt<float>) to the ONE field this leaf
+  // still live-applies. No reflash, no I2C side effect -- tick()'s own
+  // position() conversion reads config_.wheelTravelCalib fresh every call.
+  void applyTravelCalib(float travelCalib) override;
 
   // reconfigure — REVISION 1 (114-001, motor.h): whole-config replacement,
   // guarded. Refuses (returns false, leaves config_ unchanged) unless
   // mode_ == Mode::None (never yet commanded) or the motor is
-  // independently at rest (|filteredVelocity_| < kReconfigureRestVelocity
-  // AND appliedDuty() == 0.0f). On success, reassigns config_ wholesale and
+  // independently at rest (|velocity()| < kReconfigureRestVelocity AND
+  // appliedDuty() == 0.0f). On success, reassigns config_ wholesale and
   // re-derives the slew-rate/write-shaping substitution fields exactly as
   // the constructor does, then returns true. See motor.h's own doc comment
-  // for why this is a separate, narrower surface from applyGains().
+  // for why this is a separate, narrower surface from applyTravelCalib().
   [[nodiscard]] bool reconfigure(const MotorConfig& config) override;
 
-  // Velocity-estimator selection (bench A/B). mode 0 = EMA
-  // (velFiltAlpha — the shipped/default behavior); mode 1 = least-squares
-  // line-fit slope over the last `window` FRESH position samples
-  // (Savitzky-Golay order 1). The line fit rejects encoder-quantization noise
-  // with less lag than an equivalent heavier EMA. `window` is clamped to
-  // [3, kMaxVelWindow]; it is ignored in mode 0. Live-settable so the bench
-  // can compare EMA vs. line-fit(N) on the stand without reflashing.
-  void setVelEstimator(uint8_t mode, uint8_t window);
-  uint8_t velEstMode() const { return velEstMode_; }
-  uint8_t velWindow() const { return velWindow_; }
-
-  // Output duty smoothing (bench). Applies a boxcar moving
-  // average of the last `window` PID duty outputs before the shaped write,
-  // to smooth the visible/electrical duty jitter (the write path quantizes
-  // duty to integer percent, so a jittering PID output toggles the written
-  // percent by +/-1-2 LSB every ~40ms). window 1 = off (default, no
-  // averaging — unchanged behavior). Clamped to [1, kMaxDutyAvg]. Adds a
-  // small amount of control-output lag (~window/2 cycles); live-settable so
-  // the bench can find the point where smoothing stops being worth the lag.
-  void setDutyAvg(uint8_t window);
-  uint8_t dutyAvgWindow() const { return dutyAvgWindow_; }
+  // Full live config readback -- for a caller that must merge a partial
+  // update onto everything this motor is actually running (sim_ctypes.cpp's
+  // sim_configure_motor(): its Tier-2 fwdSign push round-trips through
+  // reconfigure()'s whole-config replacement, so building the replacement
+  // from anything less than this live config clobbers every other field --
+  // wheelTravelCalib/slewRate/outputDeadband/... -- back to zero). Kept
+  // non-virtual/NezhaMotor-local: the one caller holds a concrete
+  // NezhaMotor&, and the Motor interface has no such readback surface.
+  const MotorConfig& config() const { return config_; }
 
   // --- Primitive getters (Motor overrides) ---
   float position() const override;      // [mm]
-  float velocity() const override;      // [mm/s] signed, filtered
-  float velocityTarget() const override { return velocityTarget_; }  // [mm/s] signed -- commanded PID setpoint (last setVelocity())
+  float velocity() const override;      // [mm/s] signed -- naive per-tick difference quotient, see this file's own header
   float appliedDuty() const override;   // [-1, 1]
 
   bool connected() const override { return connected_; }
-  uint32_t encGlitchCount() const { return encGlitchCount_; }   // cumulative rejected samples (never resets)
-  bool pidEnabled() const { return pidEnabled_; }
 
-  // Motor::sampleTime() override -- the nowUs of the last ACCEPTED fresh
-  // encoder sample (lastFreshUs_'s own established role, see tick()'s
-  // "Fresh-sample tracking" comment below) -- NOT this tick's own nowUs.
-  // Unchanged between stale (same-raw-count) ticks; advances only when
-  // tick()'s freshness gate actually accepts a new sample.
-  uint64_t sampleTime() const override { return lastFreshUs_; }  // [us]
+  // Motor::sampleTime() override -- 125-003: with the freshness gate
+  // deleted (this file's own header), every tick() call is now treated as
+  // "fresh" -- this simply returns lastTickUs_, the nowUs of the most
+  // recent tick() call -- which the encoder characterization says is the
+  // truth on the clean schedule (fresh sample every cycle; docs/design/
+  // encoder-refresh-characterization.md), not a degraded placeholder.
+  uint64_t sampleTime() const override { return lastTickUs_; }  // [us]
 
   // tick() — the leaf's 2-step contract (see nezha_motor.cpp; the old base-
   // armor steps 1/3/5 now live in the MotorArmor DECORATOR's own tick()):
-  //   1. sample + cache this motor's own encoder (device-specific).
-  //      Velocity/glitch computation is gated on a FRESHNESS check (the
-  //      collected raw count differs from the last FRESH raw count) --
-  //      a cycle can re-collect the same value (measured 2026-07-26: NOT
-  //      an ~80ms register refresh, which is false -- see docs/design/
-  //      encoder-refresh-characterization.md); see nezha_motor.cpp's
-  //      tick() comment.
-  //   2. mode dispatch — Mode::Active routes through writeShapedDuty() (PID
-  //      or raw duty, per activeSource_/pidEnabled_); Mode::Neutral writes 0
-  //      via writeShapedDuty(); Mode::None dispatches nothing.
+  //   1. sample + cache this motor's own encoder (device-specific), and
+  //      compute a naive per-tick velocity from it (see this file's own
+  //      header for why this is a disclosed interim, not the pre-125-003
+  //      freshness-gated behavior).
+  //   2. mode dispatch — Mode::Active writes the staged raw duty via
+  //      writeShapedDuty(); Mode::Neutral writes 0 via writeShapedDuty();
+  //      Mode::None dispatches nothing.
   void tick(uint64_t nowUs) override;   // [us]
 
  private:
@@ -190,14 +168,8 @@ class NezhaMotor : public Motor {
   void writeRawDuty(float duty);    // clamp + write-on-change + throttle + slew + fwdSign + bus write
   void hardReset();                 // median-of-3 + readback-verify + retry
   void softRebaseline();            // software-only rebaseline
-  // Mode::Active covers both the raw-duty and velocity-PID cases — tick()
-  // dispatches by activeSource_ (which setter staged the command,
-  // stakeholder 2026-07-18): a Duty-staged command is raw passthrough
-  // regardless of pidEnabled_; a Velocity-staged command is the PID chase
-  // while pidEnabled_ and the open-loop kff feedforward duty while
-  // disabled (see the file-header bullet).
+
   enum class Mode : uint8_t { None, Active, Neutral };
-  enum class ActiveSource : uint8_t { Velocity, Duty };
 
   // ---- Wiring ----
   I2CBus& bus_;
@@ -205,64 +177,15 @@ class NezhaMotor : public Motor {
 
   // ---- Staged command (set by the primitive setters; executed by tick()) ----
   Mode mode_ = Mode::None;
-  ActiveSource activeSource_ = ActiveSource::Velocity;
-  float velocityTarget_ = 0.0f;               // [mm/s]
   float dutyTarget_ = 0.0f;                   // [-1, 1]
   Neutral neutralTarget_ = Neutral::Coast;
-  bool pidEnabled_ = true;                    // default
 
   // ---- tick() encoder-sample cache ----
   float lastPosition_ = 0.0f;          // [mm]
-  float filteredVelocity_ = 0.0f;      // [mm/s] EMA-filtered (velFiltAlpha); fed to the embedded PID and velocity()
-  uint64_t lastTickUs_ = 0;            // [us] this leaf's own time seam — see file header; per-TICK dt, feeds ONLY the embedded PID's dt (step 4)
+  float velocity_ = 0.0f;              // [mm/s] naive per-tick difference quotient (125-003 -- see this file's own header)
+  uint64_t lastTickUs_ = 0;            // [us] this leaf's own time seam — see file header
   bool hasLastTick_ = false;
   bool connected_ = false;
-
-  // ---- Fresh-sample tracking (tick() step 2's freshness gate) ----
-  // A cycle can re-collect the SAME raw count (measured 2026-07-26: not
-  // a register refresh period -- docs/design/
-  // encoder-refresh-characterization.md -- but schedule faults and
-  // degraded modes still repeat samples). Velocity/glitch computation
-  // runs ONLY when
-  // collectEncoder() returns a raw count different from the last FRESH raw
-  // count, using the elapsed time SINCE THAT sample (lastFreshUs_) instead
-  // of this tick's own (much shorter) dt — see nezha_motor.cpp's tick() for
-  // the full rationale and the hardware-confirmed bug this fixes
-  // (filteredVelocity_ permanently starved / rejected as a false glitch).
-  int32_t lastFreshRawEnc_ = 0;   // [tenths of degrees, offset-corrected] raw count at the last FRESH sample
-  uint64_t lastFreshUs_ = 0;      // [us] this leaf's own time seam, timestamp of the last FRESH sample
-  bool hasFreshSample_ = false;   // false until the first fresh sample is anchored; also cleared by hardReset()/softRebaseline()
-
-  // ---- Source-side encoder outlier rejection (tick() step 2's
-  // position-step plausibility gate) ----
-  uint32_t encGlitchCount_ = 0;   // cumulative rejected samples (never resets)
-  uint8_t encGlitchStreak_ = 0;   // consecutive rejections; re-anchor at kGlitchStreakAccept
-
-  // ---- Velocity estimator (sprint 101 bench A/B) ----
-  // A short ring of the most recent ACCEPTED fresh (time, position) samples.
-  // mode 1 fits a least-squares line through the last `velWindow_` of them and
-  // takes the slope as the velocity; mode 0 ignores the ring and uses the
-  // legacy 2-point + EMA path. Cleared on any encoder discontinuity
-  // (hardReset()/softRebaseline()) so a fit never spans a re-anchor.
-  static constexpr uint8_t kVelEstEma = 0;
-  static constexpr uint8_t kVelEstLineFit = 1;
-  static constexpr uint8_t kMaxVelWindow = 8;
-  uint8_t velEstMode_ = kVelEstEma;   // default: shipped EMA behavior
-  uint8_t velWindow_ = 6;             // line-fit sample count, clamped [3, kMaxVelWindow]
-  uint64_t velWinT_[kMaxVelWindow] = {};   // [us] fresh-sample times (ring)
-  float velWinP_[kMaxVelWindow] = {};      // [mm] fresh-sample positions (ring)
-  uint8_t velWinCount_ = 0;                // valid entries in the ring (<= kMaxVelWindow)
-  uint8_t velWinHead_ = 0;                 // next write slot
-
-  // ---- Output duty smoothing (sprint 101 bench) ----
-  // Boxcar moving average of the last dutyAvgWindow_ PID duty outputs, applied
-  // just before writeShapedDuty(). window 1 = off (default). Ring cleared on an
-  // encoder discontinuity alongside the velocity window (clearVelWindow()).
-  static constexpr uint8_t kMaxDutyAvg = 8;
-  uint8_t dutyAvgWindow_ = 1;              // 1 = off (default, unchanged behavior)
-  float dutyRing_[kMaxDutyAvg] = {};       // [-1,1] recent PID duty outputs (ring)
-  uint8_t dutyRingCount_ = 0;
-  uint8_t dutyRingHead_ = 0;
 
   // ---- Write path ----
   int8_t lastWrittenPct_ = -128;        // [%] sentinel (outside +/-100) forces the first write
@@ -271,7 +194,7 @@ class NezhaMotor : public Motor {
   // ---- Write shaping (folded from the old MotorArmor base, 2026-07-18):
   // reversal dwell + output deadband — Nezha-brick wedge protection (an
   // instantaneous H-bridge sign flip under way latches the 0x46 readback;
-  // near-zero PID dither would request such flips every tick — see
+  // near-zero dither would request such flips every tick — see
   // docs/knowledge/2026-07-04-encoder-wedge.md). Config-driven: cached
   // straight from MotorConfig's required reversalDwell/outputDeadband
   // fields in reconfigure() (sprint 114 ticket 003 — no more code-side ship
@@ -286,9 +209,6 @@ class NezhaMotor : public Motor {
   bool dwelling_ = false;
   uint32_t dwellDeadline_ = 0;          // [ms]
   float lastRequestedDuty_ = 0.0f;      // [-1,1] last duty actually forwarded to writeRawDuty()
-
-  // ---- Embedded velocity PID ----
-  MotorVelocityPid pid_;
 
   // ---- Encoder software offset / failure-hold state ----
   int32_t encOffset_ = 0;               // [tenths of degrees]
@@ -312,12 +232,6 @@ class NezhaMotor : public Motor {
   // status is kOk, so a NAK'd write is retried next tick instead of being
   // latched as "already written."
   int writeMotorRun(uint8_t direction, uint8_t speed);   // writes the 0x60 motor-run command
-
-  // ---- Private helpers: velocity estimator ----
-  void pushVelSample(uint64_t t, float position);   // [us] [mm] append an accepted fresh sample to the ring
-  void clearVelWindow();                             // reset the vel + duty rings on an encoder discontinuity
-  float lineFitVelocity() const;                     // [mm/s] least-squares slope over the last velWindow_ samples
-  float averageDuty(float duty);                     // [-1,1] boxcar moving average of the last dutyAvgWindow_ duties
 
   // ---- Private helpers: encoder read paths ----
   int32_t readEncoderAtomicRaw();   // one-off sample: preClear/postClear-settled 0x46 write -> read

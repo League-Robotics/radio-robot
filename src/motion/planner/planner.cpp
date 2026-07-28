@@ -1,7 +1,6 @@
 #include "planner.h"
 
 #include <algorithm>
-#include <cstdio>
 #include <cmath>
 
 #include "profile.h"
@@ -19,8 +18,9 @@ constexpr float kDoneEpsilonAngular = 1e-5f;  // [rad]
 // Settle-confirm gates (PlannerLimits::requireSettle). Unlike the done
 // epsilons above these ARE physical tolerances -- "close enough to the
 // target, and stopped" for a real, lagging plant.
-constexpr float kSettleEpsilonLinear = 1.0f;      // [mm]
-constexpr float kSettleEpsilonAngular = 0.005f;   // [rad]
+// (Settle-confirm arrival tolerances moved to PlannerLimits::
+// settleEpsilonLinear/settleEpsilonAngular -- reachability depends on the
+// robot's stiction-limited minimum creep step, a per-robot property.)
 // Rest floors -- the settle gate's ONLY velocity criterion. (An earlier
 // revision widened the gate to max(floor, one decel step), reasoning a
 // commanded plant one step from zero is at rest next interval -- but a
@@ -32,6 +32,31 @@ constexpr float kSettleEpsilonAngular = 0.005f;   // [rad]
 // -- a per-robot noise property, not a universal constant.)
 
 float sign(float value) { return value < 0.0f ? -1.0f : 1.0f; }
+
+// Below this a wheel's unit share is "not commanded" and it constrains
+// nothing -- a twist whose omega exactly cancels one wheel (v_x ==
+// omega*trackWidth/2) is a legitimate one-wheel arc, not a fault.
+constexpr float kUnitEpsilon = 1e-6f;  // [1]
+
+// Relative slack for the ratio lock's tie-break. The two wheels' allowed
+// speeds are algebraically identical on a tracking plant; anything inside
+// this band is float rounding, not a real divergence, and the DOMINANT
+// wheel's (exact) answer wins.
+constexpr float kRatioTie = 1e-6f;  // [1]
+
+// One wheel's share of the shape-space ceilings. profileStep() is
+// homogeneous of degree 1, so scaling every limit by the wheel's unit
+// magnitude is exactly equivalent to profiling in shape space and scaling
+// the answer -- which is what makes the ratio lock's tie a real tie.
+AxisLimits scaleLimits(const AxisLimits& limits, float scale) {
+  AxisLimits out;
+  out.vMax = limits.vMax * scale;
+  out.aMax = limits.aMax * scale;
+  out.aDecel = limits.aDecel * scale;
+  out.jMax = limits.jMax * scale;
+  out.aDecelPlan = limits.aDecelPlan * scale;
+  return out;
+}
 
 // Signed, clamped age between two robot-clock stamps [ms] -> [s]. The
 // loop stamps cycleStart at the TOP of the cycle but collects encoder
@@ -52,12 +77,37 @@ float timedRamp(float previous, float cruise, float boundary,
   const float toBoundary = std::fabs(previous - boundary);
   const float stepsNeeded =
       decelStep > 0.0f ? std::ceil(toBoundary / decelStep) : 0.0f;
-  if (ticksLeft <= stepsNeeded) {
+  // STRICT comparison: at ticksLeft == stepsNeeded the ramp holds cruise
+  // one more tick and still lands within the Move (an elapsed-time Move's
+  // landing is the clock, not a distance) -- anticipating one tick early
+  // staged a zero-command frame BEFORE the completion ack could ride out,
+  // which chain observers correctly read as a hand-off dip.
+  if (ticksLeft < stepsNeeded) {
     const float step = std::min(decelStep, toBoundary);
     return previous + (boundary > previous ? step : -step);
   }
   if (cruise > previous) return std::min(cruise, previous + accelStep);
   return std::max(cruise, previous - std::max(accelStep, decelStep));
+}
+
+// Direction of the profiled axis for measurement/carry accounting. A
+// Twist Move carries it on the commanded twist's sign; a Wheels Move has
+// v_x == omega == 0, so its direction lives structurally on the pair --
+// the mean for the linear axis, the differential for the angular axis.
+// (Without this, a Wheels Move with a Distance/Angle stop measured a
+// frozen remaining == threshold and could only ever end on its timeout.)
+float linearDirection(const Move& m) {
+  if (m.velocityKind == Move::VelocityKind::Wheels) {
+    return sign(0.5f * (m.vLeft + m.vRight));
+  }
+  return sign(m.v_x);
+}
+
+float angularDirection(const Move& m) {
+  if (m.velocityKind == Move::VelocityKind::Wheels) {
+    return sign(m.vRight - m.vLeft);
+  }
+  return sign(m.omega);
 }
 
 }  // namespace
@@ -70,6 +120,62 @@ Planner::Planner(const PlannerLimits& limits) : limits_(limits) {
                        limits_.velIMax, limits_.velKaff, limits_.velIAccelGate};
   pidLeft_.configure(gains);
   pidRight_.configure(gains);
+  const VelocityTrimGains trim{limits_.trimKp, limits_.trimKi,
+                               limits_.trimIMax, limits_.trimKaff,
+                               limits_.trimMax};
+  trimControlLeft_.configure(trim);
+  trimControlRight_.configure(trim);
+}
+
+void Planner::applyTrimGains(float kp, float ki, float iMax, float kaff,
+                             float trimMax) {
+  limits_.trimKp = kp;
+  limits_.trimKi = ki;
+  limits_.trimIMax = iMax;
+  limits_.trimKaff = kaff;
+  limits_.trimMax = trimMax;
+  const VelocityTrimGains gains{kp, ki, iMax, kaff, trimMax};
+  trimControlLeft_.configure(gains);
+  trimControlRight_.configure(gains);
+}
+
+// The velocity-domain closed loop. Mirrors stageDuty()'s structure -- same
+// per-wheel shape, same filter-lag compensation -- but outputs a velocity
+// CORRECTION rather than a duty, and gates its integrator on the Move's
+// phase rather than on a commanded-accel threshold.
+void Planner::stageTrim(float dt) {
+  const MovePhase phase = active_.occupied ? active_.phase : MovePhase::Idle;
+  const auto stage = [&](WheelTrim& control, float cmd, float cmdPrevious,
+                         float measured, float& trim) {
+    // No active command means nothing to trim TOWARD: correcting a zero
+    // target would fight the drain and creep a stopped robot. Reset so no
+    // learned integral survives into the next Move's ramp as a step.
+    if (cmd == 0.0f) {
+      control.reset();
+      trim = 0.0f;
+      return;
+    }
+    // The terminal creep is already a closed loop on the measured
+    // residual; a second controller stacked on it is what hunts.
+    if (active_.settling) {
+      trim = 0.0f;
+      return;
+    }
+    const float targetAccel = (cmd - cmdPrevious) / dt;  // [mm/s^2]
+    // Filter-lag compensation, same derivation as the duty stage: the EMA
+    // has a group delay of ~dt*(1-w)/w, so during a ramp the filtered
+    // feedback reads a*lag LOW and kp would chase a phantom error that
+    // scales with accel. Exactly zero at steady state, so it cannot
+    // disturb the hold phase the integrator lives in.
+    const float w = std::max(limits_.velocityFilterWeight, 0.05f);
+    const float filterLag = dt * (1.0f - w) / w;  // [s]
+    trim = control.compute(cmd, targetAccel,
+                           measured + targetAccel * filterLag, dt, phase);
+  };
+  stage(trimControlLeft_, cmdLeft_, cmdLeftPrevious_, left_.velocity(),
+        trimLeft_);
+  stage(trimControlRight_, cmdRight_, cmdRightPrevious_, right_.velocity(),
+        trimRight_);
 }
 
 // M4 duty output stage: this tick's staged velocity targets vs the
@@ -77,22 +183,33 @@ Planner::Planner(const PlannerLimits& limits) : limits_(limits) {
 // tick() exit path so the duty outputs always mirror the velocity
 // outputs; inert (0) at the default all-zero gains.
 //
-// Rest clamp: an exactly-zero target with the wheel already near rest is
-// a hard stop, not a control problem -- zero the duty and reset the trim
-// integral instead of letting feedback (a) dither around velocity
-// measurement noise forever and (b) reverse-creep the landed pose while
-// the integral unwinds through zero (measured on the duty plant: ~1 deg
-// of back-rotation after a settled turn). Mirrors the firmware write
-// path's own exact-zero immediate-stop exemption. While the wheel is
-// still moving fast the PID stays engaged and actively brakes.
+// Rest damping: an exactly-zero target with the wheel already near rest
+// is a hard stop, not a trim problem -- the integral is reset (and held
+// frozen by the braking gate below) so it can never reverse-creep the
+// landed pose while unwinding through zero (measured on the duty plant:
+// ~1 deg of back-rotation after a settled turn). The PROPORTIONAL term
+// stays engaged: duty = -kp*measured is self-terminating (it crosses
+// zero exactly when the measured velocity does, so it cannot push the
+// wheel backward), drains the coast tail ~(1 + gain*kp)x faster than a
+// dead-duty coast, and its residual noise response is far below the
+// motor deadband. While the wheel is still moving fast the full PID
+// stays engaged and actively brakes.
 void Planner::stageDuty(float dt) {
   constexpr float kRestClampVelocity = 30.0f;  // [mm/s]
   const auto stage = [&](WheelPid& pid, float cmd, float cmdPrevious,
-                         float measured, float& duty) {
+                         float measured, float measuredPrevious, float& duty) {
     if (cmd == 0.0f && std::fabs(measured) <= kRestClampVelocity) {
       pid.reset();
-      duty = 0.0f;
-      return;
+      // Below the per-robot measured-noise floor the wheel is
+      // indistinguishable from stopped -- output EXACTLY zero so the
+      // motor write path can actually go quiet (Drive's raw pass stays
+      // silent at zero, and NezhaMotor::reconfigure()'s at-rest gate
+      // demands a zero applied duty). P-damping a value that is pure
+      // sensor noise would jitter the duty word forever for nothing.
+      if (std::fabs(measured) <= limits_.settleRestVelocity) {
+        duty = 0.0f;
+        return;
+      }
     }
     // The commanded accel behind this tick's target -- feeds the PID's
     // acceleration feedforward (PidGains::kaff). Forced to ZERO during
@@ -102,6 +219,33 @@ void Planner::stageDuty(float dt) {
     // rest gate from ever confirming.
     const float targetAccel =
         active_.settling ? 0.0f : (cmd - cmdPrevious) / dt;
+    // Braking to rest (zero target, wheel still above the rest clamp) is
+    // a pure transient: integrating its huge error winds the clamp full
+    // (measured: -0.3 duty in 3 ticks on a STOP from cruise) and then
+    // RELEASES as a reversal once the wheel stops. kp+kff brake; the
+    // integral sits this one out.
+    const bool brakingToRest = cmd == 0.0f;
+    // Actuation-lead compensation while braking to rest: this tick's duty
+    // reaches the wheels one actuation delay from now, and a hard-braking
+    // wheel is measurably slower by then -- braking against the stale
+    // measurement lands a full-strength duty on an already-stopped wheel
+    // and rings it through zero (measured: a stop from cruise flipped to
+    // -19 mm/s the tick after the wheel first read ~0). Lead the braking
+    // measurement by the PREVIOUS interval's measured accel (leading with
+    // this tick's own step would blind kp -- same rationale as the
+    // command-side history), clamped at zero so braking can never be
+    // computed against a predicted sign flip.
+    float measurementBasis = measured;
+    if (brakingToRest) {
+      const float measuredAccel = (measured - measuredPrevious) / dt;
+      measurementBasis =
+          measured + measuredAccel * limits_.actuationDelay * 0.001f;
+      if (measured > 0.0f) {
+        measurementBasis = std::max(measurementBasis, 0.0f);
+      } else if (measured < 0.0f) {
+        measurementBasis = std::min(measurementBasis, 0.0f);
+      }
+    }
     // Filter-lag compensation: the EMA velocity filter has a group delay
     // of ~dt*(1-w)/w, so during a ramp the filtered feedback reads
     // a*lag LOW -- kp (and the ramp-rate integral) then chase a phantom
@@ -110,12 +254,58 @@ void Planner::stageDuty(float dt) {
     // tunable); exact zero at steady state.
     const float w = std::max(limits_.velocityFilterWeight, 0.05f);
     const float filterLag = dt * (1.0f - w) / w;  // [s]
-    duty = pid.compute(cmd, targetAccel, measured + targetAccel * filterLag,
-                       dt);
+    duty = pid.compute(cmd, targetAccel,
+                       measurementBasis + targetAccel * filterLag, dt,
+                       brakingToRest);
+    // Stiction breakaway kick -- STUCK WHEELS ONLY: the settle creep
+    // commands velocities whose PID duty computes below the gearbox
+    // breakaway, so a wheel AT REST silently ignores them (measured: the
+    // creep stalling dead while ~0.02-duty commands evaporated). When the
+    // wheel is effectively at rest during settling and the creep wants
+    // motion, kick at the breakaway duty IN THE COMMANDED DIRECTION for
+    // this tick; the plant's ~230 ms time constant makes one 40 ms kick
+    // reach only ~0.5 mm, so the step stays inside the arrival epsilons.
+    // Deliberately NOT applied while the wheel is still moving: kinetic
+    // friction is below breakaway and the plain PID handles a rolling
+    // wheel -- flooring every near-zero duty instead bang-banged the
+    // whole landing at +-floor as the raw duty's sign flickered
+    // (measured: a second full-speed push past the boundary and paired
+    // opposite-sign pulses, walking the turn to +10 deg residual).
+    if (active_.settling && cmd != 0.0f &&
+        std::fabs(measured) <= limits_.settleRestVelocity &&
+        std::fabs(duty) < limits_.dutyFloor) {
+      duty = std::copysign(limits_.dutyFloor, cmd);
+    }
   };
-  stage(pidLeft_, cmdLeft_, cmdLeftPrevious_, left_.velocity(), dutyLeft_);
+  stage(pidLeft_, cmdLeft_, cmdLeftPrevious_, left_.velocity(),
+        measuredLeftPrevious_, dutyLeft_);
   stage(pidRight_, cmdRight_, cmdRightPrevious_, right_.velocity(),
-        dutyRight_);
+        measuredRightPrevious_, dutyRight_);
+  measuredLeftPrevious_ = left_.velocity();
+  measuredRightPrevious_ = right_.velocity();
+}
+
+void Planner::applyVelGains(float kff, float kp, float ki, float iMax) {
+  limits_.velKff = kff;
+  limits_.velKp = kp;
+  limits_.velKi = ki;
+  limits_.velIMax = iMax;
+  const PidGains gains{kff, kp, ki, iMax, limits_.velKaff,
+                       limits_.velIAccelGate};
+  pidLeft_.configure(gains);
+  pidRight_.configure(gains);
+}
+
+void Planner::applyShaperLimits(float aMax, float aDecel, float alphaMax,
+                                float alphaDecel, float jerkMax,
+                                float yawJerkMax) {
+  limits_.aMax = aMax;
+  limits_.aDecel = aDecel;
+  limits_.alphaMax = alphaMax;
+  limits_.alphaDecel = alphaDecel;
+  limits_.jerkMax = jerkMax;
+  limits_.yawJerkMax = yawJerkMax;
+  shaperConfigured_ = true;
 }
 
 bool Planner::move(const Move& next, bool replace) {
@@ -128,13 +318,17 @@ bool Planner::move(const Move& next, bool replace) {
   // motion this robot cannot make, and is rejected here rather than
   // accepted and silently driven as nothing -- the Distance/Angle guards
   // below test v_x/omega, which a pure-v_y Move leaves at zero.
+  //
+  // A Kind::Stop entry commands nothing and measures nothing, so none of
+  // the shape guards apply to it -- it is valid by construction (see
+  // plannedStop() below, the only thing that builds one).
   const bool valid =
-      next.threshold >= 0.0f &&
-      ((next.velocityKind == Move::VelocityKind::Twist &&
-        (next.kind != Move::Kind::Distance || next.v_x != 0.0f) &&
-        (next.kind != Move::Kind::Angle || next.omega != 0.0f)) ||
-       (next.velocityKind == Move::VelocityKind::Wheels &&
-        next.kind == Move::Kind::Time));
+      next.kind == Move::Kind::Stop ||
+      (next.threshold >= 0.0f &&
+       ((next.velocityKind == Move::VelocityKind::Twist &&
+         (next.kind != Move::Kind::Distance || next.v_x != 0.0f) &&
+         (next.kind != Move::Kind::Angle || next.omega != 0.0f)) ||
+        (next.velocityKind == Move::VelocityKind::Wheels)));
   if (!valid) return false;
 
   if (replace) {
@@ -147,7 +341,30 @@ bool Planner::move(const Move& next, bool replace) {
   return true;
 }
 
-void Planner::stop() {
+bool Planner::plannedStop(uint32_t moveId) {
+  Move entry;
+  entry.id = moveId;
+  entry.kind = Move::Kind::Stop;
+  // No velocity, no threshold, no timeout: a planned stop's own bounded
+  // backstop is plannedStopWindow(), not the shared timeout path -- landing
+  // slowly is not a fault, and the timeout path raises one.
+  return move(entry, /*replace=*/false);
+}
+
+float Planner::plannedStopWindow() const {
+  const float drain = limits_.aDecel > 0.0f
+                          ? 1000.0f * limits_.vMax / limits_.aDecel  // [ms]
+                          : 0.0f;
+  // settleWindow when the robot has one configured (it is the same
+  // "how long may arrival take" allowance), else a fixed floor so an
+  // unconfigured planner still converges.
+  constexpr float kDefaultSettleAllowance = 500.0f;  // [ms]
+  const float settle =
+      limits_.settleWindow > 0.0f ? limits_.settleWindow : kDefaultSettleAllowance;
+  return drain + settle;
+}
+
+void Planner::estop() {
   pendingCount_ = 0;
   active_.occupied = false;
   profileVelocity_ = 0.0f;
@@ -204,6 +421,7 @@ TickResult Planner::tick(const Types::RobotState& state) {
   if (!active_.occupied) {
     drainToZero(dt);
     stageDuty(dt);
+    stageTrim(dt);
     return result;
   }
 
@@ -221,7 +439,17 @@ TickResult Planner::tick(const Types::RobotState& state) {
   } else if (!done) {
     switch (m.kind) {
       case Move::Kind::Time:
-        done = static_cast<float>(elapsed) >= m.threshold;
+        // Complete on the tick whose interval CONTAINS the expiry -- the
+        // same tick the ramp's taper lands at the boundary. When the
+        // threshold falls mid-interval, waiting for elapsed >= threshold
+        // adds a whole extra tick commanding zero while still active: one
+        // more pre-ack zero-target cycle than the loop schedule's single
+        // ack-visibility lag, which chain observers correctly read as a
+        // hand-off gap. Exact-multiple thresholds still complete exactly
+        // at the threshold, and every Move gets at least one planned tick.
+        done = elapsed > 0 && static_cast<float>(elapsed) +
+                                      limits_.controlPeriod >
+                                  m.threshold;
         break;
       case Move::Kind::Distance:
         // Carry boundary (>0): hand off the tick the crossing falls inside,
@@ -238,6 +466,16 @@ TickResult Planner::tick(const Types::RobotState& state) {
                (activeBoundary_ > 0.0f &&
                 measured.plannedRemaining <=
                     profileVelocity_ * dt + kDoneEpsilonAngular);
+        break;
+      case Move::Kind::Stop:
+        // A planned stop ends when the command has drained to zero AND the
+        // body has actually come to rest -- "completes at rest" is the
+        // whole point of asking for a stop rather than just letting the
+        // queue run dry. plannedStopWindow() is the bounded backstop so a
+        // noisy plant cannot wedge the queue here (see that method).
+        done = (cmdLeft_ == 0.0f && cmdRight_ == 0.0f &&
+                settleReached(measured, dt)) ||
+               static_cast<float>(elapsed) >= plannedStopWindow();
         break;
     }
   }
@@ -274,21 +512,46 @@ TickResult Planner::tick(const Types::RobotState& state) {
     result.timedOut = timedOut;
     result.settled = settled;
     // Cumulative-baseline carry (chain-exact accounting): a normally
-    // completed Distance/Angle Move hands the next Move a baseline of
-    // "where the boundary IS" (baseline + threshold), not "where we
-    // happened to be when completion fired" -- sub-tick residual is
-    // debited to the next Move so a chain leaks zero total error. A
-    // timeout aborts the motion: no carry, next baselines re-anchor.
-    carryValid_ = !timedOut;
-    carryKind_ = m.kind;
-    carryPath_ = active_.baselinePath + sign(m.v_x) * m.threshold;
-    carryHeading_ =
-        active_.baselineHeading + sign(m.omega) * m.threshold;
+    // completed Twist Distance/Angle Move hands the next Move BOTH
+    // cumulative baselines -- "where the boundary IS" on its own axis
+    // (baseline + threshold) and its own UNCHANGED baseline on the other
+    // axis (a straight leg intends zero heading change; a pivot intends
+    // zero path change). Carrying the full ledger across KINDS is what
+    // closes a mixed leg/turn tour: each turn targets the cumulative
+    // n*90deg and each leg's heading-hold pulls back to the carried
+    // square heading, so per-landing residuals cancel instead of
+    // accumulating (measured on the bench tour: +17 deg over 8 moves
+    // with same-kind-only carry, every leg/turn boundary re-anchoring
+    // to wherever the pose drifted). A timeout aborts the motion, and a
+    // Time/Wheels Move has no single-axis intent -- no carry, next
+    // baselines re-anchor to the pose.
+    //
+    // A Kind::Stop entry is the one exception: it declares no axis intent
+    // at all (it neither travels a planned distance nor turns a planned
+    // angle), so it leaves the ledger exactly as its predecessor left it
+    // rather than re-anchoring. "leg, planned stop, leg" then accounts
+    // identically to "leg, leg" -- the stop is a pause in the sequence,
+    // not a new origin.
+    if (m.kind != Move::Kind::Stop) {
+      carryValid_ = !timedOut &&
+                    m.velocityKind == Move::VelocityKind::Twist &&
+                    (m.kind == Move::Kind::Distance ||
+                     m.kind == Move::Kind::Angle);
+      if (m.kind == Move::Kind::Distance) {
+        carryPath_ = active_.baselinePath + linearDirection(m) * m.threshold;
+        carryHeading_ = active_.baselineHeading;
+      } else {
+        carryPath_ = active_.baselinePath;
+        carryHeading_ =
+            active_.baselineHeading + angularDirection(m) * m.threshold;
+      }
+    }
     active_.occupied = false;
     activateNext(now);
     if (!active_.occupied) {
       drainToZero(dt);
       stageDuty(dt);
+      stageTrim(dt);
       return result;
     }
   }
@@ -297,6 +560,7 @@ TickResult Planner::tick(const Types::RobotState& state) {
   // `remaining` is measured against ITS baseline and axis.
   planActive(now, dt, done ? measure(now) : measured);
   stageDuty(dt);
+  stageTrim(dt);
   return result;
 }
 
@@ -318,16 +582,49 @@ void Planner::activateNext(uint32_t now) {
   active_.baselinePath =
       0.5f * (left_.basisPosition() + right_.basisPosition());
   active_.baselineHeading = pose_.heading();
-  if (carryValid_) {
-    if (carryKind_ == Move::Kind::Distance &&
-        next.kind == Move::Kind::Distance) {
+  // A Kind::Stop entry passes the cumulative ledger THROUGH untouched --
+  // see the completion-side comment in tick(). It has no baselines of its
+  // own to adopt, and clearing the carry here would make an intervening
+  // planned stop silently re-anchor the tour that follows it.
+  if (next.kind != Move::Kind::Stop) {
+    if (carryValid_ && next.velocityKind == Move::VelocityKind::Twist &&
+        (next.kind == Move::Kind::Distance || next.kind == Move::Kind::Angle)) {
+      // Full-ledger adoption (see the completion-side comment): both axes'
+      // cumulative baselines, regardless of the predecessor's kind.
       active_.baselinePath = carryPath_;
-    } else if (carryKind_ == Move::Kind::Angle &&
-               next.kind == Move::Kind::Angle) {
       active_.baselineHeading = carryHeading_;
     }
+    carryValid_ = false;
   }
-  carryValid_ = false;
+
+  // Per-wheel plan for this Move: the constant left:right ratio, each
+  // wheel's own signed distance target, and the shape-space ceilings.
+  // Captured ONCE here rather than recomputed per tick -- the shape is a
+  // property of the Move, and re-deriving it every tick would let a
+  // divide-by-a-measured-quantity wander.
+  active_.shape = shapeOf(next, limits_.trackWidth);
+  active_.wheelLimits = shapeLimits(active_.shape, limits_);
+  if (active_.shape.valid && active_.wheelLimits.aDecel > 0.0f) {
+    lastShapeDecel_ = active_.wheelLimits.aDecel;
+  }
+  active_.phase = MovePhase::Idle;
+  active_.decelLatched = false;
+  // axisPerLambda: how much of the Move's OWN axis quantity advances per
+  // unit lambda. Distance profiles the body path, whose speed is the mean
+  // wheel speed; Angle profiles the heading, whose rate is the wheel
+  // difference over the track. Anything else never reaches planWheels().
+  active_.axisPerLambda = 1.0f;
+  if (active_.shape.valid) {
+    if (next.kind == Move::Kind::Distance) {
+      active_.axisPerLambda =
+          std::fabs(0.5f * (active_.shape.unitLeft + active_.shape.unitRight));
+    } else if (next.kind == Move::Kind::Angle) {
+      active_.axisPerLambda =
+          std::fabs(active_.shape.unitRight - active_.shape.unitLeft) /
+          limits_.trackWidth;
+    }
+  }
+  if (!(active_.axisPerLambda > 0.0f)) active_.axisPerLambda = 1.0f;
 
   // Same-axis carry keeps the profile's ramp continuity; an axis change
   // starts the new axis's profile from rest (we landed at ~0 there).
@@ -382,6 +679,8 @@ Planner::Measurement Planner::measure(uint32_t now) const {
   switch (m.kind) {
     case Move::Kind::Time:
       break;  // a Time Move's residual is the clock, not a distance
+    case Move::Kind::Stop:
+      break;  // a planned stop's residual is the body's own speed, below
     case Move::Kind::Distance: {
       // Traveled distance is the SIGNED mean-wheel displacement along the
       // Move's direction -- a telescoping measure (final minus baseline
@@ -389,7 +688,7 @@ Planner::Measurement Planner::measure(uint32_t now) const {
       // former pathLength() measure accumulated |ds| per cycle, so the
       // encoder quantum's flicker during a slow settle-creep INFLATED it
       // ~0.07 mm per jitter cycle and completed Moves measurably short.
-      const float dir = sign(m.v_x);
+      const float dir = linearDirection(m);
       const float meanPosition =
           0.5f * (left_.basisPosition() + right_.basisPosition());
       out.anchoredRemaining =
@@ -398,7 +697,7 @@ Planner::Measurement Planner::measure(uint32_t now) const {
       break;
     }
     case Move::Kind::Angle: {
-      const float dir = sign(m.omega);
+      const float dir = angularDirection(m);
       out.anchoredRemaining =
           m.threshold - (pose_.heading() - active_.baselineHeading) * dir;
       out.plannedRemaining = out.anchoredRemaining - dir * predictHeading;
@@ -413,57 +712,79 @@ bool Planner::settleReached(const Measurement& measured, float dt) const {
 
 
   const Move& m = active_.move;
+  // A planned stop is tested BEFORE the Twist gate: it has no velocity
+  // variant at all, and "did the body stop?" is the whole of its
+  // completion test. Both axes must be quiet -- a stop that left the robot
+  // spinning is not a stop.
+  if (m.kind == Move::Kind::Stop) {
+    return std::fabs(measured.bodyVelocity) <= limits_.settleRestVelocity &&
+           std::fabs(measured.omega) <= limits_.settleRestOmega;
+  }
   if (m.velocityKind != Move::VelocityKind::Twist) return false;
   switch (m.kind) {
+    case Move::Kind::Stop:
+      return false;  // unreachable: handled above
     case Move::Kind::Time:
       return false;  // nothing physical to confirm
     case Move::Kind::Distance:
-      return std::fabs(measured.anchoredRemaining) <= kSettleEpsilonLinear &&
+      return std::fabs(measured.anchoredRemaining) <=
+                 limits_.settleEpsilonLinear &&
              std::fabs(measured.bodyVelocity) <= limits_.settleRestVelocity;
     case Move::Kind::Angle:
-      return std::fabs(measured.anchoredRemaining) <= kSettleEpsilonAngular &&
+      return std::fabs(measured.anchoredRemaining) <=
+                 limits_.settleEpsilonAngular &&
              std::fabs(measured.omega) <= limits_.settleRestOmega;
   }
   return false;
 }
 
 Planner::Axis Planner::axisOf(const Move& m) {
+  // A planned stop profiles no axis -- Axis::None also makes whatever
+  // follows it start its profile from rest, which is exactly right: we
+  // just came to a stop.
+  if (m.kind == Move::Kind::Stop) return Axis::None;
   if (m.velocityKind == Move::VelocityKind::Wheels) return Axis::Wheels;
   if (m.kind == Move::Kind::Angle) return Axis::Angular;
   return Axis::Linear;
 }
 
-float Planner::boundaryVelocity(float dt) const {
+// Lookahead: the SHAPE-SPACE speed (lambda -- the dominant wheel's own
+// speed) to land the active Move at, so a chain flows at speed instead of
+// stopping between legs.
+//
+// Compatibility is now a single geometric identity -- do the two Moves
+// command the same left:right ratio? -- rather than an enumeration over
+// (kind, kind) pairs. That one predicate subsumes every case the old
+// enumeration hand-coded (same-direction straights carry; a reversal, an
+// axis change, or an opposite turn do not) AND two it could not express:
+// two Moves along the same ARC radius now carry, and two Wheels Moves of
+// identical ratio now carry, where before every Wheels Move landed at
+// zero. It is also automatically right about a planned stop, whose shape
+// is invalid by construction -- nothing ever hands off at speed into a
+// stop.
+float Planner::boundaryLambda(float dt) const {
   if (pendingCount_ == 0) return 0.0f;
-  const Move& m = active_.move;
-  const Move& next = pending_[0];
-  if (m.velocityKind != Move::VelocityKind::Twist ||
-      next.velocityKind != Move::VelocityKind::Twist) {
-    return 0.0f;
+  // Fail closed: never plan a hand-off we have no configured authority to
+  // brake out of.
+  if (limits_.aDecel <= 0.0f) return 0.0f;
+
+  const MoveShape next = shapeOf(pending_[0], limits_.trackWidth);
+  if (!shapesCompatible(active_.shape, next)) return 0.0f;
+
+  // Neither Move's own cruise may be exceeded at the hand-off.
+  float cap = std::min(active_.shape.cruise, next.cruise);
+
+  // And the successor must still be able to land: enter no faster than it
+  // can brake to rest within its own distance. A Time successor has no
+  // distance to land within, so its cruise is the only cap -- tighter, and
+  // more honest, than the blanket vMax the per-Kind version used.
+  if (next.hasDistanceTarget) {
+    const float dominantDistance = std::max(std::fabs(next.distanceLeft),
+                                            std::fabs(next.distanceRight));
+    cap = std::min(cap, maxEntryVelocity(dominantDistance, 0.0f,
+                                         shapeLimits(next, limits_), dt));
   }
-  if (m.kind == Move::Kind::Distance || m.kind == Move::Kind::Time) {
-    // Linear axis: carry into a same-direction Distance/Time successor.
-    if ((next.kind == Move::Kind::Distance || next.kind == Move::Kind::Time) &&
-        next.v_x != 0.0f && sign(next.v_x) == sign(m.v_x)) {
-      const AxisLimits lin{limits_.vMax, limits_.aMax, limits_.aDecel};
-      const float entryCap =
-          next.kind == Move::Kind::Distance
-              ? maxEntryVelocity(next.threshold, 0.0f, lin, dt)
-              : limits_.vMax;
-      return std::min(std::fabs(next.v_x), entryCap);
-    }
-    return 0.0f;
-  }
-  // Angular axis: carry into a same-direction Angle successor.
-  if (m.kind == Move::Kind::Angle && next.kind == Move::Kind::Angle &&
-      next.omega != 0.0f && sign(next.omega) == sign(m.omega)) {
-    const AxisLimits ang{limits_.omegaMax, limits_.alphaMax,
-                         limits_.alphaDecel};
-    const float entryCap =
-        maxEntryVelocity(next.threshold, 0.0f, ang, dt);
-    return std::min(std::fabs(next.omega), entryCap);
-  }
-  return 0.0f;
+  return std::max(0.0f, cap);
 }
 
 void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
@@ -523,66 +844,68 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
   }
 
   if (m.velocityKind == Move::VelocityKind::Wheels) {
-    // Time-bounded per-wheel ramp (v1 scope; no wheels lookahead).
-    const float ticksLeft = (m.threshold - elapsed) / period;
+    // Per-wheel ramp toward the commanded pair. Time-bounded Moves taper
+    // to rest on the clock; Distance/Angle-bounded Wheels Moves (the wire
+    // protocol's other arms) ramp and HOLD -- their completion is the
+    // standard measured-threshold test in tick(), and the post-completion
+    // drain ramps down (the pre-integration MoveQueue semantics: wheels
+    // Moves are direct wheel commands, not profiled landings).
+    const float ticksLeft =
+        m.kind == Move::Kind::Time ? (m.threshold - elapsed) / period
+                                   : 1.0e9f;
     const float accelStep = limits_.aMax * dt;
     const float decelStep = limits_.aDecel * dt;
-    cmdLeft_ = timedRamp(cmdLeft_, m.vLeft, 0.0f, accelStep, decelStep,
-                         ticksLeft);
-    cmdRight_ = timedRamp(cmdRight_, m.vRight, 0.0f, accelStep, decelStep,
-                          ticksLeft);
+    const float vCap = limits_.vMax;  // [mm/s] wheel-space ceiling
+    cmdLeft_ = timedRamp(cmdLeft_, std::clamp(m.vLeft, -vCap, vCap), 0.0f,
+                         accelStep, decelStep, ticksLeft);
+    cmdRight_ = timedRamp(cmdRight_, std::clamp(m.vRight, -vCap, vCap), 0.0f,
+                          accelStep, decelStep, ticksLeft);
     activeBoundary_ = 0.0f;
     return;
   }
 
   switch (m.kind) {
-    case Move::Kind::Distance: {
-      const float dir = sign(m.v_x);
-      const AxisLimits lin{limits_.vMax, limits_.aMax, limits_.aDecel,
-                           limits_.jerkMax};
-      activeBoundary_ = boundaryVelocity(dt);
-      // Plan from the max of the last command and the MEASURED speed: on
-      // a lagging plant the body genuinely runs faster than the command
-      // during decel (lag ~a*tau), and braking feasibility must hold for
-      // the TRUE state or the landing starts too late (measured as gross
-      // turn overshoot the moment the sim mirrored the real schedule).
-      const ProfileResult step = profileStep(
-          measured.plannedRemaining, profileVelocity_, std::fabs(m.v_x),
-          activeBoundary_, lin, dt, profileAccel_);
-      profileAccel_ = (step.velocity - profileVelocity_) / dt;
-      profileVelocity_ = step.velocity;
-      active_.closingIssued = step.closing;
-      const float v = dir * step.velocity;
-      cmdLeft_ = v;
-      cmdRight_ = v;
-      applyHeadingHold();
+    case Move::Kind::Stop: {
+      // Planned stop: per-wheel ramp to zero at the decel ceiling -- the
+      // same law drainToZero() applies to an empty queue, run here as a
+      // real queue entry so its arrival is sequenced, observable, and
+      // acked. A zero/absent decel ceiling snaps straight to zero rather
+      // than never converging (an unconfigured shaper must still stop).
+      const float decelStep = limits_.aDecel * dt;
+      rampCommandsToZero(decelStep);
+      profileVelocity_ = std::max(0.0f, profileVelocity_ - decelStep);
+      profileAccel_ = 0.0f;
+      activeBoundary_ = 0.0f;
+      active_.phase = MovePhase::Decel;  // a stop is all decel, by definition
+      active_.decelLatched = true;
       break;
     }
+    case Move::Kind::Distance:
     case Move::Kind::Angle: {
-      const float dir = sign(m.omega);
-      const AxisLimits ang{limits_.omegaMax, limits_.alphaMax,
-                           limits_.alphaDecel, limits_.yawJerkMax};
-      activeBoundary_ = boundaryVelocity(dt);
-      const ProfileResult step = profileStep(
-          measured.plannedRemaining, profileVelocity_, std::fabs(m.omega),
-          activeBoundary_, ang, dt, profileAccel_);
-      profileAccel_ = (step.velocity - profileVelocity_) / dt;
-      profileVelocity_ = step.velocity;
-      active_.closingIssued = step.closing;
-      const float omega = dir * step.velocity;
-      const float halfTrack = 0.5f * limits_.trackWidth;
-      cmdLeft_ = -omega * halfTrack;
-      cmdRight_ = omega * halfTrack;
+      planWheels(dt, measured);
+      if (m.kind == Move::Kind::Distance) applyHeadingHold();
       break;
     }
     case Move::Kind::Time: {
       // Both twist axes ramp toward cruise; the linear axis may carry into
       // the next Move, the angular axis lands at zero.
       const float ticksLeft = (m.threshold - elapsed) / period;
-      activeBoundary_ = boundaryVelocity(dt);
+      // The lookahead answers in shape space (the dominant wheel's own
+      // speed); this branch works in BODY linear units, so scale by how
+      // much body translation one unit of lambda produces -- which is the
+      // mean of the shape's units. A Time Move with no net translation
+      // (a timed pivot) has no linear carry to make.
+      const float shapeMean =
+          active_.shape.valid
+              ? std::fabs(0.5f * (active_.shape.unitLeft +
+                                  active_.shape.unitRight))
+              : 0.0f;
+      activeBoundary_ = boundaryLambda(dt) * shapeMean;
       const float vPrev = 0.5f * (cmdLeft_ + cmdRight_);
       const float omegaPrev = (cmdRight_ - cmdLeft_) / limits_.trackWidth;
-      const float v = timedRamp(vPrev, m.v_x, sign(m.v_x) * activeBoundary_,
+      const float v = timedRamp(vPrev,
+                                std::clamp(m.v_x, -limits_.vMax, limits_.vMax),
+                                sign(m.v_x) * activeBoundary_,
                                 limits_.aMax * dt, limits_.aDecel * dt,
                                 ticksLeft);
       const float omega =
@@ -595,6 +918,141 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
       break;
     }
   }
+}
+
+// The per-wheel profiler: one distance ledger per wheel, both profiled
+// against their own remaining, then ratio-locked back onto one command.
+//
+// SHAPE SPACE. The Move's constant left:right ratio (shape.h) lets the
+// whole plan be one scalar -- lambda, the DOMINANT wheel's own speed --
+// with wheel w commanded lambda * unit_w. Everything outside this function
+// (the completion tests, activeBoundary_, profileVelocity_, the settle
+// creep) stays in the Move's own axis units; active_.axisPerLambda is the
+// single bridge, applied on the way in and undone on the way out. That is
+// what makes this a drop-in for the two per-Kind cases it replaces: for a
+// straight axisPerLambda is 1, and for a pivot it is 2/trackWidth, so
+// profileVelocity_ comes back out as the body speed / yaw rate it always
+// was.
+//
+// WHY PER WHEEL AT ALL, when a constant ratio means both wheels' remaining
+// distances are proportional? Because on a REAL plant they stop being
+// proportional -- one wheel slips, stalls below its breakaway duty, or
+// simply runs a few percent slow -- and the wheel that is BEHIND is the
+// one whose braking feasibility actually binds. Profiling the body axis
+// alone cannot see that; it lands the mean and lets the difference become
+// heading error.
+//
+// THE RATIO LOCK. Both wheels are profiled independently, then the SAME
+// feasible fraction is applied to both: lambda is the min over wheels of
+// (that wheel's allowed speed / its unit). Scaling both wheels by one
+// number leaves the commanded ratio -- and therefore the commanded turn
+// radius, and therefore the heading the Move sweeps -- exactly intact. The
+// alternative (letting each wheel run its own profile independently) lets
+// the ratio drift mid-move, which IS heading error by construction.
+//
+// WHY THIS PRESERVES THE DISCRETE-EXACT LANDING. profileStep() is
+// homogeneous of degree 1 in (remaining, previous, cruise, boundary, aMax,
+// aDecel, jMax): every term in profile.cpp is a sum or comparison of
+// velocity- or distance-dimensioned quantities, with no absolute constant
+// but kTiny. On a plant that tracks, remaining_w = |unit_w| * R for a
+// common R, so wheel w's arguments are exactly |unit_w| times the
+// shape-space arguments and its answer is exactly |unit_w| * Lambda for
+// one common Lambda. The two wheels therefore AGREE identically, min() is
+// a tie, and the exact terminal step (remaining/dt) survives untouched.
+// When they disagree -- only possible because the plant diverged -- the
+// behind wheel binds, which is the conservative and correct direction.
+void Planner::planWheels(float dt, const Measurement& measured) {
+  const MoveShape& shape = active_.shape;
+  if (!shape.valid || active_.axisPerLambda <= 0.0f) {
+    // Unshapeable Move (rejected at move() time, so this is belt-and-
+    // braces): command nothing rather than something arbitrary.
+    cmdLeft_ = 0.0f;
+    cmdRight_ = 0.0f;
+    active_.phase = MovePhase::Idle;
+    return;
+  }
+
+  const float unit[2] = {shape.unitLeft, shape.unitRight};
+  const float magnitude[2] = {std::fabs(unit[0]), std::fabs(unit[1])};
+
+  // Axis units -> shape space. plannedRemaining is already positive-frame.
+  const float remainingLambda =
+      std::max(0.0f, measured.plannedRemaining) / active_.axisPerLambda;
+  const float previousLambda = profileVelocity_ / active_.axisPerLambda;
+  const float previousAccelLambda = profileAccel_ / active_.axisPerLambda;
+
+  const float boundary = boundaryLambda(dt);         // [mm/s] shape space
+  activeBoundary_ = boundary * active_.axisPerLambda;  // [axis units]
+
+  // Profile each wheel against ITS OWN remaining distance, cruise, and
+  // ceilings -- all just this wheel's share of the shape.
+  float allowed[2] = {0.0f, 0.0f};
+  bool closing[2] = {false, false};
+  StepPhase phase[2] = {StepPhase::Accel, StepPhase::Accel};
+  bool constrains[2] = {false, false};
+  for (int w = 0; w < 2; ++w) {
+    if (magnitude[w] <= kUnitEpsilon) continue;  // this wheel is commanded still
+    constrains[w] = true;
+    const AxisLimits lim = scaleLimits(active_.wheelLimits, magnitude[w]);
+    const ProfileResult step =
+        profileStep(remainingLambda * magnitude[w],
+                    previousLambda * magnitude[w], shape.cruise * magnitude[w],
+                    boundary * magnitude[w], lim, dt,
+                    previousAccelLambda * magnitude[w]);
+    allowed[w] = step.velocity / magnitude[w];  // back to shape space
+    closing[w] = step.closing;
+    phase[w] = step.phase;
+  }
+
+  // THE RATIO LOCK, with the tie broken toward the DOMINANT wheel. The
+  // dominant wheel's |unit| is a literal 1.0f (shape.cpp snaps it), so its
+  // arithmetic is exact and only the sub-dominant wheel eats rounding.
+  // Without this tie-break a 1-ulp difference lets the sub-dominant wheel
+  // steal the closing step and the landing quietly loses its exactness.
+  const int dominant = magnitude[0] >= magnitude[1] ? 0 : 1;
+  const int other = 1 - dominant;
+  float lambda = 0.0f;
+  int binding = dominant;
+  if (constrains[dominant] && constrains[other]) {
+    lambda = allowed[dominant];
+    if (allowed[other] < allowed[dominant] * (1.0f - kRatioTie)) {
+      lambda = allowed[other];
+      binding = other;
+    }
+  } else if (constrains[dominant]) {
+    lambda = allowed[dominant];
+  } else if (constrains[other]) {
+    lambda = allowed[other];
+    binding = other;
+  }
+
+  // Never accelerate at the end: once braking has begun, the command may
+  // fall or hold but never rise again. Deliberately non-INCREASING rather
+  // than strictly decreasing -- if a successor is queued mid-decel and
+  // lifts the boundary, holding is right and re-accelerating is not.
+  StepPhase raw = phase[binding];
+  if (active_.decelLatched) {
+    lambda = std::min(lambda, previousLambda);
+    if (raw != StepPhase::Closing) raw = StepPhase::Decel;
+  } else if (raw == StepPhase::Decel || raw == StepPhase::Closing) {
+    active_.decelLatched = true;
+  }
+
+  switch (raw) {
+    case StepPhase::Accel: active_.phase = MovePhase::Accel; break;
+    case StepPhase::Hold: active_.phase = MovePhase::Hold; break;
+    case StepPhase::Decel:
+    case StepPhase::Closing: active_.phase = MovePhase::Decel; break;
+  }
+
+  // Shape space -> axis units, and out to the wheels. The unit ratio
+  // carries the Move's direction, so no separate sign is applied here.
+  const float axisVelocity = lambda * active_.axisPerLambda;
+  profileAccel_ = (axisVelocity - profileVelocity_) / dt;
+  profileVelocity_ = axisVelocity;
+  active_.closingIssued = closing[binding];
+  cmdLeft_ = lambda * unit[0];
+  cmdRight_ = lambda * unit[1];
 }
 
 void Planner::applyHeadingHold() {
@@ -618,27 +1076,76 @@ void Planner::applyHeadingHold() {
 
 void Planner::drainToZero(float dt) {
   rollCommandHistory();
-  const float decelStep = limits_.aDecel * dt;
-  auto toward = [&](float v) {
-    if (v > decelStep) return v - decelStep;
-    if (v < -decelStep) return v + decelStep;
-    return 0.0f;
-  };
-  cmdLeft_ = toward(cmdLeft_);
-  cmdRight_ = toward(cmdRight_);
-  profileVelocity_ = std::max(0.0f, profileVelocity_ - decelStep);
+  // Drain at the ceiling the PROFILE planned against, not the body-frame
+  // linear one. profileStep() only issues its exact terminal step when the
+  // landing velocity is within one decel step OF THAT SHAPE's ceiling, so
+  // draining at a smaller ceiling leaves a residual command the plant
+  // integrates as unaccounted travel past the target -- measured as ~18 um
+  // of per-wheel landing error on a tight arc, whose shape-space decel is
+  // nearly 2x the linear one. Identical for the 1:1 and -1:1 shapes, where
+  // the two ceilings coincide.
+  const float decelStep = drainDecel(dt);
+  rampCommandsToZero(decelStep);
+  profileVelocity_ = std::max(0.0f, profileVelocity_ - limits_.aDecel * dt);
+}
+
+// The decel ceiling the drain and the planned stop ramp at: the active
+// shape's own, when there is one, else the body-frame linear ceiling.
+float Planner::drainDecel(float dt) const {  // [s] -> [mm/s] per interval
+  if (active_.occupied && active_.shape.valid &&
+      active_.wheelLimits.aDecel > 0.0f) {
+    return active_.wheelLimits.aDecel * dt;
+  }
+  if (lastShapeDecel_ > 0.0f) return lastShapeDecel_ * dt;
+  return limits_.aDecel * dt;
+}
+
+// Ramp the staged pair toward zero by one decel step, PROPORTIONALLY: the
+// dominant wheel takes the full step and the other is scaled to match, so
+// the commanded left:right ratio is preserved all the way down.
+//
+// Subtracting the same absolute step from each wheel instead -- which is
+// what this did before the per-wheel rework -- silently changes the ratio
+// whenever the wheels differ, so a robot stopping out of an arc would
+// straighten as it slowed. Harmless for the 1:1 and -1:1 shapes (equal
+// magnitudes, identical arithmetic, every pre-existing test unchanged),
+// wrong for everything else. The ratio lock guards the profiled command;
+// this guards the same property through the drain and the planned stop.
+void Planner::rampCommandsToZero(float decelStep) {  // [mm/s] per interval
+  const float dominant = std::max(std::fabs(cmdLeft_), std::fabs(cmdRight_));
+  if (decelStep <= 0.0f || dominant <= decelStep) {
+    // An unconfigured decel ceiling must still stop, and a pair already
+    // inside one step lands exactly on zero rather than overshooting it.
+    cmdLeft_ = 0.0f;
+    cmdRight_ = 0.0f;
+    return;
+  }
+  const float scale = (dominant - decelStep) / dominant;
+  cmdLeft_ *= scale;
+  cmdRight_ *= scale;
 }
 
 void Planner::update(Types::RobotState& state) const {
-  state.wheelLeft.cmdVelocity = cmdLeft_;
-  state.wheelRight.cmdVelocity = cmdRight_;
+  // The ONE place the closed loop is summed into the open loop. The
+  // profile owns the trajectory (cmdLeft_/cmdRight_, which every internal
+  // consumer -- the ledger's anticipation, the next tick's profile carry
+  // -- keeps reading untrimmed); the trim only closes the residual between
+  // what was planned and what the wheels actually did. At the default
+  // all-zero gains the trim is exactly 0 and this is bit-for-bit the
+  // profiled command.
+  const float stagedLeft = cmdLeft_ + trimLeft_;    // [mm/s]
+  const float stagedRight = cmdRight_ + trimRight_;  // [mm/s]
+  state.wheelLeft.cmdVelocity = stagedLeft;
+  state.wheelRight.cmdVelocity = stagedRight;
   // The real (124) Command section carries mode + the commanded twist, not
   // a move id -- completion/ack identity rides TickResult, never the state.
   state.command.moveActive = active_.occupied;
   state.command.mode =
       active_.occupied ? Types::Mode::Velocity : Types::Mode::Idle;
-  state.command.v_x = 0.5f * (cmdLeft_ + cmdRight_);
-  state.command.omega = (cmdRight_ - cmdLeft_) / limits_.trackWidth;
+  // Report what is actually being ASKED of the wheels, trim included --
+  // this is telemetry for a human, not the planner's own ledger.
+  state.command.v_x = 0.5f * (stagedLeft + stagedRight);
+  state.command.omega = (stagedRight - stagedLeft) / limits_.trackWidth;
 
   const float bodyVelocity = 0.5f * (left_.velocity() + right_.velocity());
   const float omegaBody =

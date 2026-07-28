@@ -201,7 +201,7 @@ def run_step(proto: NezhaProtocol, target: float, step_duration: float, capture:
             break
         print(f"    (retry {attempt + 1}/{attempts}: no ack and no motion observed -- re-sending twist())")
 
-    proto.stop()
+    proto.estop()
 
     left = summarize_step(times_ms, vel_l, target)
     right = summarize_step(times_ms, vel_r, target)
@@ -327,7 +327,7 @@ def main() -> int:
             csv_file.close()
         if proto is not None:
             try:
-                proto.stop()
+                proto.estop()
             except Exception as exc:
                 print(f"  WARN: stop() failed during cleanup: {exc}")
         if conn.is_open:

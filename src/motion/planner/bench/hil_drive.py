@@ -56,20 +56,20 @@ BRIDGE_TIMEOUT = 1000.0  # [ms] its timeout backstop
 def hilLimits() -> PlannerLimits:
     limits = PlannerLimits()
     limits.vMax = 300.0          # [mm/s] gentle bench ceiling
-    limits.aMax = 300.0          # [mm/s^2]
-    limits.aDecel = 250.0        # [mm/s^2]
-    limits.omegaMax = 3.0        # [rad/s]
-    limits.alphaMax = 6.0        # [rad/s^2]
-    limits.alphaDecel = 5.0      # [rad/s^2]
+    limits.aMax = 200.0          # [mm/s^2]
+    limits.aDecel = 120.0   # measured: bridge braking authority ~4x weaker than sim plant        # [mm/s^2]
+    limits.omegaMax = 2.0        # [rad/s]
+    limits.alphaMax = 2.5        # [rad/s^2]
+    limits.alphaDecel = 1.2  # measured: single-turn trace, 76 deg overshoot at 5.0      # [rad/s^2]
     limits.trackWidth = 128.0    # [mm] tovez.json drivetrain trackwidth
     limits.controlPeriod = 50.0  # [ms]
-    limits.actuationDelay = 450.0  # [ms] velocity-mode value (run 2, known
+    limits.actuationDelay = 150.0  # [ms] velocity-mode value (run 2, known
                                    # good): transport + firmware PID plant lag
     limits.velocityFilterWeight = 0.4  # real encoder velocity is noisy
     limits.otosStaleness = 200
     limits.headingOtosWeight = 0.0
     limits.requireSettle = True
-    limits.settleWindow = 400.0  # [ms]
+    limits.settleWindow = 4000.0  # [ms]
     limits.headingHoldGain = 1.2  # [1/s] straight legs crabbed ~-10 deg uncorrected (run 1)
     # M4 duty stage: the velocity PID now lives in the planner. Gains from
     # tovez.json (vel_kp/ki/kff/imax -- the bench-tuned 106-002 set).
@@ -105,7 +105,7 @@ class HilSession:
 
     def close(self):
         try:
-            self.proto.stop()
+            self.proto.estop()
             if self.dutyPlane:
                 # Restore the firmware PID's bench-tuned feedback gains.
                 self.proto.config(**{"pid.kp": 0.0016, "pid.ki": 0.005})
@@ -190,7 +190,7 @@ class HilSession:
                                                timeout=BRIDGE_TIMEOUT,
                                                replace=True)
                 elif stopAtEnd:
-                    self.proto.stop()
+                    self.proto.estop()
                 if result.completed and completed is None:
                     completed = dict(moveId=result.moveId,
                                      timedOut=result.timedOut,
@@ -203,7 +203,7 @@ class HilSession:
             elapsed = time.monotonic() - loopStart
             time.sleep(max(0.0, PERIOD - elapsed))
         if stopAtEnd:
-            self.proto.stop()
+            self.proto.estop()
             time.sleep(0.3)
             self.ingestTelemetry()
         encEnd = (self.state.wheelLeft.position,

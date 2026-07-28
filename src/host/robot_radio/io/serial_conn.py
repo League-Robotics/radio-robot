@@ -366,7 +366,7 @@ def _match_ack_in_frames(
     the single scalar ``ack_corr``/``ack_err`` slot (valid iff ``flags``
     bit 5 / ``ack_fresh``, both DELETED 124-008 issue §B4) this function
     used to scan with a scan over each frame's bounded ``acks`` ring (depth
-    ``kAckRingDepth``=4, telemetry.proto) -- a corr_id present ANYWHERE in
+    ``kAckRingDepth``=12, telemetry.proto) -- a corr_id present ANYWHERE in
     the ring was genuinely acked by ``App::Telemetry::ack()`` at some
     point. No freshness bit is needed to disambiguate a ring entry from a
     stale leftover value the way ``ack_fresh`` was needed for the single
@@ -1531,7 +1531,7 @@ class SerialConnection:
         ``_match_ack_in_frames()`` below) -- no freshness bit to check, a
         ring entry is either genuinely present (real) or it is not.
 
-        Ring saturation (more than ``kAckRingDepth``=4 OTHER commands acked
+        Ring saturation (more than ``kAckRingDepth``=12 OTHER commands acked
         before this one's entry is ever read) is the one remaining real,
         bounded failure mode -- narrower than the pre-120 single slot's
         "ANY other command acked in the same primary period" failure, but
@@ -1543,7 +1543,7 @@ class SerialConnection:
         was ever pushed or because it fell off the ring before being read).
         This ticket's own rapid-fire N-enqueue bench test
         (``src/tests/bench/move_protocol_bench.py``) is the check that
-        ``kAckRingDepth``=4 is enough in practice for the queue's own 5-deep
+        ``kAckRingDepth``=12 is enough in practice for the queue's own 5-deep
         ``ERR_FULL`` ceiling; retry-on-timeout still covers the residual
         rare case.
 

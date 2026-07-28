@@ -24,25 +24,7 @@ Devices::MotorConfig benchTestMotorConfig(uint32_t port) {
   // to true mm (1.4187 * 0.704871 == 1.0). The GUI overrides this at connect
   // with the geometry-derived ml/mr push (~0.70486), which agrees.
   cfg.wheelTravelCalib = 0.704871f;
-  cfg.velFiltAlpha = 1.0f;
   cfg.slewRate = 100.0f;
-  // Velocity feedforward so the sim tracks the COMMANDED velocity (like the
-  // real robot's calibrated gains do), instead of under-tracking ~17% on
-  // pure-P and undershooting every drive/turn. kff = 1/kDefaultDutyVelMax:
-  // duty = target/500 -> plant velocity = 500*duty = target (open-loop
-  // exact), with kp trimming transients/disturbance.
-  cfg.velGains.kff = 1.0f / TestSim::kDefaultDutyVelMax;  // 0.002 duty per mm/s
-  // 114-006 (SUC-006 precondition): matches data/robots/tovez_nocal.json's
-  // shipped control.vel_kp=0.002 -- this field used to hardcode 0.003 (the
-  // pre-113 value the sim silently ran before config-as-truth), exactly the
-  // class of divergence bench_test_config.h's own header warns against.
-  // kff above already tracks the commanded velocity open-loop-exact on its
-  // own (duty = target/500 -> plant velocity = target); kp is a small
-  // closed-loop trim on top of that -- still needed (kp=0 lands 90deg turns
-  // ~30deg off + faults, per the original finding below), just a smaller
-  // trim at 0.002 than the stale 0.003 was.
-  cfg.velGains.kp = 0.002f;   // feedback trim -- needed for turn accuracy
-                             // (kp=0 lands 90deg turns ~30deg off + faults)
   // PARITY (stakeholder 2026-07-18; UPDATED sprint 114 ticket 003):
   // reversalDwell/outputDeadband are now REQUIRED plain floats -- Devices::
   // MotorConfig no longer has an Opt<float> "unset -> ship default"
@@ -58,9 +40,40 @@ Devices::MotorConfig benchTestMotorConfig(uint32_t port) {
   return cfg;
 }
 
+// benchTestGains -- 125-003: relocated from the pre-125-003
+// benchTestMotorConfig()'s own velGains/velFiltAlpha (see bench_test_config.h's
+// own header). Velocity feedforward so the sim tracks the COMMANDED
+// velocity (like the real robot's calibrated gains do), instead of
+// under-tracking ~17% on pure-P and undershooting every drive/turn. kff =
+// 1/kDefaultDutyVelMax: duty = target/500 -> plant velocity = 500*duty =
+// target (open-loop exact), with kp trimming transients/disturbance.
+// 114-006 (SUC-006 precondition): kp matches data/robots/tovez_nocal.json's
+// shipped control.vel_kp=0.002 -- kff above already tracks the commanded
+// velocity open-loop-exact on its own; kp is a small closed-loop trim on
+// top of that -- still needed (kp=0 lands 90deg turns ~30deg off + faults).
+Motion::Gains benchTestGains() {
+  Motion::Gains gains;
+  gains.kff = 1.0f / TestSim::kDefaultDutyVelMax;  // 0.002 duty per mm/s
+  gains.kp = 0.002f;   // feedback trim -- needed for turn accuracy
+                       // (kp=0 lands 90deg turns ~30deg off + faults)
+  return gains;
+}
+
 void configureSimForBenchTest(TestSim::SimHarness& sim) {
   sim.configureMotor(1, benchTestMotorConfig(1));
   sim.configureMotor(2, benchTestMotorConfig(2));
+  // App::Drive's interim per-wheel velocity PID is GONE (command-ingestion-
+  // ring-buffered-comms-subsystem-routing-two-stops.md §4: Drive is open
+  // loop from calibrated speed and holds no controller). benchTestGains()
+  // now reaches the one controller that still exists -- Motion::Planner's
+  // own duty stage -- below.
+  {
+    const Motion::Gains g = benchTestGains();
+    sim.planner().applyVelGains(g.kff, g.kp, g.ki, g.iMax);
+    // Open-loop wheel drive: kff IS the duty-per-speed scale for the sim
+    // plant (1/kDefaultDutyVelMax).
+    sim.drive().setDutyPerSpeed(g.kff, g.kff);
+  }
 }
 
 }  // namespace TestSupport

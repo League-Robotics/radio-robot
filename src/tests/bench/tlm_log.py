@@ -279,7 +279,7 @@ def main() -> int:
         # Guaranteed stop: motors must never be left running on an
         # exception or Ctrl-C.
         try:
-            proto.stop()
+            proto.estop()
         except Exception:
             pass
         conn.disconnect()

@@ -50,7 +50,7 @@ and is framed identically:
 
 | Plane | Shape | Carries |
 |---|---|---|
-| Binary command verbs (host→robot) | `<VERB>':'<COBS+CRC frame>'\n'` | `MOVE`/`CONFIG`/`STOP` — `CommandEnvelope`'s three `cmd` oneof arms (§3) |
+| Binary command verbs (host→robot) | `<VERB>':'<COBS+CRC frame>'\n'` | `MOVE`/`CONFIG`/`STOP`/`WHEELS`/`ESTOP` — `CommandEnvelope`'s five `cmd` oneof arms (§3) |
 | Cleartext command verbs (host→robot) | `<VERB>'\n'`, no data | `HELLO` (identity request), `PING` (liveness), `ID` (configured-identity request), `VER` (build-version request) |
 | Cleartext reply verbs (robot→host) | `<VERB>':'<data>'\n'` | `DEVICE:` (boot/HELLO-reply hardware identity, byte-frozen), `PONG:t=<ms>` (PING's reply), `ID:<fields>` (configured identity), `VER:<version>` (build version) |
 | Binary reply verb (robot→host), every cycle | `TLM:<COBS+CRC frame>'\n'` | `ReplyEnvelope{corr_id=0, tlm: Telemetry}` — the SOLE per-command outcome path (§7) and the always-on telemetry push (§8) |
@@ -90,7 +90,7 @@ only.
 ```
 <COMMAND>'\n'                          -- cleartext, no data (HELLO/PING/ID/VER)
 <COMMAND>':'<data>'\n'                 -- cleartext, with data (DEVICE:/PONG:/ID:/VER: replies)
-<COMMAND>':'<COBS(payload + CRC-16)>'\n'  -- binary, either direction (MOVE/CONFIG/STOP/TLM)
+<COMMAND>':'<COBS(payload + CRC-16)>'\n'  -- binary, either direction (MOVE/CONFIG/STOP/WHEELS/ESTOP/TLM)
 ```
 
 One shared byte stream per transport (serial CDC, bench 115200 baud; or
@@ -256,7 +256,9 @@ two-verb rump invited.
 | `PONG` | robot→host | cleartext | `PING`'s reply |
 | `MOVE` | host→robot | binary | `CommandEnvelope.cmd.move` (§3/§4) |
 | `CONFIG` | host→robot | binary | `CommandEnvelope.cmd.config` (§3/§6) |
-| `STOP` | host→robot | binary | `CommandEnvelope.cmd.stop` (§3/§5.6) |
+| `STOP` | host→robot | binary | `CommandEnvelope.cmd.stop` (§3/§5.6) — **a PLANNED stop since the command-ingestion rework**: it enters `Motion::Planner`'s queue and executes in sequence, coming to rest before it completes. NOT "halt now" |
+| `WHEELS` | host→robot | binary | `CommandEnvelope.cmd.wheels` (§3) — the dumb teleop primitive: a per-wheel velocity pair held for a REQUIRED `duration`, routed straight to `App::Drive` with no planner involvement |
+| `ESTOP` | host→robot | binary | `CommandEnvelope.cmd.estop` (§3) — halt everything NOW: zero `App::Drive` and clear the planner's active + pending queue, no completion acks for the discarded entries. This is what `STOP` meant before the rework |
 | `TLM` | robot→host | binary | `ReplyEnvelope{tlm: Telemetry}` — the only reply arm with a live producer (§7.1/§8) |
 | `OK` / `ERR` | robot→host | binary | `ReplyEnvelope`'s `ok`/`err` oneof arms — schema-declared, zero live producers today (unchanged from v4, §7.1) |
 
@@ -315,17 +317,75 @@ own discriminant.
 — **field numbers, handler bindings, and reserved-list unchanged from
 protocol v4**:
 
-| Arm | Field # | Payload | Handler | Wire verb name (§2.4) |
-|---|---|---|---|---|
-| `config` | 6 | `ConfigDelta` (§6) | `RobotLoop::handleConfig()` | `CONFIG` |
-| `stop` | 13 | `Stop{}` (zero fields) | `RobotLoop::handleStop()` | `STOP` |
-| `move` | 21 | `Move` (§4) | `RobotLoop::handleMove()` | `MOVE` |
+| Arm | Field # | Payload | Handler | Wire verb name (§2.4) | Destination |
+|---|---|---|---|---|---|
+| `config` | 6 | `ConfigDelta` (§6) | `RobotLoop::routeCommand()` | `CONFIG` | `App::Configurator` |
+| `stop` | 13 | `Stop{id}` | `RobotLoop::handleStop()` | `STOP` | `Motion::Planner::plannedStop()` — queued, in sequence |
+| `move` | 21 | `Move` (§4) | `RobotLoop::handleMove()` | `MOVE` | `Motion::Planner::move()` — twist OR wheels velocity, any stop kind |
+| `wheels` | 22 | `Wheels{v_left, v_right, duration, id}` | `RobotLoop::handleWheels()` | `WHEELS` | `App::Drive::command()` — supersedes the planner |
+| `estop` | 23 | `Estop{}` (zero fields) | `RobotLoop::handleEstop()` | `ESTOP` | `App::Drive::estop()` **and** `Motion::Planner::estop()` |
 
 `corr_id` (field 1) is present on every `CommandEnvelope` and is echoed
 back via the ack ring (§7.1), never a per-command `ReplyEnvelope`.
-Reserved field numbers (2, 3, 4, 5, 7-12, 14-18, 19, 20) are unchanged
-from v4 — this sprint added no new `CommandEnvelope` arm and removed
-none. `ErrCode` (used by every ack — §7.3) is unchanged.
+Reserved field numbers (2, 3, 4, 5, 7-12, 14-18, 19, 20) are unchanged;
+`wheels`/`estop` were assigned fresh, never-before-used numbers (22/23),
+never one of the reserved ones. `ErrCode` (used by every ack — §7.3) is
+unchanged.
+
+**An arm's NAME is load-bearing, not cosmetic.** Both host senders derive
+the wire line's `<COMMAND>':'` prefix — and therefore the CRC's scope
+extension — from `WhichOneof("cmd").upper()`
+(`io/serial_conn.py`/`io/sim_config.py`'s own `_envelope_command_name()`),
+so every arm name must be the lowercase spelling of its verb in
+`commands.proto`. Renaming an arm silently breaks every frame's CRC.
+
+**Exactly one subsystem owns motion at a time**, enforced at routing:
+a `WHEELS` command clears the planner, a `MOVE` clears `App::Drive`'s armed
+command. That is also why routing every `MOVE` to the planner closed a live
+gap — a wheels-velocity `MOVE` carrying a DISTANCE stop used to be diverted
+into `Drive`, which has no odometry, and therefore ran to its timeout
+backstop instead of stopping on the odometer.
+
+### 3.1 Two stops
+
+`STOP` and `ESTOP` are not synonyms and not a rename:
+
+- **`ESTOP`** — halt everything now. Zeroes `App::Drive`'s targets and
+  clears `Motion::Planner`'s active + pending queue in the same cycle. The
+  discarded entries get **no** completion acks: the host asked for a halt,
+  not for a report that the things it cancelled finished.
+- **`STOP`** — "come to a stop when you reach THIS point in the queued
+  sequence." An ordinary planner queue entry (`Motion::Move::Kind::Stop`)
+  that waits behind whatever is already queued, ramps the wheels down at
+  the decel ceiling, and completes once the robot is actually at rest.
+  Two acks, two keys, exactly like `Move`: the enqueue ack echoes the
+  envelope's `corr_id` (or `ERR_FULL` if the 5-deep queue is full), and the
+  completion ack — the one that means the robot has stopped — echoes
+  `Stop.id`.
+
+`STOP` **changed meaning** with this rework; it used to be the panic stop.
+Every caller that means "halt now" belongs on `ESTOP`
+(`NezhaProtocol.estop()`).
+
+### 3.2 Command ingestion
+
+`App::Comms` buffers decoded commands in a ring (`kCmdRingDepth` = 12).
+`Comms::pump()` drains **both** transports into it and is called from
+inside each of `RobotLoop::cycle()`'s four existing pacing windows, so the
+transports are freed several times per cycle instead of once; the loop then
+drains the whole ring through `routeCommand()` once per cycle. Before this,
+ingestion was rate-limited by the control loop — at most one command per
+cycle, ~21/s at the measured 47 ms period — and a burst was silently lost
+in the transports' own buffers (a single completed-message slot on radio, a
+linear accumulator on serial).
+
+A well-formed command that arrives at a full ring is dropped and counted
+(`Comms::commandsDroppedCount()`, surfaced as `flags` bit 18); that is
+firmware backpressure, distinct in kind from `flags` bit 9's malformed-line
+count. The ack ring (§7.1) was raised to the same depth for the matching
+reason: the loop drains N commands in one cycle and pushes N acks into a
+single frame, so a burst that fits the command ring must also fit the ack
+ring or it executes unobservably.
 
 ---
 

@@ -41,8 +41,11 @@ class WheelPid {
 
   // One control step: velocity target (+ the commanded accel behind it)
   // vs measured -> duty in [-1, 1].
-  float compute(float target, float targetAccel, float measured,
-                float dt);  // [mm/s] [mm/s^2] [mm/s] [s]
+  // freezeIntegral: the caller knows this step is a pure transient (e.g.
+  // braking to rest on a zero target) where integral wind-up would later
+  // release as unwanted motion -- integrate nothing this step.
+  float compute(float target, float targetAccel, float measured, float dt,
+                bool freezeIntegral = false);  // [mm/s] [mm/s^2] [mm/s] [s]
 
   void reset() { integral_ = 0.0f; }
   float integral() const { return integral_; }  // [duty] observability

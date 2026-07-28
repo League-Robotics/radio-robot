@@ -313,7 +313,8 @@ list(APPEND SOURCE_FILES ${CC_FILES})
 set(MOTION_SOURCE_DIR "src/motion")
 RECURSIVE_FIND_DIR(MOTION_INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}" "*.h")
 # (planner exclusion rationale: see the MOTION_SOURCE_FILES filter below)
-list(FILTER MOTION_INCLUDE_DIRS EXCLUDE REGEX "/planner")
+list(FILTER MOTION_INCLUDE_DIRS EXCLUDE REGEX "/planner/(tests|bench|py|build)")
+list(FILTER MOTION_INCLUDE_DIRS EXCLUDE REGEX "/build")
 list(APPEND INCLUDE_DIRS ${MOTION_INCLUDE_DIRS})
 list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}")
 # The parent of BOTH src/firm and src/motion ("src/"), so a qualified
@@ -331,7 +332,17 @@ RECURSIVE_FIND_FILE(MOTION_SOURCE_FILES "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_D
 # sources). None of it may link into the firmware image -- without this
 # filter the glob above would pull in duplicate main() definitions and
 # host-only code the ARM toolchain cannot build.
-list(FILTER MOTION_SOURCE_FILES EXCLUDE REGEX "/planner/")
+# Planner INTEGRATION (2026-07-26): the library core (profile/estimation/
+# wheel_pid/planner.cpp) now compiles INTO the firmware image -- only the
+# standalone project's own subtrees stay excluded (test mains, the ctypes
+# capi, bench/py tooling, and any nested build dir).
+list(FILTER MOTION_SOURCE_FILES EXCLUDE REGEX "/planner/(tests|bench|py|build)/")
+list(FILTER MOTION_SOURCE_FILES EXCLUDE REGEX "/planner/capi\\.cpp")
+# Likewise any CMake build directory under src/motion (the standalone
+# motion_tests/planner builds configure in-tree): CMake's own generated
+# feature-test sources (CompilerId*.cpp etc.) must never be globbed into
+# the firmware image.
+list(FILTER MOTION_SOURCE_FILES EXCLUDE REGEX "/build/")
 list(APPEND SOURCE_FILES ${MOTION_SOURCE_FILES})
 
 # ---------------------------------------------------------------------------

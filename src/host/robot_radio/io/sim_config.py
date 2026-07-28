@@ -135,6 +135,42 @@ class SimConfigConn:
         self.send_envelope_fast(envelope)
         return {"sent": envelope, "mode": "sim", "reply": None}
 
+    def wait_for_ack(self, corr_id: int, timeout: int = 500,  # [ms]
+                     ) -> "int | None":
+        """``SerialConnection.wait_for_ack()``-compatible: returns the RAW
+        PACKED ring word (``corr_id<<4 | err``) for ``corr_id``, or ``None``
+        on timeout.
+
+        Added by the command-ingestion rework so ``NezhaProtocol`` is a
+        complete, working client of this class rather than a partial one.
+        ``NezhaProtocol.wait_for_ack()`` calls ``self._conn.wait_for_ack()``
+        and re-wraps the result via ``AckEntry.from_ring_entry()``, which
+        expects the packed int -- ``poll_ack()`` below returns an
+        already-adapted ``AckEntry`` instead and therefore could not be used
+        for that path. Both exist: ``poll_ack()`` for the direct callers
+        that predate this (``SimTransport``, ``SimLoop.
+        configure_from_robot()``), ``wait_for_ack()`` for anything driving
+        this connection through ``NezhaProtocol``.
+
+        Repacks rather than plumbs the raw word through: ``SimLoop.
+        read_pending_binary_tlm_frames()`` hands back adapted ``TLMFrame``/
+        ``AckEntry`` dataclasses, one layer past the wire's own packed
+        ints, so the word is reconstructed here with the same packing
+        ``App::Telemetry::pushAckRing()`` uses.
+        """
+        entry = self.poll_ack(corr_id, timeout=timeout)
+        if entry is None:
+            return None
+        return (entry.corr_id << 4) | (entry.err_code & 0xF)
+
+    def read_pending_binary_tlm_frames(self) -> list:
+        """``SerialConnection``-compatible non-blocking telemetry drain --
+        straight through to the ``SimLoop``. Same reason as
+        ``wait_for_ack()`` above: a caller driving this connection through
+        ``NezhaProtocol`` (or reading telemetry directly, as the square-tour
+        gate does) needs the identical method name on both backends."""
+        return self._loop.read_pending_binary_tlm_frames()
+
     def poll_ack(self, corr_id: int, timeout: int = 500,  # [ms]
                 ) -> "protocol.AckEntry | None":
         """Poll ``SimLoop.read_pending_binary_tlm_frames()``'s bounded ack

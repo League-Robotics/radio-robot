@@ -243,7 +243,16 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
         size_t payloadLen = 0;
         if (!WireRuntime::beginLengthDelimited(buf, len, &pos, 0, &payloadLen)) return false;
         size_t outCount = 0;
-        if (!WireRuntime::decodePackedVarint(buf + pos, payloadLen, out->acks_, /*maxCount=*/4, &outCount)) {
+        // maxCount from the STRUCT, never a literal: this was a hardcoded 4,
+        // which silently truncated every frame the moment App::kAckRingDepth
+        // grew past it (command-ingestion-ring-buffered-comms-subsystem-
+        // routing-two-stops.md §1 raised it to 12). The truncation was
+        // invisible -- decode still SUCCEEDED, just short -- so a burst's
+        // later acks read as "never acked" in every harness built on this
+        // codec. Sizing off sizeof(acks_) makes a future depth change
+        // impossible to miss here.
+        constexpr size_t kAcksCap = sizeof(out->acks_) / sizeof(out->acks_[0]);
+        if (!WireRuntime::decodePackedVarint(buf + pos, payloadLen, out->acks_, kAcksCap, &outCount)) {
           return false;
         }
         out->acks_count = static_cast<uint8_t>(outCount);
@@ -356,13 +365,59 @@ bool encodeNestedField(uint32_t fieldNumber, const uint8_t* payload, size_t payl
   return true;
 }
 
-// Encodes CommandEnvelope field 13 (stop, length-delimited oneof arm, empty
-// payload -- Stop has no fields at all), then field 1 (corr_id) if nonzero.
-size_t encodeStopEnvelope(uint32_t corrId, uint8_t* buf, size_t cap) {
+// Encodes CommandEnvelope field 13 (stop, length-delimited oneof arm),
+// then field 1 (corr_id) if nonzero. Stop's own `id` (field 1 --
+// command-ingestion-...-two-stops.md §2, the planned stop's COMPLETION-ack
+// key) is encoded inside the arm when nonzero; zero omits it, proto3
+// implicit presence, leaving the byte-for-byte zero-length payload this
+// arm had when Stop was a genuinely empty message.
+size_t encodeStopEnvelope(uint32_t corrId, uint32_t id, uint8_t* buf, size_t cap) {
   size_t pos = 0;
   if (!encodeVarintField(1, corrId, buf, cap, &pos)) return 0;
+
+  uint8_t scratch[16];
+  size_t scratchPos = 0;
+  if (!encodeVarintField(1, id, scratch, sizeof(scratch), &scratchPos)) return 0;
+
   if (!WireRuntime::encodeTag(13, WireType::kLengthDelimited, buf, cap, &pos)) return 0;
+  if (!WireRuntime::encodeVarint(scratchPos, buf, cap, &pos)) return 0;
+  if (cap - pos < scratchPos) return 0;
+  std::memcpy(buf + pos, scratch, scratchPos);
+  pos += scratchPos;
+  return pos;
+}
+
+// Encodes CommandEnvelope field 23 (estop, length-delimited oneof arm,
+// empty payload -- Estop has no fields at all, the shape the old Stop had
+// before it became the planned stop), then field 1 (corr_id) if nonzero.
+size_t encodeEstopEnvelope(uint32_t corrId, uint8_t* buf, size_t cap) {
+  size_t pos = 0;
+  if (!encodeVarintField(1, corrId, buf, cap, &pos)) return 0;
+  if (!WireRuntime::encodeTag(23, WireType::kLengthDelimited, buf, cap, &pos)) return 0;
   if (!WireRuntime::encodeVarint(0, buf, cap, &pos)) return 0;  // zero-length payload
+  return pos;
+}
+
+// Encodes CommandEnvelope field 22 (wheels, length-delimited oneof arm --
+// Wheels{v_left=1, v_right=2, duration=3, id=4}), then field 1 (corr_id)
+// if nonzero.
+size_t encodeWheelsEnvelope(float vLeft, float vRight, float duration, uint32_t id,
+                             uint32_t corrId, uint8_t* buf, size_t cap) {
+  size_t pos = 0;
+  if (!encodeVarintField(1, corrId, buf, cap, &pos)) return 0;
+
+  uint8_t scratch[32];
+  size_t scratchPos = 0;
+  if (!encodeFloatField(1, vLeft, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeFloatField(2, vRight, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeFloatField(3, duration, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeVarintField(4, id, scratch, sizeof(scratch), &scratchPos)) return 0;
+
+  if (!WireRuntime::encodeTag(22, WireType::kLengthDelimited, buf, cap, &pos)) return 0;
+  if (!WireRuntime::encodeVarint(scratchPos, buf, cap, &pos)) return 0;
+  if (cap - pos < scratchPos) return 0;
+  std::memcpy(buf + pos, scratch, scratchPos);
+  pos += scratchPos;
   return pos;
 }
 
@@ -537,11 +592,26 @@ std::string armorMoveCommand(float v_left, float v_right, MoveStopKind stopKind,
   return armor(rawBuf, n, "MOVE");
 }
 
-std::string armorStopCommand(uint32_t corrId) {
+std::string armorStopCommand(uint32_t corrId, uint32_t id) {
   uint8_t rawBuf[32];
-  size_t n = encodeStopEnvelope(corrId, rawBuf, sizeof(rawBuf));
+  size_t n = encodeStopEnvelope(corrId, id, rawBuf, sizeof(rawBuf));
   if (n == 0) return std::string();
   return armor(rawBuf, n, "STOP");
+}
+
+std::string armorEstopCommand(uint32_t corrId) {
+  uint8_t rawBuf[32];
+  size_t n = encodeEstopEnvelope(corrId, rawBuf, sizeof(rawBuf));
+  if (n == 0) return std::string();
+  return armor(rawBuf, n, "ESTOP");
+}
+
+std::string armorWheelsCommand(float vLeft, float vRight, float duration, uint32_t id,
+                                uint32_t corrId) {
+  uint8_t rawBuf[64];
+  size_t n = encodeWheelsEnvelope(vLeft, vRight, duration, id, corrId, rawBuf, sizeof(rawBuf));
+  if (n == 0) return std::string();
+  return armor(rawBuf, n, "WHEELS");
 }
 
 }  // namespace TestSupport

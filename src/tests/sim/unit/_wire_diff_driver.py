@@ -181,7 +181,11 @@ def encode_err(binary: pathlib.Path, corr_id: int, code_name: str, field_num: in
     return base64.b64decode(line[len("B64 "):])
 
 
-_ACK_RING_DEPTH = 4  # mirrors App::kAckRingDepth (app/telemetry.h) / telemetry.proto's Telemetry.acks max_count
+# 4 -> 12 (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
+# §1): the ack ring is sized to App::kCmdRingDepth so a burst that fits the
+# firmware's new command ring also fits here. Mirrors App::kAckRingDepth
+# (app/telemetry.h) / telemetry.proto's Telemetry.acks max_count -- change together.
+_ACK_RING_DEPTH = 12
 
 
 def pack_ack(corr_id: int, err: int) -> int:

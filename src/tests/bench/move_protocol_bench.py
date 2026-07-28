@@ -194,7 +194,7 @@ def scenario_distance_stop(proto: NezhaProtocol, result: Result) -> None:
     result.record("distance MOVE traveled ~200mm (+/-20% tolerance)",
                   180.0 <= traveled <= 240.0,
                   f"before={before[:2]} after={after[:2]} traveled={traveled:.1f}mm")
-    proto.stop()
+    proto.estop()
 
 
 def scenario_angle_stop(proto: NezhaProtocol, result: Result) -> None:
@@ -224,7 +224,7 @@ def scenario_angle_stop(proto: NezhaProtocol, result: Result) -> None:
                   0.375 <= abs(dtheta_rad) <= 0.625,
                   f"before_theta_cdeg={before[2]} after_theta_cdeg={after[2]} "
                   f"dtheta={dtheta_rad:.3f}rad")
-    proto.stop()
+    proto.estop()
 
 
 def scenario_wheels_variant_signs(proto: NezhaProtocol, result: Result) -> None:
@@ -257,7 +257,7 @@ def scenario_wheels_variant_signs(proto: NezhaProtocol, result: Result) -> None:
     else:
         result.record("wheels MOVE drove the two wheels in opposite directions",
                       False, "no encoder frames observed")
-    proto.stop()
+    proto.estop()
 
 
 def scenario_chaining_seamless(proto: NezhaProtocol, result: Result) -> None:
@@ -307,7 +307,7 @@ def scenario_chaining_seamless(proto: NezhaProtocol, result: Result) -> None:
                   ack_complete_b is not None, f"move_id={move_b}")
     result.record("chain: no idle gap between A ending and B activating", not gap,
                   f"gap_detected={gap}")
-    proto.stop()
+    proto.estop()
 
 
 def scenario_replace_preempts(proto: NezhaProtocol, result: Result) -> None:
@@ -339,7 +339,7 @@ def scenario_replace_preempts(proto: NezhaProtocol, result: Result) -> None:
                   ack_complete_a is None, f"move_id={move_a}")
     result.record("preempt: Move B completion ack observed", ack_complete_b is not None,
                   f"move_id={move_b}")
-    proto.stop()
+    proto.estop()
 
 
 def scenario_err_full(proto: NezhaProtocol, result: Result) -> None:
@@ -373,7 +373,7 @@ def scenario_err_full(proto: NezhaProtocol, result: Result) -> None:
 
     # Clean up immediately -- no need to let the whole 6s+4x200ms chain play
     # out; STOP flushes the active Move and every pending slot at once.
-    stop_corr = proto.stop()
+    stop_corr = proto.estop()
     stop_ack = proto.wait_for_ack(stop_corr, timeout=ACK_TIMEOUT)
     result.record("ERR_FULL: STOP cleanup ack ok", stop_ack is not None and stop_ack.ok,
                   f"ack={stop_ack}")
@@ -478,7 +478,7 @@ def scenario_stop_mid_motion(proto: NezhaProtocol, result: Result) -> None:
     _watch(proto, 0.4)  # let A actually be underway
 
     stop_sent_at = time.monotonic()
-    stop_corr = proto.stop()
+    stop_corr = proto.estop()
     stop_frames: list[TLMFrame] = []
 
     def _record(f: TLMFrame) -> None:
@@ -580,7 +580,7 @@ def main() -> int:
             scenario(proto, result)
     finally:
         try:
-            proto.stop()
+            proto.estop()
         except Exception:
             pass
         conn.disconnect()
