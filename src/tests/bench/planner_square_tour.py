@@ -82,7 +82,7 @@ def main() -> int:
     pending_enqueues: dict[int, int] = {}  # corr_id -> move_id awaiting enqueue ack
     completions: list[tuple[float, int]] = []  # (t, move_id)
     log = dict(t=[], velLeft=[], velRight=[], posLeft=[], posRight=[],
-               heading=[])
+               heading=[], cmdLeft=[], cmdRight=[], x=[], y=[])
     enc_start = None
     t0 = time.monotonic()
 
@@ -111,6 +111,21 @@ def main() -> int:
                     log["posRight"].append(f.enc_right.position)
                     # pose is (x, y, heading) with heading in centi-degrees
                     log["heading"].append(f.pose[2] / 100.0 if f.pose else float("nan"))
+                    log["x"].append(f.pose[0] if f.pose else float("nan"))
+                    log["y"].append(f.pose[1] if f.pose else float("nan"))
+                    # Commanded twist (v [mm/s], omega [mrad/s]) -> the
+                    # per-wheel COMMANDED speeds the planner staged this
+                    # cycle (trim included -- telemetry reports what is
+                    # actually asked of the wheels).
+                    if f.twist is not None:
+                        v = float(f.twist[0])
+                        omega = float(f.twist[1]) / 1000.0  # [rad/s]
+                        half = 0.5 * TRACK * omega
+                        log["cmdLeft"].append(v - half)
+                        log["cmdRight"].append(v + half)
+                    else:
+                        log["cmdLeft"].append(float("nan"))
+                        log["cmdRight"].append(float("nan"))
                 for entry in f.acks:
                     if entry.corr_id in pending_enqueues:
                         if not entry.ok:
@@ -156,15 +171,32 @@ def main() -> int:
     print(f"  heading (encoder differential) {heading_enc:.1f} deg "
           f"(target 360; error {heading_enc - 360.0:+.1f})")
 
+    # Closure: how far the pose ended from where it started, and how far
+    # the final heading is from a full 360 turn.
+    x0, y0 = log["x"][0], log["y"][0]
+    x1, y1 = log["x"][-1], log["y"][-1]
+    closure = math.hypot(x1 - x0, y1 - y0)
+    print(f"  pose closure {closure:.1f} mm from start "
+          f"(finish at {x1 - x0:+.1f}, {y1 - y0:+.1f})")
+
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(14, 6))
-    ax.plot(log["t"], log["velLeft"], color="#1f77b4", lw=1.2,
-            label="left wheel speed [mm/s] (real encoder)")
-    ax.plot(log["t"], log["velRight"], color="#2ca02c", lw=1.2,
-            label="right wheel speed [mm/s] (real encoder)")
+    fig = plt.figure(figsize=(15, 10))
+    grid = fig.add_gridspec(2, 2, height_ratios=[1.15, 1.0],
+                            hspace=0.3, wspace=0.2)
+
+    # --- Wheel speeds: commanded vs measured, both wheels ----------------
+    ax = fig.add_subplot(grid[0, :])
+    ax.plot(log["t"], log["cmdLeft"], color="#1f77b4", lw=1.0, ls="--",
+            label="left commanded [mm/s]")
+    ax.plot(log["t"], log["velLeft"], color="#1f77b4", lw=1.4,
+            label="left measured (encoder)")
+    ax.plot(log["t"], log["cmdRight"], color="#d62728", lw=1.0, ls="--",
+            label="right commanded [mm/s]")
+    ax.plot(log["t"], log["velRight"], color="#d62728", lw=1.4,
+            label="right measured (encoder)")
     for tc, move_id in completions:
         ax.axvline(tc, color="#888888", lw=0.6, alpha=0.5)
         kind = "leg" if move_id % 2 == 1 else "turn"
@@ -172,22 +204,60 @@ def main() -> int:
                     xy=(tc, 0.98), xycoords=("data", "axes fraction"),
                     fontsize=7.5, rotation=90, va="top", ha="right",
                     color="#666666")
-    lim = 1.1 * max(max(abs(v) for v in log["velLeft"]),
-                    max(abs(v) for v in log["velRight"]), CRUISE)
+    lim = 1.15 * max(max(abs(v) for v in log["velLeft"]),
+                     max(abs(v) for v in log["velRight"]), CRUISE)
     ax.set_ylim(-lim, lim)
     ax.axhline(0.0, color="black", lw=0.5)
     ax.axhline(CRUISE, color="#cccccc", lw=0.7, ls=":")
     ax.set_xlabel("time [s]")
     ax.set_ylabel("wheel speed [mm/s]")
-    ax.set_title(
-        f"ON-ROBOT square tour -- onboard Motion::Planner, real encoders\n"
-        f"path {path:.1f}/{4 * LEG:.0f} mm, heading {heading_enc:.1f}/360 deg, "
-        f"{len(completions)}/{len(moves)} moves")
-    ax.legend(loc="lower right", fontsize=8, framealpha=0.9)
+    ax.legend(loc="lower right", fontsize=8, ncol=2, framealpha=0.9)
     ax.grid(True, alpha=0.25)
-    fig.tight_layout()
+    ax.set_title("Wheel speed: commanded (dashed) vs measured (solid)",
+                 fontsize=10)
+
+    # --- The motion (encoder-odometry pose) ------------------------------
+    ax2 = fig.add_subplot(grid[1, 0])
+    xs = [x - x0 for x in log["x"]]
+    ys = [y - y0 for y in log["y"]]
+    ideal = [(0, 0), (LEG, 0), (LEG, LEG), (0, LEG), (0, 0)]
+    ax2.plot([p[0] for p in ideal], [p[1] for p in ideal], color="#bbbbbb",
+             ls="--", lw=1.0, label="ideal square")
+    ax2.plot(xs, ys, color="#2b8a3e", lw=1.6)
+    ax2.plot([0], [0], marker="o", color="#2b8a3e", ms=7, label="start")
+    ax2.plot([xs[-1]], [ys[-1]], marker="X", color="#d62728", ms=10,
+             label="finish")
+    ax2.annotate(f"closure {closure:.1f} mm", xy=(xs[-1], ys[-1]),
+                 xytext=(10, -14), textcoords="offset points",
+                 fontsize=9, color="#d62728")
+    ax2.set_aspect("equal", adjustable="datalim")
+    ax2.set_xlabel("x [mm]")
+    ax2.set_ylabel("y [mm]")
+    ax2.legend(loc="best", fontsize=8)
+    ax2.grid(True, alpha=0.25)
+    ax2.set_title("Path (encoder odometry pose)", fontsize=10)
+
+    # --- Heading vs time -------------------------------------------------
+    ax3 = fig.add_subplot(grid[1, 1])
+    ax3.plot(log["t"], log["heading"], color="#6741d9", lw=1.4)
+    for i in range(1, 5):
+        ax3.axhline(90.0 * i, color="#cccccc", lw=0.7, ls=":")
+    ax3.set_xlabel("time [s]")
+    ax3.set_ylabel("heading [deg]")
+    ax3.grid(True, alpha=0.25)
+    ax3.set_title("Heading (encoder odometry) -- gridlines at n*90 deg",
+                  fontsize=10)
+
+    fig.suptitle(
+        f"ON-ROBOT square tour -- onboard Motion::Planner "
+        f"(per-wheel profiler + velocity trim), real encoders\n"
+        f"{len(completions)}/{len(moves)} moves   "
+        f"path {path:.1f}/{4 * LEG:.0f} mm ({path - 4 * LEG:+.1f})   "
+        f"heading {heading_enc:.1f}/360 deg ({heading_enc - 360.0:+.1f})   "
+        f"pose closure {closure:.1f} mm",
+        fontsize=12)
     out = args.out or (__file__.rsplit("/", 1)[0] + "/planner_square_tour.png")
-    fig.savefig(out, dpi=130)
+    fig.savefig(out, dpi=130, bbox_inches="tight")
     print(f"wrote {out}")
     return 0 if ok else 1
 

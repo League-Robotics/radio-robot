@@ -120,12 +120,16 @@ char versionLastDigit() {
 // ~47 ms budget whose motion tuning assumes those cycles are not being
 // spent elsewhere. Boot is the one window where the cost is free.
 void showBootIdentity() {
+  // Pixel values are BRIGHTNESS 0..255, not booleans -- a 1 here renders
+  // at 1/255 duty, i.e. invisibly dim next to the font's full-bright
+  // digit (stakeholder observed "only the 1, no hearts", 2026-07-27).
+  constexpr uint8_t kOn = 255;
   static const uint8_t kHeart[] = {
-      0, 1, 0, 1, 0,
-      1, 1, 1, 1, 1,
-      1, 1, 1, 1, 1,
-      0, 1, 1, 1, 0,
-      0, 0, 1, 0, 0,
+      0,   kOn, 0,   kOn, 0,
+      kOn, kOn, kOn, kOn, kOn,
+      kOn, kOn, kOn, kOn, kOn,
+      0,   kOn, kOn, kOn, 0,
+      0,   0,   kOn, 0,   0,
   };
   constexpr int kHeartHold = 500;  // [ms]
   constexpr int kDigitHold = 900;  // [ms] longer -- it is the payload
