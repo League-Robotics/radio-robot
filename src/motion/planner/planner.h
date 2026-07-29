@@ -112,6 +112,33 @@ class Planner {
     float baselinePath = 0.0f;     // [mm] signed mean wheel position at activation
     float baselineHeading = 0.0f;  // [rad] heading() at activation
     bool closingIssued = false;    // last command was the exact terminal step
+
+    // Stall backstop. Completion tests `plannedRemaining <= epsilon` on a
+    // SIGNED residual, so a Move that OVERSHOOTS completes at once (the
+    // residual goes negative) but one that lands SHORT by more than the
+    // epsilon never completes on its own: with the wheels stopped the
+    // in-flight prediction that would carry the residual negative is also
+    // zero, so it is pinned and the Move runs out its full MOVE_TIMEOUT
+    // (measured 2026-07-28: turns idling 27+ s with both wheels at rest and
+    // the Move still flagged active). Widening the epsilon only moves the
+    // cliff -- a weaker plant lands further short and hangs again, which is
+    // exactly what happened after the 1 um -> 1 mm widening.
+    //
+    // So arrival is not the only way to be finished: a body that has come
+    // to REST and is making no further progress is done, wherever it
+    // stopped. These track that -- `stallRemaining` is the anchored
+    // residual when the stall window opened, `stallTicks` how many
+    // consecutive ticks it has held while at rest.
+    float stallRemaining = 0.0f;   // [mm] or [rad], the Move's own axis
+    uint32_t stallTicks = 0;
+    // Gate: the backstop only arms once the body has actually left rest.
+    // Without this, every Move is "at rest and making no progress" on its
+    // own activation tick, and one that is merely slow to break away (the
+    // accel ramp plus ~120-140 ms of actuation lag) would be completed
+    // instead of driven -- skipping the leg outright, which is far worse
+    // than the hang being fixed. "Moved, then stopped, and stayed stopped"
+    // is the condition; "has not started yet" is not.
+    bool hasMoved = false;
     // Settle-confirm (PlannerLimits::requireSettle): profile-complete has
     // fired and we are holding the completion back until the body has
     // arrived and stopped, or until settleWindow expires.

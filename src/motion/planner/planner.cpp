@@ -30,12 +30,41 @@ namespace {
 // PlannerLimits::requireSettle is on, and that defaults false and is not
 // baked from robot config.
 //
-// Sized against measurement resolution, not taste: the encoder quantum is
-// 0.0716 mm, so ~14 quanta linear; the heading quantum for a pivot is
-// 2*0.0716/trackWidth ~= 0.0011 rad, so ~3 quanta angular. Both are far
-// inside the tour's error budget (1 mm on a 500 mm leg is 0.2%).
-constexpr float kDoneEpsilonLinear = 1.0f;     // [mm]
-constexpr float kDoneEpsilonAngular = 0.003f;  // [rad] ~0.17 deg
+// RESTORED to the original float-noise floors after the stall backstop
+// below made them the wrong tool. Widening these to 1.0 mm / 0.003 rad did
+// stop the hangs, but at a cost that only showed up later: `done` fires on
+// the tick the residual first drops under the epsilon, BEFORE the profile's
+// exact terminal step executes, so a wide epsilon truncates the last
+// epsilon of EVERY move. That is a systematic short-fall on every leg and
+// turn (planner_scenarios_test caught it: a 400 mm move landing 0.9 mm
+// short against a 0.001 mm tolerance), and it still could not survive a
+// plant that lands further short than whatever value was chosen.
+//
+// The stall backstop handles the stuck case directly and without a
+// tolerance to outgrow, so these go back to being what their original
+// comment said they were: noise floors absorbing last-ulp rounding in the
+// re-measurement, not motion margin.
+constexpr float kDoneEpsilonLinear = 1e-3f;   // [mm]
+constexpr float kDoneEpsilonAngular = 1e-5f;  // [rad]
+
+// Stall backstop (Planner::ActiveMove::stallTicks documents the failure it
+// defends against). "Has stopped and is going nowhere" needs three things:
+//
+//  - AT REST. Reuses PlannerLimits::settleRestVelocity/settleRestOmega, the
+//    same thresholds settleReached() already calls "stopped".
+//  - NOT MOVING THE RESIDUAL. Tested on `anchoredRemaining`, which only
+//    changes when a real encoder sample lands (planner.h) -- the noise-free
+//    signal, deliberately not the predicted one. The tolerances are a few
+//    measurement quanta: the encoder quantum is 0.0716 mm, and a pivot's
+//    heading quantum is 2*0.0716/trackWidth ~= 0.0011 rad.
+//  - FOR LONG ENOUGH that a slow crawl is not mistaken for a stall. At
+//    <5 mm/s, 0.5 s is under 2.5 mm of travel.
+//
+// 0.5 s replaces a 30 s MOVE_TIMEOUT, and unlike an epsilon it cannot be
+// re-broken by a weaker plant landing further short.
+constexpr float kStallWindow = 0.5f;            // [s]
+constexpr float kStallEpsilonLinear = 0.25f;    // [mm] ~3.5 encoder quanta
+constexpr float kStallEpsilonAngular = 0.004f;  // [rad] ~3.6 heading quanta
 
 // Settle-confirm gates (PlannerLimits::requireSettle). Unlike the done
 // epsilons above these ARE physical tolerances -- "close enough to the
@@ -455,7 +484,47 @@ TickResult Planner::tick(const Types::RobotState& state) {
 
   const bool timedOut = m.timeout > 0.0f &&
                         static_cast<float>(elapsed) >= m.timeout;
-  bool done = timedOut;
+
+  // Stall backstop. Only for the two kinds whose completion is a POSITION
+  // the plant has to reach and that are meant to land at rest -- a Time
+  // Move's stop condition is the clock, and a Move handing off at speed
+  // (activeBoundary_ > 0) is not supposed to stop at all, so neither can
+  // legitimately stall. Evaluated before `done` so a stalled Move completes
+  // on the same tick it is recognised.
+  const bool stallApplies =
+      (m.kind == Move::Kind::Distance || m.kind == Move::Kind::Angle) &&
+      activeBoundary_ <= 0.0f;
+  bool stalled = false;
+  if (stallApplies) {
+    const bool angular = (m.kind == Move::Kind::Angle);
+    const bool atRest =
+        angular ? std::fabs(measured.omega) <= limits_.settleRestOmega
+                : std::fabs(measured.bodyVelocity) <= limits_.settleRestVelocity;
+    const float epsilon =
+        angular ? kStallEpsilonAngular : kStallEpsilonLinear;
+    // Progress is measured against where the residual stood when the window
+    // opened, NOT against the previous tick: a residual creeping by less
+    // than epsilon per tick would otherwise reset the counter forever while
+    // going nowhere.
+    if (!atRest) {
+      active_.hasMoved = true;
+      active_.stallTicks = 0;  // moving: not stalled, wherever it is
+    } else if (!active_.hasMoved) {
+      // Still breaking away from the activation tick -- not a stall.
+      active_.stallTicks = 0;
+    } else if (active_.stallTicks > 0 &&
+               std::fabs(measured.anchoredRemaining -
+                         active_.stallRemaining) <= epsilon) {
+      ++active_.stallTicks;
+    } else {
+      active_.stallTicks = 1;
+      active_.stallRemaining = measured.anchoredRemaining;
+    }
+    stalled = dt > 0.0f && static_cast<float>(active_.stallTicks) * dt >=
+                               kStallWindow;
+  }
+
+  bool done = timedOut || stalled;
   if (!done && active_.settling) {
     done = true;  // profile-complete already fired; only the gate is pending
   } else if (!done) {
@@ -601,6 +670,9 @@ void Planner::activateNext(uint32_t now) {
   active_.closingIssued = false;
   active_.settling = false;
   active_.settleStart = now;
+  active_.stallRemaining = 0.0f;
+  active_.stallTicks = 0;
+  active_.hasMoved = false;
   active_.baselinePath =
       0.5f * (left_.basisPosition() + right_.basisPosition());
   active_.baselineHeading = pose_.heading();

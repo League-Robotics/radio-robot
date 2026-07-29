@@ -14,7 +14,7 @@
   "vision": {
     "robot_tag_id": 100,
     "tag_offset_mm": {
-      "x": 47.5,
+      "x": 0,
       "y": 0.0,
       "z": 120.0,
       "yaw_rad": 0.0

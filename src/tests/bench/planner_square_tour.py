@@ -59,15 +59,14 @@ def tour(omega: float = OMEGA) -> list[dict]:
     """The 8 tour moves as move_twist() kwargs, in order.
 
     `omega` [rad/s] sets the pivot rate, i.e. each wheel runs at
-    omega*trackWidth/2. The default 1.2 puts the wheels at +/-76.8 mm/s,
-    which is inside the plant's erratic near-breakaway region (measured
-    2026-07-28: below ~120 mm/s the two wheels' achieved/commanded ratios
-    diverge wildly and are not repeatable, e.g. 0.194 vs 0.539 at 77 mm/s;
-    at and above ~150 mm/s both directions agree within a few percent).
-    Raising omega moves the pivot onto the well-behaved part of the curve
-    -- omega=2.4 gives +/-153.6 mm/s -- and measurably improves pivot
-    symmetry. Exposed as a flag rather than retuned in place so the two can
-    be compared on one robot.
+    omega*trackWidth/2. The default 2.4 puts the wheels at +/-153.6 mm/s,
+    on the well-behaved part of the plant's curve. The previous 1.2 put
+    them at +/-76.8 mm/s, inside the erratic near-breakaway region
+    (measured 2026-07-28: below ~120 mm/s the two wheels' achieved/commanded
+    ratios diverge wildly and are not repeatable, e.g. 0.194 vs 0.539 at
+    77 mm/s; at and above ~150 mm/s both directions agree within a few
+    percent). See the OMEGA constant above for the A/B numbers. Exposed as
+    a flag so the two can still be compared on one robot.
     """
     # Move.id values start well above any corr_id this session's
     # SerialConnection will ever assign (a small monotonic counter starting
@@ -98,10 +97,10 @@ def main() -> int:
                    help="plot path (default: alongside this script)")
     p.add_argument("--omega", type=float, default=OMEGA,
                    help="[rad/s] pivot rate; each wheel runs at "
-                        "omega*trackWidth/2. Default 1.2 = +/-76.8 mm/s, "
-                        "inside the plant's erratic near-breakaway region; "
-                        "2.4 = +/-153.6 mm/s, on the well-behaved part of "
-                        "the curve (see tour()).")
+                        "omega*trackWidth/2. Default 2.4 = +/-153.6 mm/s, "
+                        "on the well-behaved part of the curve; 1.2 = "
+                        "+/-76.8 mm/s, inside the plant's erratic "
+                        "near-breakaway region (see tour()).")
     args = p.parse_args()
 
     conn = SerialConnection(port=args.port,
@@ -180,10 +179,29 @@ def main() -> int:
                     log["heading"].append(f.pose[2] / 100.0 if f.pose else float("nan"))
                     log["x"].append(f.pose[0] if f.pose else float("nan"))
                     log["y"].append(f.pose[1] if f.pose else float("nan"))
-                    # Commanded twist (v [mm/s], omega [mrad/s]) -> the
-                    # per-wheel COMMANDED speeds the planner staged this
-                    # cycle (trim included -- telemetry reports what is
-                    # actually asked of the wheels).
+                    # NOT COMMANDED -- this is MEASURED, decomposed.
+                    #
+                    # `Telemetry.twist` is documented in telemetry.proto as
+                    # "body twist from measured wheel velocities" and is
+                    # populated from state.pose.v_x/omega (telemetry.cpp).
+                    # Decomposing it per wheel therefore reproduces the
+                    # encoder velocities already plotted, by a different
+                    # route -- it is the SAME signal, not a second one.
+                    #
+                    # This block used to be labelled "commanded", and the
+                    # chart drew it as a dashed "commanded" trace sitting
+                    # exactly on the solid measured trace. That overlay was
+                    # an artifact of plotting one signal twice, and was
+                    # repeatedly misread as evidence of perfect tracking.
+                    #
+                    # There is currently NO commanded-velocity telemetry to
+                    # plot instead: RobotState::Command::v_x/omega are
+                    # unwired (permanently 0.0, see robot_state.h) and the
+                    # real per-wheel setpoint `cmd_vel` lived on
+                    # TelemetrySecondary, which has been deleted. Exposing it
+                    # means adding a field to the primary frame. Until then
+                    # the honest thing is to label this what it is -- see
+                    # docs/design/2026-07-28-motion-profile-exploration.md.
                     if f.twist is not None:
                         v = float(f.twist[0])
                         omega = float(f.twist[1]) / 1000.0  # [rad/s]
@@ -258,11 +276,11 @@ def main() -> int:
     # --- Wheel speeds: commanded vs measured, both wheels ----------------
     ax = fig.add_subplot(grid[0, :])
     ax.plot(log["t"], log["cmdLeft"], color="#1f77b4", lw=1.0, ls="--",
-            label="left commanded [mm/s]")
+            label="left, twist-derived (MEASURED, not commanded)")
     ax.plot(log["t"], log["velLeft"], color="#1f77b4", lw=1.4,
             label="left measured (encoder)")
     ax.plot(log["t"], log["cmdRight"], color="#d62728", lw=1.0, ls="--",
-            label="right commanded [mm/s]")
+            label="right, twist-derived (MEASURED, not commanded)")
     ax.plot(log["t"], log["velRight"], color="#d62728", lw=1.4,
             label="right measured (encoder)")
     for tc, move_id in completions:
@@ -281,7 +299,7 @@ def main() -> int:
     ax.set_ylabel("wheel speed [mm/s]")
     ax.legend(loc="lower right", fontsize=8, ncol=2, framealpha=0.9)
     ax.grid(True, alpha=0.25)
-    ax.set_title("Wheel speed: commanded (dashed) vs measured (solid)",
+    ax.set_title("Wheel speed: measured (solid) vs the same signal via body twist (dashed) -- NO commanded telemetry exists",
                  fontsize=10)
 
     # --- The motion (encoder-odometry pose) ------------------------------
