@@ -74,6 +74,24 @@ class RobotLoop {
   void markConfigured() { configured_ = true; }
   bool isConfigured() const { return configured_; }
 
+  // setRotationCalibration -- the measured affine turn response,
+  // `actual = gain * commanded + offset`, per direction of rotation.
+  // handleMove() inverts it so an ANGLE-stopped move LANDS on the angle the
+  // host asked for. Seeded from the robot JSON by main.cpp, mirroring how
+  // Drive gets its wheel calibration; the identity (gain 1, offset 0) is
+  // deliberately the default, so an uncalibrated robot behaves exactly as
+  // before rather than being silently skewed.
+  //
+  // offsets are RADIANS here (the robot JSON carries degrees; main.cpp
+  // converts) so this matches Move::threshold's own units.
+  void setRotationCalibration(float gainPos, float offsetPos,
+                              float gainNeg, float offsetNeg) {
+    rotGainPos_ = gainPos;
+    rotOffsetPos_ = offsetPos;
+    rotGainNeg_ = gainNeg;
+    rotOffsetNeg_ = offsetNeg;
+  }
+
   // Clamp a wheel position to the wire bound; static for isolated testing.
   static float clampToPositionWireBound(float pos, bool* clamped);
 
@@ -177,6 +195,14 @@ class RobotLoop {
   int acceptedMoveIdNext_ = 0;
 
   bool configured_ = false;
+
+  // Turn calibration; identity until main.cpp seeds it from the robot JSON.
+  // See setRotationCalibration(). Offsets are [rad], matching
+  // Motion::Move::threshold.
+  float rotGainPos_ = 1.0f;
+  float rotOffsetPos_ = 0.0f;
+  float rotGainNeg_ = 1.0f;
+  float rotOffsetNeg_ = 0.0f;
 };
 
 }  // namespace App

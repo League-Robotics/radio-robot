@@ -455,6 +455,18 @@ int main() {
                                    planner, preamble, stateEstimator, clock,
                                    sleeper);
 
+  // Turn calibration from the robot JSON. Degrees on the wire/JSON side (what
+  // a human reads and what the camera measurement produced), radians inside,
+  // matching Motion::Move::threshold. See RobotLoop::setRotationCalibration().
+  {
+    constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+    robotLoop.setRotationCalibration(
+        drivetrainConfig.rotation_gain_pos,
+        drivetrainConfig.rotation_offset * kDegToRad,
+        drivetrainConfig.rotation_gain_neg,
+        drivetrainConfig.rotation_offset_neg * kDegToRad);
+  }
+
   uint32_t storedVersion = 0;
   Config::Blob storedBlob{};
   bool storeHadData = tuningStore.load(&storedVersion, &storedBlob);

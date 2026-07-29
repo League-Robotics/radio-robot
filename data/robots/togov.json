@@ -71,7 +71,12 @@
     "mm_per_wheel_deg_left": null,
     "mm_per_wheel_deg_right": null,
     "rotational_slip": 0.92,
-    "ekf_r_otos_theta": 0.01
+    "ekf_r_otos_theta": 0.01,
+    "rotation_gain": 1.0,
+    "rotation_offset_deg": 0.0,
+    "rotation_gain_neg": 1.0,
+    "rotation_offset_deg_neg": 0.0,
+    "_rotation_calibration_note": "identity = no turn correction. Replace with a measured fit (actual = gain*commanded + offset[deg], per direction) from a camera sweep; see tovez.json's _rotation_calibration_note."
   },
   "mecanum_calibration": {
     "mm_per_wheel_deg_fr": null,

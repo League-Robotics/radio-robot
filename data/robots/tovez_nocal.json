@@ -68,7 +68,12 @@
     "fwd_sign_right": -1,
     "rotational_slip": 1.0,
     "otos_linear_scale": 1.0,
-    "otos_angular_scale": 1.0
+    "otos_angular_scale": 1.0,
+    "rotation_gain": 1.0,
+    "rotation_offset_deg": 0.0,
+    "rotation_gain_neg": 1.0,
+    "rotation_offset_deg_neg": 0.0,
+    "_rotation_calibration_note": "identity = no turn correction. Replace with a measured fit (actual = gain*commanded + offset[deg], per direction) from a camera sweep; see tovez.json's _rotation_calibration_note."
   },
   "control": {
     "_vel_gains_domain": "duty [-1,1] (NezhaMotor MotorVelocityPid); NOT the old PWM-percent scale",

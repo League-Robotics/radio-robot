@@ -181,6 +181,39 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
     }
   }
 
+  // Turn calibration. The measured response of an ANGLE-stopped move is
+  // affine, actual = gain * commanded + offset, so to LAND on the requested
+  // angle we command (requested - offset) / gain.
+  //
+  // Measured 2026-07-29 against overhead camera truth, 48 shuffled in-place
+  // turns: 15..180 deg, both directions, omega 2.5..8.0 rad/s. The same law
+  // holds at every rate -- this is geometry/stiction, not a deceleration
+  // artifact -- so ONE pair of constants per direction covers the range.
+  //
+  // The offset is what makes this worth doing: it is roughly -6 deg
+  // regardless of size, which is invisible at 180 and ruinous at 15 (a 15
+  // deg command landed at 9). A pure scale factor cannot correct it, which
+  // is why calibrating against 180-degree turns alone did not transfer down.
+  //
+  // Per direction because the two gearboxes are not identical. Direction is
+  // taken from the commanded rotation itself: omega for a twist, the wheel
+  // difference for a wheels-velocity move.
+  if (m.kind == Motion::Move::Kind::Angle) {
+    const bool positive =
+        (m.velocityKind == Motion::Move::VelocityKind::Twist)
+            ? (m.omega >= 0.0f)
+            : (m.vRight >= m.vLeft);
+    const float gain = positive ? rotGainPos_ : rotGainNeg_;
+    const float offset = positive ? rotOffsetPos_ : rotOffsetNeg_;
+    if (gain > 0.0f) {
+      const float corrected = (m.threshold - offset) / gain;
+      // Never invert or zero the request: a correction large enough to do
+      // that means the constants are wrong, and turning backwards is worse
+      // than turning inaccurately.
+      m.threshold = (corrected > 0.0f) ? corrected : m.threshold;
+    }
+  }
+
   // A retried enqueue whose original ack was lost carries this same id under
   // a fresh corr_id. Ack it as success -- the move genuinely is enqueued,
   // running, or done, and an error would make the host abandon a move that
@@ -510,6 +543,7 @@ void RobotLoop::cycle() {
     publishTiming(cycleStartUs);
 
     tlm_.update(state_);
+    tlm_.tickBootSettle();  // arms report-on-change once boot state settles
     // A bare `TLM` line is a request for one frame NOW -- force past the
     // idle gate, since "nothing is happening" is exactly the state someone
     // asking is trying to observe. Still subject to the cadence gate, so a

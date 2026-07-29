@@ -410,6 +410,23 @@ def rotational_slip_for_config(cfg: dict) -> float:
     return float(_require(cfg, "calibration", "rotational_slip"))
 
 
+def rotation_calibration_for_config(cfg: dict):
+    """Return (gain_pos, offset_pos_deg, gain_neg, offset_neg_deg).
+
+    The measured affine turn response, `actual = gain*commanded + offset`,
+    per direction of rotation. RobotLoop inverts it so an ANGLE-stopped move
+    lands on the requested angle. `_pos` is positive commanded omega.
+
+    Offsets stay in DEGREES here (the unit the robot JSON and a human use);
+    main.cpp converts to radians at the seam.
+    """
+    cal = cfg["calibration"]
+    return (float(_require(cfg, "calibration", "rotation_gain")),
+            float(_require(cfg, "calibration", "rotation_offset_deg")),
+            float(_require(cfg, "calibration", "rotation_gain_neg")),
+            float(_require(cfg, "calibration", "rotation_offset_deg_neg")))
+
+
 def estimator_config_for_config(cfg: dict):
     """Return (heading_otos, omega_otos, staleness) for the
     EstimatorBootConfig struct (117, predict-to-now estimator v1) --
@@ -565,6 +582,7 @@ def generate(cfg: dict, source_path: str) -> str:
     try:
         trackwidth   = trackwidth_for_config(cfg)
         rot_slip     = rotational_slip_for_config(cfg)
+        rot_cal      = rotation_calibration_for_config(cfg)
         vel_kp, vel_ki, vel_kff, vel_imax, vel_kaw, vel_filt = vel_gains_for_config(cfg)
         output_deadband = output_deadband_for_config(cfg)
         reversal_dwell = reversal_dwell_for_config(cfg)
@@ -679,6 +697,11 @@ msg::DrivetrainConfig defaultDrivetrainConfig() {{
     msg::DrivetrainConfig cfg;
     cfg.setTrackwidth({_f(trackwidth)});   // [mm] baked from robot geometry
     cfg.setRotationalSlip({_f(rot_slip)});   // scrub: actual/ideal rotation, 0 = uncalibrated
+    // Turn calibration: actual = gain*commanded + offset[deg], per direction.
+    cfg.setRotationGainPos({_f(rot_cal[0])});
+    cfg.setRotationOffset({_f(rot_cal[1])});
+    cfg.setRotationGainNeg({_f(rot_cal[2])});
+    cfg.setRotationOffsetNeg({_f(rot_cal[3])});
     // The drive-pair port binding lives in DrivetrainConfig (the robot's
     // normal drive pair); the coupled bench rig re-binds via `DEV DT PORTS`.
     cfg.setLeftPort({LEFT_PORT});
