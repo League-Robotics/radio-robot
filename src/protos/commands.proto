@@ -68,6 +68,22 @@ enum Verb {
   PONG   = 6 [(binary) = false];
   // ID/VER also answer as reply verbs (ID -> "ID:<fields>", VER ->
   // "VER:<version>"), echoing the command verb above -- not redeclared.
+  //
+  // READY -- unsolicited, emitted ONCE when RobotLoop::boot() completes and
+  // the loop will actually accept a Move.
+  //
+  // PING is a LIVENESS check, not a readiness check, and cannot be made into
+  // one: comms_.pump() runs inside boot()'s own probe loop (123-006), so the
+  // board answers PONG while still rejecting every Move with
+  // ERR_NOT_CONFIGURED (rejectDuringBoot, 125-001). Measured 2026-07-29 over
+  // direct serial: 5 of 6 fresh connections had their first Move rejected
+  // for exactly this reason, with PING answering happily throughout, and the
+  // gap is ~5s. A host that treats PONG as "go" loses its first command.
+  //
+  // Unsolicited rather than a query so a host never has to poll: connect()
+  // simply reads until READY arrives. It rides the same one-off cleartext
+  // path as DEVICE (sendReliable), immediately after the banner.
+  READY  = 15 [(binary) = false];
 
   // --- Binary command verbs (host -> robot) -- CommandEnvelope.cmd's
   // oneof arms (envelope.proto), also named on the wire per the uniform

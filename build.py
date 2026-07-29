@@ -106,6 +106,31 @@ _sp.run([sys.executable, _gen_pb2], check=True)
 _gen_boot = os.path.join(os.path.dirname(__file__), "src", "scripts", "gen_boot_config.py")
 _sp.run([sys.executable, _gen_boot], check=True)
 
+# Bump the canonical project version BEFORE generating the header, so every
+# build that reaches the board carries a version distinct from the last one
+# (stakeholder directive 2026-07-29). That is what the build field is for:
+# the board flashes day+build at boot, and two builds that share a version
+# are indistinguishable on the matrix -- the exact confusion this removes.
+#
+# `dotconfig version bump` advances config/dotconfig.yaml and syncs
+# pyproject.toml. Deliberately NOT --tag/--push: tagging stays a release act
+# (close_sprint's job), this is only the build counter.
+#
+# Non-fatal by design. A missing/broken dotconfig must not stop a firmware
+# build -- gen_version.py below still emits whatever version is on disk, so
+# the worst case is a repeated version, not a failed flash.
+try:
+    _bump = _sp.run(["dotconfig", "version", "bump"],
+                    cwd=os.path.dirname(os.path.abspath(__file__)),
+                    capture_output=True, text=True)
+    if _bump.returncode == 0:
+        print(f"version bump: {_bump.stdout.strip()}")
+    else:
+        print(f"WARNING: version bump failed (rc={_bump.returncode}), "
+              f"building at the existing version: {_bump.stderr.strip()}")
+except FileNotFoundError:
+    print("WARNING: dotconfig not on PATH -- building at the existing version")
+
 # Regenerate src/firm/types/version_generated.h from pyproject.toml so the
 # firmware's compiled-in FIRMWARE_VERSION (reported by VER/ID) tracks the
 # canonical project version instead of drifting from a hand-edited constant.

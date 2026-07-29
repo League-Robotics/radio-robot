@@ -55,7 +55,11 @@ _CPP_ROW_RE = re.compile(
 # dumb, time-bounded teleop primitive routed straight to App::Drive, ESTOP
 # is "halt everything now" -- the meaning STOP used to carry before it
 # became a planned, queued stop.
-_EXPECTED_CLEARTEXT = {"HELLO", "PING", "ID", "VER", "DEVICE", "PONG"}
+# READY (2026-07-29): unsolicited boot-complete line. PING cannot carry this
+# -- it answers from inside RobotLoop::boot() (123-006), so PONG is true
+# throughout a window in which every Move is rejected with
+# ERR_NOT_CONFIGURED. See commands.proto's READY row.
+_EXPECTED_CLEARTEXT = {"HELLO", "PING", "ID", "VER", "DEVICE", "PONG", "READY"}
 _EXPECTED_BINARY = {"MOVE", "CONFIG", "STOP", "WHEELS", "ESTOP", "TLM", "OK", "ERR"}
 
 

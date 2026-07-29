@@ -306,6 +306,11 @@ void RobotLoop::boot() {
   tlm_.setLiveFlag(kFlagEventBootReady, true);
 
   comms_.sendBanner();
+  // READY last, and only here: past this point the loop dispatches commands
+  // instead of NACKing them via rejectDuringBoot(). A host that waits for
+  // this line never loses its first Move. Emitted after the banner so a
+  // fresh listener gets identity first, then permission.
+  comms_.sendReady();
 }
 
 // --- cycle() steps ---

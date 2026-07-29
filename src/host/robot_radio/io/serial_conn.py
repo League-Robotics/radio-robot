@@ -171,6 +171,12 @@ _HELLO_ATTEMPT_DELAY_S = 0.20
 _HELLO_CLASSIFY_TIMEOUT_S = 2.5
 # Timeout for each relay command during the !GO handshake sequence.
 _RELAY_CMD_TIMEOUT_S = 1.0
+# Budget for the unsolicited READY line (RobotLoop::boot()'s tail). Boot is
+# device-probe bound, so this tracks probe time, not link speed: measured
+# ~5s on tovez over direct serial 2026-07-29. 10s leaves headroom for a
+# slower/retrying probe without stalling a connect to firmware that predates
+# READY, which times out here and reports ready=False rather than failing.
+_READY_TIMEOUT_S = 10.0
 
 # Bounded TLM queue depth: if the consumer is slow, oldest frames are dropped.
 _TLM_QUEUE_DEPTH = 256
@@ -648,9 +654,32 @@ class SerialConnection:
                 # Caller supplied an explicit non-relay mode; skip classify.
                 role = "direct"
 
-            # Normal path: active readiness poll via PING.
+            # Liveness poll via PING. This proves the board ANSWERS; it does
+            # NOT prove the loop will accept a Move -- comms_.pump() runs
+            # inside RobotLoop::boot() (123-006), so PONG comes back happily
+            # throughout a boot window in which every Move is rejected with
+            # ERR_NOT_CONFIGURED. Readiness is the separate wait below.
             # _poll_ready uses _ser directly (reader not running yet).
             lines = self._poll_ready(total_timeout_s=_POLL_TOTAL_NORMAL_S)
+
+            # Readiness: wait for the firmware's unsolicited READY line, which
+            # it emits once from boot()'s tail (commands.proto READY row).
+            # Measured 2026-07-29 over direct serial: without this, 5 of 6
+            # fresh connections had their FIRST Move rejected, PING answering
+            # throughout, with a ~5s gap. Non-fatal on timeout -- an older
+            # firmware never sends READY, and refusing to connect to it would
+            # be worse than proceeding; `ready` in the result says which
+            # happened so a caller can decide.
+            # READY may already have arrived DURING the PING poll above --
+            # boot completes on its own schedule, not ours. _poll_ready calls
+            # reset_input_buffer() before each attempt, so a READY landing in
+            # that window is flushed and would never be seen by the wait
+            # below: connect() then burns the full _READY_TIMEOUT_S and
+            # reports ready=False on a robot that is, in fact, ready.
+            # Checking the poll's own captured lines first closes that race.
+            ready = any(ln.strip().startswith("READY") for ln in lines)
+            if not ready:
+                ready = self._wait_for_ready(timeout_s=_READY_TIMEOUT_S)
 
             self._start_reader()
 
@@ -660,6 +689,7 @@ class SerialConnection:
                 "mode": self._mode,
                 "lines": lines,
                 "pinged": bool(lines),
+                "ready": ready,
             }
             if announce:
                 result["announcement"] = announce
@@ -1018,6 +1048,69 @@ class SerialConnection:
         # "TelemetrySecondary dies") -- drop, matching this loop's
         # tolerance for undecodable bytes elsewhere.
         self.malformed_frame_count += 1
+
+    def _wait_for_ready(self, timeout_s: float) -> bool:
+        """Block until the firmware will accept commands.
+
+        Two signals, and BOTH are needed -- neither is sufficient alone:
+
+        - the unsolicited ``READY`` line, emitted exactly once from
+          ``RobotLoop::boot()``'s tail.  Edge-triggered: it is the immediate
+          answer on a FRESH boot, and it is gone forever once it has passed.
+        - ``event_boot_ready`` in the telemetry flags word.  Level-triggered:
+          continuously present in every frame, so it is the only thing that
+          can answer for a robot that booted BEFORE this connect().
+
+        Opening the port does not reliably reset the board (verified
+        2026-07-29: a plain open produced telemetry but no banner and no
+        READY, because the robot had booted minutes earlier).  Waiting for
+        the line alone therefore times out ~50% of the time on a robot that
+        is perfectly ready -- which is exactly the bug this pairing fixes.
+
+        Neither signal means the board is merely ALIVE: PING answers from
+        inside ``boot()`` (123-006), so PONG is true throughout a window in
+        which every Move is rejected with ERR_NOT_CONFIGURED
+        (``rejectDuringBoot``, 125-001).
+
+        Operates on ``_ser`` directly and must only be called before the
+        reader thread starts (same contract as ``_poll_ready``).
+
+        Returns True when ready, False on timeout.  False is not fatal --
+        firmware predating READY still sets the flag, and firmware predating
+        both is simply raced as before -- but the caller should expect its
+        first Move to land in the boot window.
+        """
+        deadline = time.time() + timeout_s
+        while time.time() < deadline:
+            for line in self._poll_read_lines(_POLL_ATTEMPT_DURATION,
+                                              stop_token="READY"):
+                if line.strip().startswith("READY"):
+                    return True
+            # No line this pass -- ask the always-present flag instead, for
+            # the already-booted case where READY is long gone.
+            if self._boot_ready_flag_set():
+                return True
+        return False
+
+    def _boot_ready_flag_set(self) -> bool:
+        """True if a decodable telemetry frame currently reports boot-ready.
+
+        Reads whatever bytes are pending and looks for the flag; a frame that
+        does not decode (partial read straddling this call) is simply skipped
+        -- the caller retries.
+        """
+        try:
+            from robot_radio.robot.protocol import TLMFrame
+        except Exception:                                   # noqa: BLE001
+            return False
+        for env in self.drain_binary_tlm():
+            try:
+                frame = TLMFrame.from_pb2(env.tlm)
+            except Exception:                               # noqa: BLE001
+                continue
+            if frame.event_boot_ready:
+                return True
+        return False
 
     def _poll_ready(self, total_timeout_s: float = _POLL_TOTAL_NORMAL_S) -> list[str]:
         """Poll PING until the device responds or total_timeout_s is exceeded.

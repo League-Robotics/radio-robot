@@ -404,4 +404,19 @@ void Comms::sendBanner() {
   radioLink_.sendReliable(banner_);
 }
 
+// sendReady -- the unsolicited "the loop will now accept commands" line.
+//
+// Emitted once, from RobotLoop::boot()'s tail. A host cannot infer this from
+// PING: comms_.pump() runs inside boot()'s probe loop (123-006), so PONG
+// answers throughout a boot window in which every Move is correctly rejected
+// with ERR_NOT_CONFIGURED (rejectDuringBoot, 125-001). See commands.proto's
+// READY row for the measurement that motivated this.
+void Comms::sendReady() {
+  // Same one-off cleartext path as the banner. No data field: the verb IS
+  // the whole message, so it parses as a bare no-data line under the v5
+  // grammar, exactly like HELLO/PING inbound.
+  serialLink_.sendReliable("READY");
+  radioLink_.sendReliable("READY");
+}
+
 }  // namespace App

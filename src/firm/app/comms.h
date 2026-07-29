@@ -329,6 +329,11 @@ class Comms {
   // data on the first ':') -- formatBanner() needs no edit (issue §8).
   void sendBanner();
 
+  // sendReady -- unsolicited "READY" line, once, when the loop will actually
+  // accept commands. PING answers from inside boot() and so cannot signal
+  // this; see commands.proto's READY row and comms.cpp's own definition.
+  void sendReady();
+
   // Diagnostic counter -- malformed COBS frame, CRC mismatch, malformed
   // protobuf decode, an unrecognized `<COMMAND>` (not in messages/
   // commands.h's kVerbTable[]), AND a cleartext command with no inbound

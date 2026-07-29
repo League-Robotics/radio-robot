@@ -94,15 +94,38 @@ Motion::ShaperLimits toShaperLimits(const Config::ShaperBootConfig& src) {
   return limits;
 }
 
-// The last digit of FIRMWARE_VERSION_STR ("0.20260726.1" -> '1'). Scans to
-// the end rather than indexing a fixed offset, so it survives any version
-// format gen_version.py might emit; '?' if the string somehow has no digit.
-char versionLastDigit() {
-  char last = '?';
+// The boot tag: the DAY of the version's date field, then the build number.
+// "0.20260726.1" -> "261" (day 26, build 1).
+//
+// A single trailing digit cannot distinguish two builds made on different
+// days -- the board showed "1" for both 0.20260726.1 and 0.20260729.1, which
+// is exactly the confusion that costs bench time. Day+build stays short
+// enough to read off the matrix at a glance while being unique across any
+// plausible session (stakeholder directive 2026-07-29).
+//
+// Parsed rather than indexed at fixed offsets, so it survives a format change
+// in gen_version.py; emits "?" if the string lacks the two dots the
+// major.date.build shape requires.
+void versionTag(char* out, size_t cap) {
+  if (cap == 0) return;
+  const char* firstDot = nullptr;
+  const char* lastDot = nullptr;
   for (const char* p = FIRMWARE_VERSION_STR; *p != '\0'; ++p) {
-    if (*p >= '0' && *p <= '9') last = *p;
+    if (*p == '.') {
+      if (firstDot == nullptr) firstDot = p;
+      lastDot = p;
+    }
   }
-  return last;
+  size_t n = 0;
+  // Two distinct dots, and a date field of at least two characters to take a
+  // day from.
+  if (firstDot != nullptr && lastDot != firstDot && (lastDot - firstDot) >= 3) {
+    if (n + 1 < cap) out[n++] = *(lastDot - 2);
+    if (n + 1 < cap) out[n++] = *(lastDot - 1);
+    for (const char* p = lastDot + 1; *p != '\0' && n + 1 < cap; ++p) out[n++] = *p;
+  }
+  if (n == 0 && cap > 1) out[n++] = '?';
+  out[n] = '\0';
 }
 
 // Boot identity on the LED matrix: heart, the last digit of the firmware
@@ -132,16 +155,25 @@ void showBootIdentity() {
       0,   0,   kOn, 0,   0,
   };
   constexpr int kHeartHold = 500;  // [ms]
-  constexpr int kDigitHold = 900;  // [ms] longer -- it is the payload
+  constexpr int kDigitHold = 700;  // [ms] per digit -- it is the payload
+  constexpr int kDigitGap = 150;   // [ms] blank between digits, so a repeated
+                                   // digit ("22") reads as two, not one long
 
   uBit.display.enable();
   MicroBitImage heart(5, 5, kHeart);
   uBit.display.print(heart);
   uBit.sleep(kHeartHold);
   uBit.display.clear();
-  uBit.display.printChar(versionLastDigit());
-  uBit.sleep(kDigitHold);
-  uBit.display.clear();
+
+  char tag[8];
+  versionTag(tag, sizeof(tag));
+  for (const char* p = tag; *p != '\0'; ++p) {
+    uBit.display.printChar(*p);
+    uBit.sleep(kDigitHold);
+    uBit.display.clear();
+    uBit.sleep(kDigitGap);
+  }
+
   uBit.display.print(heart);  // resting state -- left lit through boot
 }
 
