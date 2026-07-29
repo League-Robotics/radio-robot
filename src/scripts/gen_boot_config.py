@@ -394,6 +394,22 @@ def trackwidth_for_config(cfg: dict) -> float:
     return float(_require(cfg, "geometry", "trackwidth"))
 
 
+def rotational_slip_for_config(cfg: dict) -> float:
+    """Return calibration.rotational_slip -> DrivetrainConfig.rotational_slip.
+
+    The scrub factor: a differential robot skids its wheels sideways through
+    a turn, so it rotates LESS than ideal kinematics (omega = (vR-vL)/b)
+    predicts for a given wheel differential. This is the ratio of actual to
+    ideal rotation, so the EFFECTIVE track is trackwidth / rotational_slip
+    (main.cpp does that division; trackwidth itself stays the physically
+    measured wheel separation and must not be bent to absorb scrub).
+
+    Domain is `{0} u [0.5, 1.0]` (config.proto): 0 is the "uncalibrated"
+    sentinel and means apply no correction, NOT divide-by-zero.
+    """
+    return float(_require(cfg, "calibration", "rotational_slip"))
+
+
 def estimator_config_for_config(cfg: dict):
     """Return (heading_otos, omega_otos, staleness) for the
     EstimatorBootConfig struct (117, predict-to-now estimator v1) --
@@ -548,6 +564,7 @@ def drivetrain_type_for_config(cfg: dict) -> str:
 def generate(cfg: dict, source_path: str) -> str:
     try:
         trackwidth   = trackwidth_for_config(cfg)
+        rot_slip     = rotational_slip_for_config(cfg)
         vel_kp, vel_ki, vel_kff, vel_imax, vel_kaw, vel_filt = vel_gains_for_config(cfg)
         output_deadband = output_deadband_for_config(cfg)
         reversal_dwell = reversal_dwell_for_config(cfg)
@@ -661,6 +678,7 @@ void defaultMotorConfigs(msg::MotorConfig* out) {{
 msg::DrivetrainConfig defaultDrivetrainConfig() {{
     msg::DrivetrainConfig cfg;
     cfg.setTrackwidth({_f(trackwidth)});   // [mm] baked from robot geometry
+    cfg.setRotationalSlip({_f(rot_slip)});   // scrub: actual/ideal rotation, 0 = uncalibrated
     // The drive-pair port binding lives in DrivetrainConfig (the robot's
     // normal drive pair); the coupled bench rig re-binds via `DEV DT PORTS`.
     cfg.setLeftPort({LEFT_PORT});

@@ -269,7 +269,27 @@ int main() {
   // existed only for TelemetrySecondary's own independently-armored line,
   // now deleted) -- comms already owns both transports internally.
   static App::Telemetry tlm(comms);
-  static App::Drive drive(motorL, motorR, drivetrainConfig.trackwidth);
+  // Effective track width = physical separation corrected for SCRUB.
+  //
+  // Ideal differential kinematics say omega = (vR - vL) / b, but a skid-steer
+  // robot drags its wheels sideways through a turn and rotates LESS than that
+  // for a given wheel differential. rotational_slip is the measured ratio of
+  // actual to ideal rotation, so every kinematic use of the track wants
+  // b / slip, not b.
+  //
+  // `trackwidth` stays the caliper-measured wheel separation and must NOT be
+  // bent to absorb scrub -- that would destroy the one value in the robot
+  // JSON that is independently verifiable, and hide the scrub instead of
+  // measuring it.
+  //
+  // slip == 0 is the "uncalibrated" sentinel (config.proto's `{0} u
+  // [0.5, 1.0]` domain), meaning apply no correction.
+  const float kScrub = drivetrainConfig.rotational_slip;
+  const float kEffectiveTrack =
+      (kScrub > 0.0f) ? (drivetrainConfig.trackwidth / kScrub)
+                      : drivetrainConfig.trackwidth;
+
+  static App::Drive drive(motorL, motorR, kEffectiveTrack);
   // Wheel calibration comes from the ROBOT JSON, never from C++
   // (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
   // §6): App::Drive carries no calibration defaults, and without this
@@ -286,11 +306,11 @@ int main() {
         driveConfig.gainRightDecel, driveConfig.interceptRightDecel);
     drive.setCrawlPulse(driveConfig.crawlPulse);
   }
-  static Motion::Odometry odom(drivetrainConfig.trackwidth, motorL.position(), motorR.position());
+  static Motion::Odometry odom(kEffectiveTrack, motorL.position(), motorR.position());
 
 
 #ifdef FAKE_OTOS
-  static App::FakeOtos fakeOtos(odom, motorL, motorR, drivetrainConfig.trackwidth);
+  static App::FakeOtos fakeOtos(odom, motorL, motorR, kEffectiveTrack);
   Devices::Otos& otos = fakeOtos;
 #else
   Devices::Otos& otos = realOtos;
@@ -327,7 +347,7 @@ int main() {
   plannerLimits.alphaDecel = 5.0f;   // [rad/s^2]
   plannerLimits.jerkMax = 1500.0f;   // [mm/s^3] aMax reached in ~0.2 s
   plannerLimits.yawJerkMax = 30.0f;  // [rad/s^3] alphaMax reached in ~0.2 s
-  plannerLimits.trackWidth = drivetrainConfig.trackwidth;
+  plannerLimits.trackWidth = kEffectiveTrack;
   // MEASURED loop period, not the kCycle nominal: the schedule's real
   // delivered cycle is 46-48 ms on the bench (tlm cycle-delta capture,
   // 2026-07-27, after the 1 ms scheduler tick + overrun-yield fixes) --

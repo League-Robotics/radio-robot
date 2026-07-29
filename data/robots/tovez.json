@@ -33,8 +33,8 @@
     },
     "odometry_chip_upside_down": false,
     "otos_untrusted": true,
-    "trackwidth": 140.4,
-    "_trackwidth_note": "2026-07-29, camera-measured on the playfield. 180 deg in-place turns vs overhead AprilTag truth, 3 W->N->E / 3 E->N->W per config:\n      tw 138.5 -> 175.8 deg (sd 2.0)   -2.4%\n      tw 140.4 -> 180.3 deg (sd 2.6)   +0.2%   <- shipped\n      tw 143.0 -> 185.8 deg (sd 2.8)   +3.2%\n    Response is 2.22 deg per mm and monotonic the way the stop condition implies: the angle stop is |theta - theta0| >= threshold against the estimator heading (stop_condition.cpp), theta is encoder-only here (otos=0), so a LARGER tw needs more wheel differential to reach the threshold and yields more rotation. 140.4 is the interpolation for exactly 180.\n    Earlier values in git history (108.6, 143) were fit against measurements taken with an INVERTED turn-direction convention, which mis-resolved the 2*pi wrap and corrupted the magnitudes; they also drove the robot through South. Positive omega DECREASES this camera yaw (0=East, +90=North) -- verified by sampling heading mid-turn, not assumed.\n    Straight legs measured 99-100% of commanded, so mm_per_wheel_deg_* is sound and this only ever affected rotation.\n    Consumed at BOOT (gen_boot_config.py -> boot_config.cpp -> main.cpp Drive/Odometry/plannerLimits); a runtime CONFIG tw patch acks ERR_UNIMPLEMENTED, so changing it requires a reflash.",
+    "trackwidth": 128,
+    "_trackwidth_note": "trackwidth is the CALIPER-MEASURED wheel separation (stakeholder, 128 mm). Do NOT bend it to make turns land -- it is the one independently verifiable number in this file. Scrub correction belongs in calibration.rotational_slip; main.cpp derives an effective track = trackwidth / rotational_slip and hands THAT to Drive/Odometry/plannerLimits.",
     "wheelbase_mm": null
   },
   "wheels": {
@@ -70,7 +70,8 @@
     "mm_per_wheel_deg_right": 0.7077,
     "fwd_sign_left": 1,
     "fwd_sign_right": -1,
-    "rotational_slip": 0.92,
+    "rotational_slip": 0.9117,
+    "_rotational_slip_note": "2026-07-29, camera-measured on the playfield. Scrub: the ratio of ACTUAL rotation to what ideal differential kinematics (omega = (vR-vL)/b) predict -- a skid-steer robot drags its wheels sideways through a turn and under-rotates. 180 deg in-place turns vs overhead AprilTag truth, 3 W->N->E / 3 E->N->W: 180.3 deg actual (sd 1.9), 100.2%. Equivalent to an effective track of 140.4 mm against the measured 128. Domain {0} u [0.5, 1.0] (config.proto); 0 is the uncalibrated sentinel meaning apply no correction. Consumed at BOOT (gen_boot_config.py -> boot_config.cpp -> main.cpp kEffectiveTrack); a runtime CONFIG rotSlip patch acks ERR_UNIMPLEMENTED, so changing it needs a reflash.",
     "rotation_gain": 0.956,
     "rotation_offset_deg": 1.045,
     "rotation_gain_neg": 0.954,
