@@ -181,10 +181,47 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
     }
   }
 
+  // A retried enqueue whose original ack was lost carries this same id under
+  // a fresh corr_id. Ack it as success -- the move genuinely is enqueued,
+  // running, or done, and an error would make the host abandon a move that
+  // actually executed. Returning here also skips the drive_.estop() below,
+  // which would otherwise disturb a planner move already in flight, and
+  // precedes any `replace` handling, so a duplicate cannot restart a move
+  // mid-flight.
+  if (alreadyAccepted(move.id)) {
+    tlm_.ack(env.corr_id, 0);
+    return;
+  }
+
   drive_.estop();  // the planner takes over motion (one owner at a time)
   const bool accepted = planner_.move(m, move.replace);
+  // Only a real accept is recorded: an ERR_FULL move never ran, and the host
+  // is entitled to send it again once the queue drains.
+  if (accepted) {
+    recordAccepted(move.id);
+  }
   tlm_.ack(env.corr_id,
            accepted ? 0 : static_cast<uint32_t>(msg::ErrCode::ERR_FULL));
+}
+
+bool RobotLoop::alreadyAccepted(uint32_t id) const {
+  if (id == 0) {
+    return false;  // "unset": every id-0 move is its own move
+  }
+  for (int i = 0; i < kAcceptedMoveIdCount; ++i) {
+    if (acceptedMoveIds_[i] == id) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void RobotLoop::recordAccepted(uint32_t id) {
+  if (id == 0) {
+    return;
+  }
+  acceptedMoveIds_[acceptedMoveIdNext_] = id;
+  acceptedMoveIdNext_ = (acceptedMoveIdNext_ + 1) % kAcceptedMoveIdCount;
 }
 
 // WHEELS: the dumb teleop primitive. Straight to Drive, superseding the

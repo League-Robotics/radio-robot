@@ -9,11 +9,33 @@ namespace Motion {
 
 namespace {
 
-// Completion epsilons -- float-measurement noise floors, NOT motion-margin
-// constants (the profile's terminal step lands exactly; these only absorb
-// last-ulp rounding in the traveled-distance re-measurement).
-constexpr float kDoneEpsilonLinear = 1e-3f;   // [mm]
-constexpr float kDoneEpsilonAngular = 1e-5f;  // [rad]
+// Completion epsilons -- PHYSICAL arrival tolerances, sized to what the
+// plant can actually measure and reach.
+//
+// These were 1e-3 mm / 1e-5 rad, documented as "float-measurement noise
+// floors, NOT motion-margin constants (the profile's terminal step lands
+// exactly)". That premise holds for a sim plant and fails on hardware:
+// completion tests `plannedRemaining <= epsilon` on a SIGNED residual, so
+// a move that OVERSHOOTS completes instantly while one that UNDERSHOOTS by
+// more than the epsilon never completes at all. Real wheels stop short --
+// the profile's final decel step falls below App::Drive's dead-zone
+// intercept, correctedCommand() returns exactly 0, and the wheel parks a
+// fraction of a mm out. With the wheels stopped the in-flight prediction
+// that would otherwise carry plannedRemaining negative is also 0, so the
+// residual is pinned and the Move hangs to its MOVE_TIMEOUT backstop
+// (measured 2026-07-28: a 500mm leg parked 0.4mm short -- 400x the old
+// 1e-3 epsilon -- and sat 13s past arrival; other runs hit the full 30s).
+// The settle creep that exists to close exactly this gap cannot help: it
+// is gated on active_.settling, which only ever gets set when
+// PlannerLimits::requireSettle is on, and that defaults false and is not
+// baked from robot config.
+//
+// Sized against measurement resolution, not taste: the encoder quantum is
+// 0.0716 mm, so ~14 quanta linear; the heading quantum for a pivot is
+// 2*0.0716/trackWidth ~= 0.0011 rad, so ~3 quanta angular. Both are far
+// inside the tour's error budget (1 mm on a 500 mm leg is 0.2%).
+constexpr float kDoneEpsilonLinear = 1.0f;     // [mm]
+constexpr float kDoneEpsilonAngular = 0.003f;  // [rad] ~0.17 deg
 
 // Settle-confirm gates (PlannerLimits::requireSettle). Unlike the done
 // epsilons above these ARE physical tolerances -- "close enough to the

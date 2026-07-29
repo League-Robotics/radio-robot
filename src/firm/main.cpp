@@ -166,6 +166,20 @@ int main() {
 
   static Devices::MicroBitI2CBus bus(uBit.i2c);
 
+  // BENCH A/B, 2026-07-28 -- TEMPORARY, revert after the measurement.
+  // Inbound command loss (~7-8% of PINGs and enqueues, measured on direct
+  // USB) is concentrated in a window of the loop cycle rather than spread
+  // uniformly, which points at UART RX bytes being lost while interrupts
+  // are masked for the full duration of each I2C transaction. This turns
+  // that masking off so the A/B can measure whether loss drops.
+  //
+  // NOT a candidate for shipping as-is: the guard exists to suppress the
+  // nRF52 TWIM errata (microbit_i2c_bus.h -- "under higher levels of
+  // background interrupt load"), which is what produces encoder wedges.
+  // Any run with this off must watch the wedge/bus-error counters, not
+  // just the ping loss.
+  bus.setIrqGuard(false);
+
   msg::MotorConfig motorConfigs[Config::kMotorConfigCount];
   Config::defaultMotorConfigs(motorConfigs);
   msg::DrivetrainConfig drivetrainConfig = Config::defaultDrivetrainConfig();

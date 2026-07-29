@@ -97,6 +97,14 @@ class RobotLoop {
   void handleStop(const msg::CommandEnvelope& env);
   void handleEstop(const msg::CommandEnvelope& env);
 
+  // MOVE enqueue is idempotent on Move.id: a host that retries an enqueue
+  // whose ack was lost re-sends the SAME id under a fresh corr_id, and
+  // without this the move would execute twice. Move.id 0 means "unset" (the
+  // host-side default) and is never matched or recorded -- deduplicating it
+  // would drop every default-id move after the first.
+  bool alreadyAccepted(uint32_t id) const;
+  void recordAccepted(uint32_t id);
+
   // Boot-window commands are NACKed (ERR_NOT_CONFIGURED), never dropped.
   void rejectDuringBoot(const Cmd& cmd);
 
@@ -157,6 +165,16 @@ class RobotLoop {
   // cycle() call history for cycleBusy/cyclePeriod telemetry.
   uint64_t previousCycleStartUs_ = 0;  // [us]
   bool everCycled_ = false;
+
+  // Move.ids accepted so far, newest overwriting oldest. The window must
+  // outlive completion: the retry being defended against can land after the
+  // original move has already run, so ids are not evicted when a move leaves
+  // the planner queue. Sized well above the 5-deep queue; a long session
+  // eventually wraps and could re-accept a very old id, which is harmless
+  // because the retry window is seconds and hosts assign ids monotonically.
+  static constexpr int kAcceptedMoveIdCount = 16;
+  uint32_t acceptedMoveIds_[kAcceptedMoveIdCount] = {};  // 0 = empty slot
+  int acceptedMoveIdNext_ = 0;
 
   bool configured_ = false;
 };

@@ -38,14 +38,37 @@ TRACK = 128.0        # [mm]
 LEG = 500.0          # [mm]
 CRUISE = 150.0       # [mm/s]
 TURN = math.pi / 2   # [rad]
-OMEGA = 1.2          # [rad/s]
+OMEGA = 2.4          # [rad/s] pivot rate -> +/-153.6 mm/s per wheel
+# Was 1.2 (+/-76.8 mm/s per wheel). Raised 2026-07-28 on bench evidence:
+# below ~120 mm/s this plant is not repeatable -- four identical trials at
+# 76.8 mm/s spread 26-53 mm/s, and one wheel failed to turn at all on some
+# reverse trials -- so a 1.2 pivot ran the wheels inside the dead zone and
+# came out asymmetric, arcing through corners instead of rotating. At
+# 153.6 mm/s the same measurement is clean (a counter-rotating pair matched
+# to 0.2 mm/s). Tour A/B, 4 runs each, NON-OVERLAPPING closures:
+#   omega 1.2 -> 9.8, 21.1, 18.0, 18.0 mm (median 18.0)
+#   omega 2.4 -> 9.1,  5.1,  3.2,  7.1 mm (median  6.1)
+# Heading accuracy is unchanged (+/-1.5 deg either way) -- the turns always
+# reached their ANGLE, they just got there by arcing. Override with --omega.
 MOVE_TIMEOUT = 30000.0  # [ms] per-move safety backstop
 QUEUE_DEPTH = 5      # 1 active + 4 pending
 WALL_LIMIT = 120.0   # [s] whole-tour wall-clock bound
 
 
-def tour() -> list[dict]:
-    """The 8 tour moves as move_twist() kwargs, in order."""
+def tour(omega: float = OMEGA) -> list[dict]:
+    """The 8 tour moves as move_twist() kwargs, in order.
+
+    `omega` [rad/s] sets the pivot rate, i.e. each wheel runs at
+    omega*trackWidth/2. The default 1.2 puts the wheels at +/-76.8 mm/s,
+    which is inside the plant's erratic near-breakaway region (measured
+    2026-07-28: below ~120 mm/s the two wheels' achieved/commanded ratios
+    diverge wildly and are not repeatable, e.g. 0.194 vs 0.539 at 77 mm/s;
+    at and above ~150 mm/s both directions agree within a few percent).
+    Raising omega moves the pivot onto the well-behaved part of the curve
+    -- omega=2.4 gives +/-153.6 mm/s -- and measurably improves pivot
+    symmetry. Exposed as a flag rather than retuned in place so the two can
+    be compared on one robot.
+    """
     # Move.id values start well above any corr_id this session's
     # SerialConnection will ever assign (a small monotonic counter starting
     # at 1) so a completion ack (keyed by Move.id) is never confused with an
@@ -56,7 +79,7 @@ def tour() -> list[dict]:
         moves.append(dict(v_x=CRUISE, v_y=0.0, omega=0.0,
                           stop_distance=LEG, timeout=MOVE_TIMEOUT,
                           replace=False, move_id=9001 + 2 * i))
-        moves.append(dict(v_x=0.0, v_y=0.0, omega=OMEGA,
+        moves.append(dict(v_x=0.0, v_y=0.0, omega=omega,
                           stop_angle=TURN, timeout=MOVE_TIMEOUT,
                           replace=False, move_id=9002 + 2 * i))
     return moves
@@ -73,6 +96,12 @@ def main() -> int:
                         "in the relay's control plane)")
     p.add_argument("--out", default=None,
                    help="plot path (default: alongside this script)")
+    p.add_argument("--omega", type=float, default=OMEGA,
+                   help="[rad/s] pivot rate; each wheel runs at "
+                        "omega*trackWidth/2. Default 1.2 = +/-76.8 mm/s, "
+                        "inside the plant's erratic near-breakaway region; "
+                        "2.4 = +/-153.6 mm/s, on the well-behaved part of "
+                        "the curve (see tour()).")
     args = p.parse_args()
 
     conn = SerialConnection(port=args.port,
@@ -83,7 +112,7 @@ def main() -> int:
     time.sleep(BOOT_WAIT)
     proto.read_pending_binary_tlm_frames()
 
-    moves = tour()
+    moves = tour(args.omega)
     next_enqueue = 0
     inflight = 0
     # corr_id -> (move_id, send_time, retries). Over the RADIO RELAY ~20%
