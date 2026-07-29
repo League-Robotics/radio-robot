@@ -46,11 +46,34 @@ import time
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
-TRACK = 128.0          # [mm]
+TRACK = 128.0          # [mm] PHYSICAL wheel separation (caliper-measured)
+
+# The track this script must use for ANGLE math is the EFFECTIVE one:
+# trackwidth / rotational_slip. A skid-steer robot scrubs its wheels
+# sideways through a pivot and rotates LESS than ideal kinematics predict,
+# and every angle here -- the commanded pivot arc, the self-calibration
+# measurement, and the reported heading -- is wheel-difference over track.
+#
+# Using the physical 128 over-reported rotation by 1/slip (9.7% on tovez).
+# That corrupted BOTH ends of the measurement: the pivot self-calibration
+# read 93.6 deg for a true 85.3, then SHORTENED already-short turns by
+# 0.962, and the final heading came out 383.6 for a true ~345. Set from the
+# robot config at backend init so sim (slip 1.0 -> 128) is unchanged.
+EFFECTIVE_TRACK = TRACK
+
+
+def _set_effective_track(robot_config) -> None:
+    """Derive EFFECTIVE_TRACK from the active robot config, once."""
+    global EFFECTIVE_TRACK, TURN_ARC
+    tw = robot_config.trackwidth or TRACK
+    slip = getattr(robot_config.calibration, "rotational_slip", None) or 1.0
+    EFFECTIVE_TRACK = tw / slip if slip > 0 else tw
+    TURN_ARC = EFFECTIVE_TRACK * math.pi / 4.0
 LEG = 500.0            # [mm]
 CRUISE = 150.0         # [mm/s] leg speed, both wheels
 TURN_SPEED = 120.0     # [mm/s] pivot wheel speed (above the crawl boundary)
 TURN_ARC = TRACK * math.pi / 4.0  # [mm] per-wheel travel for a 90 deg pivot
+                                  # (recomputed by _set_effective_track())
 BOOT_WAIT = 6.0        # [s] hardware only -- the sim boots synchronously
 TAU = 0.23             # [s] plant time constant (spin-up transient)
 DWELL = 0.10           # [s] armor reversal dwell (sign-flip wheel holds 0)
@@ -152,6 +175,7 @@ class SimBackend(_Backend):
         from robot_radio.robot.protocol import NezhaProtocol
 
         robot_config = load_robot_config(robot_json)
+        _set_effective_track(robot_config)
         track = robot_config.trackwidth if robot_config.trackwidth is not None else TRACK
         self._sim = SimLoop(track_width=track)
         # Deterministic manual stepping, no tick thread: this script is the
@@ -186,9 +210,16 @@ class SimBackend(_Backend):
 class HardwareBackend(_Backend):
     label = "hardware"
 
-    def __init__(self, port: str) -> None:
+    def __init__(self, port: str, robot_json: "str | pathlib.Path") -> None:
+        from robot_radio.config.robot_config import load_robot_config
         from robot_radio.io.serial_conn import SerialConnection
         from robot_radio.robot.protocol import NezhaProtocol
+
+        # The hardware backend previously read no robot config at all, so
+        # every angle it computed used the physical 128 mm track -- see
+        # EFFECTIVE_TRACK. That is the path that actually matters, since the
+        # sim robot has no scrub.
+        _set_effective_track(load_robot_config(robot_json))
 
         self._conn = SerialConnection(port=port)
         self._conn.connect()
@@ -339,7 +370,7 @@ class Tour:
             return 1.0
         dL = self.log["posL"][-1] - self.log["posL"][base]
         dR = self.log["posR"][-1] - self.log["posR"][base]
-        degMeasured = abs(math.degrees((dR - dL) / TRACK))
+        degMeasured = abs(math.degrees((dR - dL) / EFFECTIVE_TRACK))
         turnScale = 90.0 / degMeasured if degMeasured > 10 else 1.0
         print(f"test pivot: {degMeasured:.1f} deg -> turn duration scale {turnScale:.3f}")
         self.cmdL = self.cmdR = 0.0
@@ -380,7 +411,7 @@ def integrateEncoderPath(log, start: int):
         dL = log["posL"][i] - log["posL"][i - 1]
         dR = log["posR"][i] - log["posR"][i - 1]
         ds = 0.5 * (dL + dR)
-        dTheta = (dR - dL) / TRACK
+        dTheta = (dR - dL) / EFFECTIVE_TRACK
         heading += dTheta
         xs.append(xs[-1] + ds * math.cos(heading - dTheta / 2.0))
         ys.append(ys[-1] + ds * math.sin(heading - dTheta / 2.0))
@@ -405,7 +436,7 @@ def main() -> int:
     args = p.parse_args()
 
     backend: _Backend = (SimBackend(args.robot_json) if args.sim
-                         else HardwareBackend(args.port))
+                         else HardwareBackend(args.port, args.robot_json))
     tour = Tour(backend)
     try:
         completed = tour.run()
@@ -422,7 +453,7 @@ def main() -> int:
     dTotL = log["posL"][-1] - log["posL"][start]
     dTotR = log["posR"][-1] - log["posR"][start]
     path = 0.5 * (dTotL + dTotR)
-    headingDeg = math.degrees((dTotR - dTotL) / TRACK)
+    headingDeg = math.degrees((dTotR - dTotL) / EFFECTIVE_TRACK)
     closure = math.hypot(xs[-1], ys[-1])
 
     # Plant truth wins where it exists: on the sim the encoder integration
