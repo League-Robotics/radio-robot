@@ -72,10 +72,11 @@
     "fwd_sign_right": -1,
     "rotational_slip": 0.9117,
     "_rotational_slip_note": "2026-07-29, camera-measured on the playfield. Scrub: the ratio of ACTUAL rotation to what ideal differential kinematics (omega = (vR-vL)/b) predict -- a skid-steer robot drags its wheels sideways through a turn and under-rotates. 180 deg in-place turns vs overhead AprilTag truth, 3 W->N->E / 3 E->N->W: 180.3 deg actual (sd 1.9), 100.2%. Equivalent to an effective track of 140.4 mm against the measured 128. Domain {0} u [0.5, 1.0] (config.proto); 0 is the uncalibrated sentinel meaning apply no correction. Consumed at BOOT (gen_boot_config.py -> boot_config.cpp -> main.cpp kEffectiveTrack); a runtime CONFIG rotSlip patch acks ERR_UNIMPLEMENTED, so changing it needs a reflash.",
-    "rotation_gain": 0.956,
-    "rotation_offset_deg": 1.045,
-    "rotation_gain_neg": 0.954,
-    "rotation_offset_deg_neg": 1.158,
+    "rotation_gain": 1.061,
+    "rotation_offset_deg": -5.54,
+    "rotation_gain_neg": 1.071,
+    "rotation_offset_deg_neg": -7.04,
+    "_rotation_calibration_note": "2026-07-29, camera-measured, robot untethered. Turn response is affine: actual = gain*commanded + offset, fitted over 48 shuffled in-place turns (15/30/45/90/135/180 deg, both directions, omega 2.5/4.5/6.5/8.0 rad/s). The SAME law holds at every rate -- accuracy does not degrade with speed, so this is geometry/stiction, not a dynamics artifact. The ~-6 deg offset is why small turns were so bad: a 15 deg command landed at 9. Inverting it (commanded = (desired - offset)/gain) and re-running 47 trials gave a residual of mean +0.64 deg, sd 2.13, max 6.5 -- verified at 8.0 rad/s as well as 2.5. SIGN MAPPING, confirm before trusting: these were measured in the camera frame, where POSITIVE commanded omega DECREASES yaw. _pos here = positive commanded omega (clockwise in camera), _neg = negative. NOT YET CONSUMED BY FIRMWARE: rotation_gain_pos/neg and rotation_offset/neg exist in msg::DrivetrainConfig but have no reader and no emitter in gen_boot_config.py -- dead data, exactly as rotational_slip was before this session. Compensation is currently applied host-side (scratchpad turn_verify.py) because the robot is on battery and cannot be reflashed; wire it up next time it is on the bench.",
     "ekf_r_otos_theta": 0.01
   },
   "control": {
