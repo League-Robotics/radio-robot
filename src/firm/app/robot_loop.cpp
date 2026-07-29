@@ -510,7 +510,11 @@ void RobotLoop::cycle() {
     publishTiming(cycleStartUs);
 
     tlm_.update(state_);
-    tlm_.emit(state_.time.cycleStart);
+    // A bare `TLM` line is a request for one frame NOW -- force past the
+    // idle gate, since "nothing is happening" is exactly the state someone
+    // asking is trying to observe. Still subject to the cadence gate, so a
+    // request storm cannot outrun the wire.
+    tlm_.emit(state_.time.cycleStart, /*force=*/comms_.takeTelemetryRequest());
 
     // Refresh what STATUS answers from. Sourced from the SAME state_ the
     // telemetry projection just used, so the queryable line and the wire

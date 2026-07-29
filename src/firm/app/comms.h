@@ -267,6 +267,17 @@ class Comms {
   // RobotLoop; cheap enough to be unconditional.
   void setStatus(const Status& status) { status_ = status; }
 
+  // takeTelemetryRequest -- true exactly once per bare `TLM` line received,
+  // clearing the request. RobotLoop polls this and forces one frame out.
+  // Consume-on-read so a request can never be served twice, and so a burst
+  // of requests collapses to one frame rather than queueing up behind the
+  // cadence gate.
+  bool takeTelemetryRequest() {
+    const bool requested = telemetryRequested_;
+    telemetryRequested_ = false;
+    return requested;
+  }
+
   // banner/idLine must outlive the Comms instance (caller-owned, e.g.
   // main.cpp's own static buffers) -- Comms does not format or own either
   // string itself, matching its own boundary ("outside: device state" --
@@ -444,6 +455,9 @@ class Comms {
   // Zero-initialised: a STATUS arriving before the first cycle -- i.e.
   // during boot -- correctly answers ready=0.
   Status status_{};
+
+  // Set by a bare `TLM` line, consumed by takeTelemetryRequest().
+  bool telemetryRequested_ = false;
   uint32_t malformedCount_ = 0;
   uint32_t commandsDroppedCount_ = 0;
 

@@ -234,6 +234,21 @@ void Comms::dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& 
     return;
   }
 
+  // A bare `TLM` -- the verb with NO ':' and so no body -- is a telemetry
+  // REQUEST, not a malformed telemetry frame. Since telemetry went silent
+  // at rest there was no way to ask "what is your state right now?" and get
+  // the full frame back; STATUS answers in cleartext but carries only a
+  // handful of flags, not pose/encoders/sensors. This is the pull half of
+  // what used to be push-only.
+  //
+  // Requesting is unambiguous precisely because a real inbound TLM frame
+  // always carries a ':'-prefixed COBS body, even an empty one -- the same
+  // property the no-':' branch above relies on.
+  if (entry->verb == msg::Verb::TLM && colonPos >= lineLen) {
+    telemetryRequested_ = true;
+    return;
+  }
+
   if (entry->binary) {
     decodeBinaryFrame(reinterpret_cast<const uint8_t*>(cmdPtr), cmdLen, dataPtr, dataLen, out);
   } else {
