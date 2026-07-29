@@ -33,7 +33,8 @@
     },
     "odometry_chip_upside_down": false,
     "otos_untrusted": true,
-    "trackwidth": 128,
+    "trackwidth": 108.6,
+    "_trackwidth_note": "2026-07-29, camera-measured on the playfield: EFFECTIVE track, not the physical wheel separation. 6 in-place 180 deg turns (3 CW / 3 CCW) against overhead AprilTag truth averaged 199.9 deg actual for 180 commanded (sd 1.9 deg -- systematic, not slip), implying 108.6 mm (sd 1.5) from the measured wheel differential. The previous 128 made every turn overshoot ~11%. Straight legs measured 99-100% of commanded over the same session, so the per-wheel distance calibration (mm_per_wheel_deg_*) is sound and the error was track alone. Consumed at BOOT (gen_boot_config.py -> boot_config.cpp -> main.cpp Drive/Odometry/plannerLimits), never a runtime delta -- a CONFIG tw patch acks ERR_UNIMPLEMENTED -- so changing this requires a reflash.",
     "wheelbase_mm": null
   },
   "wheels": {
