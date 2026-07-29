@@ -137,6 +137,72 @@ def segments() -> "list[tuple[float, float, float, int]]":
 # ---------------------------------------------------------------------------
 
 
+class GeofenceViolation(RuntimeError):
+    """The robot left the safe box. Motors are already stopped."""
+
+
+class Geofence:
+    """A HARD geofence: it stops the robot, it does not merely warn.
+
+    2026-07-29: an earlier version of this run logged "RAIL WARNING" lines to
+    a file and had no authority to do anything about them. The robot drove
+    off the table and the stakeholder caught it by hand. A camera that only
+    observes is not a safety device -- it has to be in the loop, with the
+    power to halt, and it has to be checked on the same timebase the robot is
+    moving on (inside advance(), not between segments).
+
+    Fails CLOSED on losing the tag: if the robot cannot be seen, it is not
+    known to be safe, so it is stopped. Missing the tag is exactly what
+    happens when the robot leaves the field.
+    """
+
+    HALF_W = 67.15   # [cm] field
+    HALF_H = 44.65
+
+    def __init__(self, proto, margin: float = 10.0, lost_grace: float = 1.5):
+        from aprilcam.client.control import DaemonControl
+        from aprilcam.config import Config
+
+        self._dc = DaemonControl.connect_default(Config.load())
+        self._cam = self._dc.list_cameras()[0]
+        self._proto = proto
+        self.margin = margin           # [cm] robot half-extent plus slack
+        self._lost_grace = lost_grace  # [s] tolerate brief detection dropouts
+        self._last_seen = time.monotonic()
+        self.last = None
+
+    def _halt(self, why: str):
+        for _ in range(3):
+            try:
+                self._proto.stop()
+            except Exception:
+                pass
+            time.sleep(0.05)
+        raise GeofenceViolation(why)
+
+    def check(self) -> None:
+        for t in self._dc.get_tags(self._cam).tags:
+            if t.id == 100 and t.world_xy:
+                x, y = t.world_xy
+                self.last = (x, y)
+                self._last_seen = time.monotonic()
+                if (abs(x) > self.HALF_W - self.margin
+                        or abs(y) > self.HALF_H - self.margin):
+                    self._halt(f"geofence: robot at ({x:.1f},{y:.1f}) cm is "
+                               f"within {self.margin} cm of the field edge")
+                return
+        if time.monotonic() - self._last_seen > self._lost_grace:
+            self._halt(f"geofence: tag 100 not seen for "
+                       f"{time.monotonic()-self._last_seen:.1f}s -- "
+                       f"position unknown, last {self.last}")
+
+    def close(self):
+        try:
+            self._dc.close()
+        except Exception:
+            pass
+
+
 class _Backend:
     """A connected robot, real or simulated.
 
@@ -211,6 +277,8 @@ class HardwareBackend(_Backend):
     label = "hardware"
 
     def __init__(self, port: str, robot_json: "str | pathlib.Path") -> None:
+        import json
+
         from robot_radio.config.robot_config import load_robot_config
         from robot_radio.io.serial_conn import SerialConnection
         from robot_radio.robot.protocol import NezhaProtocol
@@ -219,7 +287,23 @@ class HardwareBackend(_Backend):
         # every angle it computed used the physical 128 mm track -- see
         # EFFECTIVE_TRACK. That is the path that actually matters, since the
         # sim robot has no scrub.
-        _set_effective_track(load_robot_config(robot_json))
+        #
+        # And it must be the ACTIVE robot, not this script's --robot-json
+        # default: that default is tovez_nocal, the deliberately
+        # UNCALIBRATED config the sim wants. Loading it on hardware silently
+        # gave the host unity scrub (effective track 128 for a robot whose
+        # measured effective track is 140.4) while the robot itself ran its
+        # own baked tovez calibration -- host and firmware disagreeing about
+        # the same robot.
+        pointer = _REPO_ROOT / "data" / "robots" / "active_robot.json"
+        active = robot_json
+        if pointer.exists():
+            spec = json.loads(pointer.read_text())
+            if "path" in spec:
+                active = _REPO_ROOT / spec["path"]
+        cfg = load_robot_config(active)
+        print(f"hardware robot config: {cfg.robot_name} ({pathlib.Path(active).name})")
+        _set_effective_track(cfg)
 
         self._conn = SerialConnection(port=port)
         self._conn.connect()
@@ -228,11 +312,18 @@ class HardwareBackend(_Backend):
         time.sleep(BOOT_WAIT)
         self.proto.read_pending_binary_tlm_frames()  # discard the boot burst
 
+    geofence = None
+
     def advance(self, seconds: float) -> "list":
         frames = []
         deadline = time.monotonic() + seconds
+        nextCheck = 0.0
         while time.monotonic() < deadline:
             frames.extend(self.proto.read_pending_binary_tlm_frames())
+            now = time.monotonic()
+            if self.geofence is not None and now >= nextCheck:
+                self.geofence.check()      # raises GeofenceViolation
+                nextCheck = now + 0.1
             time.sleep(0.005)
         return frames
 
@@ -316,6 +407,46 @@ class Tour:
         print(f"WARNING: segment {moveId} never acked")
         return False
 
+    turnMode = "move"       # closed-loop corners; see runTurnMove()
+    movingPrelude = False   # stationary prelude is the DEFAULT: it must
+                            # not move the robot on the playfield.
+
+    def runTurnMove(self, label: str, moveId: int) -> bool:
+        """A 90 deg corner as an ANGLE-stopped MOVE, not a timed WHEELS pivot.
+
+        A timed pivot has to PREDICT how far the wheels coast; measured, it
+        over-rotates ~14% (sim heading 412.7 for a target 360 once the old
+        prelude's duration fudge is removed). The old moving prelude hid that
+        behind a per-run scale factor bought with 40 cm of travel.
+
+        An ANGLE stop instead closes the loop on the estimator heading, and
+        the firmware now applies the camera-measured affine turn calibration
+        (RobotLoop::setRotationCalibration) on top -- 180 deg commands landed
+        at 180.3 (sd 1.9) over six runs, and 15..180 deg across four rates
+        held to mean +0.64 deg. No duration to guess and nothing to
+        pre-measure, so the prelude does not have to move.
+        """
+        import math as _m
+        self.marks.append((self.elapsed, label))
+        # vLeft<0 / vRight>0 in the WHEELS form is positive omega; keep the
+        # same rotation sense so the square runs the same way round.
+        omega = 2.0                     # [rad/s]
+        rad = _m.pi / 2.0
+        timeout = rad / omega * 1000.0 * 3.0 + 3000.0
+        self.backend.proto.move_twist(0.0, 0.0, omega, stop_angle=rad,
+                                      timeout=timeout, move_id=moveId)
+        seen = False
+        deadline = time.monotonic() + timeout / 1000.0 + 2.0
+        while time.monotonic() < deadline:
+            frames = self.advance(0.1)
+            if frames:
+                if frames[-1].active:
+                    seen = True
+                elif seen:
+                    break
+        self.advance(SEGMENT_REST)
+        return True
+
     def runSegment(self, label: str, vL: float, vR: float, durationMs: float,
                    moveId: int) -> bool:
         self.marks.append((self.elapsed, label))
@@ -331,9 +462,45 @@ class Tour:
 
     # --- calibration prelude (unchanged in intent from wheel-layer-v1) ---
 
-    def calibrate(self) -> float:
-        """Measure this run's per-wheel gain and turn-duration scale.
-        Returns the turn scale; fills CAL as a side effect."""
+    def calibrateStationary(self) -> float:
+        """The no-motion prelude. Returns the turn scale; fills CAL.
+
+        THE PRELUDE MUST NOT MOVE THE ROBOT (stakeholder, 2026-07-29). The
+        old moving prelude drove ~39 cm to measure per-wheel gain and then
+        pivoted and un-pivoted to measure a turn scale. On a 89.3 cm field
+        that displacement is half the height -- it put the robot into the
+        north rail -- and it is also the "turned right, then turned left"
+        the stakeholder saw before the tour proper had even started.
+
+        Neither measurement is needed:
+
+        - Per-wheel gain: App::Drive ALREADY inverts
+          `actual = gain*commanded + intercept`, per wheel and per direction
+          of approach, from the robot JSON's wheel_gain_*/wheel_intercept_*
+          (drive.cpp correctedCommand(), seeded in main.cpp). Measuring a
+          host-side gain on top of that double-corrects -- it fits the
+          RESIDUAL of an already-closed correction, which is why three
+          consecutive runs produced L 0.819/0.873/1.200 for one robot. Unity
+          is the honest value here.
+
+        - Turn scale: TURN_ARC is now built from the EFFECTIVE track
+          (trackwidth / rotational_slip), which is itself camera-measured,
+          so the commanded pivot arc is already the right arc for 90 deg.
+
+        Anything this cannot know from configuration is better measured by a
+        dedicated calibration run than by stealing 40 cm from every tour.
+        """
+        CAL["L"] = 1.0
+        CAL["R"] = 1.0
+        print(f"prelude: stationary (no motion). "
+              f"wheel gains from firmware correction, "
+              f"turn arc from effective track {EFFECTIVE_TRACK:.1f} mm")
+        return 1.0
+
+    def calibrateMoving(self) -> float:
+        """The ORIGINAL moving prelude -- retained for the bench, where the
+        40 cm of travel it needs is free. Never the default; see
+        calibrateStationary() for why it must not run on the playfield."""
         print("calibrating straight...")
         self.sendVerified(CRUISE, CRUISE, 3500.0, 9598)
         base = len(self.log["t"])
@@ -384,13 +551,17 @@ class Tour:
         return turnScale
 
     def run(self) -> bool:
-        turnScale = self.calibrate()
+        turnScale = (self.calibrateMoving() if self.movingPrelude
+                     else self.calibrateStationary())
         segs = [(vL, vR, dur * (turnScale if idx % 2 == 1 else 1.0), mid)
                 for idx, (vL, vR, dur, mid) in enumerate(segments())]
         self._tourStartIndex = len(self.log["t"])
         for idx, (vL, vR, durMs, moveId) in enumerate(segs):
             label = f"leg {idx // 2 + 1}" if idx % 2 == 0 else f"turn {idx // 2 + 1}"
-            if not self.runSegment(label, vL, vR, durMs, moveId):
+            isTurn = idx % 2 == 1
+            ok = (self.runTurnMove(label, moveId) if (isTurn and self.turnMode == "move")
+                  else self.runSegment(label, vL, vR, durMs, moveId))
+            if not ok:
                 return False
         self.advance(1.0)  # final coast-down
         return True
@@ -431,6 +602,18 @@ def main() -> int:
                    help="[mm] fail if the tour's end point is farther than this from its start")
     p.add_argument("--heading-tolerance", type=float, default=DEFAULT_HEADING_TOLERANCE,
                    help="[deg] fail if total heading change is farther than this from 360")
+    p.add_argument("--no-geofence", action="store_true",
+                   help="DISABLE the camera geofence. Do not use on the playfield.")
+    p.add_argument("--geofence-margin", type=float, default=10.0,
+                   help="[cm] halt this close to the field edge (default 10)")
+    p.add_argument("--turn-mode", choices=("move", "wheels"), default="move",
+                   help="corners as ANGLE-stopped MOVEs (default, closed-loop) or "
+                        "as timed WHEELS pivots (the original; needs the moving "
+                        "prelude's duration scale to be accurate)")
+    p.add_argument("--moving-prelude", action="store_true",
+                   help="use the ORIGINAL prelude, which drives ~39cm and pivots "
+                        "to self-calibrate. Bench only -- it does not fit on the "
+                        "playfield and skews the tour's start heading.")
     p.add_argument("--chart", default=None,
                    help="output PNG path (default: src/tests/bench/square_tour_<backend>.png)")
     args = p.parse_args()
@@ -438,9 +621,21 @@ def main() -> int:
     backend: _Backend = (SimBackend(args.robot_json) if args.sim
                          else HardwareBackend(args.port, args.robot_json))
     tour = Tour(backend)
+    if not args.sim and not args.no_geofence:
+        backend.geofence = Geofence(backend.proto, margin=args.geofence_margin)
+        print(f"geofence ARMED: stops the robot within "
+              f"{args.geofence_margin:.0f} cm of the field edge, and on tag loss")
+    tour.movingPrelude = args.moving_prelude
+    tour.turnMode = args.turn_mode
     try:
         completed = tour.run()
+    except GeofenceViolation as exc:
+        print(f"ABORTED: {exc}")
+        print("motors stopped by the geofence")
+        return 2
     finally:
+        if getattr(backend, "geofence", None) is not None:
+            backend.geofence.close()
         backend.close()
 
     log = tour.log
