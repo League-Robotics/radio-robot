@@ -114,6 +114,24 @@ def durationFor(distance, steady, reversal):  # [mm] [mm/s] -> [s]
     return d
 
 
+# Move ids must be unique PER RUN, not fixed constants.
+#
+# The firmware keeps a 16-slot ring of accepted move ids so a retried enqueue
+# whose ack was lost is not executed twice (robot_loop.cpp alreadyAccepted()).
+# It ACKS a duplicate id and discards it. The robot does not reboot between
+# runs over the radio, so fixed ids meant the second and later runs had their
+# segments silently skipped -- proven on hardware: the same move_id sent
+# twice moved 50.7 mm then 0.1 mm, both acked.
+#
+# Skipping the TURNS turns four legs into one 2 m straight line, which is how
+# the robot ended up driving off the table. The script could not detect it:
+# an ack is indistinguishable from "already accepted".
+#
+# Base is derived from the clock so consecutive runs never collide, and kept
+# stable within a run so sendVerified()'s own retry-on-lost-ack still works.
+_ID_BASE = 10000 + (int(time.time()) % 50000) * 10
+
+
 def segments() -> "list[tuple[float, float, float, int]]":
     """(vLeft, vRight, duration_ms, move_id) per segment. Commands are
     calibration-corrected so the MEASURED wheel speeds hit the targets;
@@ -127,8 +145,8 @@ def segments() -> "list[tuple[float, float, float, int]]":
     turnR = TURN_SPEED / CAL["R"]
     out = []
     for i in range(4):
-        out.append((legL, legR, legMs, 9601 + 2 * i))
-        out.append((turnL, turnR, turnMs, 9602 + 2 * i))
+        out.append((legL, legR, legMs, _ID_BASE + 1 + 2 * i))
+        out.append((turnL, turnR, turnMs, _ID_BASE + 2 + 2 * i))
     return out
 
 
@@ -419,8 +437,38 @@ class Tour:
         return False
 
     turnMode = "move"       # closed-loop corners; see runTurnMove()
+    legMode  = "move"       # closed-loop legs;    see runLegMove()
     movingPrelude = False   # stationary prelude is the DEFAULT: it must
                             # not move the robot on the playfield.
+
+    def runLegMove(self, label: str, moveId: int) -> bool:
+        """A 500 mm leg as a DISTANCE-stopped MOVE, not a timed WHEELS run.
+
+        Measured: a timed WHEELS leg curved 8 cm north over 48 cm east (the
+        geofence aborted on it), because equal commanded wheel speeds do not
+        produce equal actual speeds and nothing closes the loop. The same
+        distance driven as a MOVE held ~1 cm of cross-track over 40 cm
+        earlier today, and 99-100% of commanded distance over five legs.
+        """
+        import math as _m
+        self.marks.append((self.elapsed, label))
+        timeout = LEG / CRUISE * 1000.0 * 3.0 + 3000.0
+        self.backend.proto.move_twist(CRUISE, 0.0, 0.0, stop_distance=LEG,
+                                      timeout=timeout, move_id=moveId)
+        self._awaitMove(timeout)
+        return True
+
+    def _awaitMove(self, timeout: float) -> None:
+        seen = False
+        deadline = time.monotonic() + timeout / 1000.0 + 2.0
+        while time.monotonic() < deadline:
+            frames = self.advance(0.1)
+            if frames:
+                if frames[-1].active:
+                    seen = True
+                elif seen:
+                    break
+        self.advance(SEGMENT_REST)
 
     def runTurnMove(self, label: str, moveId: int) -> bool:
         """A 90 deg corner as an ANGLE-stopped MOVE, not a timed WHEELS pivot.
@@ -446,16 +494,7 @@ class Tour:
         timeout = rad / omega * 1000.0 * 3.0 + 3000.0
         self.backend.proto.move_twist(0.0, 0.0, omega, stop_angle=rad,
                                       timeout=timeout, move_id=moveId)
-        seen = False
-        deadline = time.monotonic() + timeout / 1000.0 + 2.0
-        while time.monotonic() < deadline:
-            frames = self.advance(0.1)
-            if frames:
-                if frames[-1].active:
-                    seen = True
-                elif seen:
-                    break
-        self.advance(SEGMENT_REST)
+        self._awaitMove(timeout)
         return True
 
     def runSegment(self, label: str, vL: float, vR: float, durationMs: float,
@@ -513,7 +552,7 @@ class Tour:
         40 cm of travel it needs is free. Never the default; see
         calibrateStationary() for why it must not run on the playfield."""
         print("calibrating straight...")
-        self.sendVerified(CRUISE, CRUISE, 3500.0, 9598)
+        self.sendVerified(CRUISE, CRUISE, 3500.0, _ID_BASE + 98)
         base = len(self.log["t"])
         self.advance(4.2)
         rows = list(zip(self.log["posL"][base:], self.log["posR"][base:]))
@@ -542,7 +581,7 @@ class Tour:
         tR = TURN_SPEED / CAL["R"]
         print("calibrating turn...")
         base = len(self.log["t"])
-        self.sendVerified(tL, tR, turnMsNominal, 9597)
+        self.sendVerified(tL, tR, turnMsNominal, _ID_BASE + 97)
         self.advance(turnMsNominal / 1000.0 + 1.5)
         if len(self.log["t"]) - base < 4:
             return 1.0
@@ -570,8 +609,12 @@ class Tour:
         for idx, (vL, vR, durMs, moveId) in enumerate(segs):
             label = f"leg {idx // 2 + 1}" if idx % 2 == 0 else f"turn {idx // 2 + 1}"
             isTurn = idx % 2 == 1
-            ok = (self.runTurnMove(label, moveId) if (isTurn and self.turnMode == "move")
-                  else self.runSegment(label, vL, vR, durMs, moveId))
+            if isTurn and self.turnMode == "move":
+                ok = self.runTurnMove(label, moveId)
+            elif not isTurn and self.legMode == "move":
+                ok = self.runLegMove(label, moveId)
+            else:
+                ok = self.runSegment(label, vL, vR, durMs, moveId)
             if not ok:
                 return False
         self.advance(1.0)  # final coast-down
@@ -617,6 +660,10 @@ def main() -> int:
                    help="DISABLE the camera geofence. Do not use on the playfield.")
     p.add_argument("--geofence-margin", type=float, default=12.0,
                    help="[cm] halt this close to the field edge (default 10)")
+    p.add_argument("--leg-mode", choices=("move", "wheels"), default="move",
+                   help="legs as DISTANCE-stopped MOVEs (default, closed-loop) or "
+                        "as timed WHEELS runs (the original; measured 8cm of "
+                        "cross-track drift over a 48cm leg)")
     p.add_argument("--turn-mode", choices=("move", "wheels"), default="move",
                    help="corners as ANGLE-stopped MOVEs (default, closed-loop) or "
                         "as timed WHEELS pivots (the original; needs the moving "
@@ -638,6 +685,7 @@ def main() -> int:
               f"{args.geofence_margin:.0f} cm of the field edge, and on tag loss")
     tour.movingPrelude = args.moving_prelude
     tour.turnMode = args.turn_mode
+    tour.legMode = args.leg_mode
     try:
         completed = tour.run()
     except GeofenceViolation as exc:
