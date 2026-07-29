@@ -33,8 +33,8 @@
     },
     "odometry_chip_upside_down": false,
     "otos_untrusted": true,
-    "trackwidth": 108.6,
-    "_trackwidth_note": "2026-07-29, camera-measured on the playfield: EFFECTIVE track, not the physical wheel separation. 6 in-place 180 deg turns (3 CW / 3 CCW) against overhead AprilTag truth averaged 199.9 deg actual for 180 commanded (sd 1.9 deg -- systematic, not slip), implying 108.6 mm (sd 1.5) from the measured wheel differential. The previous 128 made every turn overshoot ~11%. Straight legs measured 99-100% of commanded over the same session, so the per-wheel distance calibration (mm_per_wheel_deg_*) is sound and the error was track alone. Consumed at BOOT (gen_boot_config.py -> boot_config.cpp -> main.cpp Drive/Odometry/plannerLimits), never a runtime delta -- a CONFIG tw patch acks ERR_UNIMPLEMENTED -- so changing this requires a reflash.",
+    "trackwidth": 143.0,
+    "_trackwidth_note": "2026-07-29, camera-measured on the playfield. Turn accuracy vs overhead AprilTag truth, 180 deg commanded, in-place, 3 CW / 3 CCW per config:\n      tw 128.0 -> 199.9 deg (sd 1.9)   +11%\n      tw 108.6 -> 226.1 deg (sd 1.6)   +26%\n      tw 143.0 -> 178.1 deg (4 runs)    -1%\n    NOT a track-width-as-geometry relationship: LOWERING tw produced a SMALLER wheel differential but a LARGER actual rotation, which no model of rotation-proportional-to-differential explains, so do not reason about this value as the physical wheel separation -- 108.6 was derived that way and made things worse. It is an empirical constant fit to the observed monotonic response (~-1.35 deg of rotation per mm of tw). The causal mechanism is NOT understood; the angle stop is |theta - theta0| >= threshold against the estimator heading (stop_condition.cpp), and with otos=0 that heading is encoder-only.\n    Straight legs measured 99-100% of commanded across five runs in the same session at tw=128, so mm_per_wheel_deg_* is sound.\n    Consumed at BOOT (gen_boot_config.py -> boot_config.cpp -> main.cpp Drive/Odometry/plannerLimits); a runtime CONFIG tw patch acks ERR_UNIMPLEMENTED, so changing it requires a reflash.",
     "wheelbase_mm": null
   },
   "wheels": {
