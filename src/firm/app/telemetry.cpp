@@ -218,9 +218,21 @@ bool Telemetry::hasSomethingToSay() const {
   //    that will be debugged the hard way, and this is the difference
   //    between "quiet because nothing is happening" and "quiet because we
   //    stopped listening".
-  if (flags_ != lastEmittedFlags_) return true;
+  //    Armed only after boot: during the preamble the flags word churns on
+  //    every probe (each motor connecting, the OTOS, kFlagEventBootReady),
+  //    and reporting each one turns power-on into a burst of binary in
+  //    whatever terminal is attached.
+  if (changeReportingArmed_ && flags_ != lastEmittedFlags_) return true;
 
   return false;
+}
+
+void Telemetry::markBootComplete() {
+  // Adopt the settled flags word as the baseline BEFORE arming, so the
+  // post-boot state is not itself reported as a change -- otherwise the
+  // first cycle after boot emits a frame saying nothing happened.
+  lastEmittedFlags_ = flags_;
+  changeReportingArmed_ = true;
 }
 
 void Telemetry::emit(uint32_t now, bool force) {

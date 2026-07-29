@@ -352,6 +352,15 @@ class Telemetry {
   // progress. Bounded: boot ends, and with it the forcing.
   void emit(uint32_t now, bool force = false);
 
+  // markBootComplete -- called once by RobotLoop::boot() at its tail. Arms
+  // report-on-change and adopts the current flags word as the baseline, so
+  // the settled post-boot state does not itself read as news and emit a
+  // frame. Until this call telemetry stays SILENT unless the robot is
+  // genuinely moving or an ack is outstanding, so powering on produces the
+  // DEVICE banner and READY and nothing else -- both cleartext, both
+  // readable in a terminal (stakeholder directive 2026-07-29).
+  void markBootComplete();
+
   // Measurement/test seam -- lets a HOST_BUILD test report the realized
   // cadence without parsing a FakeTransport's send log.
   uint32_t primaryEmitCount() const { return primaryEmitCount_; }
@@ -423,6 +432,15 @@ class Telemetry {
   // happened to equal a zero-initialised member would otherwise start life
   // invisible.
   uint32_t lastEmittedFlags_ = 0xFFFFFFFFu;
+
+  // Report-on-change is armed only AFTER boot. During the preamble the flags
+  // word churns constantly -- each motor connecting, the OTOS probe,
+  // kFlagEventBootReady itself -- and every one of those is a "change", so
+  // an armed change-detector turns power-on into a burst of binary in
+  // whatever terminal happens to be attached. Boot's OWN output is the
+  // DEVICE banner and READY, both cleartext and both readable; the binary
+  // frames add nothing a human wants and nothing STATUS cannot answer.
+  bool changeReportingArmed_ = false;
 
   uint32_t seq_ = 0;  // increments once per SENT primary frame
 

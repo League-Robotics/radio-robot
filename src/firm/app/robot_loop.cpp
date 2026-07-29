@@ -314,6 +314,12 @@ void RobotLoop::boot() {
   }
   tlm_.setLiveFlag(kFlagEventBootReady, true);
 
+  // Arm report-on-change now, adopting the settled boot state as the
+  // baseline. Everything before this point -- motors connecting, the OTOS
+  // probe, boot-ready itself -- is deliberately unreported: powering the
+  // robot on should put the banner and READY in a terminal and nothing else.
+  tlm_.markBootComplete();
+
   comms_.sendBanner();
   // READY last, and only here: past this point the loop dispatches commands
   // instead of NACKing them via rejectDuringBoot(). A host that waits for
