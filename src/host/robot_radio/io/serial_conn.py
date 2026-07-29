@@ -465,6 +465,16 @@ class SerialConnection:
         self._reply_queues: dict[str, queue.Queue] = {}
         self._reply_lock = threading.Lock()
 
+        # Bounded CLEARTEXT reply queue. The cleartext verbs
+        # (DEVICE/PONG/ID/VER/READY/STATUS/HELP) carry no corr-id and cannot
+        # -- they are typed by a human at a terminal as often as they are
+        # sent by code, and a `STATUS #7` is not a valid verb under the v5
+        # grammar. So they route HERE, by arrival, rather than through
+        # _reply_queues' corr-id matching. Without this they were parsed
+        # correctly and then dropped on the floor, which reads from the
+        # caller's side as a dead robot -- see send_cleartext().
+        self._text_queue: queue.Queue = queue.Queue(maxsize=64)
+
         # Bounded TLM queue: drop oldest frame on overflow rather than blocking
         # the reader thread.
         self._tlm_queue: queue.Queue = queue.Queue(maxsize=_TLM_QUEUE_DEPTH)
@@ -941,12 +951,22 @@ class SerialConnection:
         (``_CORR_ID_RE``) are DELETED, not ported -- both were pre-v4
         vestiges with no firmware emitter behind them (telemetry is binary
         now; corr-id'd replies ride ``ReplyEnvelope``, a binary shape).
-        None of the four cleartext verbs currently have a live
-        reader-thread consumer (see ``_handle_wire_line()``'s own
-        docstring) -- dropped silently here, same policy as a pre-124
-        ``OK``/``ERR``/``CFG`` reply with no registered queue.
+        Cleartext replies now have a live consumer: ``_text_queue``, drained
+        by ``send_cleartext()``. Before that they were parsed correctly and
+        then DROPPED here, so every cleartext query looked from the caller's
+        side exactly like an unreachable robot -- which cost a bench session
+        chasing a radio link that was working the whole time.
         """
-        del command, text  # no live reader-thread consumer yet -- see docstring
+        del command  # the full line (verb included) is what callers want
+        if self._text_queue.full():
+            try:
+                self._text_queue.get_nowait()  # drop oldest, never block reader
+            except queue.Empty:
+                pass
+        try:
+            self._text_queue.put_nowait(text)
+        except queue.Full:
+            pass  # racing drain; dropping one status line is harmless
 
     def _handle_binary_reply(self, frame: bytes, command: bytes) -> None:
         """COBS-decode, CRC-verify, protobuf-decode, and route one binary
@@ -1222,6 +1242,54 @@ class SerialConnection:
                         self._last_write_s = time.monotonic()
             except Exception:
                 break   # port closed / gone — let the robot safety-stop
+
+    def send_cleartext(self, verb: str, read_timeout: int = 1500) -> list[str]:  # [ms]
+        """Send a bare cleartext verb and return the reply lines.
+
+        Use this for HELLO/PING/ID/VER/STATUS/HELP -- NOT ``send()``, which
+        appends a ``#<corr_id>`` suffix and matches the reply back by that
+        id. Cleartext verbs carry no corr-id (``STATUS #7`` is not a valid
+        verb under the v5 grammar), so through ``send()`` the command is
+        malformed AND the reply is unroutable: it returns ``[]`` for a robot
+        that answered perfectly.
+
+        Args:
+            verb: bare verb, no corr-id, no newline (e.g. ``"STATUS"``).
+            read_timeout: how long to collect replies. Some verbs answer
+                with several lines, so this always drains the full window
+                rather than stopping at the first line.
+
+        Returns:
+            The decoded reply lines, verb included, in arrival order.
+        """
+        if not self.is_open:
+            return []
+
+        while not self._text_queue.empty():   # drop stale/unsolicited lines
+            try:
+                self._text_queue.get_nowait()
+            except queue.Empty:
+                break
+
+        try:
+            with self._write_lock:
+                self._ser.write(f"{verb}\n".encode("utf-8"))
+                self._ser.flush()
+                self._last_write_s = time.monotonic()
+        except Exception:
+            return []
+
+        lines: list[str] = []
+        deadline = time.time() + (read_timeout / 1000.0)
+        while True:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            try:
+                lines.append(self._text_queue.get(timeout=min(remaining, 0.05)))
+            except queue.Empty:
+                continue
+        return lines
 
     def send(self, message: str, read_timeout: int = 500,  # [ms]
              stop_token: str | None = "OK") -> dict[str, Any]:
