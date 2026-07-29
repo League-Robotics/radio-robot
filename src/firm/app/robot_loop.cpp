@@ -299,10 +299,16 @@ void RobotLoop::boot() {
     bootState.wheelRight.connected = preamble_.rightConnected();
     bootState.otos.connected = preamble_.otosConnected();
     tlm_.update(bootState);
-    // force: boot's per-probe status frames are the message -- nothing is
-    // moving and no ack is pending, so the idle gate would suppress exactly
-    // the frames a host watches to follow the preamble.
-    tlm_.emit(bootState.time.cycleStart, /*force=*/true);
+    // NOT forced. Forcing here pushed one frame per probe pass -- a ~5s
+    // flood on every reset, and since opening a serial port asserts DTR and
+    // resets the board, that meant a wall of binary every single time a
+    // monitor was attached, ahead of the DEVICE banner and READY.
+    //
+    // The report-on-change arm already emits the boot frames that carry
+    // information: motors connecting, OTOS connecting, kFlagEventBootReady
+    // coming up. Those are a handful of frames, each marking a real
+    // transition, instead of a per-pass stream of identical ones.
+    tlm_.emit(bootState.time.cycleStart);
 
     sleeper_.sleepMillis(kPreamblePace);  // paces probes AND yields (radio RX)
   }
