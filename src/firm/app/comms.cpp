@@ -273,6 +273,12 @@ void Comms::dispatchCleartext(msg::Verb verb, Transport& t, uint32_t now) {
       // runtime formatting at all.
       t.sendReliable("VER:" FIRMWARE_VERSION_STR);
       return;
+    case msg::Verb::STATUS:
+      sendStatus(t);
+      return;
+    case msg::Verb::HELP:
+      sendHelp(t);
+      return;
     default:
       // Any other cleartext verb arriving INBOUND (e.g. a stray
       // DEVICE/PONG -- those are reply-plane-only) has no command
@@ -411,6 +417,52 @@ void Comms::sendBanner() {
 // answers throughout a boot window in which every Move is correctly rejected
 // with ERR_NOT_CONFIGURED (rejectDuringBoot, 125-001). See commands.proto's
 // READY row for the measurement that motivated this.
+// sendStatus -- the queryable state line, "STATUS:k=v:k=v...".
+//
+// Answers from the snapshot RobotLoop refreshes each cycle, so it costs one
+// struct read and a format. Works with telemetry silent and without a binary
+// codec, which is the point: a human on a serial terminal can ask.
+//
+// Booleans are 1/0 rather than yes/no -- shorter on a size-constrained line,
+// and unambiguous to both a person and a parser. `flags` is hex because it
+// is a bit field and every reader of it wants bits, not a decimal.
+void Comms::sendStatus(Transport& t) {
+  char line[128];
+  std::snprintf(line, sizeof(line),
+                "STATUS:ready=%d:active=%d:connL=%d:connR=%d:otos=%d"
+                ":wedge=%d:flags=0x%lx",
+                status_.ready ? 1 : 0, status_.active ? 1 : 0,
+                status_.wheelLeftConnected ? 1 : 0,
+                status_.wheelRightConnected ? 1 : 0,
+                status_.otosPresent ? 1 : 0, status_.wedged ? 1 : 0,
+                static_cast<unsigned long>(status_.flags));
+  t.sendReliable(line);
+}
+
+// sendHelp -- the cleartext verbs this build actually answers.
+//
+// WALKS kVerbTable rather than carrying a literal list, so it reports what
+// the dispatcher will really accept. A hand-written list is a second source
+// of truth and would drift the first time someone adds a verb -- which is
+// exactly how the old help text died.
+//
+// Binary verbs are skipped: they need a COBS+CRC frame and cannot be typed,
+// so listing them would advertise commands a human cannot use.
+void Comms::sendHelp(Transport& t) {
+  char line[160];
+  std::size_t n = 0;
+  n += static_cast<std::size_t>(std::snprintf(line, sizeof(line), "HELP:"));
+  for (std::size_t i = 0; i < msg::kVerbCount && n + 1 < sizeof(line); ++i) {
+    const msg::VerbEntry& e = msg::kVerbTable[i];
+    if (e.binary) continue;
+    const int written = std::snprintf(line + n, sizeof(line) - n, "%s%s",
+                                      n > 5 ? " " : "", e.name);
+    if (written <= 0) break;
+    n += static_cast<std::size_t>(written);
+  }
+  t.sendReliable(line);
+}
+
 void Comms::sendReady() {
   // Same one-off cleartext path as the banner. No data field: the verb IS
   // the whole message, so it parses as a bare no-data line under the v5

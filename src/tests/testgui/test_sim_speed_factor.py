@@ -79,10 +79,27 @@ _OFFERED_MULTIPLIERS = (1, 2, 5, 10, 20)
 
 
 def _make_deterministic_loop():
+    """A stepped, configured SimLoop.
+
+    CONFIGURED matters: the firmware is fail-closed since 114-001, so an
+    unconfigured robot silently refuses to drive -- twist() returns fine and
+    the plant never moves. That went unnoticed while telemetry streamed
+    unconditionally, because the burst measurements below still saw frames
+    from a stationary robot. Since 2026-07-29 telemetry is gated on the robot
+    actually doing something, so a test that means to measure a MOVING robot
+    now has to make it move.
+    """
+    import pathlib
+
+    from robot_radio.config.robot_config import load_robot_config
     from robot_radio.io.sim_loop import SimLoop
 
     loop = SimLoop(track_width=128.0, lib_path=_sim_lib_path())
     loop.connect(start_tick_thread=False)
+    # testgui -> tests -> src -> repo root = THREE hops
+    robots = pathlib.Path(__file__).resolve().parents[3] / "data" / "robots"
+    loop.configure_from_robot(load_robot_config(robots / "tovez_nocal.json"))
+    loop.step(1)   # let the Tier-1 ConfigDelta be consumed before any drive
     return loop
 
 

@@ -299,7 +299,10 @@ void RobotLoop::boot() {
     bootState.wheelRight.connected = preamble_.rightConnected();
     bootState.otos.connected = preamble_.otosConnected();
     tlm_.update(bootState);
-    tlm_.emit(bootState.time.cycleStart);
+    // force: boot's per-probe status frames are the message -- nothing is
+    // moving and no ack is pending, so the idle gate would suppress exactly
+    // the frames a host watches to follow the preamble.
+    tlm_.emit(bootState.time.cycleStart, /*force=*/true);
 
     sleeper_.sleepMillis(kPreamblePace);  // paces probes AND yields (radio RX)
   }
@@ -496,6 +499,22 @@ void RobotLoop::cycle() {
 
     tlm_.update(state_);
     tlm_.emit(state_.time.cycleStart);
+
+    // Refresh what STATUS answers from. Sourced from the SAME state_ the
+    // telemetry projection just used, so the queryable line and the wire
+    // frame can never disagree -- STATUS is a second VIEW of the state, not
+    // a second copy of it. Cheap enough to do unconditionally; it must run
+    // even when the idle gate suppressed the frame above, since answering
+    // STATUS on a parked robot is precisely the case it exists for.
+    Comms::Status status;
+    status.ready = true;  // past boot(): the loop is dispatching commands
+    status.active = state_.command.moveActive;
+    status.wheelLeftConnected = state_.wheelLeft.connected;
+    status.wheelRightConnected = state_.wheelRight.connected;
+    status.otosPresent = state_.otos.present;
+    status.wedged = state_.health.wedgeLatch;
+    status.flags = tlm_.flags();
+    comms_.setStatus(status);
 
     // Both deciders tick AFTER emit: their completion acks ride the NEXT
     // frame. Drive::update() runs LAST so that, while Drive owns motion,

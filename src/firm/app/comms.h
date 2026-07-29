@@ -248,6 +248,25 @@ constexpr uint8_t kPumpMaxLines = 2 * kCmdRingDepth;
 
 class Comms {
  public:
+  // Status -- what STATUS reports. Deliberately a plain aggregate of
+  // already-known booleans: this is a REPORT, not a second source of truth,
+  // so every field is copied from the loop's own state rather than derived
+  // here. Add fields freely; the wire format is key=value and the v5 grammar
+  // ends the verb at the first colon, so new keys need no parser change.
+  struct Status {
+    bool ready = false;             // boot() finished; Moves are accepted
+    bool active = false;            // a Move is running
+    bool wheelLeftConnected = false;
+    bool wheelRightConnected = false;
+    bool otosPresent = false;
+    bool wedged = false;            // encoder stuck-position latch
+    uint32_t flags = 0;             // the full telemetry flags word
+  };
+
+  // Refresh the snapshot STATUS answers from. Called once per cycle by
+  // RobotLoop; cheap enough to be unconditional.
+  void setStatus(const Status& status) { status_ = status; }
+
   // banner/idLine must outlive the Comms instance (caller-owned, e.g.
   // main.cpp's own static buffers) -- Comms does not format or own either
   // string itself, matching its own boundary ("outside: device state" --
@@ -334,6 +353,13 @@ class Comms {
   // this; see commands.proto's READY row and comms.cpp's own definition.
   void sendReady();
 
+ private:
+  // STATUS/HELP reply formatters -- see their definitions in comms.cpp.
+  void sendStatus(Transport& t);
+  void sendHelp(Transport& t);
+
+ public:
+
   // Diagnostic counter -- malformed COBS frame, CRC mismatch, malformed
   // protobuf decode, an unrecognized `<COMMAND>` (not in messages/
   // commands.h's kVerbTable[]), AND a cleartext command with no inbound
@@ -407,6 +433,17 @@ class Comms {
   Transport& radioLink_;
   const char* banner_;
   const char* idLine_;
+
+  // Live status snapshot, refreshed by RobotLoop every cycle and formatted
+  // on demand by the STATUS handler. A snapshot rather than a back-pointer
+  // to the loop: Comms must not reach into subsystems to answer a query
+  // (it would invert the dependency and make a cleartext reply depend on
+  // whatever the loop happens to be mid-update), and the whole thing is a
+  // few bytes to copy.
+  //
+  // Zero-initialised: a STATUS arriving before the first cycle -- i.e.
+  // during boot -- correctly answers ready=0.
+  Status status_{};
   uint32_t malformedCount_ = 0;
   uint32_t commandsDroppedCount_ = 0;
 

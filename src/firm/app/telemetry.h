@@ -227,6 +227,10 @@ constexpr uint32_t kPrimaryPeriod = 40;  // [ms] ~25 Hz, matches robot_loop.cpp'
 // App::kCmdRingDepth (comms.h); change the two together.
 constexpr uint8_t kAckRingDepth = 12;
 
+// How many emitted frames a freshly-pushed ack forces before it is treated as
+// delivered. See Telemetry::ackSends_ for why this is >1.
+constexpr uint8_t kAckRepeats = 3;
+
 class Telemetry {
  public:
   // Wire-shaped staging area, filled WHOLE by update() every call -- no
@@ -338,7 +342,15 @@ class Telemetry {
   // 124-009: TelemetrySecondary's tie-break/alternation cadence machinery
   // is GONE with the message type itself -- there is only one frame type
   // to pace any more, so this is a plain "due since last send" gate.
-  void emit(uint32_t now);
+  // emit -- cadence-gated send. Sends only when there is something to say
+  // (motion, or an undelivered ack) so a parked robot leaves the link quiet
+  // and a serial terminal stays typeable.
+  //
+  // `force` bypasses the has-something-to-say test for callers whose frames
+  // ARE the message regardless of motion -- specifically RobotLoop::boot(),
+  // whose per-probe status frames are how a host watches the preamble
+  // progress. Bounded: boot ends, and with it the forcing.
+  void emit(uint32_t now, bool force = false);
 
   // Measurement/test seam -- lets a HOST_BUILD test report the realized
   // cadence without parsing a FakeTransport's send log.
@@ -347,6 +359,12 @@ class Telemetry {
 
  private:
   bool primaryDue(uint32_t now) const;
+  // True when there is something worth sending: motion in progress, or an
+  // ack that has not yet been carried kAckRepeats times. False means the
+  // robot is parked with nothing to report and the link stays SILENT --
+  // which is what makes a serial terminal usable for typing HELLO/VER/PING
+  // (stakeholder directive 2026-07-29).
+  bool hasSomethingToSay() const;
   void emitPrimary(uint32_t now);
   void pushAckRing(uint32_t corrId, uint32_t errCode);
 
@@ -384,6 +402,27 @@ class Telemetry {
   uint32_t ackRing_[kAckRingDepth]{};
   uint8_t ackRingHead_ = 0;
   uint8_t ackRingCount_ = 0;
+
+  // Per-entry delivery count, parallel to ackRing_ and sharing its indexing.
+  // An entry pushed by ack() starts at 0 and increments on every emitted
+  // frame that carries it; once it reaches kAckRepeats it stops forcing
+  // frames. That is what lets telemetry go SILENT at rest without losing
+  // acks: a command issued to a parked robot still gets kAckRepeats frames
+  // carrying its outcome, then the link goes quiet again.
+  //
+  // kAckRepeats > 1 because the wire is lossy: sprint 123 measured a
+  // residual physical-layer corruption rate that CRC catches but cannot
+  // repair, so a single carrying frame can vanish. Three gives redundancy
+  // without meaningfully extending the quiet-after-command window
+  // (3 x kPrimaryPeriod = 120 ms).
+  uint8_t ackSends_[kAckRingDepth]{};
+
+  // The flags word as of the last emitted frame, for the report-on-change
+  // arm of hasSomethingToSay(). Seeded to a value flags_ can never hold so
+  // the FIRST frame always sends: a robot whose very first flags word
+  // happened to equal a zero-initialised member would otherwise start life
+  // invisible.
+  uint32_t lastEmittedFlags_ = 0xFFFFFFFFu;
 
   uint32_t seq_ = 0;  // increments once per SENT primary frame
 

@@ -632,6 +632,16 @@ void scenarioMeasuredCadenceReport() {
   App::Comms comms(serialFake, radioFake, banner);
   App::Telemetry telemetry(comms);
 
+  // A MOVING robot: the cadence target only applies when there is something
+  // to say. Since 2026-07-29 emit() is gated on that (stakeholder directive:
+  // no telemetry while parked, so a serial terminal stays typeable), so this
+  // scenario has to put the robot in the state whose cadence it is measuring
+  // -- an idle robot is now correctly near-silent, and measuring IT would be
+  // measuring the wrong contract.
+  Types::RobotState moving;
+  moving.command.moveActive = true;
+  telemetry.update(moving);
+
   const uint32_t kStep = 3;  // [ms] fine-grained relative to kPrimaryPeriod=40
   const uint32_t kEndTime = 10000;
   for (uint32_t now = 0; now <= kEndTime; now += kStep) {
@@ -639,13 +649,36 @@ void scenarioMeasuredCadenceReport() {
   }
 
   double primaryHz = static_cast<double>(telemetry.primaryEmitCount()) / (static_cast<double>(kEndTime) / 1000.0);
-  std::printf("  measured: primary %.2f Hz (target ~25 Hz/40 ms) over %u ms\n", primaryHz,
+  std::printf("  measured: primary %.2f Hz while MOVING (target ~25 Hz/40 ms) over %u ms\n", primaryHz,
               static_cast<unsigned>(kEndTime));
 
   // Not required to HIT 25 Hz exactly (ticket's own acceptance criterion)
   // -- only sane and in the right neighborhood for a deterministic
   // scripted-clock host test.
   checkTrue(primaryHz > 15.0 && primaryHz < 35.0, "measured primary Hz is in a sane neighborhood of the 25 Hz target");
+
+  // The other half of the contract: once the robot parks, the link goes
+  // QUIET. Without this the gate could regress to always-on and only the
+  // hardware would notice.
+  const uint64_t whileMoving = telemetry.primaryEmitCount();
+  Types::RobotState parked;  // moveActive false, zero velocity, same flags
+  telemetry.update(parked);
+
+  // The park transition is reported on the next DUE tick, not on the very
+  // next emit() call -- the cadence gate still applies, so allow one full
+  // kPrimaryPeriod to pass before sampling.
+  uint32_t now = kEndTime + kStep;
+  const uint32_t settleEnd = now + 200;  // [ms] comfortably > kPrimaryPeriod
+  for (; now <= settleEnd; now += kStep) telemetry.emit(now);
+  const uint64_t afterPark = telemetry.primaryEmitCount();
+
+  checkTrue(afterPark > whileMoving,
+            "the park transition itself IS reported (report-on-change), so the "
+            "host sees the robot stop rather than the stream simply ending");
+
+  for (; now <= settleEnd + 5000; now += kStep) telemetry.emit(now);
+  checkU64Eq(telemetry.primaryEmitCount(), afterPark,
+             "parked robot emits nothing further once the flags stop changing");
 
   // Every send() call accounted for exactly -- no call produced an
   // untracked extra line (124-009: only ONE frame type exists, so this is

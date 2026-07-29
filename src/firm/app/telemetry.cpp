@@ -171,6 +171,11 @@ void Telemetry::pushAckRing(uint32_t corrId, uint32_t errCode) {
   }
   // Packed word (124-008, issue §B4): corr_id<<4 | err.
   ackRing_[tail] = (corrId << kAckErrBits) | (errCode & kAckErrMask);
+  // Undelivered: this entry now forces frames until it has been carried
+  // kAckRepeats times (hasSomethingToSay). Reset explicitly rather than
+  // relying on the slot's prior value -- a reused slot would otherwise
+  // inherit the evicted entry's delivered count and never be sent at all.
+  ackSends_[tail] = 0;
 }
 
 bool Telemetry::primaryDue(uint32_t now) const {
@@ -178,8 +183,48 @@ bool Telemetry::primaryDue(uint32_t now) const {
   return (now - lastPrimaryEmit_) >= kPrimaryPeriod;
 }
 
-void Telemetry::emit(uint32_t now) {
-  if (primaryDue(now)) {
+// hasSomethingToSay -- the idle-silence gate (stakeholder directive
+// 2026-07-29: "I don't want telemetry when the robot's not moving").
+//
+// Two reasons to speak, and the second is what keeps the wire honest:
+//   - motion in progress (kFlagActive): the host needs the stream.
+//   - an ack not yet carried kAckRepeats times: acks ride telemetry frames
+//     and there is no other delivery path, so going silent with an
+//     undelivered ack would strand the outcome of any command issued to a
+//     parked robot -- reintroducing the "acked but nothing happened" class
+//     that cost this project a bench session.
+bool Telemetry::hasSomethingToSay() const {
+  // 1. A Move is running.
+  if (flags_ & kFlagActive) return true;
+
+  // 2. The WHEELS are turning, whether or not a Move owns them. "Not moving"
+  //    has to mean the wheels, not the queue: after a STOP the Move ends
+  //    immediately but the chassis coasts, and gating on kFlagActive alone
+  //    cut telemetry mid-deceleration -- a harness watching velocity settle
+  //    saw it frozen at 366 mm/s because the frames stopped, not the wheels.
+  if (frame_.encLeft.velocity != 0 || frame_.encRight.velocity != 0) return true;
+
+  // 3. An ack not yet carried kAckRepeats times. Acks ride telemetry frames
+  //    and have no other delivery path, so silence with an undelivered ack
+  //    would strand the outcome of any command sent to a parked robot.
+  for (uint8_t i = 0; i < ackRingCount_; ++i) {
+    const uint8_t idx = static_cast<uint8_t>((ackRingHead_ + i) % kAckRingDepth);
+    if (ackSends_[idx] < kAckRepeats) return true;
+  }
+
+  // 4. Anything in the flags word CHANGED since the last frame -- boot-ready
+  //    coming up, a motor dropping off the bus, a fault latching. Report on
+  //    change: a state transition nobody can observe is a state transition
+  //    that will be debugged the hard way, and this is the difference
+  //    between "quiet because nothing is happening" and "quiet because we
+  //    stopped listening".
+  if (flags_ != lastEmittedFlags_) return true;
+
+  return false;
+}
+
+void Telemetry::emit(uint32_t now, bool force) {
+  if (primaryDue(now) && (force || hasSomethingToSay())) {
     emitPrimary(now);
   }
 }
@@ -214,6 +259,11 @@ void Telemetry::emitPrimary(uint32_t now) {
   for (uint8_t i = 0; i < ackRingCount_; ++i) {
     const uint8_t idx = static_cast<uint8_t>((ackRingHead_ + i) % kAckRingDepth);
     tlm.acks_[i] = ackRing_[idx];
+    // Count this delivery. Saturate rather than wrap: an entry that has been
+    // carried kAckRepeats times must STAY delivered, or a long-lived ring
+    // entry would silently start forcing frames again on overflow and the
+    // link would never go quiet.
+    if (ackSends_[idx] < kAckRepeats) ++ackSends_[idx];
   }
 
   tlm.enc_left = frame_.encLeft;
@@ -236,6 +286,9 @@ void Telemetry::emitPrimary(uint32_t now) {
 
   everEmittedPrimary_ = true;
   lastPrimaryEmit_ = now;
+  // Record what this frame reported, so the next hasSomethingToSay() can
+  // tell "nothing has changed" from "something changed and nobody saw it".
+  lastEmittedFlags_ = flags_;
   ++primaryEmitCount_;
 }
 
