@@ -159,7 +159,18 @@ class Geofence:
     HALF_W = 67.15   # [cm] field
     HALF_H = 44.65
 
-    def __init__(self, proto, margin: float = 10.0, lost_grace: float = 1.5):
+    # MEASURED 2026-07-29: the fence fires at the line but the robot COASTS
+    # past it -- 6.2 cm at 120 mm/s (halted at y=-24.9, came to rest at
+    # -31.1). Cruise is 150 mm/s, so budget ~8 cm. The margin therefore has
+    # to cover coast, not just robot half-extent, or the halt still ends up
+    # off the table.
+    #
+    # This is genuinely tight on this field: a 500 mm square needs 50 cm of
+    # CENTRE travel in y, and the field is only 89.3 cm, leaving 19.6 cm
+    # total -- under 10 cm per side for margin + coast + tour error. 12 cm
+    # keeps ~5 cm of real clearance after coast while still permitting a
+    # correctly-driven 500 mm square.
+    def __init__(self, proto, margin: float = 12.0, lost_grace: float = 1.5):
         from aprilcam.client.control import DaemonControl
         from aprilcam.config import Config
 
@@ -604,7 +615,7 @@ def main() -> int:
                    help="[deg] fail if total heading change is farther than this from 360")
     p.add_argument("--no-geofence", action="store_true",
                    help="DISABLE the camera geofence. Do not use on the playfield.")
-    p.add_argument("--geofence-margin", type=float, default=10.0,
+    p.add_argument("--geofence-margin", type=float, default=12.0,
                    help="[cm] halt this close to the field edge (default 10)")
     p.add_argument("--turn-mode", choices=("move", "wheels"), default="move",
                    help="corners as ANGLE-stopped MOVEs (default, closed-loop) or "
