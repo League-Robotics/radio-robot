@@ -394,16 +394,31 @@ class Tour:
                 self.log["trueY"].append(truth[1])
                 self.log["trueH"].append(truth[2])
 
-    def advance(self, seconds: float) -> None:
+    def advance(self, seconds: float) -> "list":
         """Advance robot time in short slices, sampling ground truth once
         per slice so the sim's truth trace has the same resolution as the
-        telemetry it rides alongside."""
+        telemetry it rides alongside. Returns every frame drained across
+        all slices (in order), so callers can inspect completion state
+        (e.g. `_awaitMove`'s `active` flag) without a second, starving
+        drain of the backend's telemetry queue -- see `sendVerified`'s own
+        docstring on why there is only ever one consumer.
+
+        Previously returned nothing: every frame still reached `record()`,
+        but a caller like `_awaitMove` that needed to SEE the frames (not
+        just have them logged) got `None` back on every call, which made
+        its early-exit-on-completion branch permanently unreachable and
+        left every segment riding out its full timeout budget instead of
+        stopping the instant the move actually finished."""
+        out = []
         remaining = seconds
         while remaining > 1e-6:
             slice_s = min(CYCLE_S, remaining)
-            self.record(self.backend.advance(slice_s))
+            frames = self.backend.advance(slice_s)
+            self.record(frames)
+            out.extend(frames)
             self.elapsed += slice_s
             remaining -= slice_s
+        return out
 
     def sendVerified(self, vL: float, vR: float, durationMs: float, moveId: int) -> bool:
         """Send one WHEELS segment and confirm the firmware acked it,
@@ -447,19 +462,43 @@ class Tour:
         timeout = LEG / CRUISE * 1000.0 * 3.0 + 3000.0
         self.backend.proto.move_twist(CRUISE, 0.0, 0.0, stop_distance=LEG,
                                       timeout=timeout, move_id=moveId)
-        self._awaitMove(timeout)
+        self._awaitMove(timeout, label, moveId)
         return True
 
-    def _awaitMove(self, timeout: float) -> None:
+    def _awaitMove(self, timeout: float, label: str, moveId: int) -> None:
+        """Wait for the move's completion signal (telemetry `active` flag
+        rising then falling), returning the instant it is observed.
+        `timeout` (plus a 2s safety margin) is a BACKSTOP against a lost
+        command or a stalled move, not the normal path.
+
+        Previously `self.advance()` returned nothing, so `frames` here was
+        always falsy and completion could never be observed -- every
+        segment silently rode out this entire backstop deadline on every
+        run (fixed by `Tour.advance()` now returning the frames it
+        drains). If the backstop still fires, print a LOUD, greppable
+        warning distinguishing the two distinct failure modes, since they
+        have completely different causes: the move never started
+        (`active` never rose -- likely a lost command) vs. it started but
+        never finished (`active` rose but never fell -- the move itself
+        stalled, or its completion frame was lost)."""
         seen = False
-        deadline = time.monotonic() + timeout / 1000.0 + 2.0
+        start = time.monotonic()
+        budget = timeout / 1000.0 + 2.0
+        deadline = start + budget
         while time.monotonic() < deadline:
             frames = self.advance(0.1)
             if frames:
                 if frames[-1].active:
                     seen = True
                 elif seen:
-                    break
+                    self.advance(SEGMENT_REST)
+                    return
+        waited = time.monotonic() - start
+        reason = ("started but never completed -- 'active' rose but never "
+                  "dropped" if seen else
+                  "never started -- 'active' never rose (command likely lost)")
+        print(f"TIMEOUT (hey jackass, it timed out): {label} (move {moveId}) "
+              f"{reason}; waited {waited:.1f}s of a {budget:.1f}s budget")
         self.advance(SEGMENT_REST)
 
     def runTurnMove(self, label: str, moveId: int) -> bool:
@@ -486,7 +525,7 @@ class Tour:
         timeout = rad / omega * 1000.0 * 3.0 + 3000.0
         self.backend.proto.move_twist(0.0, 0.0, omega, stop_angle=rad,
                                       timeout=timeout, move_id=moveId)
-        self._awaitMove(timeout)
+        self._awaitMove(timeout, label, moveId)
         return True
 
     def runSegment(self, label: str, vL: float, vR: float, durationMs: float,
@@ -1106,16 +1145,31 @@ def runActuationFloorMeasurement(backend: "_Backend", args) -> int:
             "ticket's Completion Notes)")
     from robot_radio.field import captureFixWithRetry
 
-    def awaitMoveAndSettle(timeout: float) -> None:
+    def awaitMoveAndSettle(timeout: float, label: str, moveId: int) -> None:
+        """Same wait-for-completion pattern as `Tour._awaitMove` (see that
+        method's docstring for the two distinct timeout causes this
+        distinguishes) -- duplicated here rather than shared because this
+        function reads `backend.advance()` directly (no `Tour`/log in this
+        code path), which already returns its drained frames and was never
+        subject to the `Tour.advance()` bug fixed above."""
         seen = False
-        deadline = time.monotonic() + timeout / 1000.0 + 2.0
+        start = time.monotonic()
+        budget = timeout / 1000.0 + 2.0
+        deadline = start + budget
         while time.monotonic() < deadline:
             frames = backend.advance(0.1)
             if frames:
                 if frames[-1].active:
                     seen = True
                 elif seen:
-                    break
+                    backend.advance(SEGMENT_REST)
+                    return
+        waited = time.monotonic() - start
+        reason = ("started but never completed -- 'active' rose but never "
+                  "dropped" if seen else
+                  "never started -- 'active' never rose (command likely lost)")
+        print(f"TIMEOUT (hey jackass, it timed out): {label} (move {moveId}) "
+              f"{reason}; waited {waited:.1f}s of a {budget:.1f}s budget")
         backend.advance(SEGMENT_REST)
 
     results = {"distance": [], "angle": []}
@@ -1127,7 +1181,7 @@ def runActuationFloorMeasurement(backend: "_Backend", args) -> int:
         moveId = int(time.time() * 1000) % 1_000_000_000
         backend.proto.move_twist(CRUISE, 0.0, 0.0, stop_distance=d, timeout=timeout,
                                  move_id=moveId)
-        awaitMoveAndSettle(timeout)
+        awaitMoveAndSettle(timeout, f"dist-{d:.0f}mm", moveId)
         after = captureFixWithRetry(geofence, f"dist-{d:.0f}mm-after")
         measured = (math.hypot(after[0] - before[0], after[1] - before[1]) * 10.0
                     if before is not None and after is not None else None)
@@ -1144,7 +1198,7 @@ def runActuationFloorMeasurement(backend: "_Backend", args) -> int:
         moveId = int(time.time() * 1000) % 1_000_000_000
         backend.proto.move_twist(0.0, 0.0, omega, stop_angle=rad, timeout=timeout,
                                  move_id=moveId)
-        awaitMoveAndSettle(timeout)
+        awaitMoveAndSettle(timeout, f"angle-{a:.0f}deg", moveId)
         after = captureFixWithRetry(geofence, f"angle-{a:.0f}deg-after")
         measured = None
         if before is not None and after is not None:
