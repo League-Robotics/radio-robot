@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '127'
+tickets:
+- 127-002
 ---
 
 # Duplicate move enqueue when an enqueue ack is lost and the host retries
