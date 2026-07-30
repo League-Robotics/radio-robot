@@ -17,8 +17,28 @@ Exports (grown incrementally, ticket by ticket):
                        speed, curvature slew limit, target-behind angle).
   ArcSolution       — solveArcToPoint's return type (v_x, omega, arcLength,
                        stop, bearing).
+  gotoWorld         — the outer position loop, world-frame target (127-006).
+  gotoRobot         — the outer position loop, robot-frame target -- a thin
+                       composition through gotoWorld (127-006).
+  GotoResult        — gotoWorld()/gotoRobot()'s return type.
+  GiveUpLimits      — the give-up policy (iteration/timeout caps).
+  ReplaceThreshold  — the throttled-replacement policy (curvature/distance
+                       material-change thresholds).
+  MoveIdAllocator   — the strictly-monotonic Move.id source a caller issuing
+                       multiple sequential goto calls must share.
+  TERMINATION_TOLERANCE — the provisional arrival tolerance ([mm]), pending
+                       ticket 007's measured minimum reliable move distance.
 """
 
+from robot_radio.pathplan.planner import (
+    TERMINATION_TOLERANCE,
+    GiveUpLimits,
+    GotoResult,
+    MoveIdAllocator,
+    ReplaceThreshold,
+    gotoRobot,
+    gotoWorld,
+)
 from robot_radio.pathplan.solver import ArcSolution, SolverLimits, solveArcToPoint
 from robot_radio.pathplan.world_pose import PoseDivergence, Transform2, WorldPose
 
@@ -29,4 +49,11 @@ __all__ = [
     "solveArcToPoint",
     "SolverLimits",
     "ArcSolution",
+    "gotoWorld",
+    "gotoRobot",
+    "GotoResult",
+    "GiveUpLimits",
+    "ReplaceThreshold",
+    "MoveIdAllocator",
+    "TERMINATION_TOLERANCE",
 ]
