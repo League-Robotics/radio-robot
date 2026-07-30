@@ -61,19 +61,29 @@ ACK_WAIT = 0.6                 # [s] bound for scanning drained frames for a mat
 CRUISE = 150.0                  # [mm/s] straight-leg speed, --mode units
 LEG = 300.0                     # [mm] default straight-leg distance, --mode units
 
-TURN_OMEGA = -2.0               # [rad/s] --mode lever-arm's fixed rotation
-                                 # direction. NEGATIVE commanded omega
-                                 # INCREASES camera yaw (playfield-testing.md:
-                                 # "positive commanded omega DECREASES camera
-                                 # yaw"), i.e. this sweeps east -> north ->
-                                 # west, never through south -- the tether
-                                 # rule for a single turn.
+TURN_OMEGA_MAG = 2.0            # [rad/s] --mode lever-arm's rotation speed
+                                 # magnitude. The SIGN is chosen at run time
+                                 # from the measured starting heading (see
+                                 # pickSafeTurnDirection()), not fixed here --
+                                 # a fixed direction is only tether-safe when
+                                 # starting near east; this script may be
+                                 # invoked from any heading. NEGATIVE
+                                 # commanded omega INCREASES camera yaw
+                                 # (playfield-testing.md: "positive commanded
+                                 # omega DECREASES camera yaw").
 TURN_ANGLE_DEG = 90.0            # [deg] --mode lever-arm's rotation magnitude
 
 FIELD_SAFE_MARGIN_CM = 15.0      # [cm] stay at least this far from the field
                                   # edge (the project floor is 12 cm; this
                                   # script uses a slightly larger margin since
                                   # neither move here is coast-calibrated).
+SOUTH_HEADING_MARGIN_DEG = 20.0  # [deg] minimum clearance from south
+                                  # (-90/270 deg, the tether direction) the
+                                  # chosen turn must keep throughout its
+                                  # sweep -- a turn that technically avoids
+                                  # crossing south but ends or passes within
+                                  # a few degrees of it is not what "never
+                                  # through south" means in practice.
 
 
 # ---------------------------------------------------------------------------
@@ -466,6 +476,45 @@ def sweepCrossesAngle(startDeg: float, deltaDeg: float, targetDeg: float) -> boo
     return deltaDeg <= d < 0.0
 
 
+def closestApproachToSouthDeg(startDeg: float, deltaDeg: float) -> float:  # [deg] [deg] -> [deg]
+    """Minimum angular distance from south (-90 / 270 deg, the tether
+    direction) reached anywhere along a continuous, monotonic sweep from
+    startDeg by the SIGNED deltaDeg (including both endpoints)."""
+    steps = max(2, int(round(abs(deltaDeg))))
+    closest = float("inf")
+    for i in range(steps + 1):
+        angle = startDeg + deltaDeg * (i / steps)
+        d = (angle - (-90.0)) % 360.0
+        d = min(d, 360.0 - d)
+        closest = min(closest, d)
+    return closest
+
+
+def pickSafeTurnDirection(startDeg: float, angleDeg: float, marginDeg: float
+                          ) -> "float | None":  # [deg] [deg] [deg] -> signed [deg] or None
+    """Choose the signed turn delta (+angleDeg or -angleDeg) from startDeg
+    that respects the tether rule: never sweep through south (-90/270 deg),
+    and keep at least marginDeg of clearance from south throughout the
+    sweep (a turn that technically avoids crossing south but skims within a
+    few degrees of it is not tether-safe in practice -- a fixed
+    east-starting direction is only safe when the robot actually starts
+    near east; from other headings the safe direction can flip). Of the two
+    candidate directions, prefers whichever keeps the larger margin.
+    Returns None if neither direction clears marginDeg."""
+    candidates: "list[tuple[float, float]]" = []
+    for delta in (angleDeg, -angleDeg):
+        if sweepCrossesAngle(startDeg, delta, -90.0):
+            continue
+        candidates.append((closestApproachToSouthDeg(startDeg, delta), delta))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda c: -c[0])
+    bestMargin, bestDelta = candidates[0]
+    if bestMargin < marginDeg:
+        return None
+    return bestDelta
+
+
 def fitCircle(points: "list[tuple[float, float]]"
              ) -> "tuple[float, float, float, float] | None":
     """Kasa algebraic circle fit over [(x, y), ...] -- purely geometric, same
@@ -512,14 +561,26 @@ def runLeverArmMode(args: argparse.Namespace) -> int:
                   f"{args.geofence_margin:.0f}cm of the field edge -- reposition before turning")
             return 1
 
-        deltaDeg = TURN_ANGLE_DEG if TURN_OMEGA < 0 else -TURN_ANGLE_DEG
-        if sweepCrossesAngle(startYawDeg, deltaDeg, -90.0):
-            print(f"FAIL: a {deltaDeg:+.0f} deg turn from {startYawDeg:+.1f} deg would sweep "
-                  "through south (-90 deg) -- tether rule violation, refusing to command it")
+        # Direction is chosen from the MEASURED starting heading, not fixed:
+        # a fixed east->west-through-north direction is only tether-safe
+        # when the robot actually starts near east. Whichever direction
+        # keeps the larger clearance from south wins.
+        deltaDeg = pickSafeTurnDirection(startYawDeg, TURN_ANGLE_DEG, SOUTH_HEADING_MARGIN_DEG)
+        if deltaDeg is None:
+            print(f"FAIL: no tether-safe {TURN_ANGLE_DEG:.0f} deg turn direction from current "
+                  f"heading {startYawDeg:+.1f} deg keeps >= {SOUTH_HEADING_MARGIN_DEG:.0f} deg "
+                  "clearance from south (-90/270 deg, tether direction) -- reposition before "
+                  "turning")
             return 1
+        omega = -TURN_OMEGA_MAG if deltaDeg > 0 else TURN_OMEGA_MAG  # negative omega increases yaw
+        southMargin = closestApproachToSouthDeg(startYawDeg, deltaDeg)
+        print(f"turn direction: {deltaDeg:+.0f} deg (omega={omega:+.2f} rad/s) chosen from the "
+              f"measured start heading {startYawDeg:+.1f} deg for tether safety -- closest "
+              f"approach to south during the sweep: {southMargin:.1f} deg "
+              f"(>= {SOUTH_HEADING_MARGIN_DEG:.0f} required)")
 
-        angleRad = math.radians(TURN_ANGLE_DEG)
-        requestedTimeoutMs = abs(angleRad / TURN_OMEGA) * 1000.0 * 3.0 + 3000.0  # [ms]
+        angleRad = math.radians(abs(deltaDeg))
+        requestedTimeoutMs = abs(angleRad / TURN_OMEGA_MAG) * 1000.0 * 3.0 + 3000.0  # [ms]
         # Same clamp every move in this script goes through (see
         # clampTimeoutToClearance's own docstring). v_x=v_y=0 here -- an
         # in-place rotation has zero commanded translational speed, so the
@@ -529,11 +590,10 @@ def runLeverArmMode(args: argparse.Namespace) -> int:
         print(f"timeout safety clamp: requested={requestedTimeoutMs:.0f}ms "
               f"camera-confirmed clearance={clearanceMm} (pure rotation, zero translational "
               f"worst case) -> clamped={timeoutMs:.0f}ms")
-        print(f"commanding in-place rotation: omega={TURN_OMEGA:+.2f} rad/s "
-              f"stop_angle={TURN_ANGLE_DEG:.0f} deg timeout={timeoutMs:.0f} ms "
-              "(direction fixed east->north->west, never south, per the tether rule)")
+        print(f"commanding in-place rotation: omega={omega:+.2f} rad/s "
+              f"stop_angle={abs(deltaDeg):.0f} deg timeout={timeoutMs:.0f} ms")
 
-        corrId = proto.move_twist(0.0, 0.0, TURN_OMEGA, stop_angle=angleRad,
+        corrId = proto.move_twist(0.0, 0.0, omega, stop_angle=angleRad,
                                   timeout=timeoutMs, replace=True)
         ack = awaitAck(proto, geofence, corrId)
         moveAcked = ack is not None and ack.ok
