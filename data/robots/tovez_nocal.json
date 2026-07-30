@@ -69,11 +69,11 @@
     "rotational_slip": 1.0,
     "otos_linear_scale": 1.0,
     "otos_angular_scale": 1.0,
-    "rotation_gain": 1.0,
-    "rotation_offset_deg": 0.0,
-    "rotation_gain_neg": 1.0,
-    "rotation_offset_deg_neg": 0.0,
-    "_rotation_calibration_note": "identity = no turn correction. Replace with a measured fit (actual = gain*commanded + offset[deg], per direction) from a camera sweep; see tovez.json's _rotation_calibration_note."
+    "rotation_gain": 1.006,
+    "rotation_offset_deg": 12.1,
+    "rotation_gain_neg": 1.006,
+    "rotation_offset_deg_neg": 12.1,
+    "_rotation_calibration_note": "125-007 (adjacent-sim-plant-rotation-calibration-for-angle-stop-move-overshoot.md): sim-plant-measured, NOT camera-measured -- these correct the SIM plant's own ANGLE-stop coast-down overshoot (WheelPlant's first-order tau=0.13s duty->velocity lag, TestSim/wheel_plant.h -- the wheels keep coasting for a beat after the stop threshold fires, same physical mechanism real hardware's own actuation lag produces, .clasi/knowledge/actuation-latency-delay-in-plan.md), NOT geometry/stiction (contrast tovez.json's own hardware fit). Measured at omega=+/-2.0 rad/s (square_tour.py's own runTurnMove() rate) against SimLoop.get_true_pose(): identity calibration overshoots by a roughly-constant +11.8..+13.0 deg for target angles >=45 deg (45->56.9, 90->103.0, 180->193.0), least-squares-fit over that range to gain~1.006/offset~12.1 deg. Verified after fitting: 90 deg lands at 90.2 (err +0.2), 180 deg at 179.9 (err -0.1); the fit is intentionally NOT tuned for very small angles (<45 deg), which square_tour.py never commands (every corner is exactly 90 deg) and which the coast-down model saturates nonlinearly toward zero anyway (15 deg identity-overshoot measured +6.5, not +13 -- a single affine pair cannot cover both regimes, and this ticket's only consumer needs 90 deg). Requires 125-007's own sim_configure_drivetrain() plumbing (sim_ctypes.cpp/sim_boot_config.py) to take effect at all -- editing this JSON alone was previously a silent no-op for the sim path (SimHarness's own App::RobotLoop never got setRotationCalibration() called before that ticket). Symmetric pos/neg because the sim plant has no directional asymmetry coded (WheelPlant's dv/dt model is sign-symmetric); confirmed by measuring both directions. NOT a substitute for tovez.json's own camera-measured hardware values -- see that file's own note for why hardware needs a DIFFERENT (negative-offset) correction for a different physical reason."
   },
   "control": {
     "_vel_gains_domain": "duty [-1,1] (NezhaMotor MotorVelocityPid); NOT the old PWM-percent scale",

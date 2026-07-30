@@ -354,6 +354,13 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
         ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_int)]
     lib.sim_read_motor_config.restype = None
 
+    # 125-007: Tier-2 boot-only turn-calibration load -- App::RobotLoop::
+    # setRotationCalibration() passthrough, offsets in RADIANS (see
+    # sim_ctypes.cpp's own doc comment on sim_configure_drivetrain()).
+    lib.sim_configure_drivetrain.argtypes = [
+        ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float]
+    lib.sim_configure_drivetrain.restype = None
+
     lib.sim_set_read_hook.argtypes = [ctypes.c_void_p, _SimHookFn, ctypes.c_void_p]
     lib.sim_set_read_hook.restype = None
     lib.sim_set_write_hook.argtypes = [ctypes.c_void_p, _SimHookFn, ctypes.c_void_p]
@@ -532,7 +539,7 @@ class SimLoop:
           (109-002 Architecture Revision 1's "one mechanism, not a
           Sim-specific fork") -- no Tier-1 field selection is
           reimplemented here.
-        - **Tier 2** (the boot-only motor fields with no live wire arm):
+        - **Tier 2** (the boot-only fields with no live wire arm):
           calls ``motor_boot_config_for(config, port)`` (ticket 004's reuse
           of ``gen_boot_config.py``'s own mapping functions) and passes the
           result to the ``sim_configure_motor()`` ctypes export (ticket
@@ -541,7 +548,15 @@ class SimLoop:
           ``planner_boot_config_for()``/``sim_configure_planner()`` --
           was DELETED, 115-003, gut S1 motion-stack excision: nothing in
           the S1 minimal firmware reads a boot-loaded ``msg::PlannerConfig``
-          any more.)
+          any more.) Also calls ``drivetrain_boot_config_for(config)``
+          (125-007) and passes the result to the ``sim_configure_drivetrain()``
+          ctypes export -- ``App::RobotLoop::setRotationCalibration()``'s
+          own one-shot runtime-load surface, the sim-side counterpart of
+          ``main.cpp``'s real-hardware boot seam. Before 125-007 this tier
+          never touched turn calibration at all, so the sim's own
+          ``App::RobotLoop`` stayed at the identity default (gain 1, offset
+          0) regardless of a robot JSON's own
+          ``calibration.rotation_gain``/``rotation_offset_deg`` values.
         - **Tier 3** (119 ticket 001,
           kill-the-silent-off-shaping-config-boundary.md): the live
           ``EstimatorConfigPatch`` wire arm -- ``App::StateEstimator``'s
@@ -607,10 +622,11 @@ class SimLoop:
         config_proto = NezhaProtocol(sim_config_conn)  # type: ignore[arg-type]
         config_proto.set_config(**calibration_kwargs(config))
 
-        # ---- Tier 2: one-shot boot-config load surface (motor only --
-        # the planner half was DELETED, 115-003, gut S1 motion-stack
-        # excision) ---------------------------------------------------------
-        from robot_radio.calibration.sim_boot_config import motor_boot_config_for
+        # ---- Tier 2: one-shot boot-config load surface (motor + drivetrain
+        # rotation calibration -- the planner half was DELETED, 115-003, gut
+        # S1 motion-stack excision) ------------------------------------------
+        from robot_radio.calibration.sim_boot_config import (
+            drivetrain_boot_config_for, motor_boot_config_for)
 
         for port in (1, 2):  # 1=left, 2=right -- same convention as every other port-keyed call
             motor_cfg = motor_boot_config_for(config, port)
@@ -618,6 +634,19 @@ class SimLoop:
                 self._handle, ctypes.c_int(port),
                 ctypes.c_float(motor_cfg["vel_filt_alpha"]),
                 ctypes.c_int(motor_cfg["fwd_sign"]))
+
+        # 125-007: turn calibration -- the sim's own App::RobotLoop otherwise
+        # keeps the identity default (gain 1, offset 0) forever, regardless
+        # of what a robot JSON's calibration.rotation_gain/
+        # rotation_offset_deg say. See sim_configure_drivetrain()'s own
+        # doc comment (sim_ctypes.cpp) for why this tier was missing.
+        drivetrain_cfg = drivetrain_boot_config_for(config)
+        self._lib.sim_configure_drivetrain(
+            self._handle,
+            ctypes.c_float(drivetrain_cfg["rot_gain_pos"]),
+            ctypes.c_float(drivetrain_cfg["rot_offset_pos"]),
+            ctypes.c_float(drivetrain_cfg["rot_gain_neg"]),
+            ctypes.c_float(drivetrain_cfg["rot_offset_neg"]))
 
         # ---- Tier 3: live EstimatorConfigPatch wire arm (119 ticket 001) ---
         est_kwargs = estimator_kwargs(config)

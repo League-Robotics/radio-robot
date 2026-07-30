@@ -42,6 +42,7 @@ reconstructs the raw-dict shape via ``model_dump()`` so the SAME
 """
 from __future__ import annotations
 
+import math
 import sys
 from pathlib import Path
 from typing import Any
@@ -124,4 +125,37 @@ def motor_boot_config_for(config: Any, port: int) -> "dict[str, float | int]":
     return {
         "vel_filt_alpha": filt_alpha,
         "fwd_sign": fwd_signs[port - 1],
+    }
+
+
+def drivetrain_boot_config_for(config: Any) -> "dict[str, float]":
+    """Return ``{"rot_gain_pos", "rot_offset_pos", "rot_gain_neg",
+    "rot_offset_neg"}`` (offsets in RADIANS) for
+    ``sim_configure_drivetrain()`` (125-007,
+    adjacent-sim-plant-rotation-calibration-for-angle-stop-move-overshoot.md)
+    -- the sim-side counterpart of ``main.cpp``'s own boot seam, which reads
+    the identical four ``calibration.rotation_gain``/``rotation_offset_deg``/
+    ``rotation_gain_neg``/``rotation_offset_deg_neg`` JSON keys via
+    ``gen_boot_config.py``'s ``rotation_calibration_for_config()`` and calls
+    ``App::RobotLoop::setRotationCalibration()`` once at boot.
+
+    Before this function (and its ctypes call site,
+    ``SimLoop.configure_from_robot()``) existed, nothing in the sim path
+    ever called ``setRotationCalibration()`` -- the sim's own
+    ``App::RobotLoop`` kept the identity default (gain 1, offset 0)
+    permanently, so editing a robot JSON's rotation calibration fields was a
+    silent no-op for ``square_tour.py --sim``.
+
+    Degrees->radians conversion happens HERE (mirroring ``main.cpp``'s own
+    ``kDegToRad`` conversion at its boot seam) so the ctypes export itself
+    stays a pure passthrough -- ``rotation_calibration_for_config()``
+    returns the offsets in degrees (the JSON's own unit).
+    """
+    cfg = _as_cfg_dict(config)
+    gain_pos, offset_pos_deg, gain_neg, offset_neg_deg = gbc.rotation_calibration_for_config(cfg)
+    return {
+        "rot_gain_pos": gain_pos,
+        "rot_offset_pos": math.radians(offset_pos_deg),
+        "rot_gain_neg": gain_neg,
+        "rot_offset_neg": math.radians(offset_neg_deg),
     }
