@@ -117,6 +117,37 @@ const char* verbName(msg::Verb verb) {
   return nullptr;
 }
 
+// classifyTlmArg() -- Part 4's case-insensitive cleartext token match for
+// `TLM:<data>` (telemetry-emit-policy-rebuild-spec.md). A real binary
+// telemetry frame only ever travels robot->host (this file's own
+// dispatchLine() doc comment on the TLM verb), so an inbound `TLM:` line's
+// data is ALWAYS one of these cleartext tokens, never a COBS+CRC binary
+// body -- safe to strip a single trailing '\r' before comparing, the same
+// allowance dispatchLine()'s no-colon branch already makes for a raw
+// terminal's "\r\n" (issue Part 8 criterion 15, human-typed TLM:ON).
+App::Comms::TlmAction classifyTlmArg(const uint8_t* data, uint16_t len) {
+  if (len > 0 && data[len - 1] == '\r') --len;
+
+  auto matches = [data, len](const char* token) {
+    const size_t tokenLen = std::strlen(token);
+    if (tokenLen != len) return false;
+    for (size_t i = 0; i < tokenLen; ++i) {
+      char a = static_cast<char>(data[i]);
+      char b = token[i];
+      if (a >= 'a' && a <= 'z') a = static_cast<char>(a - 'a' + 'A');
+      if (b >= 'a' && b <= 'z') b = static_cast<char>(b - 'a' + 'A');
+      if (a != b) return false;
+    }
+    return true;
+  };
+
+  if (matches("NOW")) return App::Comms::TlmAction::kFrame;
+  if (matches("ON")) return App::Comms::TlmAction::kSetOn;
+  if (matches("AUTO")) return App::Comms::TlmAction::kSetAuto;
+  if (matches("OFF")) return App::Comms::TlmAction::kSetOff;
+  return App::Comms::TlmAction::kUnrecognized;
+}
+
 // bodyKindToVerb() -- ReplyEnvelope::BodyKind (envelope.proto) and
 // msg::Verb (commands.proto) are two independently-generated enums over
 // the SAME three reply shapes (TLM/OK/ERR); this is the one seam that
@@ -234,18 +265,25 @@ void Comms::dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& 
     return;
   }
 
-  // A bare `TLM` -- the verb with NO ':' and so no body -- is a telemetry
-  // REQUEST, not a malformed telemetry frame. Since telemetry went silent
-  // at rest there was no way to ask "what is your state right now?" and get
-  // the full frame back; STATUS answers in cleartext but carries only a
-  // handful of flags, not pose/encoders/sensors. This is the pull half of
-  // what used to be push-only.
-  //
-  // Requesting is unambiguous precisely because a real inbound TLM frame
-  // always carries a ':'-prefixed COBS body, even an empty one -- the same
-  // property the no-':' branch above relies on.
-  if (entry->verb == msg::Verb::TLM && colonPos >= lineLen) {
-    telemetryRequested_ = true;
+  // TLM's whole inbound surface (Part 4, telemetry-emit-policy-rebuild-
+  // spec.md) is intercepted HERE, before the registry's `binary` flag is
+  // even consulted: a real binary telemetry frame only ever travels
+  // robot->host, so an inbound, robot-ward `TLM`/`TLM:<data>` line is
+  // NEVER a COBS+CRC frame to dearmor -- it is always one of the cleartext
+  // control tokens below. Bare `TLM` (no ':', no body -- same property the
+  // no-':' branch above relies on) and `TLM:NOW` are both a telemetry
+  // REQUEST (kFrame): since telemetry went silent at rest there was no way
+  // to ask "what is your state right now?" and get the full frame back;
+  // STATUS answers in cleartext but carries only a handful of flags, not
+  // pose/encoders/sensors. `TLM:ON`/`TLM:AUTO`/`TLM:OFF` (case-insensitive)
+  // stage a mode change; anything else after the ':' stages kUnrecognized.
+  // Comms only STAGES the action and remembers which transport asked --
+  // Telemetry never parses wire text, and Comms holds no Telemetry& to
+  // apply the mode itself, so RobotLoop::cycle() is the one that consumes
+  // takeTlmAction() and calls tlm_.setMode()/emit()/sendTlmReply().
+  if (entry->verb == msg::Verb::TLM) {
+    tlmReplyTransport_ = &t;
+    tlmAction_ = (colonPos >= lineLen) ? TlmAction::kFrame : classifyTlmArg(dataPtr, dataLen);
     return;
   }
 
@@ -442,15 +480,29 @@ void Comms::sendBanner() {
 // and unambiguous to both a person and a parser. `flags` is hex because it
 // is a bit field and every reader of it wants bits, not a decimal.
 void Comms::sendStatus(Transport& t) {
+  // tlm= (Part 4): the current TlmMode, spelled the same way the `TLM:`
+  // command surface itself is spelled -- lowercase, since every other
+  // STATUS field is lowercase and this one is meant to be read by both a
+  // human at a terminal and a host parser. status_.tlmMode is the raw
+  // App::TlmMode enum value (0/1/2) RobotLoop copies in each cycle
+  // (Comms::Status's own doc comment) -- never derived here.
+  const char* tlmStr = "auto";
+  switch (status_.tlmMode) {
+    case 0: tlmStr = "off"; break;
+    case 1: tlmStr = "auto"; break;
+    case 2: tlmStr = "on"; break;
+    default: break;  // unreachable: only 0/1/2 are ever written
+  }
+
   char line[128];
   std::snprintf(line, sizeof(line),
                 "STATUS:ready=%d:active=%d:connL=%d:connR=%d:otos=%d"
-                ":wedge=%d:flags=0x%lx",
+                ":wedge=%d:flags=0x%lx:tlm=%s",
                 status_.ready ? 1 : 0, status_.active ? 1 : 0,
                 status_.wheelLeftConnected ? 1 : 0,
                 status_.wheelRightConnected ? 1 : 0,
                 status_.otosPresent ? 1 : 0, status_.wedged ? 1 : 0,
-                static_cast<unsigned long>(status_.flags));
+                static_cast<unsigned long>(status_.flags), tlmStr);
   t.sendReliable(line);
 }
 
@@ -462,20 +514,50 @@ void Comms::sendStatus(Transport& t) {
 // exactly how the old help text died.
 //
 // Binary verbs are skipped: they need a COBS+CRC frame and cannot be typed,
-// so listing them would advertise commands a human cannot use.
+// so listing them would advertise commands a human cannot use -- EXCEPT
+// TLM (Part 4, telemetry-emit-policy-rebuild-spec.md): the registry still
+// marks it `binary` (a real TLM frame travels robot->host as one), but an
+// INBOUND TLM line is always this ticket's cleartext control surface
+// (dispatchLine()'s own doc comment on the TLM verb) -- a human CAN type
+// it, so it is listed here too, with its own argument grammar in place of
+// the bare verb name.
 void Comms::sendHelp(Transport& t) {
-  char line[160];
+  char line[192];
   std::size_t n = 0;
   n += static_cast<std::size_t>(std::snprintf(line, sizeof(line), "HELP:"));
   for (std::size_t i = 0; i < msg::kVerbCount && n + 1 < sizeof(line); ++i) {
     const msg::VerbEntry& e = msg::kVerbTable[i];
-    if (e.binary) continue;
+    if (e.binary && e.verb != msg::Verb::TLM) continue;
+    const char* token = (e.verb == msg::Verb::TLM) ? "TLM[:NOW|ON|AUTO|OFF]" : e.name;
     const int written = std::snprintf(line + n, sizeof(line) - n, "%s%s",
-                                      n > 5 ? " " : "", e.name);
+                                      n > 5 ? " " : "", token);
     if (written <= 0) break;
     n += static_cast<std::size_t>(written);
   }
   t.sendReliable(line);
+}
+
+// sendTlmReply -- see comms.h's own doc comment for the full contract
+// (call AFTER setStatus() has the NEW mode). No pending-transport guard
+// needed beyond the null check: tlmReplyTransport_ is only ever non-null
+// after dispatchLine() staged a real TlmAction on the same call chain that
+// produced the `action` argument here.
+void Comms::sendTlmReply(TlmAction action) {
+  if (tlmReplyTransport_ == nullptr) return;
+  switch (action) {
+    case TlmAction::kSetOff:
+    case TlmAction::kSetAuto:
+    case TlmAction::kSetOn:
+      sendStatus(*tlmReplyTransport_);
+      break;
+    case TlmAction::kUnrecognized:
+      sendHelp(*tlmReplyTransport_);
+      break;
+    case TlmAction::kNone:
+    case TlmAction::kFrame:
+    default:
+      break;  // kFrame's reply is the forced telemetry frame emit() sends
+  }
 }
 
 void Comms::sendReady() {

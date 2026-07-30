@@ -1019,8 +1019,12 @@ is corrected to cite this trace.), bit 7
 aggregate exists yet), bit 9 `kFlagFaultCommsMalformed`
 (`Comms::malformedCount() > 0`), bit 10 `kFlagEventDeadmanExpired` (116:
 ORPHANED — its producer, `Deadman::expired()`, was deleted along with
-`App::Deadman`; nothing sets this bit any more, see §6), bit 11
-`kFlagEventBootReady` (`Preamble::done()`'s first-true transition), bit 12
+`App::Deadman`; nothing sets this bit any more, see §6), bit 11 RESERVED
+(125-002, telemetry-emit-policy-rebuild-spec.md Part 1 item 8: formerly the
+boot-ready event bit, `Preamble::done()`'s first-true transition — deleted
+outright, not merely orphaned like bit 10: it was a one-shot latch whose
+transition was unobservable by construction, and the `READY` cleartext line
+already announces boot completion), bit 12
 `kFlagEventConfigApplied` (declared, not yet wired), bits 13/14
 `kFlagLinePresent`/`kFlagColorPresent` (see §2's line/color polling note),
 bit 15 `kFlagFaultMoveTimeout` (116: wired — set on the cycle an active

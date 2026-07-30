@@ -107,6 +107,14 @@ class Rig:
         detection time to finish before the first command is sent; any
         telemetry frames queued during that window are drained before
         returning so a caller's first `read_tlm()` only sees fresh pushes.
+
+        125-005 (telemetry-emit-policy-rebuild-spec.md Part 7): under the
+        new `kAuto` default a PARKED robot emits nothing unsolicited, so
+        every `Rig`-based script -- including this class's own smoke check
+        below, which reads a pre-command encoder BASELINE before the first
+        `twist()` -- would otherwise race a silent wire and see no frames at
+        all. `Rig.open()` is the one connect path every `rig_*.py` script
+        shares, so `TLM:ON` is sent here once rather than in each caller.
         """
         conn = SerialConnection(port=port, mode=mode)
         info = conn.connect()
@@ -114,6 +122,7 @@ class Rig:
             raise ConnectionError(f"connect failed: {info}")
         time.sleep(settle)
         rig = cls(conn)
+        rig.proto.tlmOn()
         rig.proto.read_pending_binary_tlm_frames()
         return rig
 
@@ -155,7 +164,14 @@ class Rig:
 
     def close(self) -> None:
         """Guaranteed stop + disconnect — motors must never be left
-        running (`.claude/rules/hardware-bench-testing.md`)."""
+        running (`.claude/rules/hardware-bench-testing.md`).
+
+        `TLM:OFF` undoes `Rig.open()`'s own `tlmOn()` (125-005) -- best
+        effort, alongside the estop(), before the port goes away."""
+        try:
+            self.proto.tlmOff()
+        except Exception:
+            pass
         try:
             self.proto.estop()
         except Exception:

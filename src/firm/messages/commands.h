@@ -16,6 +16,9 @@ enum class Verb : uint8_t {
     VER = 4,
     DEVICE = 5,
     PONG = 6,
+    READY = 15,
+    STATUS = 16,
+    HELP = 17,
     MOVE = 7,
     CONFIG = 8,
     STOP = 9,
@@ -37,13 +40,16 @@ struct VerbEntry {
     bool binary;
 };
 
-constexpr VerbEntry kVerbTable[14] = {
+constexpr VerbEntry kVerbTable[17] = {
     { Verb::HELLO, "HELLO", false },
     { Verb::PING, "PING", false },
     { Verb::ID, "ID", false },
     { Verb::VER, "VER", false },
     { Verb::DEVICE, "DEVICE", false },
     { Verb::PONG, "PONG", false },
+    { Verb::READY, "READY", false },
+    { Verb::STATUS, "STATUS", false },
+    { Verb::HELP, "HELP", false },
     { Verb::MOVE, "MOVE", true },
     { Verb::CONFIG, "CONFIG", true },
     { Verb::STOP, "STOP", true },
@@ -53,7 +59,7 @@ constexpr VerbEntry kVerbTable[14] = {
     { Verb::OK, "OK", true },
     { Verb::ERR, "ERR", true },
 };
-constexpr uint8_t kVerbCount = 14;
+constexpr uint8_t kVerbCount = 17;
 
 }  // namespace msg
 

@@ -76,9 +76,9 @@ def _drain(proto: NezhaProtocol) -> list[TLMFrame]:
     return proto.read_pending_binary_tlm_frames()
 
 
-def _wait_for_boot_ready(proto: NezhaProtocol, timeout: float = 3.0) -> bool:  # [s]
-    """Poll telemetry until `kFlagEventBootReady` (flags bit 11) is observed,
-    or `timeout` elapses -- 125-001
+def _wait_for_boot_ready(connect_info: dict) -> bool:
+    """Report whether the robot was observed ready before its first real
+    command may be sent -- 125-001
     (bench-move-commands-intermittently-never-reach-firmware.md).
 
     Root cause: `SerialConnection.connect()`'s own HELLO-classify + PING
@@ -92,18 +92,21 @@ def _wait_for_boot_ready(proto: NezhaProtocol, timeout: float = 3.0) -> bool:  #
     still does not EXECUTE: firmware deliberately does not act on a command
     before every device is probed (executing early against a not-yet-
     resolved motor/OTOS would be the genuinely unsafe alternative, not the
-    fix). This script's OWN first real command therefore needs the robot to
-    actually be ready, not merely reachable -- waits for the SAME signal
-    `move_soak.py`/`tlm_log.py` already read off `Telemetry.flags` bit 11.
-    Returns False (never raises) on timeout so a caller can report it as
-    positive evidence of a regression rather than an opaque hang."""
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        for f in proto.read_pending_binary_tlm_frames():
-            if f.event_boot_ready:
-                return True
-        time.sleep(0.01)
-    return False
+    fix).
+
+    125-005 (telemetry-emit-policy-rebuild-spec.md Part 7): this used to
+    poll telemetry for `kFlagEventBootReady` (flags bit 11), which 125-002
+    DELETED outright (the bit never sets any more, under any TLM mode) --
+    that whole flags-word signal is gone, not just harder to observe under
+    `kAuto`. Readiness is now `SerialConnection.connect()`'s own job: it
+    already waits for the unsolicited `READY` cleartext line (falling back
+    to the legacy flags-word bit for pre-READY firmware) before returning,
+    and reports the outcome as `info["ready"]` -- see that method's own
+    docstring. This function is kept as the call site's existing entry
+    point, now just reading that field rather than polling telemetry itself
+    (connect() already did the waiting, before this is ever called).
+    """
+    return bool(connect_info.get("ready"))
 
 
 def _watch(proto: NezhaProtocol, duration: float,  # [s]
@@ -562,14 +565,15 @@ def main() -> int:
     proto = NezhaProtocol(conn)
     print(f"connected: port={args.port} mode={info.get('mode')}")
 
-    # 125-001: wait for the robot to actually be ready (kFlagEventBootReady)
-    # before sending the first real command -- connect() itself only proves
-    # the link answers HELLO/PING, not that RobotLoop::boot() has finished
-    # probing every device. See _wait_for_boot_ready()'s own doc comment.
-    if _wait_for_boot_ready(proto):
+    # 125-001: wait for the robot to actually be ready before sending the
+    # first real command -- connect() itself only proves the link answers
+    # HELLO/PING, not that RobotLoop::boot() has finished probing every
+    # device. 125-005: readiness is now connect()'s own job (the READY
+    # line); see _wait_for_boot_ready()'s own doc comment.
+    if _wait_for_boot_ready(info):
         print("boot_ready observed -- robot is ready for the first MOVE")
     else:
-        print("WARNING: kFlagEventBootReady not observed within timeout -- "
+        print("WARNING: boot-ready (READY line) not observed by connect() -- "
               "proceeding anyway (scenario_distance_stop's own checks will "
               "surface whatever the robot actually does)")
 

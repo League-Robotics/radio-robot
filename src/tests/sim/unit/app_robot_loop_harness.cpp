@@ -2635,6 +2635,29 @@ void scenarioEncoderAgesAreIndependentAndReflectRealCollectSkew() {
             "(robot_loop.cpp's own request/settle/collect/clear/request/settle/collect schedule)");
 }
 
+// ===========================================================================
+// TLM: command surface (125-003, telemetry-emit-policy-rebuild-spec.md
+// Part 4) -- RELOCATED by 125-006 to
+// src/tests/sim/system/robot_loop_tlm_harness.cpp
+// (test_robot_loop_tlm.py). This whole file was ALREADY -DHOST_BUILD
+// compile-broken before sprint 125 started (an unrelated, independent
+// motion-library rework -- "Planner integration," dated 2026-07-26 per
+// src/sim/sim_harness.h's own comments -- changed App::RobotLoop's
+// constructor from 15 to 16 arguments and removed App::Drive::
+// gainsLeft()/gainsRight(); this file's LiveFixture and every other
+// RobotLoop-construction call site here still use the pre-Planner shape),
+// so the 4 scenarios 125-003 originally wrote here never actually ran --
+// see test_app_robot_loop.py's own xfail marker. 125-006 (issue Part 8's
+// own acceptance ticket) declined to leave acceptance resting on dead
+// code and moved them onto TestSim::SimHarness (src/sim/sim_harness.h),
+// which IS current on the Planner/Configurator shape (it mirrors
+// main.cpp's own composition root) -- see the relocated file's own header
+// for the full rationale. Repairing THIS file's ~20 RobotLoop
+// construction call sites for the Planner rework is a separate,
+// substantial, unrelated motion-library-alignment undertaking, tracked
+// independently of telemetry-emit-policy work.
+// ===========================================================================
+
 }  // namespace
 
 int main() {
@@ -2663,6 +2686,9 @@ int main() {
   scenarioClampToPositionWireBoundClampsAndFlagsOutOfRangeValues();
 
   scenarioEncoderAgesAreIndependentAndReflectRealCollectSkew();
+
+  // TLM command-surface scenarios relocated 125-006 -- see the comment
+  // block above this main() where they used to live.
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::RobotLoop scenarios passed\n");

@@ -396,6 +396,13 @@ def main() -> int:
     print(f"connected: {info}")
 
     try:
+        # 125-005 (telemetry-emit-policy-rebuild-spec.md Part 7): under the
+        # new kAuto default a parked robot emits nothing unsolicited -- and
+        # this script's very first check below is a 1s PARKED bus-health
+        # read (no drive commands), plus a later 5s idle rest-creep check.
+        # Stream-always for the whole session.
+        proto.tlmOn()
+
         # --- passive sensor/bus-health read ---------------------------------
         print("\n== Bus-health / sensor-alive read (no drive commands) ==")
         frames = []
@@ -452,6 +459,10 @@ def main() -> int:
             run_turn_trial(proto, -90.0, report, f"turn -90deg #{i+1}")
 
     finally:
+        try:
+            proto.tlmOff()
+        except Exception:
+            pass
         try:
             proto.estop()
         except Exception:

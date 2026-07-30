@@ -437,10 +437,15 @@ per-cycle `MoveQueue::tick()` schedule, land-at-zero completion,
 approach shaping (`Motion::VelocityShaper`), the "no completion ack for a
 flushed-while-pending `Move`" AS-BUILT behavior, the no-deadman
 structural safety property (SUC-053), velocity staging (`App::Drive`),
-`STOP`'s effect, and the config-completeness gate are all identical to
+and the config-completeness gate are all identical to
 [`docs/protocol-v4.md`](protocol-v4.md) §5.1-§5.7. This sprint's own
 `RobotLoop`/`Telemetry` restructure (124-009) changed HOW state is
 assembled and projected (§8 below), not this execution model.
+
+**`STOP`'s effect is the one exception** — protocol-v4.md §5.6 describes
+the OLD, pre-two-stops-rework `STOP` (immediate zero + queue flush, no
+`ESTOP` arm existed yet). That is now `ESTOP`'s effect, not `STOP`'s — see
+§3.1 "Two stops" above for the current, split semantics.
 
 **New this sprint, orthogonal to the execution model above: position
 rebaseline.** `EncoderReading.position` (§8.1) accumulates monotonically
@@ -746,8 +751,19 @@ assert ack is not None and ack.ok
 proto.move_wheels(100.0, 100.0, stop_distance=300.0, timeout=4000.0,
                    replace=False)
 
-# Panic stop.
+# Planned stop: a queue entry that waits behind whatever Move is already
+# active, then ramps down at the decel ceiling once its turn comes. NOT a
+# halt-now -- see §3.1 "Two stops".
 proto.stop()
+
+# Panic stop: halt everything NOW -- zeroes App::Drive's targets AND
+# clears the planner's active + pending queue in the same cycle. This is
+# what every "halt now" call site (a geofence breach, Ctrl-C, an
+# emergency-stop button) must call, never stop() above. Measured on
+# hardware (2026-07-29): a stop() sent 0.5s into an in-flight 400mm leg
+# rode out the ENTIRE leg (39.8cm) before taking effect; estop() on the
+# same repro measured 2.9cm.
+proto.estop()
 
 # Live-tune a motor gain (persisted across power-cycle, §6).
 proto.config(**{"pid.kp": 0.02})

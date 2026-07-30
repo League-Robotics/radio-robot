@@ -505,6 +505,56 @@ void scenarioRequestCollectPairingYieldsExpectedPositionVelocity() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the pairing");
 }
 
+// 5b. Ticket 125-001 (telemetry-emit-policy-rebuild-spec.md, Part 2):
+//     "motor velocity must read 0 until it is real." velocity() is a
+//     difference quotient -- with only one collected sample there is no
+//     prior sample to diff against, so NezhaMotor::tick() must treat the
+//     FIRST post-construction sample as a baseline-only anchor and leave
+//     velocity() at 0.0f, never fabricating a rate from an uninitialized/
+//     phantom pre-boot position. Deliberately scripts a NONZERO position
+//     for that first sample (3.0mm) at a NONZERO nowUs (20ms): a naive
+//     per-tick diff with no anchor concept would compute (3.0 - 0.0) /
+//     0.020 == 150 mm/s against the phantom zero-initialized baseline --
+//     exactly the bogus-nonzero-velocity-on-a-never-moved-robot defect
+//     this ticket fixes at the source. The second sample then must yield
+//     the real, ordinary difference quotient -- unchanged behavior from
+//     today, just no longer computed off a meaningless first sample.
+void scenarioVelocityReadsZeroUntilTwoValidSamplesCollected() {
+  beginScenario("velocity() reads 0 until two valid samples are collected (125-001, Part 2)");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor motor(plant, baseNezhaConfig());
+
+  // First sample: connect + collect one reading. Nonzero position, nonzero
+  // nowUs -- if this were still fabricating a rate from the pre-boot
+  // baseline, velocity() would read 150.0f here, not 0.0f.
+  scriptEncoderRequestCollect(bus, wireAddr, 3.0f);
+  motor.requestSample();
+  motor.tick(20000);   // nowUs=20000 (20ms)
+
+  checkTrue(motor.connected(), "first sample: request+collect pairing reports connected");
+  checkFloatEq(motor.position(), 3.0f, "first sample: position reflects the collected sample");
+  checkFloatEq(motor.velocity(), 0.0f,
+               "first sample: velocity() is 0 -- one sample is a baseline anchor only, "
+               "never a fabricated rate against the pre-boot phantom baseline");
+
+  // Second sample: a genuinely new reading -- velocity() now reflects the
+  // real difference quotient between the two collected samples.
+  scriptEncoderRequestCollect(bus, wireAddr, 8.0f);
+  motor.requestSample();
+  motor.tick(40000);   // nowUs=40000 (20ms later)
+
+  checkFloatEq(motor.position(), 8.0f, "second sample: position reflects the new reading");
+  checkFloatEq(motor.velocity(), 250.0f,
+               "second sample: velocity() == (8.0 - 3.0)mm / 0.020s -- the real, unchanged "
+               "difference-quotient behavior, now correctly gated on having two samples");
+
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0,
+              "no script under-run across the two-sample-floor sequence");
+}
+
 // 6. Duty passthrough (NEW, 125-003 -- replaces the deleted PID-chase
 //    coverage): setDuty()->tick() writes EXACTLY the given duty through the
 //    dwell/deadband shaping -- NezhaMotor no longer has any velocity
@@ -805,6 +855,7 @@ int main() {
   scenarioStandstillGuardedResetGatesOnRestTicks();
   scenarioWedgeLatchAndSuspectDeriveAsBefore();
   scenarioRequestCollectPairingYieldsExpectedPositionVelocity();
+  scenarioVelocityReadsZeroUntilTwoValidSamplesCollected();
   scenarioSetDutyTickWritesExactlyTheGivenDutyThroughShaping();
   scenarioNakedStopWriteIsRetriedNextTickNotLatched();
   scenarioApplyTravelCalibTakesEffectSameBootNoReflash();

@@ -34,6 +34,13 @@ def main() -> int:
     proto = NezhaProtocol(conn)
     print("waiting out boot preamble...")
     time.sleep(6.0)
+    # 125-005 (telemetry-emit-policy-rebuild-spec.md Part 7): under the new
+    # kAuto default a parked robot emits nothing unsolicited -- and the
+    # first level's own pre-move "anchor positions" poll below reads a
+    # baseline frame before the run's first move_wheels(), on a robot that
+    # has never moved. Without this, `start` stays None and the run crashes
+    # computing `end.enc_left.position - start.enc_left.position`.
+    proto.tlmOn()
     proto.read_pending_binary_tlm_frames()
 
     results = []  # (duty, meanSpeedL, rippleL, meanSpeedR, rippleR)
@@ -70,6 +77,10 @@ def main() -> int:
         results.append((duty, meanL, ripL, meanR, ripR))
         print(f"eff duty {duty:.2f} (cmd {v:5.1f} mm/s): "
               f"L {meanL:6.1f} +-{ripL:5.1f}   R {meanR:6.1f} +-{ripR:5.1f}")
+    try:
+        proto.tlmOff()
+    except Exception:
+        pass
     conn.disconnect()
 
     import csv

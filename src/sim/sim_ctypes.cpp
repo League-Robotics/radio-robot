@@ -504,6 +504,33 @@ void sim_read_motor_config(SimHandle h, int port, float* velFiltAlpha, int* fwdS
   *fwdSign = cfg.fwdSign;
 }
 
+// 125-007 (adjacent-sim-plant-rotation-calibration-for-angle-stop-move-
+// overshoot.md): thin call-through to App::RobotLoop::setRotationCalibration()
+// (robot_loop.h), the SAME boot-only turn-calibration seam main.cpp uses for
+// real hardware (main.cpp reads drivetrainConfig.rotation_gain_pos/
+// rotation_offset/rotation_gain_neg/rotation_offset_neg, converts the
+// offsets deg->rad, and calls this exact method once at boot). Before this
+// export existed, nothing in the sim path ever called
+// setRotationCalibration() at all -- SimHarness's own App::RobotLoop kept
+// the identity default (gain 1, offset 0) permanently, regardless of what a
+// robot JSON's calibration.rotation_gain/rotation_offset_deg said, which is
+// why editing those JSON fields alone was a silent no-op for
+// square_tour.py --sim's ANGLE-stop overshoot. `robotLoop()` is already a
+// public accessor (sim_harness.h) -- no new SimHarness method needed, this
+// export just gives it a ctypes-callable C ABI shape like every other
+// Tier-2 export in this file.
+//
+// offsetPos/offsetNeg are [rad] here, matching setRotationCalibration()'s
+// own contract and its own (unit-free, `// [rad]`-tagged) parameter names
+// -- the deg->rad conversion happens host-side (sim_boot_config.py's
+// drivetrain_boot_config_for(), mirroring main.cpp's own conversion at its
+// seam) so this export stays a pure passthrough, no unit-conversion logic
+// of its own.
+void sim_configure_drivetrain(SimHandle h, float gainPos, float offsetPos,  // [rad]
+                              float gainNeg, float offsetNeg) {  // [rad]
+  asHarness(h)->robotLoop().setRotationCalibration(gainPos, offsetPos, gainNeg, offsetNeg);
+}
+
 // ---- Hook surface ----
 
 void sim_set_read_hook(SimHandle h, SimHookFn cb, void* ctx) {

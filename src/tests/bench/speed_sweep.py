@@ -35,6 +35,13 @@ def main() -> int:
     proto = NezhaProtocol(conn)
     print("waiting out boot preamble...")
     time.sleep(6.0)
+    # 125-005 (telemetry-emit-policy-rebuild-spec.md Part 7): under the new
+    # kAuto default a parked robot emits nothing unsolicited -- and the
+    # first level's own pre-move baseline poll below reads a frame before
+    # the run's first move_wheels(), on a robot that has never moved.
+    # Without this, `start` stays None and the run crashes computing
+    # `end.enc_left.position - start.enc_left.position`.
+    proto.tlmOn()
     proto.read_pending_binary_tlm_frames()
 
     results = []  # (cmd_signed, meanL, ripL, meanR, ripR)
@@ -85,6 +92,10 @@ def main() -> int:
             regime = "crawl" if level < GAIN * CRAWL_PULSE else "cont."
             print(f"cmd {v:+7.1f} ({regime}): L {meanL:+7.1f} +-{ripL:5.1f}"
                   f"   R {meanR:+7.1f} +-{ripR:5.1f}")
+    try:
+        proto.tlmOff()
+    except Exception:
+        pass
     conn.disconnect()
 
     import csv

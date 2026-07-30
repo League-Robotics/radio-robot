@@ -246,6 +246,11 @@ def main() -> int:
             return 2
         print(f"  connected: mode={info.get('mode')}")
         proto = NezhaProtocol(conn)
+        # 125-005 (telemetry-emit-policy-rebuild-spec.md Part 7): under the
+        # new kAuto default a robot stopped between steps (settle/config
+        # windows below) emits nothing unsolicited -- stream-always for the
+        # whole session rather than relying on each twist() to restart it.
+        proto.tlmOn()
         time.sleep(1.5)  # let boot-time telemetry queue drain before the first command
         proto.read_pending_binary_tlm_frames()
 
@@ -326,6 +331,10 @@ def main() -> int:
         if csv_file is not None:
             csv_file.close()
         if proto is not None:
+            try:
+                proto.tlmOff()
+            except Exception as exc:
+                print(f"  WARN: tlmOff() failed during cleanup: {exc}")
             try:
                 proto.estop()
             except Exception as exc:

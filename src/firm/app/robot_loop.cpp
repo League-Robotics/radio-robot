@@ -333,25 +333,19 @@ void RobotLoop::boot() {
     bootState.otos.connected = preamble_.otosConnected();
     tlm_.update(bootState);
     // NOT forced. Forcing here pushed one frame per probe pass -- a ~5s
-    // flood on every reset, and since opening a serial port asserts DTR and
-    // resets the board, that meant a wall of binary every single time a
-    // monitor was attached, ahead of the DEVICE banner and READY.
+    // flood on every reset, ahead of the DEVICE banner and READY.
     //
-    // The report-on-change arm already emits the boot frames that carry
-    // information: motors connecting, OTOS connecting, kFlagEventBootReady
-    // coming up. Those are a handful of frames, each marking a real
-    // transition, instead of a per-pass stream of identical ones.
+    // Under the three-mode emit predicate (issue Part 3: mode_ defaults
+    // kAuto, everMoved_ is still false, no motion is possible before the
+    // preamble even finishes) this emits nothing on its own -- a silent
+    // host sees zero binary bytes during boot. A host that DOES transmit
+    // during boot still gets served: a bare TLM request forces one frame
+    // (reason 1), and any early command's NACK rides the ack ring (reason
+    // 3, rejectDuringBoot() above) -- both honored in every mode.
     tlm_.emit(bootState.time.cycleStart);
 
     sleeper_.sleepMillis(kPreamblePace);  // paces probes AND yields (radio RX)
   }
-  tlm_.setLiveFlag(kFlagEventBootReady, true);
-
-  // Arm report-on-change now, adopting the settled boot state as the
-  // baseline. Everything before this point -- motors connecting, the OTOS
-  // probe, boot-ready itself -- is deliberately unreported: powering the
-  // robot on should put the banner and READY in a terminal and nothing else.
-  tlm_.markBootComplete();
 
   comms_.sendBanner();
   // READY last, and only here: past this point the loop dispatches commands
@@ -543,19 +537,40 @@ void RobotLoop::cycle() {
     publishTiming(cycleStartUs);
 
     tlm_.update(state_);
-    tlm_.tickBootSettle();  // arms report-on-change once boot state settles
-    // A bare `TLM` line is a request for one frame NOW -- force past the
-    // idle gate, since "nothing is happening" is exactly the state someone
-    // asking is trying to observe. Still subject to the cadence gate, so a
-    // request storm cannot outrun the wire.
-    tlm_.emit(state_.time.cycleStart, /*force=*/comms_.takeTelemetryRequest());
+
+    // TLM: command surface (Part 4, telemetry-emit-policy-rebuild-spec.md):
+    // Comms parsed a `TLM`/`TLM:...` line's argument and staged the
+    // result; Telemetry never parses wire text, so RobotLoop is the one
+    // that turns a recognized mode token into a Telemetry::setMode() call,
+    // at the same consume point the pre-Part-4 bare-TLM request used to be
+    // read from alone.
+    const Comms::TlmAction tlmAction = comms_.takeTlmAction();
+    switch (tlmAction) {
+      case Comms::TlmAction::kSetOff:  tlm_.setMode(TlmMode::kOff);  break;
+      case Comms::TlmAction::kSetAuto: tlm_.setMode(TlmMode::kAuto); break;
+      case Comms::TlmAction::kSetOn:   tlm_.setMode(TlmMode::kOn);   break;
+      case Comms::TlmAction::kNone:
+      case Comms::TlmAction::kFrame:
+      case Comms::TlmAction::kUnrecognized:
+      default:
+        break;  // no mode change
+    }
+
+    // A bare `TLM`/`TLM:NOW` line is a request for one frame NOW -- force
+    // past the mode-gated unsolicited check (issue Part 3, reason 1), since
+    // "nothing is happening" is exactly the state someone asking is trying
+    // to observe. Still subject to the cadence gate, so a request storm
+    // cannot outrun the wire.
+    tlm_.emit(state_.time.cycleStart, /*force=*/tlmAction == Comms::TlmAction::kFrame);
 
     // Refresh what STATUS answers from. Sourced from the SAME state_ the
     // telemetry projection just used, so the queryable line and the wire
     // frame can never disagree -- STATUS is a second VIEW of the state, not
     // a second copy of it. Cheap enough to do unconditionally; it must run
     // even when the idle gate suppressed the frame above, since answering
-    // STATUS on a parked robot is precisely the case it exists for.
+    // STATUS on a parked robot is precisely the case it exists for. tlmMode
+    // is read AFTER the switch above, so a mode change this cycle is
+    // already reflected -- sendTlmReply() below relies on that ordering.
     Comms::Status status;
     status.ready = true;  // past boot(): the loop is dispatching commands
     status.active = state_.command.moveActive;
@@ -564,7 +579,14 @@ void RobotLoop::cycle() {
     status.otosPresent = state_.otos.present;
     status.wedged = state_.health.wedgeLatch;
     status.flags = tlm_.flags();
+    status.tlmMode = static_cast<uint8_t>(tlm_.mode());
     comms_.setStatus(status);
+
+    // TLM: mode-change / garbage reply (Part 4): the STATUS line for a
+    // recognized ON/AUTO/OFF (now reporting the mode applied above), or the
+    // HELP line for an unrecognized `TLM:<data>` argument. No-op for
+    // kNone/kFrame -- see Comms::sendTlmReply()'s own doc comment.
+    comms_.sendTlmReply(tlmAction);
 
     // Both deciders tick AFTER emit: their completion acks ride the NEXT
     // frame. Drive::update() runs LAST so that, while Drive owns motion,

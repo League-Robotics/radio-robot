@@ -106,11 +106,12 @@ class Preamble {
   // --- Per-device status accessors -- boot telemetry. RobotLoop::boot()
   // (124-009) wires these into a throwaway Types::RobotState's
   // wheelLeft/wheelRight/otos.connected fields (tlm_.update(bootState))
-  // and calls tlm_.setLiveFlag(kFlagEventBootReady, true) on done()'s
-  // first-true transition (see telemetry.h's fault/event bit-layout
-  // comment for kFlagEventBootReady). Each is a cheap forwarding accessor
-  // to the leaf's own existing status method -- Preamble holds no separate
-  // copy of this state. ---
+  // while polling done(); once done() goes true, boot()'s own tail
+  // (sendBanner()/sendReady()) announces completion in cleartext -- there
+  // is no boot-ready telemetry bit any more (125-002, deleted; see
+  // telemetry.h's flags-layout comment, bit 11 RESERVED). Each accessor
+  // below is a cheap forwarding call to the leaf's own existing status
+  // method -- Preamble holds no separate copy of this state. ---
   bool leftConnected() const { return left_.connected(); }
   bool rightConnected() const { return right_.connected(); }
   bool otosPresent() const { return otos_.present(); }

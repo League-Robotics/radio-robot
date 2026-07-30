@@ -26,8 +26,10 @@ Tracks, over the run:
     accounting) -- this IS the seq-monotonic check: a monotonic seq at the
     expected ~50Hz cadence is what a low drop rate already certifies.
   - Reboot detection: the robot clock (`TLMFrame.t`, ms) must never jump
-    backward, and `kFlagEventBootReady` (flags bit 11) must never be
-    freshly observed a second time after the run's own first frame.
+    backward -- the ONLY reboot signature this script trusts (see the
+    `drain()` docstring below for why a flags-word boot-ready bit is not
+    used: it never existed as a real transition event, and 125-002 has
+    since deleted it outright).
   - New fault bits (flags bits 6-9) that turn on DURING the run -- a bit
     already set on the very first frame (e.g. the boot-time one-shot
     `kFlagFaultI2CSafetyNet`, or `kFlagFaultCommsMalformed`/
@@ -145,21 +147,27 @@ def soak(port: str, duration: float) -> SoakResult:  # [s]
             if f.t is not None:
                 # Robot clock jumping backward (beyond simple frame-reordering
                 # slack) is the ONLY reboot signature this function trusts.
-                # kFlagEventBootReady (flags bit 11) is documented as a
+                # kFlagEventBootReady (flags bit 11) was documented as a
                 # "one-shot, transition-cycle" event (telemetry.proto's own
-                # bit-table comment) but is NOT implemented that way as of
-                # this sprint: `RobotLoop::boot()` calls
-                # `tlm_.setFlag(kFlagEventBootReady, true)` exactly once at
-                # `robot_loop.cpp:433`, with no corresponding `setFlag(...,
-                # false)` anywhere in the tree -- `Telemetry::flags_` is a
-                # plain persistent bitmask, so the bit stays set on EVERY
-                # frame for the rest of the session once boot completes, not
-                # just the one transition cycle. A `boot_ready`-occurrence
-                # counter therefore false-positives within the first few
-                # frames of any run, real reboot or not (discovered live,
-                # ticket 116-010's bench session, 2026-07-22) -- do not
-                # resurrect that check without first fixing the firmware to
-                # actually pulse the bit.
+                # bit-table comment) but was NOT implemented that way as of
+                # ticket 116-010: `RobotLoop::boot()` called
+                # `tlm_.setFlag(kFlagEventBootReady, true)` exactly once, with
+                # no corresponding `setFlag(..., false)` anywhere in the tree
+                # -- `Telemetry::flags_` was a plain persistent bitmask, so
+                # the bit stayed set on EVERY frame for the rest of the
+                # session once boot completed, not just the one transition
+                # cycle. A `boot_ready`-occurrence counter therefore
+                # false-positived within the first few frames of any run,
+                # real reboot or not (discovered live, ticket 116-010's bench
+                # session, 2026-07-22). 125-002 has since DELETED the bit
+                # outright (telemetry-emit-policy-rebuild-spec.md) -- it is
+                # not merely unreliable now, it is gone, replaced for
+                # boot-readiness purposes by the unsolicited `READY`
+                # cleartext line (`SerialConnection.connect()`'s own
+                # `info["ready"]`) and, for command acceptance, the ack
+                # ring's `ERR_NOT_CONFIGURED` rejection. Do not resurrect a
+                # flags-bit-based reboot/ready check -- there is no bit left
+                # to read.
                 if last_t is not None and f.t < last_t - 50 and not reboot_detected:
                     reboot_detected = True
                     reboot_evidence = f"robot clock jumped backward: {last_t} -> {f.t}"

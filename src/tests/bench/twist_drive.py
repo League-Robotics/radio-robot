@@ -29,8 +29,11 @@ What this script proves, in order:
   3. Telemetry pushes show the encoders actually moving while the Move's
      `stop_time` window runs — the real point of a bench gate: not just
      "the ack came back", but "the wheels actually turned".
-  4. `stop()` halts the drivetrain and its own ack is confirmed the same
-     way.
+  4. `estop()` (the panic stop, halt-now) halts the drivetrain and its own
+     ack is confirmed the same way. NOT `stop()` — since the 2026-07-29
+     command-ingestion rework, `stop()` is a PLANNED stop that queues
+     behind whatever `Move` is already active and would not interrupt the
+     one just started above; see `NezhaProtocol.estop()`'s own docstring.
 
 No "arm telemetry" step: the P4 firmware pushes `Telemetry` UNCONDITIONALLY
 at all times (~25 Hz primary / 5 Hz secondary) — there is no `STREAM` verb
@@ -107,17 +110,23 @@ def main() -> int:
         # moving" watch window below only sees fresh pushes.
         proto.read_pending_binary_tlm_frames()
 
+        # 125-006: a PARKED robot in the default kAuto mode is correctly
+        # silent (telemetry-emit-policy-rebuild-spec.md Part 3) — there is
+        # no ambient push to passively wait out any more ("give the
+        # firmware one push cycle" never arrives on a robot that has never
+        # moved, issue Part 8 #1/#5). Request one frame explicitly instead
+        # (bare TLM, force=true, honored in EVERY mode per Part 3 reason 1)
+        # so enc_before is always seeded deterministically, the same fix
+        # ticket 005 already applied to the other parked-capture scripts.
+        proto.tlmNow()
         enc_before = None
-        for frame in proto.read_pending_binary_tlm_frames():
-            if frame.enc is not None:
-                enc_before = frame.enc
-        if enc_before is None:
-            # No frame arrived in the drain above (telemetry is push-only,
-            # not request/reply) — give the firmware one push cycle.
-            time.sleep(0.1)
+        deadline = time.monotonic() + 0.5
+        while enc_before is None and time.monotonic() < deadline:
             for frame in proto.read_pending_binary_tlm_frames():
                 if frame.enc is not None:
                     enc_before = frame.enc
+            if enc_before is None:
+                time.sleep(0.02)
 
         # --- move_twist() --------------------------------------------------
         corr_id = proto.move_twist(v_x=args.v_x, v_y=0.0, omega=args.omega,
@@ -142,13 +151,14 @@ def main() -> int:
         result.record("encoders moving during move_twist()", moved,
                        f"before={enc_before} after={enc_after}")
 
-        # --- stop() --------------------------------------------------------
+        # --- estop() (halt now, NOT the planned stop() -- see this file's
+        # own header) --------------------------------------------------------
         stop_corr_id = proto.estop()
-        result.record("stop() returns a corr_id", stop_corr_id != 0,
+        result.record("estop() returns a corr_id", stop_corr_id != 0,
                        f"corr_id={stop_corr_id}")
 
         stop_ack = proto.wait_for_ack(stop_corr_id, timeout=ACK_TIMEOUT)
-        result.record("stop() ack confirmed via ack ring",
+        result.record("estop() ack confirmed via ack ring",
                        stop_ack is not None and stop_ack.ok, f"ack={stop_ack}")
     finally:
         # Guaranteed stop: motors must never be left running on an

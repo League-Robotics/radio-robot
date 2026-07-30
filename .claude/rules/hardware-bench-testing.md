@@ -5,6 +5,35 @@ so it **cannot drive away** — it is safe to power the motors and spin the whee
 freely during verification. Use the real hardware to confirm changes, not just
 unit tests.
 
+## Bench-room lights (turn them on yourself)
+
+The bench-room lights are on a network relay at `192.168.1.122`. **They turn off
+when the stakeholder leaves the room**, which blinds the overhead playfield
+camera — dark frames, or AprilTag detections dropping to zero, usually means the
+lights are off, not that the camera or the tags are broken.
+
+Turn them back on and keep working. Do not stop to ask; this is
+pre-authorized (stakeholder directive 2026-07-29).
+
+```bash
+curl -s "http://192.168.1.122/rpc/switch.set?id=0&on=true"    # lights ON
+curl -s "http://192.168.1.122/rpc/switch.set?id=0&on=false"   # lights OFF
+```
+
+Both return `{"was_on":<bool>}` — the state *before* the call, so
+`{"was_on":false}` from the ON call means you just turned them on. Verified
+working 2026-07-29.
+
+Notes:
+- `/rpc/switch.set` is the Shelly Gen2+ RPC shape; `id=0` is the single relay
+  channel. `curl -s "http://192.168.1.122/rpc/switch.getStatus?id=0"` reads
+  current state without changing it — the `output` field is the lights
+  (`"output":true` = on).
+- Prefer leaving the lights **on**. Only turn them off when explicitly asked.
+- If the host does not answer, the relay is unreachable (network or power) —
+  report that plainly rather than re-attributing dark camera frames to the
+  camera, the tags, or the playfield calibration.
+
 ## Standing verification gate
 
 Every firmware sprint that touches the HAL, motor control, sensing, or the
@@ -87,7 +116,8 @@ uv run python src/tests/bench/twist_drive.py --port /dev/cu.usbmodem2121102
 | Config push | `config(**{"pid.kp": ...})` / `otos_config(...)` | ack observed in the next `Telemetry` frame's bounded `acks` ring (`corr_id` == the enqueue `corr_id`, `err == 0`) — the ring is the ONLY ack path (the older single scalar ack slot is deleted) |
 | Drive (on stand) | `move_twist(v_x=150, stop_time=..., timeout=...)` | enqueue ack, then telemetry frames with `enc_left`/`enc_right`/`pose` climbing while the `Move` runs |
 | Completion | *(no separate call — the same `Move` ends on its own)* | a later frame's `acks` ring carries an entry with `corr_id == Move.id` (the completion ack, `err` always 0 — timeout vs. stop-condition is `flags` bit 15, not `err`) |
-| Stop | `stop()` | enqueue ack; `flags` bit 2 (`kFlagActive`) drops, encoders hold |
+| Stop (planned) | `stop()` | enqueue ack; queues BEHIND whatever `Move` is already active and only takes effect once it's that stop's turn — does **not** interrupt the in-flight `Move`. Measured 2026-07-29: sent 0.5s into a 400mm leg, the robot travelled the ENTIRE leg (39.8cm) and `flags` bit 2 (`kFlagActive`) stayed set for 5.9s. |
+| Halt now | `estop()` | enqueue ack; zeroes wheel targets AND clears the planner queue in the SAME cycle — `flags` bit 2 (`kFlagActive`) drops within one cycle, encoders hold. Measured 2026-07-29 on the same repro: 2.9cm of travel, 0.10s to clear. This is the verb every "stop the robot now" call site (geofence, Ctrl-C, panic) must use — see `.claude/rules/playfield-testing.md`'s "Halting" section. |
 | Odometry / OTOS | read `Telemetry.pose` / `Telemetry.otos` off any frame | `pose` always present; `otos` valid when `flags` bit 0 is set |
 | Line / color | read `Telemetry.line` / `Telemetry.color` off any frame | valid when `flags` bits 13/14 are set — 4 plausible channel values each |
 

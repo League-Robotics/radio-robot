@@ -83,6 +83,12 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
 msg::DrivetrainConfig defaultDrivetrainConfig() {
     msg::DrivetrainConfig cfg;
     cfg.setTrackwidth(128.0f);   // [mm] baked from robot geometry
+    cfg.setRotationalSlip(0.9117f);   // scrub: actual/ideal rotation, 0 = uncalibrated
+    // Turn calibration: actual = gain*commanded + offset[deg], per direction.
+    cfg.setRotationGainPos(1.061f);
+    cfg.setRotationOffset(-5.54f);
+    cfg.setRotationGainNeg(1.071f);
+    cfg.setRotationOffsetNeg(-7.04f);
     // The drive-pair port binding lives in DrivetrainConfig (the robot's
     // normal drive pair); the coupled bench rig re-binds via `DEV DT PORTS`.
     cfg.setLeftPort(1);

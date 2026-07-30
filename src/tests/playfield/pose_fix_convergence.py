@@ -363,7 +363,10 @@ def hop_test(proto: NezhaProtocol, dc, cam, tag_id: int,
             breached = True
             break
         time.sleep(0.05)
-    proto.stop()   # always stop at the end of the hop, breach or not
+    # estop(), not stop(): this is the geofence-breach halt path -- a
+    # planned stop() would wait behind whatever is queued instead of
+    # halting now (2026-07-29 safety fix).
+    proto.estop()   # always halt at the end of the hop, breach or not
     time.sleep(0.3)
 
     if breached:

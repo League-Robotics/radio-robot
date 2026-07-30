@@ -90,6 +90,14 @@ constexpr int kWedgeThreshold = 10;
 //    side-effect wedge latch (position necessarily holds at its last-good
 //    value while disconnected -- collectEncoder()'s own "return
 //    lastGoodRawEnc_" path, nezha_motor.cpp).
+//
+//    125-002 (telemetry-emit-policy-rebuild-spec.md Part 3): this scenario
+//    never commands a Move -- the robot stays PARKED throughout, so under
+//    the new kAuto default there is no unsolicited stream to sample a
+//    window of frames from (exactly the "at rest there is plenty of
+//    bandwidth, so the host polls instead" case the issue's own kAuto
+//    rationale describes). A bare TLM request (reason 1, honored in every
+//    mode) forces the one frame each checkpoint needs.
 // ===========================================================================
 
 void scenarioMotorDisconnectFlipsConnLeftAndRecovers() {
@@ -103,6 +111,8 @@ void scenarioMotorDisconnectFlipsConnLeftAndRecovers() {
 
   sim.plant().setDisconnected(/*port=*/1, true);  // 1 == left
   sim.step(5);  // well under kWedgeThreshold -- isolates the connLeft signal
+  sim.injectCommand("TLM");  // parked robot -- poll for the one frame this checkpoint needs
+  sim.step(1);
 
   std::vector<DecodedLine> disconnectedFrames = onlyTelemetry(sim.drainTelemetry());
   checkTrue(!disconnectedFrames.empty(), "telemetry decoded while disconnected");
@@ -119,6 +129,8 @@ void scenarioMotorDisconnectFlipsConnLeftAndRecovers() {
 
   sim.plant().setDisconnected(/*port=*/1, false);
   sim.step(5);  // recovery window
+  sim.injectCommand("TLM");  // parked robot -- poll for the one frame this checkpoint needs
+  sim.step(1);
 
   std::vector<DecodedLine> recoveredFrames = onlyTelemetry(sim.drainTelemetry());
   checkTrue(!recoveredFrames.empty(), "telemetry decoded after clearing the knob");

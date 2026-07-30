@@ -21,6 +21,10 @@ covering, in one session:
      gate, not just its isolated repro) -- SUC-008.
   8. The 123-006 hardware repro (`move_wheels` whose own serialized bytes
      embed a literal 0x0A) goes 10/10 over the relay -- SUC-007.
+  9. 125-008 safety fix: mid-move `estop()` measurably shortens travel vs.
+     the commanded distance (the regression lock for the 2026-07-29
+     "halt now" defect -- see `scenario_estop_mid_move_shortens_travel()`'s
+     own docstring).
 
 Every check prints its own PASS/FAIL line (`Result.record()`, the same
 idiom `move_protocol_bench.py`/`wire_truth.py` already use) and the script
@@ -164,7 +168,22 @@ ACK_TIMEOUT = 500  # [ms] wait_for_ack() bound for each command's enqueue ack
 # convention as move_protocol_bench.py/test_sim_wire_loopback.py -- so a
 # completion ack (keyed by Move.id) is never confused with an enqueue ack
 # (keyed by the envelope's own corr_id).
-_NEXT_MOVE_ID = 9000
+# Move ids must be unique PER RUN, not a fixed base.
+#
+# The firmware keeps a 16-slot ring of accepted move ids so a retried enqueue
+# whose ack was lost is not executed twice (robot_loop.cpp alreadyAccepted()).
+# It ACKS a duplicate and DISCARDS it. The robot does not reboot between runs
+# over the relay, so a fixed base meant the second and later runs of this
+# script re-sent ids the robot had already accepted: the move never ran, and
+# the gate reported it as "active flag never True", "encoder positions did not
+# climb" and "completion=None" -- which reads exactly like an encoder/bus
+# fault and cost a bench session being diagnosed as one (2026-07-29).
+#
+# A move sent with id 0 is exempt from dedup ("every id-0 move is its own
+# move"), which is why ad-hoc probes that omit move_id kept working while this
+# gate failed minutes later -- the very contrast that made it look
+# intermittent.
+_NEXT_MOVE_ID = 9000 + (int(time.time()) % 50000) * 10
 
 
 def _next_move_id() -> int:
@@ -439,7 +458,16 @@ def scenario_move_wheels_start_stop_and_climb(proto: NezhaProtocol, result: Resu
     FAIL, never a vacuous PASS) -- audited per the coordinator's review of
     this file; see module docstring "vacuous PASS" note."""
     _drain(proto, telemetry, "start_stop:drain")
-    before_frames = _watch(proto, 0.15, telemetry, "start_stop:before")
+    # 125-006: a PARKED robot in the default kAuto mode is correctly silent
+    # (telemetry-emit-policy-rebuild-spec.md Part 3) -- the passive 0.15s
+    # "before" watch window below can no longer rely on ambient always-on
+    # streaming to seed enc_before (issue Part 8 #1/#5: zero unsolicited
+    # frames while parked). Request one frame explicitly first (bare TLM,
+    # force=true, honored in EVERY mode per Part 3 reason 1) -- same fix
+    # ticket 005 already applied to the other parked-capture scripts, and
+    # ticket 006 (this ticket) applied to twist_drive.py's identical gap.
+    proto.tlmNow()
+    before_frames = _watch(proto, 0.3, telemetry, "start_stop:before")
     enc_before = None
     for f in reversed(before_frames):
         if f.enc is not None:
@@ -485,6 +513,80 @@ def scenario_move_wheels_start_stop_and_climb(proto: NezhaProtocol, result: Resu
     result.record("drivetrain active flag clears after stop",
                   stopped,
                   f"last active={settle_frames[-1].active if settle_frames else None}")
+
+
+def scenario_estop_mid_move_shortens_travel(proto: NezhaProtocol, result: Result,
+                                             telemetry: "SessionTelemetry") -> None:
+    """125-008 safety fix: mid-move `estop()` measurably shortens travel
+    vs. the commanded distance -- the bench regression lock for the
+    2026-07-29 hardware finding that a "halt now" call site was calling
+    the PLANNED `stop()` by mistake and the robot rode out an entire
+    in-flight leg (measured: 39.8cm of a 40cm leg, `kFlagActive` held
+    5.9s) before it took effect; `estop()` measured 2.9cm / 0.10s on the
+    same repro.
+
+    Commands a LONG move (150mm/s, 5s `stop_time` -> 750mm commanded if it
+    ran to completion), lets it run briefly so it is genuinely mid-flight,
+    sends `estop()`, and asserts the encoder delta measured from
+    move-start to settle is far below the 750mm commanded distance -- a
+    `stop()` masquerading as an `estop()` would ride out the whole 750mm
+    (the exact defect this locks in against)."""
+    _drain(proto, telemetry, "estop_shortens:drain")
+    proto.tlmNow()
+    before_frames = _watch(proto, 0.3, telemetry, "estop_shortens:before")
+    enc_before = None
+    for f in reversed(before_frames):
+        if f.enc is not None:
+            enc_before = f.enc
+            break
+
+    speed = 150.0  # [mm/s]
+    stop_time_ms = 5000.0  # [ms] -- long enough that the estop below is genuinely mid-flight
+    commanded_distance = speed * (stop_time_ms / 1000.0)  # [mm]
+
+    move_id = _next_move_id()
+    corr = proto.move_wheels(v_left=speed, v_right=speed, stop_time=stop_time_ms,
+                              timeout=stop_time_ms + 2000.0, replace=True, move_id=move_id)
+    ack = proto.wait_for_ack(corr, timeout=ACK_TIMEOUT)
+    result.record("estop-shortens: move_wheels enqueue ack ok (starts the long move)",
+                  ack is not None and ack.ok, f"ack={ack}")
+
+    during_frames = _watch(proto, 0.5, telemetry, "estop_shortens:during")
+    active_seen = any(f.active for f in during_frames)
+    result.record("estop-shortens: drivetrain active flag observed True before the estop",
+                  active_seen, f"{len(during_frames)} frames observed")
+
+    corr_estop = proto.estop()
+    ack_estop = proto.wait_for_ack(corr_estop, timeout=ACK_TIMEOUT)
+    result.record("estop-shortens: estop enqueue ack ok",
+                  ack_estop is not None and ack_estop.ok, f"ack={ack_estop}")
+
+    settle_frames = _watch(proto, 0.6, telemetry, "estop_shortens:after_estop")
+    enc_after = enc_before
+    for f in reversed(during_frames + settle_frames):
+        if f.enc is not None:
+            enc_after = f.enc
+            break
+
+    shortened = False
+    detail = f"before={enc_before} after={enc_after} commanded_distance={commanded_distance:.0f}mm"
+    if enc_before is not None and enc_after is not None:
+        d_left = enc_after[0] - enc_before[0]    # [mm]
+        d_right = enc_after[1] - enc_before[1]   # [mm]
+        traveled = 0.5 * (d_left + d_right)      # [mm]
+        # "far below" the commanded distance -- half is a generous bound
+        # that still catches a stop() masquerading as an estop(): measured
+        # on hardware, that defect rode out ~100% of the commanded
+        # distance, not under 50%.
+        shortened = traveled < commanded_distance * 0.5
+        detail = (f"before={enc_before} after={enc_after} traveled={traveled:.1f}mm "
+                  f"commanded_distance={commanded_distance:.0f}mm")
+    result.record("estop mid-move measurably shortened travel vs. the commanded distance",
+                  shortened, detail)
+
+    stopped = bool(settle_frames) and not settle_frames[-1].active
+    result.record("estop-shortens: drivetrain active flag clears after estop",
+                  stopped, f"last active={settle_frames[-1].active if settle_frames else None}")
 
 
 def scenario_enqueue_and_completion_acks(proto: NezhaProtocol, result: Result,
@@ -663,6 +765,7 @@ def main() -> int:
             proto = NezhaProtocol(conn)
             scenario_hello_ping_id_ver(conn, result)
             scenario_move_wheels_start_stop_and_climb(proto, result, telemetry)
+            scenario_estop_mid_move_shortens_travel(proto, result, telemetry)
             scenario_enqueue_and_completion_acks(proto, result, telemetry)
             scenario_embedded_0x0a_10_of_10(proto, result, telemetry)
     except Exception as exc:

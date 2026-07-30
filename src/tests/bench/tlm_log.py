@@ -269,6 +269,14 @@ def main() -> int:
 
     row_count = 0
     try:
+        # 125-005 (telemetry-emit-policy-rebuild-spec.md Part 7): under the
+        # new kAuto default a parked robot emits nothing unsolicited -- this
+        # tool exists specifically to capture idle/parked sessions (e.g. a
+        # bare bus-health read with no drive commands), so bracket the whole
+        # capture in streaming-always mode rather than relying on motion to
+        # keep frames flowing.
+        proto.tlmOn()
+
         # Drop anything queued before this run started so the capture below
         # only sees fresh pushes.
         proto.read_pending_binary_tlm_frames()
@@ -278,6 +286,10 @@ def main() -> int:
     finally:
         # Guaranteed stop: motors must never be left running on an
         # exception or Ctrl-C.
+        try:
+            proto.tlmOff()
+        except Exception:
+            pass
         try:
             proto.estop()
         except Exception:

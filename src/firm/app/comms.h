@@ -261,22 +261,54 @@ class Comms {
     bool otosPresent = false;
     bool wedged = false;            // encoder stuck-position latch
     uint32_t flags = 0;             // the full telemetry flags word
+
+    // tlmMode -- the current App::TlmMode, as its own raw enum value
+    // (0=kOff, 1=kAuto, 2=kOn -- telemetry.h). A raw uint8_t, not an
+    // App::TlmMode member, because comms.h cannot include telemetry.h
+    // (telemetry.h already includes THIS header -- see its own file
+    // header): Comms holds no Telemetry& and never parses/derives the
+    // mode itself (Part 4's own boundary), it only reports whatever
+    // RobotLoop copies in here each cycle, exactly like `flags` above.
+    // Defaults to 1 (kAuto), matching Telemetry::mode_'s own default.
+    uint8_t tlmMode = 1;
   };
 
   // Refresh the snapshot STATUS answers from. Called once per cycle by
   // RobotLoop; cheap enough to be unconditional.
   void setStatus(const Status& status) { status_ = status; }
 
-  // takeTelemetryRequest -- true exactly once per bare `TLM` line received,
-  // clearing the request. RobotLoop polls this and forces one frame out.
-  // Consume-on-read so a request can never be served twice, and so a burst
-  // of requests collapses to one frame rather than queueing up behind the
-  // cadence gate.
-  bool takeTelemetryRequest() {
-    const bool requested = telemetryRequested_;
-    telemetryRequested_ = false;
-    return requested;
+  // TlmAction -- the parsed effect of one `TLM`/`TLM:...` line (Part 4's
+  // command surface, telemetry-emit-policy-rebuild-spec.md). Comms parses
+  // the argument (case-insensitively) and stages exactly this; Telemetry
+  // itself never parses wire text (this file's own boundary note) -- it is
+  // RobotLoop::cycle() that turns kSetOff/kSetAuto/kSetOn into a
+  // Telemetry::setMode() call and kFrame into a forced emit(), at the SAME
+  // consume point the pre-Part-4 takeTelemetryRequest() used to be read
+  // from alone (that method is replaced by takeTlmAction() below -- bare
+  // `TLM` and `TLM:NOW` both surface as kFrame, an explicit alias, not two
+  // separate code paths).
+  enum class TlmAction : uint8_t { kNone, kFrame, kSetOff, kSetAuto, kSetOn, kUnrecognized };
+
+  // takeTlmAction -- consume-on-read, same discipline the pre-Part-4
+  // takeTelemetryRequest() had: a burst of `TLM:` lines arriving within one
+  // cycle collapses to the LAST one's action (RobotLoop drains this once
+  // per cycle), never queued or served twice.
+  TlmAction takeTlmAction() {
+    const TlmAction action = tlmAction_;
+    tlmAction_ = TlmAction::kNone;
+    return action;
   }
+
+  // sendTlmReply -- the reply half of a just-consumed TlmAction: the
+  // STATUS line for a recognized mode change (kSetOff/kSetAuto/kSetOn), the
+  // HELP line for kUnrecognized (`TLM:<garbage>`), nothing for kNone/kFrame
+  // (kFrame's reply IS the forced telemetry frame RobotLoop's own emit()
+  // call already sends -- no second reply here). Call this AFTER
+  // setStatus() has been refreshed with the mode the action just applied,
+  // so a mode-change reply's `tlm=` field always reports the NEW mode, not
+  // the one from before this cycle. Replies on the SAME transport the
+  // `TLM:` line arrived on (remembered from the parse in dispatchLine()).
+  void sendTlmReply(TlmAction action);
 
   // banner/idLine must outlive the Comms instance (caller-owned, e.g.
   // main.cpp's own static buffers) -- Comms does not format or own either
@@ -456,8 +488,14 @@ class Comms {
   // during boot -- correctly answers ready=0.
   Status status_{};
 
-  // Set by a bare `TLM` line, consumed by takeTelemetryRequest().
-  bool telemetryRequested_ = false;
+  // Staged by a `TLM`/`TLM:...` line's parse (dispatchLine()), consumed by
+  // takeTlmAction()/sendTlmReply() -- see TlmAction's own doc comment above.
+  // tlmReplyTransport_ is which Transport (serialLink_ or radioLink_) the
+  // triggering line arrived on; a raw pointer is safe here because both
+  // ever point at is one of Comms's own long-lived member references (never
+  // dangling for the life of this object).
+  TlmAction tlmAction_ = TlmAction::kNone;
+  Transport* tlmReplyTransport_ = nullptr;
   uint32_t malformedCount_ = 0;
   uint32_t commandsDroppedCount_ = 0;
 
