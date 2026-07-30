@@ -1,5 +1,13 @@
 ---
-status: pending
+status: done
+sprint: '126'
+tickets:
+- 126-001
+- 126-002
+- 126-003
+- 126-004
+- 126-005
+- 126-006
 ---
 
 # Bring the OTOS up: read it, report it in telemetry, calibrate it against the camera

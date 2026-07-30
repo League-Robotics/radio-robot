@@ -149,7 +149,19 @@ def test_calibration_commands_tovez_json_snapshot() -> None:
     used to carry (PlannerConfigPatch wire keys, sprint 114's config-as-
     truth completion) are gone -- PlannerConfigPatch itself, and the
     App::Pilot that applied it, are deleted wholesale; only the vel_*/PID
-    group still reaches the wire from this JSON."""
+    group still reaches the wire from this JSON.
+
+    126-005: re-pinned against two independent drifts in the live
+    tovez.json, both traced and legitimate (not this test's own bug):
+      - ``rotSlip``: 0.92 -> 0.9117.  Pre-existing drift, predates sprint
+        126 entirely -- the snapshot was already stale against the file's
+        ``rotational_slip`` before this sprint touched anything.
+      - ``OL``: 67 -> 28.  126-003's camera-measured correction of
+        ``calibration.otos_linear_scale`` (1.067 -> 1.0275, see that
+        field's own provenance note in tovez.json) changes the
+        ``scale_to_int8()``-encoded register value this line pins.
+        ``OA`` is unchanged (-13): 126-004 confirmed
+        ``otos_angular_scale`` (0.987) correct as committed, no edit."""
     cfg = load_robot_config(_ROBOTS_DIR / "tovez.json")
 
     cmds = calibration_commands(cfg)
@@ -158,14 +170,14 @@ def test_calibration_commands_tovez_json_snapshot() -> None:
         ("SET ml=0.716500", 200),
         ("SET mr=0.707700", 200),
         ("SET tw=128", 200),
-        ("SET rotSlip=0.92", 200),
+        ("SET rotSlip=0.9117", 200),
         ("SET pid.kp=0.0016", 200),
         ("SET pid.ki=0.005", 200),
         ("SET pid.kff=0.0008", 200),
         ("SET pid.iMax=0.3", 200),
         ("SET pid.kaw=20", 200),
         ("OI", 500),
-        ("OL 67", 200),
+        ("OL 28", 200),
         ("OA -13", 200),
     ]
 
@@ -173,7 +185,14 @@ def test_calibration_commands_tovez_json_snapshot() -> None:
 def test_calibration_commands_tovez_nocal_json_snapshot() -> None:
     """115-003: see test_calibration_commands_tovez_json_snapshot's own
     docstring -- the same headingKp/headingKd/minSpeed/distanceKp/
-    arriveDwell lines are gone from this profile's snapshot too."""
+    arriveDwell lines are gone from this profile's snapshot too.
+
+    126-005: verified still accurate -- tovez_nocal.json is untouched by
+    sprint 126 (its ``rotational_slip``/``otos_linear_scale``/
+    ``otos_angular_scale`` are all uncalibrated sentinels, unaffected by
+    126-003/126-004's tovez.json-only edits), and re-running
+    ``calibration_commands()`` against the live file reproduces this exact
+    list -- no independent drift, no change needed."""
     cfg = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
 
     cmds = calibration_commands(cfg)
