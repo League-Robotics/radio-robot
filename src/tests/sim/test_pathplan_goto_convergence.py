@@ -85,6 +85,42 @@ def _truePose(loop) -> "tuple[float, float, float]":  # (x_mm, y_mm, h_rad)
     return pose["x"], pose["y"], pose["h"]
 
 
+def _seedAndReanchor(loop, worldPose) -> "tuple[float, float, float]":
+    """Shared setup for every test in this file: seed `worldPose` from real
+    telemetry, then re-anchor from the sim's own ground truth (the
+    sim-tier stand-in for a startup camera fix, this module's own
+    docstring). Returns the start pose `(x_mm, y_mm, h_rad)` used as the
+    re-anchor fix."""
+    frames = []
+    for _ in range(_STARTUP_TELEMETRY_TRIES):
+        frames = loop.read_pending_binary_tlm_frames()
+        if frames:
+            break
+        time.sleep(0.01)  # let the background tick thread advance real time
+    assert frames, "no telemetry received from the sim within the startup window"
+    for frame in frames:
+        worldPose.ingest(frame)
+
+    startX, startY, startH = _truePose(loop)
+    worldPose.reanchor((startX / 10.0, startY / 10.0, startH))  # [mm] -> [cm]
+    return startX, startY, startH
+
+
+def _forwardLeftTarget(startX: float, startY: float, startH: float,
+                       forwardFrac: float = 0.95, leftFrac: float = 0.20
+                       ) -> "tuple[float, float]":
+    """A target `_TARGET_DISTANCE` [mm] ahead of `(startX, startY, startH)`,
+    mostly straight ahead with a small left offset -- the same target
+    shape `test_goto_world_converges_to_a_nearby_target` has always used,
+    factored out so the fault-injection tests below aim at an identical
+    geometry and only the injected fault differs."""
+    import math
+    cosH, sinH = math.cos(startH), math.sin(startH)
+    forward, left = _TARGET_DISTANCE * forwardFrac, _TARGET_DISTANCE * leftFrac
+    return (startX + forward * cosH - left * sinH,
+            startY + forward * sinH + left * cosH)
+
+
 def test_goto_world_converges_to_a_nearby_target():
     from robot_radio.pathplan.planner import GiveUpLimits, gotoWorld
     from robot_radio.pathplan.solver import SolverLimits
@@ -92,32 +128,11 @@ def test_goto_world_converges_to_a_nearby_target():
 
     loop, proto = _makeSimProto()
     try:
-        worldPose = WorldPose()
-
-        # Seed WorldPose from real telemetry, then re-anchor from the
-        # sim's own ground truth -- the sim-tier stand-in for a startup
-        # camera fix (module docstring above).
-        frames = []
-        for _ in range(_STARTUP_TELEMETRY_TRIES):
-            frames = loop.read_pending_binary_tlm_frames()
-            if frames:
-                break
-            time.sleep(0.01)  # let the background tick thread advance real time
-        assert frames, "no telemetry received from the sim within the startup window"
-        for frame in frames:
-            worldPose.ingest(frame)
-
-        startX, startY, startH = _truePose(loop)
-        worldPose.reanchor((startX / 10.0, startY / 10.0, startH))  # [mm] -> [cm]
-
-        # A nearby target: mostly straight ahead in the sim's own start
-        # heading, slightly offset -- small enough for a fast sim smoke
-        # test, well above the >=100 mm carrot-distance floor.
         import math
-        cosH, sinH = math.cos(startH), math.sin(startH)
-        forward, left = _TARGET_DISTANCE * 0.95, _TARGET_DISTANCE * 0.20
-        targetX_mm = startX + forward * cosH - left * sinH
-        targetY_mm = startY + forward * sinH + left * cosH
+
+        worldPose = WorldPose()
+        startX, startY, startH = _seedAndReanchor(loop, worldPose)
+        targetX_mm, targetY_mm = _forwardLeftTarget(startX, startY, startH)
 
         limits = SolverLimits(trackWidth=_TRACK_WIDTH, speed=_SPEED)
         result = gotoWorld(
@@ -147,6 +162,153 @@ def test_goto_world_converges_to_a_nearby_target():
         loop.disconnect()
 
 
+def test_goto_world_converges_under_otos_drift():
+    """127-007: inject `SimLoop.set_otos_drift()` and confirm `gotoWorld()`
+    stays sane -- specifically, confirm it converges to essentially the
+    SAME place it does with no drift at all.
+
+    This is not an accident of robustness -- it is a direct structural
+    consequence of `WorldPose.worldPose()` (what `gotoWorld()` navigates
+    by) reading the ENCODER-anchored transform only, never the
+    OTOS-anchored one (`WorldPose.worldPoseOtos()`, a separate accessor
+    this loop never calls). `set_otos_drift()` perturbs `TLMFrame.
+    otos_reading` (`frame.otos_present`/`o.x`/`o.y`/`o.heading`), which
+    feeds ONLY `_latestOtos`/`_transformOtos` -- `frame.pose` (the
+    encoder-derived pose `_latestEnc`/`_transformEnc` are built from) is
+    untouched. This matches sprint 127's own success criterion 5
+    (`estimator.weight_heading_otos`/`weight_omega_otos` committed 0.0,
+    `geometry.otos_untrusted` unchanged) at the HOST navigation layer:
+    OTOS is not just down-weighted in the firmware's estimator, it is
+    structurally absent from what this loop steers by."""
+    from robot_radio.pathplan.planner import GiveUpLimits, gotoWorld
+    from robot_radio.pathplan.solver import SolverLimits
+    from robot_radio.pathplan.world_pose import WorldPose
+
+    loop, proto = _makeSimProto()
+    try:
+        import math
+
+        worldPose = WorldPose()
+        startX, startY, startH = _seedAndReanchor(loop, worldPose)
+        targetX_mm, targetY_mm = _forwardLeftTarget(startX, startY, startH)
+
+        # A large, obviously-wrong drift -- if gotoWorld() were (wrongly)
+        # reading the OTOS-anchored pose, this would steer it far off
+        # course. 80 mm / 80 mm / ~17 deg, comfortably bigger than
+        # TERMINATION_TOLERANCE (100 mm) itself.
+        loop.set_otos_drift(80.0, 80.0, 0.3)
+
+        limits = SolverLimits(trackWidth=_TRACK_WIDTH, speed=_SPEED)
+        result = gotoWorld(
+            proto, worldPose, targetX_mm / 10.0, targetY_mm / 10.0,
+            limits=limits, geofence=None,
+            giveUp=GiveUpLimits(maxIterations=400, giveUpTimeout=25.0),
+        )
+
+        print(f"gotoWorld under otos_drift(80,80,0.3rad): success={result.success} "
+              f"reason={result.reason!r} iterations={result.iterations} sent={result.sent}")
+        assert result.success, f"gotoWorld() did not converge under otos_drift: {result.reason}"
+        assert not math.isnan(result.finalPose.x) and not math.isnan(result.finalPose.y), (
+            "gotoWorld() produced a NaN pose under otos_drift -- unhandled exception surface")
+
+        endX, endY, endH = _truePose(loop)
+        residual = math.hypot(endX - targetX_mm, endY - targetY_mm)
+        print(f"  true final pose=({endX:.1f},{endY:.1f},{endH:.3f} rad) "
+              f"ground-truth residual={residual:.1f} mm")
+        # SAME bound as the no-drift smoke test -- the whole point being
+        # verified here is that this number is NOT meaningfully worse
+        # than the undrifted baseline, since gotoWorld() never reads the
+        # drifted transform in the first place.
+        assert residual < 220.0, (
+            f"ground-truth residual {residual:.1f} mm exceeds the no-drift bound -- "
+            f"otos_drift() should have ZERO effect on gotoWorld() navigation "
+            f"(it only feeds worldPoseOtos(), never worldPose())")
+
+        divergence = worldPose.encoderOtosDivergence()
+        assert divergence is not None, "expected both encoder and OTOS samples to be ingested"
+        print(f"  encoder-vs-OTOS divergence at arrival: distance={divergence.distance * 10.0:.1f}mm "
+              f"heading={math.degrees(divergence.heading):+.1f}deg (the injected drift, "
+              f"visible ONLY in this separate diagnostic -- not in gotoWorld()'s own navigation)")
+    finally:
+        proto.estop()
+        loop.disconnect()
+
+
+def test_goto_world_stays_sane_under_enc_slip():
+    """127-007: inject `SimLoop.set_enc_slip()` on one wheel -- unlike
+    `set_otos_drift()` (see the test above), this DOES corrupt what
+    `gotoWorld()` actually navigates by: `set_enc_slip()` injects a
+    permanent signed offset into `TLMFrame.enc_left`/`enc_right`
+    (the reported wheel position), which is exactly what `frame.pose`
+    (the encoder-derived pose `WorldPose.worldPose()` reads) is built
+    from. This is the genuine "world-pose re-anchoring design survives
+    odometry drift" case: the loop's own BELIEF is corrupted mid-approach,
+    and this test confirms the outcome stays sane (no exception, no
+    runaway -- `GiveUpLimits` already bounds iterations/wall-clock time
+    structurally, so "no runaway" here specifically means "converges or
+    gives up with an explicit reason, never hangs or raises") rather than
+    that it magically corrects for a fault it has no channel to detect."""
+    from robot_radio.pathplan.planner import GiveUpLimits, gotoWorld
+    from robot_radio.pathplan.solver import SolverLimits
+    from robot_radio.pathplan.world_pose import WorldPose
+
+    loop, proto = _makeSimProto()
+    try:
+        import math
+
+        worldPose = WorldPose()
+        startX, startY, startH = _seedAndReanchor(loop, worldPose)
+        targetX_mm, targetY_mm = _forwardLeftTarget(startX, startY, startH)
+
+        # port=1 (left wheel), rate=0.15 fires a slip event roughly every
+        # ~7 encoder samples -- several permanent +25 mm steps accrue
+        # over the course of the approach, corrupting the encoder pose
+        # this loop navigates by while the move is still in progress
+        # (not just a one-shot bias applied before the first solve).
+        loop.set_enc_slip(1, 0.15, 25.0)
+
+        limits = SolverLimits(trackWidth=_TRACK_WIDTH, speed=_SPEED)
+        result = gotoWorld(
+            proto, worldPose, targetX_mm / 10.0, targetY_mm / 10.0,
+            limits=limits, geofence=None,
+            giveUp=GiveUpLimits(maxIterations=400, giveUpTimeout=25.0),
+        )
+
+        print(f"gotoWorld under enc_slip(port=1,rate=0.15,mag=25mm): success={result.success} "
+              f"reason={result.reason!r} iterations={result.iterations} sent={result.sent}")
+        # No exception is itself part of what this test proves (an
+        # unhandled exception surfacing from a corrupted pose would fail
+        # the test at collection, not via an assertion) -- the explicit
+        # checks below are about BOUNDED behavior, not just "didn't crash".
+        assert result.finalPose is not None, "expected at least one telemetry frame ingested"
+        assert not math.isnan(result.finalPose.x) and not math.isnan(result.finalPose.y), (
+            "gotoWorld() produced a NaN pose under enc_slip -- unhandled exception surface")
+
+        endX, endY, endH = _truePose(loop)
+        residualToTarget = math.hypot(endX - targetX_mm, endY - targetY_mm)
+        print(f"  true final pose=({endX:.1f},{endY:.1f},{endH:.3f} rad) "
+              f"ground-truth residual={residualToTarget:.1f} mm "
+              f"(vs. the loop's own belief: {result.reason})")
+        # "No runaway": the true final position must still be in the
+        # GENERAL VICINITY of the target, not off across the room -- a
+        # slipped encoder can bias the loop's own belief by roughly the
+        # accumulated slip magnitude, but the loop must not diverge
+        # without bound. Bound: target distance + a generous multiple of
+        # the single-step slip magnitude (25 mm) to cover several slip
+        # events accruing during one approach, comfortably tighter than
+        # "somewhere in the sim".
+        runawayBound = _TARGET_DISTANCE + 15 * 25.0
+        assert residualToTarget < runawayBound, (
+            f"ground-truth residual {residualToTarget:.1f} mm exceeds the no-runaway "
+            f"bound ({runawayBound:.0f} mm) -- gotoWorld() diverged under enc_slip "
+            f"instead of converging (however imperfectly) or giving up explicitly")
+    finally:
+        proto.estop()
+        loop.disconnect()
+
+
 if __name__ == "__main__":
     test_goto_world_converges_to_a_nearby_target()
+    test_goto_world_converges_under_otos_drift()
+    test_goto_world_stays_sane_under_enc_slip()
     print("OK")

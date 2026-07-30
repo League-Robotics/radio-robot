@@ -41,7 +41,9 @@ from __future__ import annotations
 import argparse
 import math
 import pathlib
+import signal
 import sys
+import threading
 import time
 
 from robot_radio.field import Geofence, GeofenceViolation, checkPlayfieldLights
@@ -210,7 +212,7 @@ class _Backend:
 class SimBackend(_Backend):
     label = "sim"
 
-    def __init__(self, robot_json: "str | pathlib.Path") -> None:
+    def __init__(self, robot_json: "str | pathlib.Path", realTime: bool = False) -> None:
         from robot_radio.config.robot_config import load_robot_config
         from robot_radio.io.sim_config import SimConfigConn
         from robot_radio.io.sim_loop import SimLoop
@@ -220,15 +222,38 @@ class SimBackend(_Backend):
         _set_effective_track(robot_config)
         track = robot_config.trackwidth if robot_config.trackwidth is not None else TRACK
         self._sim = SimLoop(track_width=track)
-        # Deterministic manual stepping, no tick thread: this script is the
-        # single consumer of the sim's own telemetry queue, and real-time
-        # thread scheduling would only add jitter to a measurement that
-        # does not need wall-clock realism at all.
-        self._sim.connect(start_tick_thread=False)
+        self._realTime = realTime
+        # Deterministic manual stepping, no tick thread (the DEFAULT): this
+        # script is the single consumer of the sim's own telemetry queue,
+        # and real-time thread scheduling would only add jitter to a
+        # measurement that does not need wall-clock realism at all.
+        #
+        # realTime=True (--mode goto only, 127-007): `pathplan.planner.
+        # gotoWorld()`'s own `_advance()` polls telemetry on WALL-CLOCK
+        # time and never calls `SimLoop.step()` itself (matches
+        # `test_pathplan_goto_convergence.py`'s own established pattern,
+        # 127-006) -- it expects the sim to be advancing in the
+        # background on its own tick thread. Manual per-slice stepping
+        # (this class's default, used by every other mode in this script)
+        # would leave the sim frozen while `gotoWorld()`'s poll loop spins
+        # forever waiting for telemetry that never arrives.
+        self._sim.connect(start_tick_thread=realTime)
         self._sim.configure_from_robot(robot_config)
         self.proto = NezhaProtocol(SimConfigConn(self._sim))
 
     def advance(self, seconds: float) -> "list":
+        if self._realTime:
+            # Wall-clock poll, mirroring HardwareBackend.advance() -- the
+            # tick thread drains the C ABI into the queue itself each
+            # iteration (see the manual-stepping branch's own comment
+            # below for why that matters), so no manual step()/drain call
+            # is needed or correct here.
+            frames = []
+            deadline = time.monotonic() + seconds
+            while time.monotonic() < deadline:
+                frames.extend(self._sim.read_pending_binary_tlm_frames())
+                time.sleep(0.005)
+            return frames
         frames = []
         for _ in range(max(1, int(round(seconds / CYCLE_S)))):
             self._sim.step(1)
@@ -680,6 +705,469 @@ def reportSegmentFixes(tour: "Tour", log: dict) -> None:
         print("camera closure: unavailable -- start or end fix missing")
 
 
+# ---------------------------------------------------------------------------
+# --mode goto (127-007): the same square, driven as gotoWorld() waypoints
+# instead of open-loop WHEELS / closed-loop MOVE segments.
+# ---------------------------------------------------------------------------
+
+GOTO_OVERSHOOT_BOUND = 60.0  # [mm] stated bound for the sim tier's "bounded overshoot" check
+GOTO_STALL_WINDOW = 2.0      # [s] no-progress window that counts as a stall
+GOTO_STALL_EPS = 5.0         # [mm] progress below this over GOTO_STALL_WINDOW counts as no progress
+
+
+def _installEstopSignalHandler(proto) -> None:
+    """estop() on SIGTERM/SIGINT before the process exits -- mirrors
+    `planner_square_tour.py`'s own `_install_estop_signal_handler()`
+    (127-002 lesson, hardware incident 2026-07-30: a bare SIGTERM bypasses
+    every Python `finally` block, so the ordinary `try/finally: estop()`
+    idiom alone left a background batch driving after an external kill --
+    SIGINT/Ctrl-C was already safe, since it raises `KeyboardInterrupt`
+    and IS caught by `finally`). Defense in depth, not a full guarantee --
+    a SIGKILL cannot be caught by any process-level handler; the remaining
+    gap is closed procedurally (run goto-mode hardware/playfield tours in
+    the foreground, one at a time, never as an unsupervised background
+    batch)."""
+
+    def _handler(signum: int, _frame) -> None:
+        try:
+            proto.estop()
+        except Exception:
+            pass
+        sys.exit(1)
+
+    signal.signal(signal.SIGTERM, _handler)
+    signal.signal(signal.SIGINT, _handler)
+
+
+def gotoSquareWaypoints(startPose, legLength: float) -> "list":
+    """Four corners of a `legLength` x `legLength` square in WORLD frame,
+    laid out relative to the robot's OWN heading at `startPose` (forward =
+    +x body, left = +y body) -- the goto-mode equivalent of `segments()`'s
+    fixed leg/turn sequence: a sequence of POSITION waypoints `gotoWorld()`
+    drives to directly (continuously re-solving the arc, including through
+    the corners) rather than a scripted sequence of commanded wheel
+    speeds. `startPose` is a `nav.pose.Pose` (cm, rad); the returned list
+    is world-frame `Pose`s, heading always 0.0 -- `gotoWorld()`/
+    `solveArcToPoint()` both ignore target heading (documented at both
+    signatures, sprint.md's own "Out of Scope: terminal-theta honoring"),
+    so there is no meaningful value to put there."""
+    from robot_radio.nav.pose import Pose
+    from robot_radio.pathplan.world_pose import Transform2
+
+    toWorld = Transform2(x=startPose.x, y=startPose.y, rotation=startPose.heading)
+    legCm = legLength / 10.0  # [mm] -> [cm], nav.pose.Pose's own convention
+    corners = [(legCm, 0.0), (legCm, legCm), (0.0, legCm), (0.0, 0.0)]
+    return [toWorld.apply(Pose(x=rx, y=ry, heading=0.0)) for rx, ry in corners]
+
+
+class _TruePoseSampler:
+    """Background poller of the SIM's own ground truth during ONE
+    `gotoWorld()` call -- SIM ONLY, for --mode goto's "bounded overshoot,
+    no stall" reporting.
+
+    `gotoWorld()` itself (127-006's own file) has no tracing hook, and
+    adding one is out of this ticket's stated file scope (Files: modify
+    `square_tour.py`, and modify `planner.py` for its ONE provisional
+    constant only) -- so this samples ground truth from a SECOND thread
+    while `gotoWorld()` runs synchronously in the caller's thread.
+    `SimLoop.get_true_pose()` is a synchronous ctypes round-trip
+    independent of the telemetry frame QUEUE `gotoWorld()`'s own
+    `_advance()` drains (see that method's own docstring on the sim
+    tick thread being the single writer/reader-safe boundary), so
+    polling it from here never steals a frame from `gotoWorld()`'s
+    single-consumer telemetry queue.
+
+    Hardware/playfield backends have no equivalent ground-truth channel
+    (`_Backend.truePose()` returns `None` there), so this sampler is used
+    only when `backend.label == "sim"`; the hardware/playfield goto tour
+    reports only the coarser per-waypoint `GotoResult` / camera-fix
+    numbers instead."""
+
+    PERIOD = 0.02  # [s] ~50 Hz sampling
+
+    def __init__(self, backend: "_Backend", targetX: float, targetY: float) -> None:
+        # [mm] [mm] -- targetX/targetY in the SAME mm frame backend.truePose() reports
+        self._backend = backend
+        self._targetX = targetX
+        self._targetY = targetY
+        self.samples: "list[tuple[float, float, float, float]]" = []  # (t, x, y, distance)
+        self._stopFlag = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self) -> None:
+        t0 = time.monotonic()
+        while not self._stopFlag.is_set():
+            x, y, _h = self._backend.truePose()
+            distance = math.hypot(self._targetX - x, self._targetY - y)
+            self.samples.append((time.monotonic() - t0, x, y, distance))
+            time.sleep(self.PERIOD)
+
+    def __enter__(self) -> "_TruePoseSampler":
+        self._thread.start()
+        return self
+
+    def __exit__(self, *exc) -> None:
+        self._stopFlag.set()
+        self._thread.join(timeout=1.0)
+
+    def analyze(self, tolerance: float, stallWindow: float = GOTO_STALL_WINDOW,
+                stallEps: float = GOTO_STALL_EPS) -> dict:
+        """(minDistance, endDistance, overshoot, stalled) from the sampled
+        trace, [mm]/[mm]/[mm]/bool.
+
+        `overshoot`: how much farther the robot ended up than the closest
+        it got during the approach -- 0.0 if distance-to-target shrank
+        monotonically, as expected for one constant-speed arc to a single
+        fixed target (this solver never reverses direction).
+
+        `stalled`: True iff any `stallWindow`-second span shows less than
+        `stallEps` mm of net progress while still outside `tolerance` --
+        a coarse but real check for the drivetrain-deadband stall this
+        loop's own module docstring names as the failure mode
+        `TERMINATION_TOLERANCE` exists to stay clear of (project memory
+        `deadband-dead-zone-and-boost-fix.md`)."""
+        if not self.samples:
+            return dict(minDistance=None, endDistance=None, overshoot=None, stalled=None)
+        distances = [d for _, _, _, d in self.samples]
+        minDistance = min(distances)
+        endDistance = distances[-1]
+        overshoot = max(0.0, endDistance - minDistance)
+        stalled = False
+        for i, (t, _, _, d) in enumerate(self.samples):
+            if d <= tolerance:
+                continue
+            for t2, _, _, d2 in self.samples[i:]:
+                if t2 - t < stallWindow:
+                    continue
+                if d - d2 < stallEps:
+                    stalled = True
+                break
+        return dict(minDistance=minDistance, endDistance=endDistance,
+                    overshoot=overshoot, stalled=stalled)
+
+
+def reportGotoBoundaryFixes(fixes: "list[dict]") -> None:
+    """Per-boundary report from goto mode's own camera fixes (start + one
+    per waypoint) -- the goto-mode analogue of `reportSegmentFixes()`, but
+    over corner-to-corner hops (position+heading combined in one number,
+    since a `gotoWorld()` corner is not split into separate leg/turn stops
+    the way the segmented tour's are). No-op with fewer than 2 fixes
+    (sim, bench with no camera, or a tour that aborted before boundary 2)."""
+    cameraFixes = [f for f in fixes if f["camera"] is not None]
+    if len(cameraFixes) < 2:
+        return
+    print(f"\ngoto-mode per-boundary camera fixes ({len(cameraFixes)}/{len(fixes)} boundaries seen):")
+    for prev, cur in zip(cameraFixes, cameraFixes[1:]):
+        x0, y0, yaw0 = prev["camera"]
+        x1, y1, yaw1 = cur["camera"]
+        hop = math.hypot(x1 - x0, y1 - y0) * 10.0  # [mm]
+        dyaw = ((yaw1 - yaw0 + math.pi) % (2.0 * math.pi)) - math.pi
+        print(f"  {prev['label']} -> {cur['label']}: hop={hop:.1f}mm "
+              f"heading_delta={math.degrees(dyaw):+.1f}deg")
+    x0, y0, _ = cameraFixes[0]["camera"]
+    x1, y1, _ = cameraFixes[-1]["camera"]
+    print(f"camera closure (first vs last fix): {math.hypot(x1 - x0, y1 - y0) * 10.0:.1f} mm")
+
+
+def writeGotoChart(results: "list[dict]", fixes: "list[dict]",
+                   closureWorld: "float | None", out: str, label: str) -> None:
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, (axPath, axConv) = plt.subplots(
+        1, 2, figsize=(14, 6), gridspec_kw={"width_ratios": [1, 1.4]})
+
+    x0 = fixes[0]["pose"].x * 10.0 if fixes and fixes[0]["pose"] is not None else 0.0
+    y0 = fixes[0]["pose"].y * 10.0 if fixes and fixes[0]["pose"] is not None else 0.0
+    relXs, relYs, labels = [], [], []
+    for f in fixes:
+        if f["pose"] is None:
+            continue
+        relXs.append(f["pose"].x * 10.0 - x0)
+        relYs.append(f["pose"].y * 10.0 - y0)
+        labels.append(f["label"])
+    axPath.plot(relXs, relYs, marker="o", color="#1f77b4", lw=1.6)
+    for lbl, x, y in zip(labels, relXs, relYs):
+        axPath.annotate(lbl, xy=(x, y), fontsize=8, xytext=(4, 4), textcoords="offset points")
+    axPath.set_aspect("equal")
+    axPath.set_xlabel("x [mm]")
+    axPath.set_ylabel("y [mm]")
+    axPath.set_title("goto-mode waypoint path (WorldPose)")
+    axPath.grid(True, alpha=0.3)
+
+    hasSamples = any(r.get("samples") for r in results)
+    if hasSamples:
+        for r in results:
+            samples = r.get("samples") or []
+            if not samples:
+                continue
+            axConv.plot([s[0] for s in samples], [s[3] for s in samples], label=r["label"])
+        axConv.axhline(0, color="black", lw=0.5)
+        axConv.set_xlabel("time within corner call [s]")
+        axConv.set_ylabel("distance to target (ground truth) [mm]")
+        axConv.set_title("per-corner convergence")
+        axConv.legend(fontsize=8)
+        axConv.grid(True, alpha=0.25)
+    else:
+        axConv.axis("off")
+        summary = "\n".join(
+            f"{r['label']}: success={r['result'].success} "
+            f"it={r['result'].iterations} sent={r['result'].sent}"
+            for r in results)
+        axConv.text(0.02, 0.98, summary, va="top", fontsize=9, family="monospace")
+        axConv.set_title("per-corner GotoResult summary")
+
+    title = f"Square tour goto-mode ({label})"
+    if closureWorld is not None:
+        title += f" -- closure {closureWorld:.0f} mm"
+    fig.suptitle(title, fontsize=13)
+    fig.tight_layout(rect=(0, 0, 1, 0.94))
+    fig.savefig(out, dpi=130)
+    print(f"wrote {out}")
+
+
+def runGotoTour(backend: "_Backend", args) -> int:
+    """--mode goto: the same square, driven as a sequence of `gotoWorld()`
+    position waypoints (ticket 006's outer position loop) instead of
+    open-loop WHEELS / closed-loop-MOVE segments.
+
+    One `MoveIdAllocator` is shared across every waypoint in the tour --
+    required by `planner.gotoWorld()`'s own docstring for any caller
+    issuing multiple sequential goto calls in one robot boot session (a
+    fresh per-call allocator risks a later, genuinely new move being
+    misread as a duplicate of an earlier one that reused the same low
+    id) -- seeded from wall-clock time (matching this module's own
+    `_ID_BASE` and 127-002's finding that the robot does not necessarily
+    reboot between separate script invocations)."""
+    from robot_radio.field import captureFixWithRetry
+    from robot_radio.pathplan.planner import (GiveUpLimits, MoveIdAllocator,
+                                              TERMINATION_TOLERANCE, gotoWorld)
+    from robot_radio.pathplan.solver import SolverLimits
+    from robot_radio.pathplan.world_pose import WorldPose
+
+    proto = backend.proto
+    if not args.sim:
+        _installEstopSignalHandler(proto)
+
+    worldPose = WorldPose()
+    geofence = getattr(backend, "geofence", None)
+    tolerance = args.goto_tolerance if args.goto_tolerance is not None else TERMINATION_TOLERANCE
+
+    # Seed WorldPose from one real telemetry frame, then re-anchor:
+    #   SIM       -- from SimLoop.get_true_pose(), the sim-tier stand-in
+    #                for a startup camera fix (matches
+    #                test_pathplan_goto_convergence.py's own established
+    #                idiom, 127-006).
+    #   PLAYFIELD (geofence present) -- from a real camera fix.
+    #   BENCH (hardware, no camera) -- left un-anchored: worldPose() then
+    #                reports the raw encoder-integrated pose from boot
+    #                (identity T_world_from_odom), which IS "encoder-judged
+    #                closure" for a stand run with no camera.
+    frames = []
+    deadline = time.monotonic() + 5.0
+    while not frames and time.monotonic() < deadline:
+        frames = backend.advance(CYCLE_S)
+    if not frames:
+        print("FAIL: no telemetry received -- cannot seed WorldPose")
+        return 1
+    for frame in frames:
+        worldPose.ingest(frame)
+
+    startTrue = None
+    if args.sim:
+        startTrue = backend.truePose()
+        worldPose.reanchor((startTrue[0] / 10.0, startTrue[1] / 10.0, startTrue[2]))
+    elif geofence is not None:
+        fix = captureFixWithRetry(geofence, "start")
+        if fix is None:
+            print("FAIL: no camera fix at start -- cannot re-anchor WorldPose")
+            return 1
+        worldPose.reanchor(fix)
+
+    startPose = worldPose.worldPose()
+    if startPose is None:
+        print("FAIL: WorldPose has no pose after seeding")
+        return 1
+
+    waypoints = gotoSquareWaypoints(startPose, args.leg)
+    limits = SolverLimits(trackWidth=PHYSICAL_TRACK, speed=CRUISE)
+    giveUp = GiveUpLimits(maxIterations=400, giveUpTimeout=30.0)
+    allocator = MoveIdAllocator(start=_ID_BASE + 1)
+
+    startCamera = captureFixWithRetry(geofence, "start") if geofence is not None else None
+    fixes = [dict(label="start", pose=startPose, camera=startCamera)]
+    results: "list[dict]" = []
+
+    for idx, waypoint in enumerate(waypoints):
+        label = f"corner {idx + 1}"
+        sampler = (_TruePoseSampler(backend, waypoint.x * 10.0, waypoint.y * 10.0)
+                  if args.sim else None)
+        if sampler is not None:
+            sampler.__enter__()
+        result = gotoWorld(proto, worldPose, waypoint.x, waypoint.y,
+                           limits=limits, geofence=geofence, tolerance=tolerance,
+                           giveUp=giveUp, moveIds=allocator)
+        analysis = None
+        if sampler is not None:
+            sampler.__exit__()
+            analysis = sampler.analyze(tolerance)
+
+        line = (f"[{label}] success={result.success} reason={result.reason!r} "
+               f"iterations={result.iterations} sent={result.sent}")
+        if analysis is not None and analysis["minDistance"] is not None:
+            line += (f" minDistance={analysis['minDistance']:.1f}mm "
+                     f"overshoot={analysis['overshoot']:.1f}mm stalled={analysis['stalled']}")
+        print(line)
+
+        divergence = worldPose.encoderOtosDivergence()
+        if divergence is not None:
+            print(f"  encoder-vs-OTOS divergence: distance={divergence.distance * 10.0:.1f}mm "
+                  f"heading={math.degrees(divergence.heading):+.2f}deg")
+
+        camera = captureFixWithRetry(geofence, label) if geofence is not None else None
+        fixes.append(dict(label=label, pose=worldPose.worldPose(), camera=camera))
+        results.append(dict(label=label, result=result, analysis=analysis,
+                            samples=(sampler.samples if sampler is not None else None)))
+
+        if not result.success:
+            print(f"FAIL: {label} did not converge -- stopping the tour here")
+            break
+
+    completedAll = len(results) == len(waypoints) and all(r["result"].success for r in results)
+    finalPose = worldPose.worldPose()
+    closureWorld = (math.hypot(finalPose.x - startPose.x, finalPose.y - startPose.y) * 10.0
+                    if finalPose is not None else None)
+
+    print(f"\n[{backend.label}] goto-mode square: {len(results)}/{len(waypoints)} waypoints "
+          f"attempted, {sum(1 for r in results if r['result'].success)}/{len(waypoints)} converged")
+    if closureWorld is not None:
+        print(f"  WorldPose closure (start -> end, "
+              f"{'plant truth' if args.sim else 'encoder' if geofence is None else 'camera-anchored'}): "
+              f"{closureWorld:.1f} mm")
+
+    overshoots = [r["analysis"]["overshoot"] for r in results
+                 if r["analysis"] is not None and r["analysis"]["overshoot"] is not None]
+    stalls = [r["analysis"]["stalled"] for r in results if r["analysis"] is not None]
+    if overshoots:
+        maxOvershoot = max(overshoots)
+        overshootOk = maxOvershoot <= GOTO_OVERSHOOT_BOUND
+        print(f"  {'PASS' if overshootOk else 'FAIL'}: max overshoot {maxOvershoot:.1f} mm "
+              f"(bound {GOTO_OVERSHOOT_BOUND:.0f} mm)")
+    if stalls:
+        anyStalled = any(stalls)
+        print(f"  {'FAIL' if anyStalled else 'PASS'}: stall detected = {anyStalled} "
+              f"(window {GOTO_STALL_WINDOW:.1f}s / eps {GOTO_STALL_EPS:.0f}mm)")
+
+    if args.sim and startTrue is not None:
+        endTrue = backend.truePose()
+        trueClosure = math.hypot(endTrue[0] - startTrue[0], endTrue[1] - startTrue[1])
+        print(f"  ground-truth closure (SimLoop.get_true_pose()): {trueClosure:.1f} mm")
+
+    reportGotoBoundaryFixes(fixes)
+
+    chartPath = args.chart or f"src/tests/bench/square_tour_goto_{backend.label}.png"
+    writeGotoChart(results, fixes, closureWorld, chartPath, backend.label)
+
+    if not completedAll:
+        print("FAIL: goto-mode square tour did not converge at every waypoint")
+        return 1
+    print("PASS: goto-mode square tour closed")
+    return 0
+
+
+def runActuationFloorMeasurement(backend: "_Backend", args) -> int:
+    """--mode actuation-floor (127-007, Decision 4's feedback-loop
+    obligation): PLAYFIELD ONLY. Issues a DESCENDING series of small
+    Distance-stopped and Angle-stopped `move_twist()` moves, camera-fixing
+    immediately before and after each (at rest), to find the smallest
+    commanded distance/angle that still reliably produces close-to-
+    commanded motion -- the real actuation floor `planner.
+    TERMINATION_TOLERANCE` is provisional pending.
+
+    NOT run by this ticket's own pass: the robot was on the STAND
+    (wheels unloaded) for this pass, and an unloaded-wheel floor would be
+    optimistically wrong -- see this ticket's Completion Notes. Refuses
+    to run without a camera geofence (raises `SystemExit`) rather than
+    silently substituting a bench measurement.
+
+    Prints raw (commanded, measured) pairs for both distance and angle
+    and stops WITHOUT auto-selecting a floor value or writing it into
+    `planner.py` -- picking the actual floor from this raw data, and
+    updating `TERMINATION_TOLERANCE` with it, is a judgment call for
+    whoever reviews the data once it exists (this ticket's own acceptance
+    wording: "raw data, not just the final number")."""
+    geofence = getattr(backend, "geofence", None)
+    if geofence is None:
+        raise SystemExit(
+            "actuation-floor measurement requires the playfield camera "
+            "(geofence) -- refusing to run on the bench/stand, where "
+            "unloaded wheels would understate the real floor (see this "
+            "ticket's Completion Notes)")
+    from robot_radio.field import captureFixWithRetry
+
+    def awaitMoveAndSettle(timeout: float) -> None:
+        seen = False
+        deadline = time.monotonic() + timeout / 1000.0 + 2.0
+        while time.monotonic() < deadline:
+            frames = backend.advance(0.1)
+            if frames:
+                if frames[-1].active:
+                    seen = True
+                elif seen:
+                    break
+        backend.advance(SEGMENT_REST)
+
+    results = {"distance": [], "angle": []}
+
+    print("measuring minimum reliable move DISTANCE...")
+    for d in args.floor_distances:
+        before = captureFixWithRetry(geofence, f"dist-{d:.0f}mm-before")
+        timeout = max(1500.0, d / CRUISE * 1000.0 * 4.0 + 1000.0)
+        moveId = int(time.time() * 1000) % 1_000_000_000
+        backend.proto.move_twist(CRUISE, 0.0, 0.0, stop_distance=d, timeout=timeout,
+                                 move_id=moveId)
+        awaitMoveAndSettle(timeout)
+        after = captureFixWithRetry(geofence, f"dist-{d:.0f}mm-after")
+        measured = (math.hypot(after[0] - before[0], after[1] - before[1]) * 10.0
+                    if before is not None and after is not None else None)
+        print(f"  commanded {d:.0f} mm -> measured "
+              f"{'n/a (camera fix missing)' if measured is None else f'{measured:.1f} mm'}")
+        results["distance"].append((d, measured))
+
+    print("measuring minimum reliable TURN angle...")
+    omega = 2.0  # [rad/s] matches segments()'s own TURN_SPEED regime, well above the crawl boundary
+    for a in args.floor_angles:
+        rad = math.radians(a)
+        before = captureFixWithRetry(geofence, f"angle-{a:.0f}deg-before")
+        timeout = max(1500.0, rad / omega * 1000.0 * 4.0 + 1000.0)
+        moveId = int(time.time() * 1000) % 1_000_000_000
+        backend.proto.move_twist(0.0, 0.0, omega, stop_angle=rad, timeout=timeout,
+                                 move_id=moveId)
+        awaitMoveAndSettle(timeout)
+        after = captureFixWithRetry(geofence, f"angle-{a:.0f}deg-after")
+        measured = None
+        if before is not None and after is not None:
+            dyaw = ((after[2] - before[2] + math.pi) % (2.0 * math.pi)) - math.pi
+            measured = math.degrees(dyaw)
+        print(f"  commanded {a:.0f} deg -> measured "
+              f"{'n/a (camera fix missing)' if measured is None else f'{measured:+.1f} deg'}")
+        results["angle"].append((a, measured))
+
+    print("\nraw data (commanded, measured):")
+    print(f"  distance: {results['distance']}")
+    print(f"  angle: {results['angle']}")
+    print("\nNOT auto-selecting a floor value or writing planner.py's "
+          "TERMINATION_TOLERANCE -- see this function's own docstring.")
+    return 0
+
+
+def _floatList(text: str) -> "list[float]":
+    """argparse type: 'a,b,c' -> [a, b, c] -- used by --floor-distances/
+    --floor-angles (--mode actuation-floor)."""
+    return [float(v) for v in text.split(",") if v.strip()]
+
+
 def main() -> int:
     global LEG
     p = argparse.ArgumentParser(description=__doc__)
@@ -716,18 +1204,63 @@ def main() -> int:
                         "playfield and skews the tour's start heading.")
     p.add_argument("--chart", default=None,
                    help="output PNG path (default: src/tests/bench/square_tour_<backend>.png)")
+    p.add_argument("--mode", choices=("segments", "goto", "actuation-floor"),
+                   default="segments",
+                   help="'segments' (default): the original 8-segment WHEELS/MOVE "
+                        "tour, unchanged. 'goto': drive the same square as 4 "
+                        "gotoWorld() position waypoints (127-007). "
+                        "'actuation-floor': PLAYFIELD-ONLY minimum-reliable-move "
+                        "measurement (127-007); refuses to run without the camera "
+                        "geofence.")
+    p.add_argument("--goto-tolerance", type=float, default=None,
+                   help="[mm] gotoWorld() arrival tolerance for --mode goto "
+                        "(default: pathplan.planner.TERMINATION_TOLERANCE)")
+    p.add_argument("--floor-distances", type=_floatList,
+                   default=_floatList("150,100,80,60,50,40,30,20,15,10,5"),
+                   help="[mm] comma-separated, descending: commanded distances "
+                        "for --mode actuation-floor's distance sweep")
+    p.add_argument("--floor-angles", type=_floatList,
+                   default=_floatList("45,30,20,15,10,8,6,4,2"),
+                   help="[deg] comma-separated, descending: commanded turn "
+                        "angles for --mode actuation-floor's angle sweep")
     args = p.parse_args()
 
     LEG = args.leg
 
-    backend: _Backend = (SimBackend(args.robot_json) if args.sim
-                         else HardwareBackend(args.port, args.robot_json))
-    tour = Tour(backend)
+    backend: _Backend = (
+        SimBackend(args.robot_json, realTime=(args.mode == "goto")) if args.sim
+        else HardwareBackend(args.port, args.robot_json))
     if not args.sim and not args.no_geofence:
         checkPlayfieldLights()
         backend.geofence = Geofence(backend.proto, margin=args.geofence_margin)
         print(f"geofence ARMED: stops the robot within "
               f"{args.geofence_margin:.0f} cm of the field edge, and on tag loss")
+
+    if args.mode == "goto":
+        try:
+            return runGotoTour(backend, args)
+        except GeofenceViolation as exc:
+            print(f"ABORTED: {exc}")
+            print("motors stopped by the geofence")
+            return 2
+        finally:
+            if getattr(backend, "geofence", None) is not None:
+                backend.geofence.close()
+            backend.close()
+
+    if args.mode == "actuation-floor":
+        try:
+            return runActuationFloorMeasurement(backend, args)
+        except GeofenceViolation as exc:
+            print(f"ABORTED: {exc}")
+            print("motors stopped by the geofence")
+            return 2
+        finally:
+            if getattr(backend, "geofence", None) is not None:
+                backend.geofence.close()
+            backend.close()
+
+    tour = Tour(backend)
     tour.movingPrelude = args.moving_prelude
     tour.turnMode = args.turn_mode
     tour.legMode = args.leg_mode
