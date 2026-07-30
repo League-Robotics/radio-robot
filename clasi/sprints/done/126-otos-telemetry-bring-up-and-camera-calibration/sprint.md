@@ -1,10 +1,15 @@
 ---
 id: '126'
 title: OTOS Telemetry Bring-Up and Camera Calibration
-status: planning-docs
+status: closed
 branch: sprint/126-otos-telemetry-bring-up-and-camera-calibration
 worktree: false
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
 issues:
 - otos-telemetry-bring-up-and-camera-calibration.md
 ---
