@@ -19,15 +19,32 @@ Modes so far:
                       configured ``odometry_offset_mm`` lever arm is correct
                       in magnitude AND sign, from one measured in-place
                       rotation against camera truth.
+  --mode distance     (126-003) Fit ``calibration.otos_linear_scale`` against
+                      camera truth from many straight-line runs of differing
+                      lengths, both directions -- fitted scale plus residual
+                      mean/spread, not just a single-point check.
+  --mode heading      (126-004) Fit ``calibration.otos_angular_scale`` against
+                      camera truth from many in-place turns of differing
+                      magnitudes, both directions, tether-safe throughout --
+                      fitted scale plus residual mean/spread.
 
-Both modes are hardware/playfield-only (no ``--sim``) -- there is nothing to
+All modes are hardware/playfield-only (no ``--sim``) -- there is nothing to
 unit-test about a camera-vs-sensor comparison (see the sprint's Test
 Strategy). Every connection path calls ``estop()`` (never ``stop()``) in a
 ``finally`` block, per ``.claude/rules/playfield-testing.md``.
 
+``--mode distance``/``--mode heading`` only MEASURE and REPORT a fitted
+scale -- ``otos_linear_scale``/``otos_angular_scale`` are boot-baked
+(``gen_boot_config.py`` -> ``OtosBootConfig``), not runtime-settable, so
+correcting one is a separate step: edit ``data/robots/tovez.json``, reflash
+(``mbdeploy deploy --build``), then re-run a subset (``--lengths``/
+``--turn-angles``/``--reps``) to spot-check the correction.
+
 Usage:
     uv run python src/tests/bench/otos_calibration_bench.py --port /dev/cu.usbmodem21141112 --mode units
     uv run python src/tests/bench/otos_calibration_bench.py --port /dev/cu.usbmodem21141112 --mode lever-arm
+    uv run python src/tests/bench/otos_calibration_bench.py --port /dev/cu.usbmodem21141112 --mode distance
+    uv run python src/tests/bench/otos_calibration_bench.py --port /dev/cu.usbmodem21141112 --mode heading
 """
 from __future__ import annotations
 
@@ -84,6 +101,18 @@ SOUTH_HEADING_MARGIN_DEG = 20.0  # [deg] minimum clearance from south
                                   # crossing south but ends or passes within
                                   # a few degrees of it is not what "never
                                   # through south" means in practice.
+
+REPS_PER_COMBO = 3               # default repeats per length/direction (or
+                                  # magnitude/direction) combination,
+                                  # --mode distance / --mode heading
+DISTANCE_LEGS_MM = (150.0, 300.0, 450.0)  # [mm] short/medium/long spread,
+                                            # --mode distance -- all well
+                                            # inside the field limits even
+                                            # doubled by the ping-pong
+                                            # forward/backward pattern
+TURN_ANGLES_DEG = (15.0, 45.0, 90.0, 135.0)  # [deg] --mode heading spread,
+                                               # enough to catch a magnitude-
+                                               # dependent error
 
 
 # ---------------------------------------------------------------------------
@@ -220,6 +249,23 @@ def checkLiveness(proto: "NezhaProtocol", geofence: "Geofence | None",
     return ok, tlm
 
 
+def _resolveRobotJsonPath(robotJsonOverride: "str | None") -> pathlib.Path:
+    """Resolve which robot JSON file this script's config reads (and, for
+    --mode distance/--mode heading, calibration edits) apply to: an
+    explicit --robot-json override, else the active robot pointer
+    (data/robots/active_robot.json), else tovez.json. Shared by
+    loadConfiguredOffsetMm() and loadCommittedScale() -- one resolution,
+    not two copies of it."""
+    if robotJsonOverride is not None:
+        return pathlib.Path(robotJsonOverride)
+    pointer = _REPO_ROOT / "data" / "robots" / "active_robot.json"
+    if pointer.exists():
+        spec = json.loads(pointer.read_text())
+        if "path" in spec:
+            return _REPO_ROOT / spec["path"]
+    return _REPO_ROOT / "data" / "robots" / "tovez.json"
+
+
 def loadConfiguredOffsetMm(robotJsonOverride: "str | None"
                            ) -> "tuple[float, float, str]":  # [mm] [mm]
     """The configured odometry_offset_mm lever arm (x, y) -- read from the
@@ -228,18 +274,40 @@ def loadConfiguredOffsetMm(robotJsonOverride: "str | None"
     Returns (x, y, path-used) so the caller can print provenance."""
     from robot_radio.config.robot_config import load_robot_config
 
-    path: "pathlib.Path | str | None" = robotJsonOverride
-    if path is None:
-        pointer = _REPO_ROOT / "data" / "robots" / "active_robot.json"
-        if pointer.exists():
-            spec = json.loads(pointer.read_text())
-            if "path" in spec:
-                path = _REPO_ROOT / spec["path"]
-    if path is None:
-        path = _REPO_ROOT / "data" / "robots" / "tovez.json"
+    path = _resolveRobotJsonPath(robotJsonOverride)
     cfg = load_robot_config(path)
     offset = cfg.geometry.odometry_offset_mm
     return offset.x, offset.y, str(path)
+
+
+def loadCommittedScale(path: pathlib.Path, key: str) -> float:
+    """Read calibration.<key> (``otos_linear_scale``/``otos_angular_scale``)
+    straight from the robot JSON, not through the pydantic RobotConfig --
+    these are boot-baked config-file values consumed by
+    gen_boot_config.py's OtosBootConfig, not fields the loader models."""
+    data = json.loads(path.read_text())
+    return float(data["calibration"][key])
+
+
+def fitScaleThroughOrigin(xs: "list[float]", ys: "list[float]") -> float:
+    """Least-squares slope of y = k*x forced through the origin -- physically
+    correct here (zero true distance/heading-change must read back as zero
+    on both camera and OTOS, so an intercept term would only fit noise):
+    k = sum(x*y) / sum(x*x)."""
+    sumXY = sum(x * y for x, y in zip(xs, ys))
+    sumXX = sum(x * x for x in xs)
+    return sumXY / sumXX if sumXX > 1e-9 else float("nan")
+
+
+def meanAndStdDev(values: "list[float]") -> "tuple[float, float]":
+    """Sample mean and sample standard deviation (n-1 denominator; 0.0 for
+    a single-element sample rather than a division by zero)."""
+    n = len(values)
+    mean = sum(values) / n
+    if n < 2:
+        return mean, 0.0
+    variance = sum((v - mean) ** 2 for v in values) / (n - 1)
+    return mean, math.sqrt(variance)
 
 
 # ---------------------------------------------------------------------------
@@ -311,24 +379,32 @@ def clampTimeoutToClearance(requestedTimeoutMs: float,
 # ---------------------------------------------------------------------------
 
 
+def legDirectionSafe(camPose: "tuple[float, float, float]", legMm: float,
+                     sign: float, marginCm: float) -> bool:  # [mm] [cm]
+    """True if a legMm straight move in the given SIGNED direction (body-
+    frame forward=+1 / backward=-1), commanded from camPose, keeps the
+    robot at least marginCm from the field edge. Shared by
+    pickSafeLegDirection() (picks whichever direction is safe) and
+    --mode distance (2026-07-30, ticket 126-003 -- needs to validate a
+    SPECIFIC planned direction, not just find any safe one, since it must
+    cover both directions across the run)."""
+    x, y, yaw = camPose
+    dxCm = (legMm / 10.0) * math.cos(yaw) * sign
+    dyCm = (legMm / 10.0) * math.sin(yaw) * sign
+    nx, ny = x + dxCm, y + dyCm
+    return (abs(nx) <= Geofence.HALF_W - marginCm
+            and abs(ny) <= Geofence.HALF_H - marginCm)
+
+
 def pickSafeLegDirection(camPose: "tuple[float, float, float]", legMm: float,
                          marginCm: float) -> "float | None":  # [mm] [cm]
     """Choose the sign of v_x (forward=+1 / backward=-1) for a legMm straight
     move that keeps the robot at least marginCm from the field edge, given
     its current camera-measured pose. Returns None if neither direction is
     safe (caller must not move)."""
-    x, y, yaw = camPose
-    dxCm = (legMm / 10.0) * math.cos(yaw)
-    dyCm = (legMm / 10.0) * math.sin(yaw)
-
-    def safe(sign: float) -> bool:
-        nx, ny = x + sign * dxCm, y + sign * dyCm
-        return (abs(nx) <= Geofence.HALF_W - marginCm
-                and abs(ny) <= Geofence.HALF_H - marginCm)
-
-    if safe(1.0):
+    if legDirectionSafe(camPose, legMm, 1.0, marginCm):
         return 1.0
-    if safe(-1.0):
+    if legDirectionSafe(camPose, legMm, -1.0, marginCm):
         return -1.0
     return None
 
@@ -458,6 +534,163 @@ def runUnitsMode(args: argparse.Namespace) -> int:
             geofence.close()
         if conn is not None:
             conn.disconnect()
+
+
+# ---------------------------------------------------------------------------
+# --mode distance (126-003)
+# ---------------------------------------------------------------------------
+
+
+def runDistanceMode(args: argparse.Namespace) -> int:
+    print("=== otos_calibration_bench --mode distance (ticket 126-003) ===")
+    conn = proto = geofence = None
+    rows: "list[dict]" = []
+    try:
+        conn, proto, geofence = connectAndArm(args)
+
+        liveOk, _ = checkLiveness(proto, geofence, seconds=1.0)
+        if not liveOk:
+            return 1
+
+        # Ping-pong pattern per length: forward, backward, forward, ... --
+        # covers both directions of travel (ticket's own requirement) while
+        # keeping the robot's position bounded near its start (each
+        # backward leg undoes the preceding forward leg), so a long run of
+        # many legs never drifts toward an edge the way a one-directional
+        # walk would.
+        for length in args.lengths:
+            for i in range(2 * args.reps):
+                plannedSign = 1.0 if i % 2 == 0 else -1.0
+                label = f"len={length:.0f}mm {'fwd' if plannedSign > 0 else 'bwd'} rep{i // 2}"
+
+                camBefore = geofence.captureFix(f"distance before: {label}")
+                if camBefore is None:
+                    print(f"  SKIP {label}: camera did not see tag 100 at rest")
+                    continue
+                restFrames = drainFrames(proto, 0.4, geofence)
+                otosRestList = [f.otos_reading for f in restFrames if f.otos_reading is not None]
+                if not otosRestList:
+                    print(f"  SKIP {label}: no OTOS reading at rest before the leg")
+                    continue
+                otosBefore = otosRestList[-1]
+
+                sign = plannedSign
+                if not legDirectionSafe(camBefore, length, sign, args.geofence_margin):
+                    if legDirectionSafe(camBefore, length, -sign, args.geofence_margin):
+                        print(f"  {label}: planned direction unsafe from current pose -- "
+                              "using the opposite direction instead")
+                        sign = -sign
+                    else:
+                        print(f"  SKIP {label}: no field-safe direction for a {length:.0f}mm "
+                              f"leg from x={camBefore[0]:+.1f}cm y={camBefore[1]:+.1f}cm "
+                              f"yaw={math.degrees(camBefore[2]):+.1f}deg -- reposition")
+                        continue
+
+                vx = sign * args.cruise
+                requestedTimeoutMs = length / args.cruise * 1000.0 * 3.0 + 3000.0  # [ms]
+                requiredMs = length / args.cruise * 1000.0  # [ms]
+                timeoutMs, clearanceMm = clampTimeoutToClearance(
+                    requestedTimeoutMs, camBefore, vx, 0.0, args.geofence_margin)
+                if timeoutMs < requiredMs:
+                    print(f"  SKIP {label}: clamped timeout {timeoutMs:.0f}ms below the "
+                          f"{requiredMs:.0f}ms needed (camera-confirmed clearance "
+                          f"{clearanceMm:.0f}mm)")
+                    continue
+
+                print(f"commanding {label}: v_x={vx:+.0f} mm/s stop_distance={length:.0f} mm "
+                      f"timeout={timeoutMs:.0f} ms")
+                corrId = proto.move_twist(vx, 0.0, 0.0, stop_distance=length,
+                                          timeout=timeoutMs, replace=True)
+                ack = awaitAck(proto, geofence, corrId)
+                if ack is None or not ack.ok:
+                    print(f"  SKIP {label}: enqueue ack FAILED ({ack})")
+                    continue
+
+                awaitMoveCompletion(proto, geofence, timeoutMs)
+                drainFrames(proto, SEGMENT_REST, geofence)
+
+                camAfter = geofence.captureFix(f"distance after: {label}")
+                afterFrames = drainFrames(proto, 0.4, geofence)
+                otosAfterList = [f.otos_reading for f in afterFrames if f.otos_reading is not None]
+                if camAfter is None or not otosAfterList:
+                    print(f"  SKIP {label}: missing camera or OTOS reading after the leg")
+                    continue
+                otosAfter = otosAfterList[-1]
+
+                camMm = math.hypot(camAfter[0] - camBefore[0], camAfter[1] - camBefore[1]) * 10.0
+                otosMm = math.hypot(otosAfter.x - otosBefore.x, otosAfter.y - otosBefore.y)
+                errMm = otosMm - camMm
+                errPct = errMm / camMm * 100.0 if camMm > 1e-6 else float("nan")
+                rows.append(dict(length=length, sign=sign, camMm=camMm, otosMm=otosMm,
+                                  errMm=errMm, errPct=errPct))
+                print(f"  {label}: camera={camMm:.1f}mm OTOS={otosMm:.1f}mm "
+                      f"err={errMm:+.1f}mm ({errPct:+.1f}%)")
+
+        return _reportDistanceFit(rows, args)
+    finally:
+        if proto is not None:
+            try:
+                proto.tlmOff()
+            except Exception:
+                pass
+            try:
+                proto.estop()
+            except Exception:
+                pass
+        if geofence is not None:
+            geofence.close()
+        if conn is not None:
+            conn.disconnect()
+
+
+def _reportDistanceFit(rows: "list[dict]", args: argparse.Namespace) -> int:
+    """Fit OTOS distance = k * camera distance (through the origin) across
+    every valid run, derive the corrected otos_linear_scale, and print the
+    per-run table plus fitted scale, residual mean+spread, and an explicit
+    PASS/FAIL against the currently-committed value (ticket's own required
+    report shape -- not just a mean, not just a pass/fail verdict)."""
+    print(f"\n=== distance-scale fit ({len(rows)} valid runs) ===")
+    if len(rows) < 6:
+        print(f"FAIL: only {len(rows)} valid runs -- too few to fit a scale reliably "
+              "(need at least a handful spanning lengths/directions)")
+        return 1
+
+    print(f"{'length_mm':>9} {'dir':>4} {'camera_mm':>10} {'otos_mm':>10} "
+          f"{'err_mm':>8} {'err_pct':>8}")
+    for r in rows:
+        print(f"{r['length']:9.0f} {'fwd' if r['sign'] > 0 else 'bwd':>4} "
+              f"{r['camMm']:10.1f} {r['otosMm']:10.1f} {r['errMm']:8.1f} {r['errPct']:8.2f}")
+
+    camList = [r["camMm"] for r in rows]
+    otosList = [r["otosMm"] for r in rows]
+    slope = fitScaleThroughOrigin(camList, otosList)  # otos_mm ~= slope * camera_mm
+    correctionRatio = (1.0 / slope) if slope and not math.isnan(slope) else float("nan")
+
+    path = _resolveRobotJsonPath(args.robot_json)
+    committed = loadCommittedScale(path, "otos_linear_scale")
+    correctedScale = committed * correctionRatio
+
+    meanErrMm, sdErrMm = meanAndStdDev([r["errMm"] for r in rows])
+    meanErrPct, sdErrPct = meanAndStdDev([r["errPct"] for r in rows])
+    n = len(rows)
+    standardErrorPct = sdErrPct / math.sqrt(n)
+    ciLow, ciHigh = meanErrPct - 1.96 * standardErrorPct, meanErrPct + 1.96 * standardErrorPct
+    needsCorrection = not (ciLow <= 0.0 <= ciHigh)
+
+    print(f"\nfitted OTOS/camera slope (through origin): {slope:.4f}")
+    print(f"committed calibration.otos_linear_scale ({path.name}): {committed:.4f}")
+    print(f"corrected otos_linear_scale = committed x (1/slope) = "
+          f"{committed:.4f} x {correctionRatio:.4f} = {correctedScale:.4f}")
+    print(f"residual: mean={meanErrMm:+.2f}mm sd={sdErrMm:.2f}mm "
+          f"({meanErrPct:+.2f}% sd={sdErrPct:.2f}%, n={n})")
+    print(f"95% CI of mean residual: [{ciLow:+.2f}%, {ciHigh:+.2f}%]")
+    if needsCorrection:
+        print(f"FAIL: committed otos_linear_scale={committed:.4f} disagrees with measurement "
+              f"(95% CI of the mean residual excludes 0) -- correct to {correctedScale:.4f}")
+    else:
+        print(f"PASS: committed otos_linear_scale={committed:.4f} is within measured "
+              "uncertainty (95% CI of the mean residual includes 0) -- no correction needed")
+    return 0
 
 
 # ---------------------------------------------------------------------------
@@ -724,6 +957,184 @@ def runLeverArmMode(args: argparse.Namespace) -> int:
 
 
 # ---------------------------------------------------------------------------
+# --mode heading (126-004)
+# ---------------------------------------------------------------------------
+
+
+def isTurnSafe(startDeg: float, deltaDeg: float, marginDeg: float) -> bool:  # [deg] [deg] [deg]
+    """Tether-safety check for ONE candidate SIGNED turn: never sweeps
+    through south (-90/270 deg) and keeps at least marginDeg clearance from
+    it throughout. pickSafeTurnDirection() (126-002) already enforces this
+    when it is free to pick whichever of +/-angle is safe; --mode heading
+    needs to validate a SPECIFIC planned direction instead, since the
+    ticket requires covering BOTH directions across the run, not just
+    whichever pickSafeTurnDirection would choose each time."""
+    if sweepCrossesAngle(startDeg, deltaDeg, -90.0):
+        return False
+    return closestApproachToSouthDeg(startDeg, deltaDeg) >= marginDeg
+
+
+def runHeadingMode(args: argparse.Namespace) -> int:
+    print("=== otos_calibration_bench --mode heading (ticket 126-004) ===")
+    conn = proto = geofence = None
+    rows: "list[dict]" = []
+    try:
+        conn, proto, geofence = connectAndArm(args)
+
+        liveOk, _ = checkLiveness(proto, geofence, seconds=1.0)
+        if not liveOk:
+            return 1
+
+        # Ping-pong pattern per magnitude: +angle, -angle, +angle, ... --
+        # covers both directions (ticket's own requirement) while keeping
+        # net rotation near zero across the whole sequence (tether rule),
+        # since each turn is largely undone by the next. netRotationDeg is
+        # tracked and printed as a running check on that, not assumed.
+        netRotationDeg = 0.0  # [deg] cumulative camera-measured turn, tether-wrap tracker
+        for magnitude in args.turn_angles:
+            for i in range(2 * args.reps):
+                plannedSign = 1.0 if i % 2 == 0 else -1.0
+                label = f"mag={magnitude:.0f}deg {'ccw' if plannedSign > 0 else 'cw'} rep{i // 2}"
+
+                camBefore = geofence.captureFix(f"heading before: {label}")
+                if camBefore is None:
+                    print(f"  SKIP {label}: camera did not see tag 100 at rest")
+                    continue
+                startYawDeg = math.degrees(camBefore[2])
+
+                restFrames = drainFrames(proto, 0.4, geofence)
+                otosRestList = [f.otos_reading for f in restFrames if f.otos_reading is not None]
+                if not otosRestList:
+                    print(f"  SKIP {label}: no OTOS reading at rest before the turn")
+                    continue
+                otosBefore = otosRestList[-1]
+
+                deltaDeg = plannedSign * magnitude
+                if not isTurnSafe(startYawDeg, deltaDeg, SOUTH_HEADING_MARGIN_DEG):
+                    flipped = -deltaDeg
+                    if not isTurnSafe(startYawDeg, flipped, SOUTH_HEADING_MARGIN_DEG):
+                        print(f"  SKIP {label}: neither direction keeps "
+                              f"{SOUTH_HEADING_MARGIN_DEG:.0f}deg clearance from south from "
+                              f"heading {startYawDeg:+.1f}deg -- reposition")
+                        continue
+                    print(f"  {label}: planned direction unsafe from current heading -- "
+                          "using the opposite direction instead")
+                    deltaDeg = flipped
+
+                # negative commanded omega INCREASES camera yaw
+                # (playfield-testing.md: positive omega DECREASES yaw)
+                omega = -TURN_OMEGA_MAG if deltaDeg > 0 else TURN_OMEGA_MAG
+                southMargin = closestApproachToSouthDeg(startYawDeg, deltaDeg)
+
+                angleRad = math.radians(abs(deltaDeg))
+                requestedTimeoutMs = abs(angleRad / TURN_OMEGA_MAG) * 1000.0 * 3.0 + 3000.0  # [ms]
+                timeoutMs, _ = clampTimeoutToClearance(
+                    requestedTimeoutMs, camBefore, 0.0, 0.0, args.geofence_margin)
+
+                print(f"commanding {label}: delta={deltaDeg:+.0f}deg omega={omega:+.2f}rad/s "
+                      f"timeout={timeoutMs:.0f}ms south-clearance={southMargin:.1f}deg "
+                      f"(>= {SOUTH_HEADING_MARGIN_DEG:.0f} required)")
+                corrId = proto.move_twist(0.0, 0.0, omega, stop_angle=angleRad,
+                                          timeout=timeoutMs, replace=True)
+                ack = awaitAck(proto, geofence, corrId)
+                if ack is None or not ack.ok:
+                    print(f"  SKIP {label}: enqueue ack FAILED ({ack})")
+                    continue
+
+                awaitMoveCompletion(proto, geofence, timeoutMs)
+                drainFrames(proto, SEGMENT_REST, geofence)
+
+                camAfter = geofence.captureFix(f"heading after: {label}")
+                afterFrames = drainFrames(proto, 0.4, geofence)
+                otosAfterList = [f.otos_reading for f in afterFrames if f.otos_reading is not None]
+                if camAfter is None or not otosAfterList:
+                    print(f"  SKIP {label}: missing camera or OTOS reading after the turn")
+                    continue
+                otosAfter = otosAfterList[-1]
+
+                camDeg = math.degrees(
+                    ((camAfter[2] - camBefore[2] + math.pi) % (2.0 * math.pi)) - math.pi)
+                otosDeg = math.degrees(
+                    ((otosAfter.heading - otosBefore.heading + math.pi) % (2.0 * math.pi)) - math.pi)
+                netRotationDeg += camDeg
+                errDeg = otosDeg - camDeg
+                errPct = errDeg / camDeg * 100.0 if abs(camDeg) > 1e-6 else float("nan")
+                rows.append(dict(magnitude=magnitude, deltaDeg=deltaDeg, camDeg=camDeg,
+                                  otosDeg=otosDeg, errDeg=errDeg, errPct=errPct))
+                print(f"  {label}: camera={camDeg:+.1f}deg OTOS={otosDeg:+.1f}deg "
+                      f"err={errDeg:+.2f}deg ({errPct:+.1f}%) "
+                      f"net-rotation-so-far={netRotationDeg:+.1f}deg")
+
+        print(f"\nnet rotation across the whole sequence: {netRotationDeg:+.1f}deg "
+              "(tether-wrap tracker -- should stay near zero)")
+        return _reportHeadingFit(rows, args)
+    finally:
+        if proto is not None:
+            try:
+                proto.tlmOff()
+            except Exception:
+                pass
+            try:
+                proto.estop()
+            except Exception:
+                pass
+        if geofence is not None:
+            geofence.close()
+        if conn is not None:
+            conn.disconnect()
+
+
+def _reportHeadingFit(rows: "list[dict]", args: argparse.Namespace) -> int:
+    """Fit OTOS heading-change = k * camera heading-change (through the
+    origin) across every valid turn, derive the corrected
+    otos_angular_scale, and print the per-turn table plus fitted scale,
+    residual mean+spread, and an explicit PASS/FAIL against the currently-
+    committed value."""
+    print(f"\n=== heading-scale fit ({len(rows)} valid turns) ===")
+    if len(rows) < 6:
+        print(f"FAIL: only {len(rows)} valid turns -- too few to fit a scale reliably "
+              "(need at least a handful spanning magnitudes/directions)")
+        return 1
+
+    print(f"{'mag_deg':>8} {'dir':>4} {'camera_deg':>11} {'otos_deg':>10} "
+          f"{'err_deg':>8} {'err_pct':>8}")
+    for r in rows:
+        print(f"{r['magnitude']:8.0f} {'ccw' if r['deltaDeg'] > 0 else 'cw':>4} "
+              f"{r['camDeg']:11.2f} {r['otosDeg']:10.2f} {r['errDeg']:8.2f} {r['errPct']:8.2f}")
+
+    camList = [r["camDeg"] for r in rows]
+    otosList = [r["otosDeg"] for r in rows]
+    slope = fitScaleThroughOrigin(camList, otosList)  # otos_deg ~= slope * camera_deg
+    correctionRatio = (1.0 / slope) if slope and not math.isnan(slope) else float("nan")
+
+    path = _resolveRobotJsonPath(args.robot_json)
+    committed = loadCommittedScale(path, "otos_angular_scale")
+    correctedScale = committed * correctionRatio
+
+    meanErrDeg, sdErrDeg = meanAndStdDev([r["errDeg"] for r in rows])
+    meanErrPct, sdErrPct = meanAndStdDev([r["errPct"] for r in rows])
+    n = len(rows)
+    standardErrorPct = sdErrPct / math.sqrt(n)
+    ciLow, ciHigh = meanErrPct - 1.96 * standardErrorPct, meanErrPct + 1.96 * standardErrorPct
+    needsCorrection = not (ciLow <= 0.0 <= ciHigh)
+
+    print(f"\nfitted OTOS/camera slope (through origin): {slope:.4f}")
+    print(f"committed calibration.otos_angular_scale ({path.name}): {committed:.4f}")
+    print(f"corrected otos_angular_scale = committed x (1/slope) = "
+          f"{committed:.4f} x {correctionRatio:.4f} = {correctedScale:.4f}")
+    print(f"residual: mean={meanErrDeg:+.3f}deg sd={sdErrDeg:.3f}deg "
+          f"({meanErrPct:+.2f}% sd={sdErrPct:.2f}%, n={n})")
+    print(f"95% CI of mean residual: [{ciLow:+.2f}%, {ciHigh:+.2f}%]")
+    if needsCorrection:
+        print(f"FAIL: committed otos_angular_scale={committed:.4f} disagrees with measurement "
+              f"(95% CI of the mean residual excludes 0) -- correct to {correctedScale:.4f}")
+    else:
+        print(f"PASS: committed otos_angular_scale={committed:.4f} is within measured "
+              "uncertainty (95% CI of the mean residual includes 0) -- no correction needed")
+    return 0
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -734,18 +1145,30 @@ def buildArgParser() -> argparse.ArgumentParser:
     p.add_argument("--port", default=DEFAULT_PORT,
                    help="the robot's own serial port (mbdeploy list's NEZHA2 row), "
                         "not the radio relay")
-    p.add_argument("--mode", required=True, choices=("units", "lever-arm"),
+    p.add_argument("--mode", required=True,
+                   choices=("units", "lever-arm", "distance", "heading"),
                    help="which ticket's measurement to run")
     p.add_argument("--leg", type=float, default=LEG,  # [mm]
                    help="straight-leg distance for --mode units")
     p.add_argument("--cruise", type=float, default=CRUISE,  # [mm/s]
-                   help="straight-leg speed for --mode units")
+                   help="straight-leg speed for --mode units / --mode distance")
     p.add_argument("--geofence-margin", type=float, default=FIELD_SAFE_MARGIN_CM,  # [cm]
                    help="stay this far from the field edge")
     p.add_argument("--robot-json", default=None,
                    help="override the robot config read for the configured "
-                        "odometry_offset_mm (default: the active robot, "
-                        "data/robots/active_robot.json)")
+                        "odometry_offset_mm / calibration scales (default: "
+                        "the active robot, data/robots/active_robot.json)")
+    p.add_argument("--lengths", type=lambda s: [float(v) for v in s.split(",") if v.strip()],
+                   default=list(DISTANCE_LEGS_MM),  # [mm]
+                   help="comma-separated straight-leg lengths, --mode distance "
+                        f"(default {','.join(str(int(v)) for v in DISTANCE_LEGS_MM)})")
+    p.add_argument("--turn-angles", type=lambda s: [float(v) for v in s.split(",") if v.strip()],
+                   default=list(TURN_ANGLES_DEG),  # [deg]
+                   help="comma-separated turn magnitudes, --mode heading "
+                        f"(default {','.join(str(int(v)) for v in TURN_ANGLES_DEG)})")
+    p.add_argument("--reps", type=int, default=REPS_PER_COMBO,
+                   help="repeats per direction, --mode distance / --mode heading "
+                        "(each rep is one leg or turn per direction, ping-ponged)")
     return p
 
 
@@ -758,7 +1181,11 @@ def main() -> int:
     try:
         if args.mode == "units":
             return runUnitsMode(args)
-        return runLeverArmMode(args)
+        if args.mode == "lever-arm":
+            return runLeverArmMode(args)
+        if args.mode == "distance":
+            return runDistanceMode(args)
+        return runHeadingMode(args)
     except GeofenceViolation as exc:
         print(f"ABORTED: {exc}")
         print("motors stopped by the geofence")

@@ -108,7 +108,7 @@ OtosBootConfig defaultOtosBootConfig() {
     cfg.offsetX = -47.7f;        // [mm]
     cfg.offsetY = 3.5f;        // [mm]
     cfg.offsetYaw = 0.0f;    // [rad]
-    cfg.linearScale = 1.067f;
+    cfg.linearScale = 1.0275f;
     cfg.angularScale = 0.987f;
     return cfg;
 }
