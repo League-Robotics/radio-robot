@@ -1,7 +1,7 @@
 ---
 id: '125'
 title: 'Telemetry emit-policy rebuild: three-mode TLM control, delete arming machinery'
-status: planning-docs
+status: closed
 branch: sprint/125-telemetry-emit-policy-rebuild-three-mode-tlm-control-delete-arming-machinery
 worktree: false
 use-cases:
