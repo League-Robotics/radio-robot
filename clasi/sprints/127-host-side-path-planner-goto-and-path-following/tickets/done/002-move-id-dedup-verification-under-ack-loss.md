@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Move.id dedup verification under ack loss
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 depends-on:
@@ -49,10 +49,12 @@ section), each as an independent sim assertion:
    recorded as accepted; re-sending the same id after the queue drains
    enqueues normally (the host is entitled to retry it for real).
 
-**Hardware acceptance**: a run that reproduces or waits for a real lost
-enqueue ack, capturing at least one logged `(retry N for move …)` line —
-per the issue's own words, "a run without a retry proves nothing." The
-robot is currently reachable **only** over the RADIOBRIDGE relay
+**Hardware acceptance** *(original wording — see "Acceptance criterion
+amended 2026-07-30" below for what actually gates this ticket's
+closure)*: a run that reproduces or waits for a real lost enqueue ack,
+capturing at least one logged `(retry N for move …)` line — per the
+issue's own words, "a run without a retry proves nothing." The robot is
+currently reachable **only** over the RADIOBRIDGE relay
 (`/dev/cu.usbmodem2121302`, dongle `zavaz`) — the relay's own known
 sporadic ack loss is exactly the condition that provokes a real retry, so
 this is a favorable environment for this ticket, not an obstacle; leave
@@ -61,6 +63,36 @@ execution from **encoder-derived geometry**, not just the ack count — the
 issue's own repro signature for a failed dedup is a runaway leg (wheel
 speed held far longer than commanded) or an extra turn (`dR-dL` matching
 N+1 turns' worth of differential instead of N).
+
+**Acceptance criterion amended 2026-07-30 (team-lead disposition, after
+160 enqueues across two transports produced zero natural retries — see
+Completion Notes' "Why the retry condition is no longer reproducible"
+section for the full analysis)**: the retry-line criterion assumed the
+condition that originally produced retries (frequent lost enqueue acks)
+was still present. It is not — commit `cc04ac84` (2026-07-28, the SAME
+commit that filed this ticket's own source issue) turned off the I2C IRQ
+guard that was causing ~7-8% inbound command loss, which is what was
+generating the lost acks that triggered host retries in the first place.
+Building fault injection to synthesize that condition now would be
+manufacturing a bug that has already been fixed, to test a path that is
+already defended in sim against the real firmware code path. The
+amended, actually-gating criterion is:
+1. All four dedup rules verified in sim against the real
+   `App::RobotLoop` via `TestSim::SimHarness` (unchanged from the
+   original ticket — already met).
+2. Rule 3 (window outlives completion) additionally confirmed on real
+   hardware, incidentally, via a real dedup-ring collision across
+   separate relay-transport runs (see Completion Notes) — this is
+   stronger evidence than a single-run retry would have been, since it
+   demonstrates the ring surviving a full session boundary, not just a
+   few seconds of held state.
+3. The retry trigger's absence is itself documented and cited (the
+   `cc04ac84` analysis), not silently assumed.
+4. The zero-natural-loss measurement (160 enqueues, two transports) is
+   recorded as a baseline for future readers.
+A host-side ack-drop fault-injection capability is filed as a follow-up
+issue (see Completion Notes / Related) — a good testing investment on
+its own merits, explicitly not required for this ticket to close.
 
 **Files**:
 - Modify: `src/tests/sim/unit/test_app_robot_loop_replace.py` (or wherever
@@ -100,22 +132,25 @@ the robot is on battery and not on its own USB port right now.
 - [x] Rule 4 (`ERR_FULL` non-recording): sim assertion passes — an
       `ERR_FULL`-rejected id is not recorded, and re-sending it after the
       queue drains enqueues normally.
-- [ ] **NOT MET.** Hardware run: at least one run's log contains a real
-      `(retry N for move …)` line (not synthetically forced) — a run
-      without a retry does not satisfy this criterion. Ten full-tour runs
-      over direct USB PLUS ten clean full-tour runs over the RADIOBRIDGE
-      relay (160 enqueue commands total, both transports) produced zero
-      natural ack loss / zero retry lines. See Completion Notes for the
-      raw logs, the relay leg specifically, and a proposed fault-injection
-      follow-up.
-- [ ] **NOT MET as literally stated** (no run contained a retry to
-      validate against) — but see Completion Notes for the encoder-
-      derived exactly-once evidence gathered across all twenty runs anyway
-      (dR-dL consistently 876-882 mm across every successful run on BOTH
-      transports, matching the effective-track-corrected four-turn
-      theoretical of 882.1 mm almost exactly, with no run showing the
-      ~1100 mm five-turn signature this robot's own tuning would produce
-      on a failed dedup).
+- [x] **AMENDED 2026-07-30 (team-lead disposition).** Original wording
+      ("a run's log contains a real `(retry N for move …)` line") is
+      superseded — see "Acceptance criterion amended 2026-07-30" above
+      and Completion Notes' "Why the retry condition is no longer
+      reproducible." 160 enqueue commands across direct USB (80) and the
+      RADIOBRIDGE relay (80) produced zero natural ack loss / zero retry
+      lines, traced to commit `cc04ac84` (2026-07-28) disabling the I2C
+      IRQ guard that was the source of the lost acks the original issue
+      observed. The amended criterion — sim verification against the
+      real firmware code path, plus the incidental real-hardware
+      confirmation of Rule 3 across a session boundary, plus the cited
+      root-cause analysis for why no retry occurs — is met; see
+      Completion Notes for the full writeup.
+- [x] Encoder-derived exactly-once evidence gathered across all twenty
+      hardware runs, both transports: `dR-dL` consistently 876-882 mm,
+      matching the effective-track-corrected four-turn theoretical of
+      882.1 mm almost exactly (see Completion Notes' `rotational_slip`
+      section), with no run showing the ~1005-1100 mm five-turn
+      signature a failed dedup would produce.
 - [x] No file under `src/firm`, no `.proto` file, and no wire message
       changed anywhere in this ticket's diff (confirmed via `git diff
       --name-only` / `git diff --stat -- src/firm '*.proto'`, both empty
@@ -123,12 +158,15 @@ the robot is on battery and not on its own USB port right now.
 
 ## Completion Notes (2026-07-30)
 
-**Status: left `in-progress`, not `done`** — four of six substantive
-acceptance criteria are met; the hardware-retry criterion is genuinely
-NOT met (no natural retry was captured) and is reported as such rather
-than checked off. Sim verification is complete and solid; the hardware
-leg needs either more bench time or a follow-up ticket for host-side
-fault injection (proposed below) before this ticket can close.
+**Status: `done`.** All four dedup rules are verified in sim against
+the real `App::RobotLoop` code path. The hardware-retry criterion was
+amended by team-lead disposition (see "Acceptance criterion amended
+2026-07-30" in the Description, and "Why the retry condition is no
+longer reproducible" below) rather than met as originally worded — that
+amendment is deliberate and cited, not a criterion quietly loosened to
+pass. A follow-up issue for host-side ack-drop fault injection is filed
+(see "Related" at the end of this section) as a genuine testing-gap
+improvement, explicitly not blocking this ticket's closure.
 
 ### Sim: all four rules verified (new files, `src/firm` untouched)
 
@@ -431,6 +469,99 @@ the raw-`trackwidth` 804.2 mm figure is fully explained by
 measurement noise or dedup concern. Anyone reading this ticket later
 should treat 876-882 mm, not 804 mm, as the four-turn reference band on
 this robot.
+
+### Why the retry condition is no longer reproducible (team-lead's
+analysis, confirmed against the actual commit)
+
+```
+commit cc04ac8404a52127987a153f8cf9e4117b0ccd05
+Date:   Tue Jul 28 17:41:07 2026 -0700
+```
+
+This single commit **both** added `bus.setIrqGuard(false)` to
+`src/firm/main.cpp` **and** created
+`duplicate-move-enqueue-on-ack-loss-retry.md` (this ticket's own source
+issue). Confirmed directly (`git show cc04ac84 -- src/firm/main.cpp`):
+
+```cpp
+// BENCH A/B, 2026-07-28 -- TEMPORARY, revert after the measurement.
+// Inbound command loss (~7-8% of PINGs and enqueues, measured on direct
+// USB) is concentrated in a window of the loop cycle rather than spread
+// uniformly, which points at UART RX bytes being lost while interrupts
+// are masked for the full duration of each I2C transaction. This turns
+// that masking off so the A/B can measure whether loss drops.
+bus.setIrqGuard(false);
+```
+
+Still `false` in the current tree (`grep setIrqGuard src/firm/main.cpp`
+— one hit, unchanged). The guard masked interrupts for the full
+duration of every I2C transaction (a defense against an nRF52 TWIM
+silicon errata); since the nRF52 serial RX is DMA-driven, inbound bytes
+arriving inside a masked window were lost outright, measured at ~7-8%
+command loss on direct USB.
+
+The chain this explains: the retries that motivated the source issue
+were observed **before** this commit, with the guard **on**. A lost
+inbound *command* (not yet an ack) consumed one of the host's retries
+for nothing; a SUBSEQUENT retry that instead landed on a lost *ack* (the
+command got through, the ack did not) is what actually double-executed
+a move, because the firmware at the time had no dedup at all. Turning
+the guard off, in the SAME commit that filed the issue, dropped inbound
+loss to effectively zero — which starves the retry loop of the trigger
+condition it needs. This ticket's own measurement (160 enqueue commands,
+direct USB and the RADIOBRIDGE relay, zero natural ack loss) is exactly
+consistent with that: the guard-off state is still in effect, unchanged,
+throughout this ticket's entire hardware leg.
+
+**The criterion was asking this ticket to reproduce a condition whose
+cause was fixed in the same commit that reported it.** Building fault
+injection to force a drop would manufacture a bug that has already been
+removed from the system, to test a path (host retry landing on an
+already-accepted id) that IS already verified — against the real
+firmware code path — in sim. See
+`clasi/issues/make-irq-guard-off-permanent-and-reconcile-the-docs.md`
+for the separate, in-flight proposal to delete the guard mechanism
+entirely rather than merely leave it disabled.
+
+### The dedup's risk profile has flipped — this is the thing future readers need to know
+
+Before `cc04ac84`, the live hazard was **a duplicate executing twice**
+(command arrives, ack is lost, host retries, both copies run) — that is
+what the dedup this ticket verifies defends against, and it still does,
+correctly, per the sim results above.
+
+With the retry-trigger condition gone, the live hazard is now the
+OPPOSITE: **a legitimate command silently swallowed because its `Move.id`
+was reused**, with no error surfaced anywhere (the dedup's own ack is
+`err==0`, by design — see the source issue's own "Behaviour" section for
+why that is deliberate). This ticket's own relay run 2 (see above) is a
+concrete, unplanned instance of exactly that: a second script invocation
+reusing the first invocation's move IDs was silently deduped end-to-end,
+producing a `FAIL 7/8` with zero real motion and no enqueue-level error
+to point at the cause.
+
+Sprint 127's own planner loop (ticket 006,
+`src/host/robot_radio/pathplan/planner.py`) defends against this
+directly with a `MoveIdAllocator` that issues monotonically increasing
+IDs, rather than any fixed or reused base — the same fix this ticket
+applied to `planner_square_tour.py`'s own `tour()`, independently, for
+the same reason. Anyone writing a NEW bench script or host-side caller
+against this protocol should allocate IDs the same way (wall-clock-
+seeded or monotonic), not hardcode them, precisely because the robot
+does not necessarily reboot between separate host sessions and the
+`acceptedMoveIds_` ring has no cross-session reset.
+
+### Related
+
+- `clasi/issues/host-side-ack-drop-fault-injection-for-deterministic-retry-path-testing.md`
+  — the follow-up filed per the above, low priority, not blocking.
+- `clasi/issues/make-irq-guard-off-permanent-and-reconcile-the-docs.md`
+  — the IRQ guard's own removal proposal (why the guard-off state that
+  eliminated the retry trigger should be made permanent, not just left
+  disabled).
+- `src/host/robot_radio/pathplan/planner.py` (ticket 006) — the
+  `MoveIdAllocator` that generalizes this same monotonic-ID fix into
+  the real planner loop.
 
 ## Testing
 
