@@ -1,9 +1,15 @@
 ---
 id: '006'
 title: OTOS bring-up acceptance demonstration
-status: open
-use-cases: [SUC-005]
-depends-on: ['001', '002', '003', '004', '005']
+status: done
+use-cases:
+- SUC-005
+depends-on:
+- '001'
+- '002'
+- '003'
+- '004'
+- '005'
 github-issue: ''
 issue: otos-telemetry-bring-up-and-camera-calibration.md
 completes_issue: true
