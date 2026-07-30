@@ -56,7 +56,7 @@ QUEUE_DEPTH = 5      # 1 active + 4 pending
 WALL_LIMIT = 120.0   # [s] whole-tour wall-clock bound
 
 
-def tour(omega: float = OMEGA) -> list[dict]:
+def tour(omega: float = OMEGA, id_base: int | None = None) -> list[dict]:
     """The 8 tour moves as move_twist() kwargs, in order.
 
     `omega` [rad/s] sets the pivot rate, i.e. each wheel runs at
@@ -68,20 +68,34 @@ def tour(omega: float = OMEGA) -> list[dict]:
     77 mm/s; at and above ~150 mm/s both directions agree within a few
     percent). See the OMEGA constant above for the A/B numbers. Exposed as
     a flag so the two can still be compared on one robot.
+
+    `id_base` seeds the 8 move IDs (id_base+1 .. id_base+8); default None
+    derives a fresh one from wall-clock time. 127-002: the robot does NOT
+    necessarily reboot between separate invocations of this script (
+    confirmed on the RADIOBRIDGE relay path -- unlike some direct-USB
+    reconnects, `!GO` re-handshakes the relay dongle, not the robot, so
+    RobotLoop's own uptime and its `acceptedMoveIds_` dedup ring persist
+    across runs). The OLD hardcoded 9001-9008 base meant a second
+    consecutive run over an unrebooted session sent the exact same IDs
+    the first run already recorded as accepted -- every one of them got
+    silently deduped (acked OK, never actually enqueued), producing a
+    false FAIL with zero real motion and no informative error. Seeding
+    from time.time() keeps IDs unique run-to-run without touching
+    Move.id's own wire meaning (still just an opaque uint32 label) and
+    without changing anything about a SINGLE run's own internal
+    consistency (still 8 IDs, 2 per leg/turn pair, well above any
+    corr_id this session's SerialConnection will assign).
     """
-    # Move.id values start well above any corr_id this session's
-    # SerialConnection will ever assign (a small monotonic counter starting
-    # at 1) so a completion ack (keyed by Move.id) is never confused with an
-    # enqueue ack (keyed by the envelope's own corr_id) -- same convention
-    # as move_protocol_bench.py.
+    if id_base is None:
+        id_base = (int(time.time()) % 1_000_000) * 100
     moves = []
     for i in range(4):
         moves.append(dict(v_x=CRUISE, v_y=0.0, omega=0.0,
                           stop_distance=LEG, timeout=MOVE_TIMEOUT,
-                          replace=False, move_id=9001 + 2 * i))
+                          replace=False, move_id=id_base + 1 + 2 * i))
         moves.append(dict(v_x=0.0, v_y=0.0, omega=omega,
                           stop_angle=TURN, timeout=MOVE_TIMEOUT,
-                          replace=False, move_id=9002 + 2 * i))
+                          replace=False, move_id=id_base + 2 + 2 * i))
     return moves
 
 
@@ -319,10 +333,12 @@ def main() -> int:
             label="right, twist-derived (MEASURED, not commanded)")
     ax.plot(log["t"], log["velRight"], color="#d62728", lw=1.4,
             label="right measured (encoder)")
+    id_base = moves[0]["move_id"] - 1  # 127-002: IDs are now dynamic (tour()'s own id_base), not
+    # hardcoded at 9001 -- recover the same base from the first move actually sent this run.
     for tc, move_id in completions:
         ax.axvline(tc, color="#888888", lw=0.6, alpha=0.5)
         kind = "leg" if move_id % 2 == 1 else "turn"
-        ax.annotate(f"{kind} {(move_id - 9000 + 1) // 2}",
+        ax.annotate(f"{kind} {(move_id - id_base + 1) // 2}",
                     xy=(tc, 0.98), xycoords=("data", "axes fraction"),
                     fontsize=7.5, rotation=90, va="top", ha="right",
                     color="#666666")

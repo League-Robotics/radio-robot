@@ -103,15 +103,19 @@ the robot is on battery and not on its own USB port right now.
 - [ ] **NOT MET.** Hardware run: at least one run's log contains a real
       `(retry N for move …)` line (not synthetically forced) — a run
       without a retry does not satisfy this criterion. Ten full-tour runs
-      over direct USB (80 enqueue commands total) produced zero natural
-      ack loss / zero retry lines. See Completion Notes for the raw logs
-      and a proposed fault-injection follow-up.
+      over direct USB PLUS ten clean full-tour runs over the RADIOBRIDGE
+      relay (160 enqueue commands total, both transports) produced zero
+      natural ack loss / zero retry lines. See Completion Notes for the
+      raw logs, the relay leg specifically, and a proposed fault-injection
+      follow-up.
 - [ ] **NOT MET as literally stated** (no run contained a retry to
       validate against) — but see Completion Notes for the encoder-
-      derived exactly-once evidence gathered across all ten runs anyway
-      (dR-dL consistently 877-882 mm across every successful run, with no
-      run showing the ~1100 mm five-turn signature this robot's own
-      tuning would produce on a failed dedup).
+      derived exactly-once evidence gathered across all twenty runs anyway
+      (dR-dL consistently 876-882 mm across every successful run on BOTH
+      transports, matching the effective-track-corrected four-turn
+      theoretical of 882.1 mm almost exactly, with no run showing the
+      ~1100 mm five-turn signature this robot's own tuning would produce
+      on a failed dedup).
 - [x] No file under `src/firm`, no `.proto` file, and no wire message
       changed anywhere in this ticket's diff (confirmed via `git diff
       --name-only` / `git diff --stat -- src/firm '*.proto'`, both empty
@@ -289,16 +293,144 @@ confirmed stopped before I resumed. I then:
    after, consistent with the robot having rebooted (fault/watchdog
    reset following the abrupt kill) somewhere around that window. The
    very next run (8b) completed normally with the SAME move IDs and
-   encoder geometry matching every other run in the table, which rules
-   out a sticking dedup-ring explanation (the fixed move IDs 9001-9008
-   are reused verbatim every single run in this script by design, and
-   if the accepted-id ring had somehow persisted across a non-reboot
-   reconnect, EVERY run after the first would have been silently
-   deduped — the actual data shows the opposite: 9 of 10 full runs
-   moved for real).
+   encoder geometry matching every other run in the table.
+
+   **This paragraph's original conclusion — "rules out a sticking
+   dedup-ring explanation ... EVERY run after the first would have
+   been silently deduped" — was wrong, corrected below** once the
+   relay leg produced exactly that symptom on a session that provably
+   had NOT rebooted (see "Hardware: radio relay" below). The real
+   explanation: direct-USB `connect()` apparently does reset the robot
+   reliably enough that this session's own USB runs never collided
+   (each got a fresh `acceptedMoveIds_` ring), so the "9 of 10 full
+   runs moved for real" observation was correct as data but wrong as
+   a general claim about the dedup ring's persistence — it only held
+   because of an unstated, transport-specific assumption. Leaving this
+   note in place rather than deleting it, since the correction is the
+   useful part.
 
 Final state confirmed via telemetry (not inspection):
 `active=False`, `enc_left.velocity=0.0`, `enc_right.velocity=0.0`.
+
+### Hardware: radio relay leg (2026-07-30, second dispatch) — still zero natural retries, plus a real bench-script bug found and fixed
+
+The coordinator asked for the hardware leg to be re-run over the
+RADIOBRIDGE relay (`/dev/cu.usbmodem2121302`, dongle `zavaz`) instead of
+direct USB, on the reasoning that the relay's own documented sporadic
+ack loss (`.claude/rules/hardware-bench-testing.md`,
+`radio_bench_gate.py`'s own loss budget) is the natural mechanism the
+source issue describes, and direct USB (this ticket's first hardware
+leg, all ten runs clean) is simply too reliable a link to provoke it.
+
+**First relay run (run 1) was clean, 8/8, no retry** — same shape as
+every USB run. **Run 2 immediately exposed a real bug in this bench
+script**, and a genuinely interesting hardware confirmation of Rule 3
+at the same time: `tour()`'s move IDs were hardcoded (`9001-9008`,
+literally every invocation), and the RADIOBRIDGE relay path does NOT
+reset the robot itself the way this session's direct-USB `connect()`
+calls apparently did (`!GO` re-handshakes the DONGLE, not the robot,
+which is reached over RF) — so the robot's `acceptedMoveIds_` ring
+from run 1 was still populated when run 2 started. Run 2's own log:
+
+```
+move 9002 complete at t=0.2s
+move 9003 complete at t=0.4s
+move 9004 complete at t=0.6s
+move 9005 complete at t=0.7s
+move 9006 complete at t=0.8s
+move 9007 complete at t=1.0s
+move 9008 complete at t=1.1s
+WARNING: never completed: [9001]
+
+FAIL: 7/8 moves completed in 1.3 s
+  encoders: dL +0.0 dR +0.0 mm -> path 0.0 mm (target 2000; error -2000.0)
+```
+
+Diagnosis: moves 9002-9008 "completed" in ~1 second flat because those
+timestamps are STALE completion-ack-ring entries left over from run 1's
+own genuine completions (the ring resends each entry for a bounded
+number of frames, and connecting early enough into that window means a
+brand-new session can observe an old completion before it ages out).
+Move 9001 — run 1's OWN first move, whose completion ack had already
+fully aged out of the ring by the time run 2 connected — genuinely
+never completed in run 2, because `alreadyAccepted(9001)` was true
+(recorded by run 1, never evicted) and the dedup short-circuit fired:
+acked `err==0` on the fresh corr_id (so the script's own enqueue
+tracking saw a normal-looking accept, no `FAIL enqueue` printed) but
+`planner_.move()` was never called, so no NEW completion could ever
+arrive for it. Zero real motion (`dL`/`dR` both `0.0`) is exactly
+consistent with this: none of the 8 sends in run 2 caused a real
+`planner_.move()` call. **This is Rule 3 (window outlives completion)
+firing correctly on real hardware** — just not in the shape the
+ticket's acceptance criterion wants (a genuine ack-loss retry within
+ONE run), and the false `FAIL 7/8` it produces is actively misleading
+for anyone reading this script's output without the mechanism in mind.
+
+**Fix**: `tour()` now takes an optional `id_base` (default: derived
+from `time.time()`, so IDs are unique run-to-run) instead of the
+hardcoded `9001 + 2*i`/`9002 + 2*i`. The plotting code's leg/turn
+labeling (previously hardcoded to a `9000` offset) now recovers
+`id_base` from `moves[0]["move_id"] - 1` instead. This is a host-side
+bench-script fix only — no `src/firm`, wire, or `.proto` change — and
+it is squarely this ticket's own file
+(`src/tests/bench/planner_square_tour.py`, not `move_protocol_bench.py`
+or any of ticket 001/003/004/006's files).
+
+**Ten clean relay runs after the fix** (run 1 plus nine more with unique
+IDs; the collision run above is excluded as not a real attempt, same as
+the killed run in the USB table):
+
+| run | result | wall | dL [mm] | dR [mm] | dR-dL [mm] | heading [deg] | retry logged? |
+|---|---|---|---|---|---|---|---|
+| 1 | PASS 8/8 | 30.2s | +1564.0 | +2445.0 | 881 | 394.4 | no |
+| 3 | PASS 8/8 | 29.7s | +1569.0 | +2450.0 | 881 | 394.4 | no |
+| 4 | PASS 8/8 | 29.9s | +1567.0 | +2449.0 | 882 | 394.8 | no |
+| 5 | PASS 8/8 | 29.4s | +1566.0 | +2448.0 | 882 | 394.8 | no |
+| 6 | PASS 8/8 | 28.7s | +1567.0 | +2448.0 | 881 | 394.4 | no |
+| 7 | PASS 8/8 | 29.2s | +1573.0 | +2452.0 | 879 | 393.5 | no |
+| 8 | PASS 8/8 | 29.8s | +1572.0 | +2451.0 | 879 | 393.5 | no |
+| 9 | PASS 8/8 | 28.7s | +1572.0 | +2454.0 | 882 | 394.8 | no |
+| 10 | PASS 8/8 | 30.1s | +1565.0 | +2441.0 | 876 | 392.1 | no |
+| 11 | PASS 8/8 | 30.2s | +1560.0 | +2442.0 | 882 | 394.8 | no |
+
+**No retry line appeared in any of the ten clean relay runs either.**
+80 enqueue commands over the relay, on top of the 80 over direct USB
+from the first hardware leg — 160 total, zero natural ack loss on
+either transport. Per the coordinator's own instruction, stopping here
+rather than continuing to burn runs: **the retry path could not be
+provoked naturally on either transport available on this bench.** The
+honest disposition, per the coordinator's own framing, is that the
+hardware-retry acceptance criterion should be met either by the
+fault-injection follow-up proposed above, or the criterion itself
+should be revisited — that call belongs to the team-lead, not this
+ticket.
+
+Robot confirmed idle after the full relay leg via telemetry (not
+inspection): `active=False`, `enc_left.velocity=0.0`,
+`enc_right.velocity=0.0`.
+
+### `rotational_slip` check (coordinator's question)
+
+Confirmed, not dismissed. `data/robots/tovez.json`'s own
+`_rotational_slip_note` (2026-07-29, camera-measured) already documents
+`rotational_slip = 0.9117`, "Equivalent to an effective track of 140.4
+mm against the measured 128," consumed at boot into `kEffectiveTrack`
+(`gen_boot_config.py` -> `boot_config.cpp` -> `main.cpp`). The
+four-turn theoretical differential using the EFFECTIVE track, not the
+caliper-measured `trackwidth`, is:
+
+```
+4 * (128 / 0.9117) * (pi / 2) = 4 * 140.40 * 1.5708 = 882.1 mm
+```
+
+That is the correct "healthy" four-turn baseline for this robot, and
+it matches the measured band (876-882 mm across all nineteen
+successful runs, both transports) almost exactly — the ~9% gap against
+the raw-`trackwidth` 804.2 mm figure is fully explained by
+`rotational_slip`'s own effective-track correction, not by any
+measurement noise or dedup concern. Anyone reading this ticket later
+should treat 876-882 mm, not 804 mm, as the four-turn reference band on
+this robot.
 
 ## Testing
 
