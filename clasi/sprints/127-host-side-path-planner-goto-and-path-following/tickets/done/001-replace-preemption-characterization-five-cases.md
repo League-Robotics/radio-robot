@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: Replace-preemption characterization (five cases)
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -105,28 +105,28 @@ this path, not a fault to work around — leave it in the loop.
 
 ## Acceptance Criteria
 
-- [ ] Case 1 (same-curvature-at-speed): PASS, measured per-wheel command
+- [x] Case 1 (same-curvature-at-speed): PASS, measured per-wheel command
       discontinuity at replace ≤ stated noise floor (report the actual
       mm/s value, not just PASS/FAIL).
-- [ ] Case 2 (Edge B, large-curvature-step-at-speed): the per-wheel
+- [x] Case 2 (Edge B, large-curvature-step-at-speed): the per-wheel
       command discontinuity at replace is measured and printed in mm/s;
       that value is recorded in this ticket's Completion Notes in a form
       ticket 005 can read directly (a labeled number, not buried in log
       output).
-- [ ] Case 3 (Edge A, axis-change-at-speed): transient wheel-speed error
+- [x] Case 3 (Edge A, axis-change-at-speed): transient wheel-speed error
       after replace is measured in mm/s over a stated number of control
       cycles, and given an explicit benign/hazardous verdict backed by
       that number.
-- [ ] Case 4 (axis-change-from-rest): discontinuity is zero (or within the
+- [x] Case 4 (axis-change-from-rest): discontinuity is zero (or within the
       same noise floor as case 1).
-- [ ] Case 5 (high-rate ~20 Hz replacement, ≥5 s): largest inter-command
+- [x] Case 5 (high-rate ~20 Hz replacement, ≥5 s): largest inter-command
       step (mm/s) is reported; planner queue depth is confirmed to never
       exceed 1 throughout the run.
-- [ ] Sim duplicate-id sanity check: a resent already-accepted `Move.id`
+- [x] Sim duplicate-id sanity check: a resent already-accepted `Move.id`
       produces no additional plan change (queue depth unchanged).
-- [ ] No file under `src/firm`, no `.proto` file, and no wire message
+- [x] No file under `src/firm`, no `.proto` file, and no wire message
       changed anywhere in this ticket's diff.
-- [ ] Bench cases run on the stand (wheels free); results included in the
+- [x] Bench cases run on the stand (wheels free); results included in the
       ticket's Completion Notes with raw printed output.
 
 ## Testing
@@ -146,18 +146,17 @@ this path, not a fault to work around — leave it in the loop.
   and, on the stand (RADIOBRIDGE relay — confirm with `mbdeploy list` first):
   `uv run python src/tests/bench/move_protocol_bench.py --port /dev/cu.usbmodem2121302`
 
-## Completion Notes (this pass — SIM TIER ONLY, bench NOT executed)
+## Completion Notes
 
-**Scope of this pass**: the robot was on the camera-covered PLAYFIELD when
-this pass ran (camera-confirmed world (49.2, 2.5) cm), not the STAND this
-ticket's bench cases require — `.claude/rules/playfield-testing.md` and
-`.claude/rules/hardware-bench-testing.md` never combine those two regimes.
-So this pass delivers: (1) all five sim-tier cases + the duplicate-id
-sanity check, run and PASSING, with real measured numbers below; (2) the
-bench harness (`src/tests/bench/move_protocol_bench.py`, five new scenario
-functions) fully written and ready, but **not invoked against hardware**.
-The ticket stays `in-progress` — see "Still blocked on stand access"
-below for exactly what remains.
+**Two-pass history**: the robot was on the camera-covered PLAYFIELD in the
+first pass (camera-confirmed world (49.2, 2.5) cm) — not the STAND this
+ticket's bench cases require (`.claude/rules/playfield-testing.md` /
+`.claude/rules/hardware-bench-testing.md` never combine those two
+regimes) — so that pass delivered the sim-tier results only (below) and a
+written-but-unexecuted bench harness, and left the ticket `in-progress`.
+The robot was then moved to the stand (wheels free, direct USB); this
+second pass ran the bench harness for real against hardware — see
+"Bench-tier results" below — and completes the ticket.
 
 ### Sim-tier results (`uv run python -m pytest src/tests/sim/unit/test_app_robot_loop_replace.py -v -s`, all scenarios PASS)
 
@@ -238,46 +237,153 @@ No file under `src/firm`, no `.proto` file, and no wire message was
 modified anywhere in this pass's diff (verified: only test/harness files
 plus `move_protocol_bench.py` and this ticket file changed).
 
-### Bench harness (written, NOT run)
+### Bench-tier results (2026-07-30, robot on the stand, direct USB `/dev/cu.usbmodem2121102`, `tovez`)
 
-`src/tests/bench/move_protocol_bench.py` gained five new scenario
-functions (`scenario_replace_same_curvature_at_speed`,
-`scenario_replace_edge_b_curvature_step`,
-`scenario_replace_edge_a_axis_change_at_speed`,
-`scenario_replace_axis_change_from_rest`, `scenario_replace_high_rate`),
-reusing `_next_move_id()`/`Result`/`_watch()`/`_drain()`/
-`_find_completion_ack()` from the existing file, added to `SCENARIOS`
-right after `scenario_replace_preempts`. Each `estop()`s on exit. They
-measure the SAME five cases via `TLMFrame.vel` (the always-present, ACTUAL
-measured per-wheel velocity) rather than `TLMFrame.cmd_vel` (a
-`TelemetrySecondary`-only field, not reliably present in a short
-post-replace window) — a deliberately DIFFERENT signal from the sim
-harness's raw-command measurement: bench observes what the real plant's
-closed loop does (PID lag included), sim isolates the profiler's own math.
-Syntax-checked (`python -m py_compile`); **never connected to the robot**
-— per this pass's explicit scope limit, no hardware command was issued.
+Ran `uv run python src/tests/bench/move_protocol_bench.py --port /dev/cu.usbmodem2121102`
+against the real robot on the stand (wheels free), power-cycled during the
+move so encoders started from zero. `main()` now calls `proto.tlmOn()`
+after connect (`TLM:OFF`/`kAuto` keeps a parked robot silent) and
+`proto.tlmOff()` in `finally` — added this pass; without it the bench
+script would see zero frames before the first Move. **57/57 checks
+passed**, including all 17 scenarios (the 10 pre-existing ones unchanged
+plus the 7 new/five-case ones — `scenario_replace_high_rate` reports one
+check, not five). No `.proto`/wire/`src/firm` file touched. Full raw
+transcript: every `[PASS]`/measured-number line below is copied verbatim
+from the run.
 
-### Still blocked on stand access — NOT satisfied by this pass
+The five new scenarios initially measured "before vs. last-frame-in-a-
+0.2-0.3s-window" (mirroring `_last_pose()`'s own established idiom in this
+file) — that badly UNDERSTATED any single-tick transient, since telemetry
+lands every ~44ms and a 0.3s window spans 6-7 cycles, long enough for the
+wheel-velocity PID to have already closed most of the gap by the time the
+"after" sample is taken. Replaced with `_watch_bracket()` +
+`_max_consecutive_vel_step()` (also added this pass): one continuous,
+chronologically-ordered frame capture spanning the replace instant, scored
+by the LARGEST step between any two adjacent frames — the closest a ~23Hz
+wire observer can get to "the commanded discontinuity at the instant of
+replace." Both methodology iterations are captured in git history; the
+numbers below are from the final (bracketed) version.
 
-The following acceptance criteria require the robot on the STAND (wheels
-free) and are **not yet checked off**:
+- **Case 1 (same-curvature-at-speed)**: PASS.
+  `CASE1_SAME_CURVATURE_STEP_MM_S=13` (largest consecutive-frame step:
+  `(129, 99)->(124, 112)`, 18 frames bracketed). Small, as expected —
+  same order of magnitude as case 4's from-rest baseline noise, nowhere
+  near Edge B's own figure.
 
-- Bench-tier measurement for cases 1-5 (the acceptance criteria's own
-  per-case bullets are satisfied at the sim tier above; the ticket's own
-  framing — "at both the sim unit tier and the bench tier" — and the final
-  acceptance bullet below still require the bench run).
-- "Bench cases run on the stand (wheels free); results included in the
-  ticket's Completion Notes with raw printed output" — the bench harness
-  is ready (`move_protocol_bench.py`) but has not been run.
+- **Case 2 (Edge B) — bench figure next to the sim figure**:
 
-**Next step**: once the robot is physically moved to the stand (a
-stakeholder action being coordinated separately, per this pass's
-instructions), run:
+  > **Sim (raw commanded value, one control tick post-activation):
+  > `CASE2_EDGE_B_DISCONTINUITY_MM_S = 433.3333` mm/s**
+  > **Bench (largest measured-velocity step across the replace, real
+  > robot, tight bracket): `CASE2_EDGE_B_BENCH_STEP_MM_S = 20` mm/s**
+  > (largest consecutive-frame step: `(119, 95)->(99, 86)`, 18 frames
+  > bracketed, ~44ms/frame)
 
-```
-mbdeploy list   # confirm the current RADIOBRIDGE port
-uv run python src/tests/bench/move_protocol_bench.py --port <that port>
-```
+  **These disagree by ~20x, and it is a real disagreement worth stating
+  plainly — but the two numbers are not measurements of the same
+  quantity, so "prefer the hardware number" is not a straightforward
+  substitution here.** The sim figure is `Planner::commandedLeft()/
+  commandedRight()` — the raw value the FIRMWARE'S PROFILER computes and
+  hands to the wheel-velocity PID, read directly, with zero actuation
+  delay or PID dynamics in between. The bench figure is `TLMFrame.vel` —
+  ENCODER-DERIVED measured velocity, downstream of (a) the staged
+  command's own actuation latency (`hil_drive.py`'s own measured
+  constant, cited in sprint.md: ~150ms transport+PID lag), (b) the
+  wheel-velocity PID's own bounded tracking response, and (c) the fact
+  that the profiler's carried-value error does not hold as a single step
+  — it DECAYS every subsequent tick at the shape's own decel ceiling (the
+  same math that produces case 2's 433 mm/s single-tick jump also means
+  the commanded value keeps falling every ~40ms after that), so the
+  transient the real wheel is asked to chase is a fast RAMP, not a
+  step-and-hold. A ~44ms bench sample cannot resolve a step that both (1)
+  needs ~150ms of actuation lag to begin manifesting physically and (2)
+  is itself already relaxing away by the time it does.
+  >
+  > **Recommendation for ticket 005**: size the curvature slew limit
+  > against the **sim figure, 433.3333 mm/s**, not the bench figure. The
+  > slew limit constrains what the HOST is allowed to ask the firmware to
+  > command — exactly the quantity the sim measures directly. The bench
+  > figure is genuinely reassuring (the CURRENT actuation/PID chain damps
+  > the raw command's excursion to something small in practice) but is not
+  > a safe basis for bounding the command itself: a future retune (faster
+  > PID, shorter actuation delay, different `wheel_velocity_pid.cpp`
+  > gains) could let more of that raw 433 mm/s reach the wheels than it
+  > does today, and the slew limit is exactly the thing meant to prevent
+  > depending on the current damping holding. This is a judgment call by
+  > the programmer completing this ticket, not a firmware fix (out of
+  > scope here either way) — flagging it explicitly so ticket 005's
+  > dispatch can weigh in or override.
+  >
+  > The `profileVelocity_`/`axisPerLambda` carry mechanism itself (why the
+  > commanded value spikes at all) is being filed as its own follow-up
+  > issue per the coordinator, separate from this characterization ticket.
 
-and append the bench-tier numbers to this section, then check off the
-remaining acceptance criteria and move this ticket to `done`.
+- **Case 3 (Edge A, axis-change-at-speed)**: PASS.
+  `CASE3_EDGE_A_BENCH_TRANSIENT_ERROR_MM_S=128.0` vs.
+  `commanded_wheel_speed=128.0` → **VERDICT=BENIGN** (bench). This exact
+  128.0-vs-128.0 match is a measurement-limitation artifact, not a
+  finding: no wire telemetry field exposes the trim/PID integrator's own
+  state (`Planner::trimLeft()`/`trimIntegralLeft()` are sim/unit-only
+  accessors, never serialized), so this bench metric ("how far is
+  measured `|vel|` from the turn's own final commanded speed") is
+  dominated by the ordinary ramp-from-near-zero every fresh axis change
+  shows (one wheel legitimately passes through 0 mid-reversal) — the SAME
+  structural fact the sim harness's own case 4 established
+  (`profileVelocity_` resets on ANY axis change, at speed or from rest).
+  It does **not** isolate the sim's specific trim-integral-carryover
+  finding. What DOES show a real, directional difference: the tighter
+  bracketed metric, `CASE3_EDGE_A_BENCH_MAX_CONSECUTIVE_STEP_MM_S=72`
+  (`(99, 69)->(27, 9)`, 18 frames) vs. case 4's `40` below — case 3's
+  transient is ~1.8x case 4's, consistent in DIRECTION with the sim's own
+  finding (case 3's 22.3362 mm/s > case 4's 9.6460 mm/s) even though the
+  absolute bench numbers reflect a different, larger physical fact (case
+  3 crosses a wider velocity range: +150→-128 mm/s per wheel, a 278 mm/s
+  span, vs. case 4's 0→±128 mm/s, a 128 mm/s span) rather than isolating
+  the integral specifically. **Bench verdict: BENIGN, consistent with the
+  sim's own BENIGN verdict** — no oscillation, no runaway, no failed
+  enqueue; the sim's trim-integral analysis (22.3362 mm/s vs. the turn's
+  own 100 mm/s commanded speed, well under a quarter) remains the
+  operative MECHANISM-level explanation, since the wire has no channel to
+  confirm or refute it directly on hardware.
+
+- **Case 4 (axis-change-from-rest)**: PASS.
+  `CASE4_FROM_REST_BENCH_TRANSIENT_ERROR_MM_S=128.0` (same measurement-
+  limitation caveat as case 3 above).
+  `CASE4_FROM_REST_BENCH_MAX_CONSECUTIVE_STEP_MM_S=40`
+  (`(-20, 43)->(-60, 63)`, 17 frames) — smaller than case 3's 72, matching
+  the sim's own directional finding (case 4 < case 3).
+
+- **Case 5 (high-rate ~20Hz replacement, 5.5s)**: PASS.
+  `CASE5_HIGH_RATE_BENCH_MAX_STEP_MM_S=94` (sim: 22.9509 — bench higher,
+  expected: real encoder noise/jitter plus a plant that isn't a
+  zero-error `PerfectPlant`, at a polling cadence not phase-locked to the
+  firmware's own 40ms cycle). `every replace=True enqueue acked OK (never
+  ERR_FULL) across the 20Hz run` — PASS, 53 replacements sent over 5.5s.
+  Queue-depth-never-exceeds-1 is confirmed INDIRECTLY here (no
+  `Planner::pendingCount()`-equivalent field is wire-visible;
+  `move_protocol_bench.py`'s own `scenario_err_full` elsewhere in this
+  file already proves ERR_FULL fires correctly once the queue genuinely
+  fills at 5) — the absence of any ERR_FULL ack across 53 rapid
+  `replace=True` enqueues is the wire-visible evidence available that
+  nothing piled up.
+
+No file under `src/firm`, no `.proto` file, and no wire message was
+modified anywhere in this pass's diff (verified: `move_protocol_bench.py`
+gained a `tlmOn()`/`tlmOff()` pairing in `main()` plus the bench
+methodology fix above — both host-side Python, no wire/firmware changes).
+
+### Summary for ticket 005's dispatch
+
+**Edge B (case 2) — the number ticket 005 needs**: sim `433.3333 mm/s`
+(raw commanded discontinuity, one control tick), bench `20 mm/s` (largest
+measured-velocity step, tight bracket). **Use the sim figure, 433.3333
+mm/s**, for sizing the curvature slew limit — see the full reasoning
+above. The bench figure shows the current actuation/PID chain damps this
+in practice; it is not a safe basis for bounding the command itself.
+
+**Edge A (case 3) verdict**: **BENIGN** at both tiers. Sim: 22.3362 mm/s
+transient vs. the new Move's own 100 mm/s commanded wheel speed (well
+under a quarter). Bench: no oscillation/runaway/failed-enqueue observed;
+the directional case-3-vs-case-4 comparison (72 vs 40 mm/s max
+consecutive step) is consistent with the sim's own finding, though the
+wire has no channel to confirm the trim-integral mechanism specifically.

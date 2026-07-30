@@ -374,12 +374,69 @@ def _last_vel(frames: list[TLMFrame]) -> tuple[int, int] | None:
     return None
 
 
+def _watch_bracket(proto: NezhaProtocol, pre: float, send_fn, post: float) -> list[TLMFrame]:  # [s] [s]
+    """Drain telemetry for `pre` seconds, call `send_fn()` (the replace
+    itself), then keep draining for `post` more seconds -- returning ONE
+    chronologically continuous frame list spanning the replace instant.
+
+    This exists because a "watch a window, take the LAST frame" sample
+    (this file's older `_last_vel(_watch(...))` idiom, still used by
+    `scenario_distance_stop`/etc. for steady-state poses) DILUTES a
+    single-tick transient: telemetry lands roughly every ~44ms (close to
+    but not locked to the firmware's own 40ms control cycle), so a 0.2-0.3s
+    "before"/"after" window spans 5-7 cycles -- by the time the LAST frame
+    in the "after" window is read, the wheel-velocity PID has already
+    closed most of the gap toward its new target, so "before vs. last-after"
+    understates the actual step at replace. `_max_consecutive_vel_step()`
+    below instead scans EVERY chronologically adjacent frame pair in the
+    bracketed sequence and reports the single largest one -- the closest a
+    ~25Hz wire observer can get to "the commanded discontinuity at the
+    instant of replace," the same concept the sim-tier harness measures
+    directly off `Planner::commandedLeft()/commandedRight()`."""
+    frames: list[TLMFrame] = []
+    deadline = time.monotonic() + pre
+    while time.monotonic() < deadline:
+        frames.extend(proto.read_pending_binary_tlm_frames())
+        time.sleep(0.01)
+    send_fn()
+    deadline = time.monotonic() + post
+    while time.monotonic() < deadline:
+        frames.extend(proto.read_pending_binary_tlm_frames())
+        time.sleep(0.01)
+    return frames
+
+
+def _max_consecutive_vel_step(frames: list[TLMFrame]) -> tuple[int, tuple[int, int] | None, tuple[int, int] | None]:
+    """Scan `frames` (assumed chronologically ordered) for the largest
+    per-wheel step between any two CONSECUTIVE `vel` readings -- see
+    `_watch_bracket()`'s own docstring for why this, not a "first vs last"
+    diff, is the right bench analog of a single-tick command discontinuity.
+    Returns (max_step, frame_pair_before, frame_pair_after); (0, None, None)
+    if fewer than two `vel`-bearing frames were observed."""
+    max_step = 0
+    prev: tuple[int, int] | None = None
+    pair: tuple[tuple[int, int] | None, tuple[int, int] | None] = (None, None)
+    for f in frames:
+        if f.vel is None:
+            continue
+        if prev is not None:
+            step = max(abs(f.vel[0] - prev[0]), abs(f.vel[1] - prev[1]))
+            if step > max_step:
+                max_step = step
+                pair = (prev, f.vel)
+        prev = f.vel
+    return max_step, pair[0], pair[1]
+
+
 def scenario_replace_same_curvature_at_speed(proto: NezhaProtocol, result: Result) -> None:
     """Case 1 (baseline): replace a Linear move with another Linear move at
     the SAME unitLeft/unitRight ratio (a straight, v_x=150) while at speed.
     Expect profile continuity -- the measured per-wheel velocity step across
     the replace instant should stay within ordinary PID/measurement noise,
-    not show a step matching Case 2's Edge B magnitude."""
+    not show a step matching Case 2's Edge B magnitude. Uses
+    `_watch_bracket()`/`_max_consecutive_vel_step()` (not a "before vs.
+    long-window-later" diff) so the measurement isn't diluted by the
+    wheel-velocity PID closing the gap before the "after" sample is taken."""
     _drain(proto)
     move_a = _next_move_id()
     corr_a = proto.move_twist(v_x=150.0, v_y=0.0, omega=0.0, stop_time=3000.0,
@@ -388,25 +445,23 @@ def scenario_replace_same_curvature_at_speed(proto: NezhaProtocol, result: Resul
     result.record("case1: Move A enqueue ack ok", ack_a is not None and ack_a.ok, f"ack={ack_a}")
 
     _watch(proto, 1.0)  # let A reach cruise
-    vel_before = _last_vel(_watch(proto, 0.2))
 
     move_b = _next_move_id()
-    corr_b = proto.move_twist(v_x=150.0, v_y=0.0, omega=0.0, stop_time=1500.0,
-                              timeout=2500.0, replace=True, move_id=move_b)
-    ack_b = proto.wait_for_ack(corr_b, timeout=ACK_TIMEOUT)
-    result.record("case1: Move B (same curvature, replace=True) enqueue ack ok",
-                  ack_b is not None and ack_b.ok, f"ack={ack_b}")
 
-    vel_after = _last_vel(_watch(proto, 0.3))
-    if vel_before is not None and vel_after is not None:
-        step = max(abs(vel_after[0] - vel_before[0]), abs(vel_after[1] - vel_before[1]))
-        print(f"  CASE1_SAME_CURVATURE_STEP_MM_S={step}  (before={vel_before} after={vel_after})")
-        result.record("case1: measured per-wheel velocity step at replace stays small (<=60mm/s, "
-                       "generous over real PID/actuation noise)",
-                      step <= 60, f"step={step}mm/s")
-    else:
-        result.record("case1: measured per-wheel velocity step at replace stays small", False,
-                      "no vel frames observed")
+    def _send_b() -> None:
+        corr_b = proto.move_twist(v_x=150.0, v_y=0.0, omega=0.0, stop_time=1500.0,
+                                  timeout=2500.0, replace=True, move_id=move_b)
+        ack_b = proto.wait_for_ack(corr_b, timeout=ACK_TIMEOUT)
+        result.record("case1: Move B (same curvature, replace=True) enqueue ack ok",
+                      ack_b is not None and ack_b.ok, f"ack={ack_b}")
+
+    frames = _watch_bracket(proto, pre=0.3, send_fn=_send_b, post=0.5)
+    step, before, after = _max_consecutive_vel_step(frames)
+    print(f"  CASE1_SAME_CURVATURE_STEP_MM_S={step}  (largest consecutive-frame step: {before}->{after}, "
+          f"{len(frames)} frames bracketed)")
+    result.record("case1: largest consecutive-frame velocity step across the replace stays small "
+                   "(<=60mm/s, generous over real PID/actuation noise)",
+                  before is not None and step <= 60, f"step={step}mm/s")
     proto.estop()
 
 
@@ -414,10 +469,12 @@ def scenario_replace_edge_b_curvature_step(proto: NezhaProtocol, result: Result)
     """Case 2 (Edge B) -- THE bench-side counterpart of the number ticket
     005 consumes. Replace a straight (axisPerLambda=1.0) with a tight arc
     (unitLeft=-0.5, unitRight=1.0, axisPerLambda=0.25) at the SAME
-    dominant-wheel peak speed (150mm/s) while cruising. Measures the actual
-    per-wheel velocity step the real plant shows across the replace instant
-    -- see this file's own header for why this differs from (and
-    complements) the sim-tier harness's raw-command measurement."""
+    dominant-wheel peak speed (150mm/s) while cruising. Measures the
+    largest per-wheel velocity step between any two chronologically
+    adjacent telemetry frames bracketing the replace instant (see
+    `_watch_bracket()`'s own docstring for why this, not a "before vs.
+    long-window-later" diff, is the right bench analog of the sim-tier
+    harness's raw-command discontinuity measurement)."""
     _drain(proto)
     move_a = _next_move_id()
     corr_a = proto.move_twist(v_x=150.0, v_y=0.0, omega=0.0, stop_time=3000.0,
@@ -427,7 +484,6 @@ def scenario_replace_edge_b_curvature_step(proto: NezhaProtocol, result: Result)
                   f"ack={ack_a}")
 
     _watch(proto, 1.0)  # let A reach cruise
-    vel_before = _last_vel(_watch(proto, 0.2))
 
     # vRight=150 (dominant, peak), vLeft=-75 -- unitLeft=-0.5, unitRight=1.0.
     v_right = 150.0
@@ -435,27 +491,24 @@ def scenario_replace_edge_b_curvature_step(proto: NezhaProtocol, result: Result)
     arc_v_x = 0.5 * (v_left + v_right)
     arc_omega = (v_right - v_left) / BENCH_TRACK_WIDTH_MM
     move_b = _next_move_id()
-    corr_b = proto.move_twist(v_x=arc_v_x, v_y=0.0, omega=arc_omega, stop_distance=100.0,
-                              timeout=2500.0, replace=True, move_id=move_b)
-    ack_b = proto.wait_for_ack(corr_b, timeout=ACK_TIMEOUT)
-    result.record("case2 (Edge B): tight-arc Move B (replace=True) enqueue ack ok",
-                  ack_b is not None and ack_b.ok, f"ack={ack_b}")
 
-    vel_after = _last_vel(_watch(proto, 0.3))
-    if vel_before is not None and vel_after is not None:
-        step_left = abs(vel_after[0] - vel_before[0])
-        step_right = abs(vel_after[1] - vel_before[1])
-        step = max(step_left, step_right)
-        # ===== THE labeled number: bench-measured counterpart to ticket 005's own Edge B figure. =====
-        print(f"  CASE2_EDGE_B_BENCH_STEP_MM_S={step}  (left {vel_before[0]}->{vel_after[0]} "
-              f"[d={step_left}], right {vel_before[1]}->{vel_after[1]} [d={step_right}])")
-        # =================================================================================================
-        # No pass/fail threshold on the SIZE (same rationale as the sim
-        # harness's own Case 2) -- just confirm it is a real measurement.
-        result.record("case2 (Edge B): a real (nonzero) velocity step was measured", step >= 0,
-                      f"step={step}mm/s")
-    else:
-        result.record("case2 (Edge B): velocity step measured", False, "no vel frames observed")
+    def _send_b() -> None:
+        corr_b = proto.move_twist(v_x=arc_v_x, v_y=0.0, omega=arc_omega, stop_distance=100.0,
+                                  timeout=2500.0, replace=True, move_id=move_b)
+        ack_b = proto.wait_for_ack(corr_b, timeout=ACK_TIMEOUT)
+        result.record("case2 (Edge B): tight-arc Move B (replace=True) enqueue ack ok",
+                      ack_b is not None and ack_b.ok, f"ack={ack_b}")
+
+    frames = _watch_bracket(proto, pre=0.3, send_fn=_send_b, post=0.5)
+    step, before, after = _max_consecutive_vel_step(frames)
+    # ===== THE labeled number: bench-measured counterpart to ticket 005's own Edge B figure. =====
+    print(f"  CASE2_EDGE_B_BENCH_STEP_MM_S={step}  (largest consecutive-frame step: {before}->{after}, "
+          f"{len(frames)} frames bracketed)")
+    # =================================================================================================
+    # No pass/fail threshold on the SIZE (same rationale as the sim
+    # harness's own Case 2) -- just confirm it is a real measurement.
+    result.record("case2 (Edge B): a real velocity step was measured across the replace",
+                  before is not None, f"step={step}mm/s frames={len(frames)}")
     proto.estop()
 
 
@@ -478,29 +531,42 @@ def scenario_replace_edge_a_axis_change_at_speed(proto: NezhaProtocol, result: R
     _watch(proto, 1.5)  # let A settle at cruise long enough for any trim integral to build
 
     move_b = _next_move_id()
-    corr_b = proto.move_twist(v_x=0.0, v_y=0.0, omega=2.0, stop_angle=3.14159265,
-                              timeout=3000.0, replace=True, move_id=move_b)
-    ack_b = proto.wait_for_ack(corr_b, timeout=ACK_TIMEOUT)
-    result.record("case3 (Edge A): Angle Move B (replace=True, axis change) enqueue ack ok",
-                  ack_b is not None and ack_b.ok, f"ack={ack_b}")
+
+    def _send_b() -> None:
+        corr_b = proto.move_twist(v_x=0.0, v_y=0.0, omega=2.0, stop_angle=3.14159265,
+                                  timeout=3000.0, replace=True, move_id=move_b)
+        ack_b = proto.wait_for_ack(corr_b, timeout=ACK_TIMEOUT)
+        result.record("case3 (Edge A): Angle Move B (replace=True, axis change) enqueue ack ok",
+                      ack_b is not None and ack_b.ok, f"ack={ack_b}")
 
     # The commanded per-wheel speed the new turn itself asks for --
     # omega * trackWidth/2 -- is the yardstick the sim harness's own verdict
-    # uses; recompute it here for a directly comparable bench verdict.
+    # uses; recompute it here for a directly comparable bench verdict. NOTE:
+    # this is also, unavoidably, close to the ordinary ramp-from-zero
+    # magnitude every fresh axis change shows (the sim harness's own case 4
+    # finding: profileVelocity_ resets to 0 on ANY axis change, at speed or
+    # from rest) -- see this scenario's own printed comparison against
+    # scenario_replace_axis_change_from_rest's identical metric below,
+    # which is what actually isolates the mid-motion-specific carryover the
+    # sim's trim-integral check found (not observable directly over the
+    # wire -- no cmd_vel-equivalent trim telemetry field exists).
     commanded_wheel_speed = 2.0 * BENCH_TRACK_WIDTH_MM * 0.5
 
+    frames = _watch_bracket(proto, pre=0.2, send_fn=_send_b, post=0.6)
+    step, before, after = _max_consecutive_vel_step(frames)
     peak_dev = 0.0
-    frames = _watch(proto, 0.6)  # ~0.5s post-replace, matching the sim harness's own kTransientCycles window
     for f in frames:
         if f.vel is None:
             continue
         dev = max(abs(abs(f.vel[0]) - commanded_wheel_speed), abs(abs(f.vel[1]) - commanded_wheel_speed))
         peak_dev = max(peak_dev, dev)
 
-    # ===== THE labeled number: Case 3's bench-measured transient wheel-speed error. =====
+    # ===== THE labeled numbers: Case 3's bench-measured transient wheel-speed error. =====
     hazardous = peak_dev > commanded_wheel_speed
     print(f"  CASE3_EDGE_A_BENCH_TRANSIENT_ERROR_MM_S={peak_dev}  vs commanded_wheel_speed="
           f"{commanded_wheel_speed}  VERDICT={'HAZARDOUS' if hazardous else 'BENIGN'}")
+    print(f"  CASE3_EDGE_A_BENCH_MAX_CONSECUTIVE_STEP_MM_S={step}  ({before}->{after}, "
+          f"{len(frames)} frames bracketed)")
     # =========================================================================================
     result.record("case3 (Edge A): transient wheel-speed error measured and printed",
                   len(frames) > 0, f"peak_dev={peak_dev}mm/s frames={len(frames)}")
@@ -529,15 +595,18 @@ def scenario_replace_axis_change_from_rest(proto: NezhaProtocol, result: Result)
     _watch(proto, 0.3)  # a few more settle cycles
 
     move_b = _next_move_id()
-    corr_b = proto.move_twist(v_x=0.0, v_y=0.0, omega=2.0, stop_angle=3.14159265,
-                              timeout=3000.0, replace=False, move_id=move_b)  # from rest -- replace doesn't matter
-    ack_b = proto.wait_for_ack(corr_b, timeout=ACK_TIMEOUT)
-    result.record("case4: Angle Move B (from rest) enqueue ack ok", ack_b is not None and ack_b.ok,
-                  f"ack={ack_b}")
+
+    def _send_b() -> None:
+        corr_b = proto.move_twist(v_x=0.0, v_y=0.0, omega=2.0, stop_angle=3.14159265,
+                                  timeout=3000.0, replace=False, move_id=move_b)  # from rest -- replace doesn't matter
+        ack_b = proto.wait_for_ack(corr_b, timeout=ACK_TIMEOUT)
+        result.record("case4: Angle Move B (from rest) enqueue ack ok", ack_b is not None and ack_b.ok,
+                      f"ack={ack_b}")
 
     commanded_wheel_speed = 2.0 * BENCH_TRACK_WIDTH_MM * 0.5
+    frames = _watch_bracket(proto, pre=0.2, send_fn=_send_b, post=0.6)
+    step, before, after = _max_consecutive_vel_step(frames)
     peak_dev = 0.0
-    frames = _watch(proto, 0.6)
     for f in frames:
         if f.vel is None:
             continue
@@ -546,6 +615,8 @@ def scenario_replace_axis_change_from_rest(proto: NezhaProtocol, result: Result)
 
     print(f"  CASE4_FROM_REST_BENCH_TRANSIENT_ERROR_MM_S={peak_dev}  vs commanded_wheel_speed="
           f"{commanded_wheel_speed}  (compare against CASE3_EDGE_A_BENCH_TRANSIENT_ERROR_MM_S above)")
+    print(f"  CASE4_FROM_REST_BENCH_MAX_CONSECUTIVE_STEP_MM_S={step}  ({before}->{after}, "
+          f"{len(frames)} frames bracketed; compare against CASE3_EDGE_A_BENCH_MAX_CONSECUTIVE_STEP_MM_S)")
     result.record("case4: transient wheel-speed error measured and printed", len(frames) > 0,
                   f"peak_dev={peak_dev}mm/s frames={len(frames)}")
     proto.estop()
@@ -826,6 +897,13 @@ def main() -> int:
               "proceeding anyway (scenario_distance_stop's own checks will "
               "surface whatever the robot actually does)")
 
+    # kAuto (the default emit policy) keeps a parked robot quiet -- switch
+    # to streaming-always so _watch()/_drain() actually see frames even
+    # before the first Move starts (127-001 bench pass, 2026-07-30: a
+    # parked robot on the stand answered HELLO/PING/READY fine but emitted
+    # zero unsolicited telemetry until commanded).
+    proto.tlmOn()
+
     result = Result()
     try:
         for scenario in SCENARIOS:
@@ -834,6 +912,10 @@ def main() -> int:
     finally:
         try:
             proto.estop()
+        except Exception:
+            pass
+        try:
+            proto.tlmOff()
         except Exception:
             pass
         conn.disconnect()
