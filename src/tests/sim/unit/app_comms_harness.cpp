@@ -840,6 +840,242 @@ void scenarioRelayCarveOutIsNarrowAndDoesNotAffectSubsequentRealCommand() {
   }
 }
 
+// ===========================================================================
+// 12. TLM: command surface (125-003, telemetry-emit-policy-rebuild-spec.md
+//     Part 4): every row of the normative table, parsed by dispatchLine()
+//     into a Comms::TlmAction, plus the STATUS/HELP reply shape
+//     sendTlmReply() produces on the SAME transport the line arrived on.
+//     Comms holds no Telemetry& (Part 4's own boundary), so these scenarios
+//     prove the PARSE + REPLY halves at the Comms level only; RobotLoop's
+//     own application of the mode change to Telemetry is
+//     app_robot_loop_harness.cpp's job.
+// ===========================================================================
+
+void scenarioBareTlmAndTlmNowBothProduceKFrameNoModeChange() {
+  beginScenario("pump(): bare \"TLM\" and \"TLM:NOW\" both parse to TlmAction::kFrame -- no mode change");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  serialFake.enqueueInbound("TLM");
+  comms.pump(/*now=*/0);
+  checkTrue(comms.takeTlmAction() == App::Comms::TlmAction::kFrame, "bare TLM -> kFrame");
+
+  serialFake.enqueueInbound("TLM:NOW");
+  comms.pump(/*now=*/0);
+  checkTrue(comms.takeTlmAction() == App::Comms::TlmAction::kFrame, "TLM:NOW -> kFrame, same as bare TLM");
+
+  App::Cmd cmd;
+  checkTrue(!comms.takeCommand(cmd), "neither line ever enters the command ring");
+  checkU64Eq(comms.malformedCount(), 0, "neither line counts as malformed");
+}
+
+void scenarioTlmModeTokensCaseInsensitiveProduceCorrectAction() {
+  beginScenario("pump(): TLM:ON/AUTO/OFF (any case) parse to the matching TlmAction, colon-spelled only");
+
+  struct Row {
+    const char* line;
+    App::Comms::TlmAction expected;
+  };
+  const Row rows[] = {
+      {"TLM:ON", App::Comms::TlmAction::kSetOn},     {"TLM:on", App::Comms::TlmAction::kSetOn},
+      {"TLM:On", App::Comms::TlmAction::kSetOn},     {"TLM:AUTO", App::Comms::TlmAction::kSetAuto},
+      {"TLM:auto", App::Comms::TlmAction::kSetAuto}, {"TLM:AuTo", App::Comms::TlmAction::kSetAuto},
+      {"TLM:OFF", App::Comms::TlmAction::kSetOff},   {"TLM:off", App::Comms::TlmAction::kSetOff},
+  };
+
+  for (const Row& row : rows) {
+    FakeTransport serialFake;
+    FakeTransport radioFake;
+    static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+    App::Comms comms(serialFake, radioFake, banner);
+    serialFake.enqueueInbound(row.line);
+    comms.pump(/*now=*/0);
+    checkTrue(comms.takeTlmAction() == row.expected, std::string(row.line) + " parses to the expected TlmAction");
+  }
+}
+
+void scenarioTlmGarbageArgProducesUnrecognizedNotMalformed() {
+  beginScenario("pump(): \"TLM:<garbage>\" parses to kUnrecognized -- a valid line, not a malformed one");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  serialFake.enqueueInbound("TLM:BOGUS");
+  comms.pump(/*now=*/0);
+  checkTrue(comms.takeTlmAction() == App::Comms::TlmAction::kUnrecognized, "TLM:BOGUS -> kUnrecognized");
+  checkU64Eq(comms.malformedCount(), 0, "an unrecognized TLM: argument is not counted malformed");
+}
+
+void scenarioTlmWithSpaceNotColonFallsThroughToMalformed() {
+  beginScenario(
+      "pump(): \"TLM ON\" (space, not colon) is NOT special-cased -- falls through to the unrecognized-verb path");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  serialFake.enqueueInbound("TLM ON");
+  comms.pump(/*now=*/0);
+  checkTrue(comms.takeTlmAction() == App::Comms::TlmAction::kNone, "\"TLM ON\" (no colon) never stages a TlmAction");
+  checkU64Eq(comms.malformedCount(), 1,
+             "\"TLM ON\" does not match the registered \"TLM\" verb name -- malformedCount increments");
+}
+
+void scenarioTlmModeChangeRepliesWithStatusLineOnOriginatingTransport() {
+  beginScenario(
+      "sendTlmReply(): TLM:ON replies with the STATUS line, carrying setStatus()'s tlm=, on the SAME "
+      "transport the line arrived on (radio, not serial)");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  // Radio, not serial -- proves the reply transport is remembered per-line,
+  // not hardcoded to serialLink_.
+  radioFake.enqueueInbound("TLM:ON");
+  comms.pump(/*now=*/0);
+  const App::Comms::TlmAction action = comms.takeTlmAction();
+  checkTrue(action == App::Comms::TlmAction::kSetOn, "setup: TLM:ON parses to kSetOn");
+
+  // Mirrors RobotLoop::cycle()'s own ordering: apply the mode (not modeled
+  // here -- Comms holds no Telemetry&), THEN refresh Comms::Status with the
+  // NEW mode, THEN reply -- sendTlmReply() must be called in that order.
+  App::Comms::Status status;
+  status.ready = true;
+  status.tlmMode = 2;  // App::TlmMode::kOn
+  comms.setStatus(status);
+  comms.sendTlmReply(action);
+
+  checkU64Eq(radioFake.sentReliable().size(), 1, "exactly one reply, on radio");
+  checkU64Eq(serialFake.sentReliable().size(), 0, "no reply on serial -- the line arrived on radio");
+  if (!radioFake.sentReliable().empty()) {
+    const std::string& line = radioFake.sentReliable()[0];
+    checkTrue(line.rfind("STATUS:", 0) == 0, "TLM:ON's reply is a STATUS line");
+    checkTrue(line.find("tlm=on") != std::string::npos, "STATUS line's tlm= field reports the NEW mode (on)");
+  }
+}
+
+void scenarioTlmGarbageRepliesWithHelpLineListingTlmArgumentGrammar() {
+  beginScenario("sendTlmReply(): TLM:<garbage> replies with the HELP line, listing TLM's own argument grammar");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  serialFake.enqueueInbound("TLM:BOGUS");
+  comms.pump(/*now=*/0);
+  const App::Comms::TlmAction action = comms.takeTlmAction();
+  comms.sendTlmReply(action);
+
+  checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one reply");
+  if (!serialFake.sentReliable().empty()) {
+    const std::string& line = serialFake.sentReliable()[0];
+    checkTrue(line.rfind("HELP:", 0) == 0, "TLM:<garbage>'s reply is the HELP line");
+    checkTrue(line.find("TLM[:NOW|ON|AUTO|OFF]") != std::string::npos,
+              "HELP line lists TLM's own argument grammar, not the bare verb name");
+  }
+}
+
+void scenarioBareTlmProducesNoSendTlmReplyOutputOfItsOwn() {
+  beginScenario(
+      "sendTlmReply(): kFrame (bare TLM / TLM:NOW) sends nothing itself -- the reply is the forced telemetry "
+      "frame RobotLoop's own emit() sends separately");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  serialFake.enqueueInbound("TLM:NOW");
+  comms.pump(/*now=*/0);
+  const App::Comms::TlmAction action = comms.takeTlmAction();
+  comms.sendTlmReply(action);
+
+  checkU64Eq(serialFake.sentReliable().size(), 0, "sendTlmReply(kFrame) sends no reliable reply of its own");
+  checkU64Eq(serialFake.sent().size(), 0, "sendTlmReply(kFrame) sends no async reply either");
+}
+
+void scenarioStatusLineCarriesTlmFieldForEveryMode() {
+  beginScenario("STATUS: tlm= field reflects status_.tlmMode for all three modes (off/auto/on)");
+
+  struct Row {
+    uint8_t tlmMode;
+    const char* expected;
+  };
+  const Row rows[] = {
+      {0, "tlm=off"},
+      {1, "tlm=auto"},
+      {2, "tlm=on"},
+  };
+
+  for (const Row& row : rows) {
+    FakeTransport serialFake;
+    FakeTransport radioFake;
+    static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+    App::Comms comms(serialFake, radioFake, banner);
+
+    App::Comms::Status status;
+    status.tlmMode = row.tlmMode;
+    comms.setStatus(status);
+
+    serialFake.enqueueInbound("STATUS");
+    App::Cmd cmd = pumpOne(comms, /*now=*/0);
+    checkTrue(cmd.status == App::CmdStatus::kNone, "STATUS never decodes a Cmd");
+    checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one STATUS reply");
+    if (!serialFake.sentReliable().empty()) {
+      checkTrue(serialFake.sentReliable()[0].find(row.expected) != std::string::npos,
+                std::string("STATUS line contains ") + row.expected);
+    }
+  }
+}
+
+void scenarioStatusDefaultsTlmAutoBeforeAnySetStatusCall() {
+  beginScenario(
+      "STATUS: a freshly constructed Comms (before any setStatus() call) already reports tlm=auto, matching "
+      "Telemetry::mode_'s own kAuto default");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  serialFake.enqueueInbound("STATUS");
+  App::Cmd cmd = pumpOne(comms, /*now=*/0);
+  checkTrue(cmd.status == App::CmdStatus::kNone, "STATUS never decodes a Cmd");
+  if (!serialFake.sentReliable().empty()) {
+    checkTrue(serialFake.sentReliable()[0].find("tlm=auto") != std::string::npos,
+              "default STATUS (no setStatus() call yet) reports tlm=auto");
+  }
+}
+
+void scenarioHelpLineListsTlmArgumentGrammar() {
+  beginScenario("HELP: lists TLM[:NOW|ON|AUTO|OFF] (not the bare TLM verb name), alongside the other cleartext verbs");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+
+  serialFake.enqueueInbound("HELP");
+  App::Cmd cmd = pumpOne(comms, /*now=*/0);
+  checkTrue(cmd.status == App::CmdStatus::kNone, "HELP never decodes a Cmd");
+  checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one HELP reply");
+  if (!serialFake.sentReliable().empty()) {
+    const std::string& line = serialFake.sentReliable()[0];
+    checkTrue(line.rfind("HELP:", 0) == 0, "reply starts with the HELP: verb prefix");
+    checkTrue(line.find("TLM[:NOW|ON|AUTO|OFF]") != std::string::npos, "HELP line lists TLM's argument grammar");
+    checkTrue(line.find("STATUS") != std::string::npos, "HELP line still lists the pre-existing cleartext verbs too");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -861,6 +1097,16 @@ int main() {
   scenarioDataContainingColonAndZeroRoundTripsCorrectly();
   scenarioRelayHandshakeChatterNeverCountsAsMalformed();
   scenarioRelayCarveOutIsNarrowAndDoesNotAffectSubsequentRealCommand();
+  scenarioBareTlmAndTlmNowBothProduceKFrameNoModeChange();
+  scenarioTlmModeTokensCaseInsensitiveProduceCorrectAction();
+  scenarioTlmGarbageArgProducesUnrecognizedNotMalformed();
+  scenarioTlmWithSpaceNotColonFallsThroughToMalformed();
+  scenarioTlmModeChangeRepliesWithStatusLineOnOriginatingTransport();
+  scenarioTlmGarbageRepliesWithHelpLineListingTlmArgumentGrammar();
+  scenarioBareTlmProducesNoSendTlmReplyOutputOfItsOwn();
+  scenarioStatusLineCarriesTlmFieldForEveryMode();
+  scenarioStatusDefaultsTlmAutoBeforeAnySetStatusCall();
+  scenarioHelpLineListsTlmArgumentGrammar();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Comms scenarios passed\n");

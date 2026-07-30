@@ -53,20 +53,26 @@ namespace App {
 // sets directly -- see that method's own doc comment for why those two
 // cannot fold into update().
 //
-//   bit 0  (kFlagOtosPresent)    -- OtosReading fresh THIS frame (chip
-//                                    detected AND this cycle's burst read
-//                                    actually refreshed the cached pose --
-//                                    see odometry.h's applyOtosSample()
-//                                    doc comment). Frame.otos is valid iff
-//                                    this bit is set.
+// 125-004 (issue Part 5, telemetry-emit-policy-rebuild-spec.md): every live
+// bit below is classified into EXACTLY ONE of three declared classes, under
+// its own labeled section header. This closes off the category error that
+// caused sprint 125's own root defect: a Freshness bit
+// (kFlagLinePresent/kFlagColorPresent) was treated as stability evidence by
+// the deleted report-on-change arm, which deadlocked on any robot with a
+// connected line/color sensor (the flags word toggles every cycle by
+// design on such a robot, so "wait for the flags word to hold still" never
+// happens). A bit's CLASS is a property of what its VALUE MEANS across
+// frames, not of its symbol name -- kFlagEventConfigApplied (bit 12) is
+// named "Event" but is classified STATE below; do not infer class from
+// name alone.
+//
+// === State bits -- level, meaningful across frames (safe to compare
+//     cycle-to-cycle; these are the only bits a change-detection/stability
+//     check may ever look at) =============================================
 //   bit 1  (kFlagOtosConnected)  -- live OTOS bus health.
 //   bit 2  (kFlagActive)         -- motion in progress.
 //   bit 3  (kFlagConnLeft)       -- left motor bus connectivity.
 //   bit 4  (kFlagConnRight)      -- right motor bus connectivity.
-//   bit 5  -- RESERVED (124-008: formerly kFlagAckFresh -- deleted with
-//                                    the single "freshest ack" scalar slot
-//                                    it gated; ring membership already
-//                                    means "really acked").
 //   bit 6  (kFlagFaultI2CSafetyNet) -- I2CBus `readyAt` clearance
 //                                    safety-net trip
 //                                    (Devices::I2CBus::
@@ -123,26 +129,10 @@ namespace App {
 //   bit 9  (kFlagFaultCommsMalformed) -- malformed/undecodable inbound
 //                                    frame (App::Comms::malformedCount() >
 //                                    0).
-//   bit 10 (kFlagEventDeadmanExpired) -- Deadman staleness timer expired
-//                                    (App::Deadman::expired()), the
-//                                    transition cycle only.
-//   bit 11 -- RESERVED (125-002, telemetry-emit-policy-rebuild-spec.md
-//                                    Part 1 item 8: formerly the boot-ready
-//                                    event bit -- deleted. It was set once,
-//                                    latched forever, and its transition
-//                                    was unobservable by construction (boot
-//                                    ends before any frame that could carry
-//                                    the edge). The `READY` cleartext line
-//                                    already announces this, same
-//                                    treatment as bit 5.
 //   bit 12 (kFlagEventConfigApplied) -- a ConfigDelta was applied.
-//                                    Declared, not yet wired.
-//   bit 13 (kFlagLinePresent)       -- line word fresh THIS frame.
-//   bit 14 (kFlagColorPresent)      -- color word fresh THIS frame.
-//   bit 15 (kFlagFaultMoveTimeout)  -- MOVE timeout backstop fired.
-//                                    Set via setLiveFlag(), not
-//                                    update() -- see that method's doc
-//                                    comment.
+//                                    Declared, not yet wired. Named "Event"
+//                                    but classified STATE here -- see this
+//                                    section's own header note.
 //   bit 16 (kFlagFaultShapingDisabled) -- a MOVE is active AND BOTH
 //                                    ShaperLimits axes (linear, angular)
 //                                    are disabled (App::MoveQueue::
@@ -184,6 +174,51 @@ namespace App {
 //                                    Derived from Types::RobotState::
 //                                    Health::commandsDroppedCount inside
 //                                    update(), exactly like bit 9.
+//
+// === Freshness bits -- valid-THIS-FRAME qualifiers for a payload field;
+//     toggle BY DESIGN every cycle they are not fresh; carry NO
+//     cross-frame information. These bits may NEVER participate in any
+//     change-detection or stability logic -- comparing one of these across
+//     frames, or gating a "hold still" wait on one, is EXACTLY the defect
+//     that made the deleted report-on-change arm deadlock on a robot with
+//     a connected line/color sensor (see this section's own header note
+//     above). If a bit's own name ends in "Present", assume Freshness
+//     unless it is listed under State above (kFlagOtosPresent, bit 0, is
+//     the one bit in this file where the name and the class agree) =========
+//   bit 0  (kFlagOtosPresent)    -- OtosReading fresh THIS frame (chip
+//                                    detected AND this cycle's burst read
+//                                    actually refreshed the cached pose --
+//                                    see odometry.h's applyOtosSample()
+//                                    doc comment). Frame.otos is valid iff
+//                                    this bit is set.
+//   bit 13 (kFlagLinePresent)       -- line word fresh THIS frame.
+//   bit 14 (kFlagColorPresent)      -- color word fresh THIS frame.
+//
+// === Event bits -- true for the TRANSITION cycle only (the cycle the
+//     condition first becomes true), never a level -- reading one after
+//     its own transition cycle has passed tells you nothing =============
+//   bit 10 (kFlagEventDeadmanExpired) -- Deadman staleness timer expired
+//                                    (App::Deadman::expired()), the
+//                                    transition cycle only.
+//   bit 15 (kFlagFaultMoveTimeout)  -- MOVE timeout backstop fired, rides
+//                                    the completing frame. Set via
+//                                    setLiveFlag(), not update() -- see
+//                                    that method's doc comment.
+//
+// === Reserved (never set by any code path) ================================
+//   bit 5  -- RESERVED (124-008: formerly kFlagAckFresh -- deleted with
+//                                    the single "freshest ack" scalar slot
+//                                    it gated; ring membership already
+//                                    means "really acked").
+//   bit 11 -- RESERVED (125-002, telemetry-emit-policy-rebuild-spec.md
+//                                    Part 1 item 8: formerly the boot-ready
+//                                    event bit -- deleted. It was set once,
+//                                    latched forever, and its transition
+//                                    was unobservable by construction (boot
+//                                    ends before any frame that could carry
+//                                    the edge). The `READY` cleartext line
+//                                    already announces this, same
+//                                    treatment as bit 5.
 //   bits 19-31 -- reserved for future use.
 constexpr uint32_t kFlagOtosPresent = 1u << 0;
 constexpr uint32_t kFlagOtosConnected = 1u << 1;

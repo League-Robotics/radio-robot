@@ -1606,3 +1606,36 @@ class NezhaProtocol:
         """
         return [TLMFrame.from_pb2(reply.tlm)
                 for reply in self._conn.drain_binary_tlm()]
+
+    # ------------------------------------------------------------------
+    # Telemetry mode control (125-003, telemetry-emit-policy-rebuild-spec.md
+    # Part 4). Three thin fire-and-forget wrappers over ``send_fast()`` --
+    # the SAME "no corr_id, no blocking read" plumbing every existing
+    # cleartext-verb caller already uses for HELLO/PING/etc. (see
+    # ``src/tests/bench/radio_bench_gate.py``'s own ``send_fast(verb)``
+    # calls). No new retry/backoff behavior: a mode change's reply is the
+    # `STATUS` line (readable via ``read_lines()``/``read_pending_lines()``,
+    # like any other cleartext reply), and `TLM:NOW`'s reply is one binary
+    # telemetry frame (readable via ``read_pending_binary_tlm_frames()``) --
+    # neither is read synchronously here, mirroring the existing bare-`TLM`
+    # request path this ticket extends (comms.h's own
+    # ``takeTelemetryRequest()`` doc comment, pre-125-003).
+    # ------------------------------------------------------------------
+
+    def tlmOn(self) -> None:
+        """Send `TLM:ON` -- switch the robot to streaming-always mode
+        (issue Part 3's ``kOn``): unsolicited telemetry at cadence, moving
+        or parked."""
+        self.send_fast("TLM:ON")
+
+    def tlmOff(self) -> None:
+        """Send `TLM:OFF` -- suppress unsolicited telemetry (issue Part 3's
+        ``kOff``). Command replies (acks) and bare/`TLM:NOW` requests still
+        work; only the unsolicited stream stops."""
+        self.send_fast("TLM:OFF")
+
+    def tlmNow(self) -> None:
+        """Send `TLM:NOW` -- request exactly one telemetry frame right now,
+        without changing the current mode. An explicit-argument alias of a
+        bare `TLM` line (comms.cpp's own ``dispatchLine()`` doc comment)."""
+        self.send_fast("TLM:NOW")
