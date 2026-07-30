@@ -12,8 +12,21 @@ Exports (grown incrementally, ticket by ticket):
   Transform2        — the SE(2) transform WorldPose owns.
   PoseDivergence    — the encoder-vs-OTOS world-pose divergence WorldPose
                        exposes as a first-class output.
+  solveArcToPoint   — the pure single-arc goto solver (127-005).
+  SolverLimits      — solveArcToPoint's physical/safety limits (trackWidth,
+                       speed, curvature slew limit, target-behind angle).
+  ArcSolution       — solveArcToPoint's return type (v_x, omega, arcLength,
+                       stop, bearing).
 """
 
+from robot_radio.pathplan.solver import ArcSolution, SolverLimits, solveArcToPoint
 from robot_radio.pathplan.world_pose import PoseDivergence, Transform2, WorldPose
 
-__all__ = ["WorldPose", "Transform2", "PoseDivergence"]
+__all__ = [
+    "WorldPose",
+    "Transform2",
+    "PoseDivergence",
+    "solveArcToPoint",
+    "SolverLimits",
+    "ArcSolution",
+]
