@@ -58,6 +58,13 @@ def main() -> int:
     proto = NezhaProtocol(conn)
     print("waiting out boot preamble...")
     time.sleep(6.0)
+    # 125-005 (telemetry-emit-policy-rebuild-spec.md Part 7): under the new
+    # kAuto default a parked robot emits nothing unsolicited -- and
+    # waitEnc()'s very first call below reads a pre-move BASELINE frame
+    # before the first move_wheels() of the whole run, on a robot that has
+    # never moved. Without this, that first waitEnc() call raises "no
+    # telemetry" outright.
+    proto.tlmOn()
     proto.read_pending_binary_tlm_frames()
 
     duties = [round(0.01 * i, 3) for i in range(1, 31)] +              [round(0.30 + 0.02 * i, 3) for i in range(1, 16)]
@@ -90,6 +97,10 @@ def main() -> int:
                 deltas = [r[4] for r in results[-REPEATS:]]
                 print(f"{wheel} {'+' if direction > 0 else '-'} duty={duty:.2f} "
                       f"deltas={['%.1f' % d for d in deltas]}")
+    try:
+        proto.tlmOff()
+    except Exception:
+        pass
     conn.disconnect()
 
     import csv

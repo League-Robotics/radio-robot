@@ -208,6 +208,15 @@ def run_capture(port: str, label: str, duration: float, period: int,
 
     proto = NezhaProtocol(conn)
 
+    # 125-005 (telemetry-emit-policy-rebuild-spec.md Part 7): this script
+    # predates the three-mode TLM control (issue Part 3/4) and was written
+    # against protocol v4's unconditional always-on push; under the current
+    # kAuto default a robot that never moves emits nothing unsolicited, so
+    # a parked liveness/rate measurement like this one needs TLM:ON or it
+    # silently records zero frames. `kOn` is the closest available analogue
+    # of the always-on behavior this script's own docstring describes.
+    proto.tlmOn()
+
     # Drop any stale frames left over from a previous session, then confirm
     # the always-on binary push is actually alive on this path before timing
     # the real capture window (v4 has no arm/ping call to sanity-check
@@ -246,6 +255,13 @@ def run_capture(port: str, label: str, duration: float, period: int,
         tail_time = time.monotonic() - start
         for frame in tail:
             frames_with_time.append((tail_time, frame))
+        # 125-005: undo this function's own tlmOn() -- this script has no
+        # disconnect() call (the connection is simply left to the process
+        # exit), so this is the only teardown point available.
+        try:
+            proto.tlmOff()
+        except Exception:
+            pass
 
     actual_duration = time.monotonic() - start
     stats = analyze(frames_with_time)

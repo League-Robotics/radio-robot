@@ -376,6 +376,14 @@ def run_capture(port: str, label: str, duration: float, relay: bool,
         if info.get("status") not in ("connected", "already_connected"):
             raise RuntimeError(f"connect() failed for {port!r}: {info}")
 
+        # 125-005 (telemetry-emit-policy-rebuild-spec.md Part 7): this probe
+        # never issues a motion command (see this function's own docstring),
+        # so under the current kAuto default the robot -- parked the whole
+        # capture -- would emit nothing to classify at all. `send_fast()`
+        # writes directly over `_ser` (no reader-thread dependency), so this
+        # is safe to call both before AND after `_stop_reader()` below.
+        conn.send_fast("TLM:ON")
+
         # Hand off from SerialConnection's own background reader thread +
         # bounded queues to a single-threaded raw capture loop -- see
         # module docstring "Methodology" for why.
@@ -431,6 +439,12 @@ def run_capture(port: str, label: str, duration: float, relay: bool,
         # Never leaves the port open, and (see docstring) never issued a
         # motion command in the first place, so there is nothing to
         # neutralize on an exception/Ctrl-C -- just release the port.
+        # 125-005: undo this function's own send_fast("TLM:ON") -- best
+        # effort, `_ser` may already be gone on a read-error early exit.
+        try:
+            conn.send_fast("TLM:OFF")
+        except Exception:
+            pass
         conn.disconnect()
 
 

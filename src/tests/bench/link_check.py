@@ -320,6 +320,13 @@ def main() -> int:
     proto = NezhaProtocol(conn)
     print(f"connected on {args.port}; waiting {BOOT_WAIT:.0f}s for boot")
     time.sleep(BOOT_WAIT)
+    # 125-005 (telemetry-emit-policy-rebuild-spec.md Part 7): under the new
+    # kAuto default a parked robot emits nothing unsolicited -- this script's
+    # whole POINT is comparing telemetry continuity idle vs. during motion
+    # (phase 1/3 below are explicitly "no motion"), so bracket the entire
+    # session in streaming-always mode or the idle phases trivially read as
+    # "link down" for a reason that has nothing to do with the link.
+    proto.tlmOn()
     proto.read_pending_binary_tlm_frames()
 
     mon = LinkMonitor(conn, proto)
@@ -337,6 +344,10 @@ def main() -> int:
             proto.stop()
             proto.estop()
         finally:
+            try:
+                proto.tlmOff()
+            except Exception:
+                pass
             elapsed = time.monotonic() - t_start
             mon.close()
             rc = report(mon, records, elapsed) if records or mon.frames else 1
