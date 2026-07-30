@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Promote Geofence and camera-fix helpers into robot_radio/field/
-status: open
+status: done
 use-cases:
 - SUC-003
 depends-on: []
@@ -77,20 +77,20 @@ behavior while moving it.
 
 ## Acceptance Criteria
 
-- [ ] `grep -rn "class Geofence" src` finds exactly one definition, under
+- [x] `grep -rn "class Geofence" src` finds exactly one definition, under
       `robot_radio/field/`.
-- [ ] `otos_calibration_bench.py` contains no `sys.path.insert` call.
-- [ ] `square_tour.py` imports `Geofence`/`GeofenceViolation`/
+- [x] `otos_calibration_bench.py` contains no `sys.path.insert` call.
+- [x] `square_tour.py` imports `Geofence`/`GeofenceViolation`/
       `checkPlayfieldLights`/`captureFix` from `robot_radio.field` and
       defines none of them locally.
-- [ ] `captureFix`'s yaw averaging uses the circular mean (matches
+- [x] `captureFix`'s yaw averaging uses the circular mean (matches
       `testkit/camera.read_camera_pose`'s formula), not a linear median of
       raw yaw.
-- [ ] A grep for any other importer of the old
+- [x] A grep for any other importer of the old
       `square_tour.Geofence`/`square_tour.checkPlayfieldLights` path
       turns up none (or, if one is found, it is repointed in this same
       ticket).
-- [ ] `square_tour.py --sim` and `otos_calibration_bench.py`'s existing
+- [x] `square_tour.py --sim` and `otos_calibration_bench.py`'s existing
       modes still run without import errors after the move.
 
 ## Testing

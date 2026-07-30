@@ -55,17 +55,19 @@ import pathlib
 import sys
 import time
 
-_THIS_DIR = pathlib.Path(__file__).resolve().parent
-if str(_THIS_DIR) not in sys.path:
-    sys.path.insert(0, str(_THIS_DIR))
-
 # Reuse, not fork (sprint.md's own Architecture Design Rationale, and both
 # tickets' own instruction): lights preflight, the hard camera geofence, and
-# its per-segment camera-fix helper.
-from square_tour import Geofence, GeofenceViolation, checkPlayfieldLights  # noqa: E402
-
-from robot_radio.io.serial_conn import SerialConnection  # noqa: E402
-from robot_radio.robot.protocol import NezhaProtocol, TLMFrame  # noqa: E402
+# its per-segment camera-fix helper -- promoted (127-003) into
+# robot_radio.field alongside this module's own captureFixWithRetry, which
+# moved there too for the same "one canonical implementation" reason.
+from robot_radio.field import (
+    Geofence,
+    GeofenceViolation,
+    captureFixWithRetry,
+    checkPlayfieldLights,
+)
+from robot_radio.io.serial_conn import SerialConnection
+from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
@@ -2002,79 +2004,12 @@ def reorientForFrameCheck(proto: "NezhaProtocol", geofence: "Geofence",
 # comparing a partial camera path against a full OTOS path -- either is a
 # meaningless number that LOOKS like a huge sensor error but is really a
 # bookkeeping artifact.
+#
+# captureFixWithRetry() and its lights-recovery helpers moved to
+# robot_radio.field.geofence (127-003) -- imported above alongside
+# Geofence/GeofenceViolation/checkPlayfieldLights, one canonical
+# implementation instead of a per-script copy.
 # ---------------------------------------------------------------------------
-
-
-def _playfieldLightsOn() -> "bool | None":  # None if the relay could not be reached
-    """Query the playfield Shelly relay's light-switch state directly
-    (square_tour.checkPlayfieldLights()'s own URL) -- returns True/False,
-    or None if the relay is unreachable (a different network problem, not
-    this script's to diagnose)."""
-    import json
-    import urllib.error
-    import urllib.request
-
-    from square_tour import PLAYFIELD_LIGHTS_URL
-
-    try:
-        with urllib.request.urlopen(PLAYFIELD_LIGHTS_URL, timeout=2.0) as resp:
-            status = json.loads(resp.read())
-        return bool(status.get("output"))
-    except (urllib.error.URLError, OSError, ValueError) as exc:
-        print(f"  WARNING: could not reach the playfield lights relay: {exc!r}")
-        return None
-
-
-def _turnPlayfieldLightsOn() -> None:
-    """Best-effort: switch the playfield Shelly relay's light channel on.
-    Never raises -- a failed light-on attempt just means the subsequent
-    captureFix() retries are less likely to recover, which is already
-    handled by giving up honestly after the retry window."""
-    import urllib.error
-    import urllib.request
-
-    url = "http://192.168.1.122/rpc/Switch.Set?id=0&on=true"
-    try:
-        urllib.request.urlopen(url, timeout=2.0)
-        print("  turned playfield lights ON (Shelly 192.168.1.122)")
-    except (urllib.error.URLError, OSError) as exc:
-        print(f"  WARNING: failed to turn playfield lights on: {exc!r}")
-
-
-def captureFixWithRetry(geofence: "Geofence", label: str,
-                        retrySeconds: float = 5.0) -> "tuple[float, float, float] | None":
-    # [s]
-    """Like Geofence.captureFix(), but on losing tag 100 -- a dropout that
-    has repeatedly happened and self-recovered during this sprint's bench
-    sessions -- checks whether the playfield Shelly lights have switched
-    themselves off (a known, observed cause) and turns them back on, then
-    RETRIES the fix for up to retrySeconds before giving up. Never masks a
-    genuine, lasting loss: if the tag still is not seen after the retry
-    window, returns None exactly like captureFix() does, and the caller
-    must treat that as a real failure, not silently skip past it."""
-    fix = geofence.captureFix(label)
-    if fix is not None:
-        return fix
-
-    print(f"  '{label}': tag 100 lost -- checking playfield lights before retrying")
-    lightsOn = _playfieldLightsOn()
-    if lightsOn is False:
-        print("  playfield lights are OFF -- turning them on (known dropout cause)")
-        _turnPlayfieldLightsOn()
-        time.sleep(1.0)  # let the light + camera exposure settle
-
-    deadline = time.monotonic() + retrySeconds
-    attempt = 0
-    while time.monotonic() < deadline:
-        attempt += 1
-        time.sleep(0.5)
-        fix = geofence.captureFix(f"{label} (retry {attempt})")
-        if fix is not None:
-            print(f"  '{label}': tag 100 recovered on retry {attempt}")
-            return fix
-    print(f"  '{label}': tag 100 still not seen after {retrySeconds:.0f}s of retrying -- "
-          "giving up")
-    return None
 
 
 def tourEndAgreement(camPoints: "list", otosPoints: "list",
