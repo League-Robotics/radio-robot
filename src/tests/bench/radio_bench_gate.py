@@ -439,7 +439,16 @@ def scenario_move_wheels_start_stop_and_climb(proto: NezhaProtocol, result: Resu
     FAIL, never a vacuous PASS) -- audited per the coordinator's review of
     this file; see module docstring "vacuous PASS" note."""
     _drain(proto, telemetry, "start_stop:drain")
-    before_frames = _watch(proto, 0.15, telemetry, "start_stop:before")
+    # 125-006: a PARKED robot in the default kAuto mode is correctly silent
+    # (telemetry-emit-policy-rebuild-spec.md Part 3) -- the passive 0.15s
+    # "before" watch window below can no longer rely on ambient always-on
+    # streaming to seed enc_before (issue Part 8 #1/#5: zero unsolicited
+    # frames while parked). Request one frame explicitly first (bare TLM,
+    # force=true, honored in EVERY mode per Part 3 reason 1) -- same fix
+    # ticket 005 already applied to the other parked-capture scripts, and
+    # ticket 006 (this ticket) applied to twist_drive.py's identical gap.
+    proto.tlmNow()
+    before_frames = _watch(proto, 0.3, telemetry, "start_stop:before")
     enc_before = None
     for f in reversed(before_frames):
         if f.enc is not None:

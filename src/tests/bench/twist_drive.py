@@ -107,17 +107,23 @@ def main() -> int:
         # moving" watch window below only sees fresh pushes.
         proto.read_pending_binary_tlm_frames()
 
+        # 125-006: a PARKED robot in the default kAuto mode is correctly
+        # silent (telemetry-emit-policy-rebuild-spec.md Part 3) — there is
+        # no ambient push to passively wait out any more ("give the
+        # firmware one push cycle" never arrives on a robot that has never
+        # moved, issue Part 8 #1/#5). Request one frame explicitly instead
+        # (bare TLM, force=true, honored in EVERY mode per Part 3 reason 1)
+        # so enc_before is always seeded deterministically, the same fix
+        # ticket 005 already applied to the other parked-capture scripts.
+        proto.tlmNow()
         enc_before = None
-        for frame in proto.read_pending_binary_tlm_frames():
-            if frame.enc is not None:
-                enc_before = frame.enc
-        if enc_before is None:
-            # No frame arrived in the drain above (telemetry is push-only,
-            # not request/reply) — give the firmware one push cycle.
-            time.sleep(0.1)
+        deadline = time.monotonic() + 0.5
+        while enc_before is None and time.monotonic() < deadline:
             for frame in proto.read_pending_binary_tlm_frames():
                 if frame.enc is not None:
                     enc_before = frame.enc
+            if enc_before is None:
+                time.sleep(0.02)
 
         # --- move_twist() --------------------------------------------------
         corr_id = proto.move_twist(v_x=args.v_x, v_y=0.0, omega=args.omega,

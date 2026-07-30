@@ -2637,110 +2637,26 @@ void scenarioEncoderAgesAreIndependentAndReflectRealCollectSkew() {
 
 // ===========================================================================
 // TLM: command surface (125-003, telemetry-emit-policy-rebuild-spec.md
-// Part 4): end-to-end proof that a wire `TLM:` line reaches
-// Telemetry::setMode() through RobotLoop::cycle()'s own consume point, and
-// that the STATUS/HELP reply RobotLoop triggers actually appears on the
-// wire. app_comms_harness.cpp already proves the Comms-level parse/reply
-// halves in isolation (Comms holds no Telemetry&); only RobotLoop can prove
-// the FULL wire-to-Telemetry path, since it is the one collaborator that
-// holds both.
+// Part 4) -- RELOCATED by 125-006 to
+// src/tests/sim/system/robot_loop_tlm_harness.cpp
+// (test_robot_loop_tlm.py). This whole file was ALREADY -DHOST_BUILD
+// compile-broken before sprint 125 started (an unrelated, independent
+// motion-library rework -- "Planner integration," dated 2026-07-26 per
+// src/sim/sim_harness.h's own comments -- changed App::RobotLoop's
+// constructor from 15 to 16 arguments and removed App::Drive::
+// gainsLeft()/gainsRight(); this file's LiveFixture and every other
+// RobotLoop-construction call site here still use the pre-Planner shape),
+// so the 4 scenarios 125-003 originally wrote here never actually ran --
+// see test_app_robot_loop.py's own xfail marker. 125-006 (issue Part 8's
+// own acceptance ticket) declined to leave acceptance resting on dead
+// code and moved them onto TestSim::SimHarness (src/sim/sim_harness.h),
+// which IS current on the Planner/Configurator shape (it mirrors
+// main.cpp's own composition root) -- see the relocated file's own header
+// for the full rationale. Repairing THIS file's ~20 RobotLoop
+// construction call sites for the Planner rework is a separate,
+// substantial, unrelated motion-library-alignment undertaking, tracked
+// independently of telemetry-emit-policy work.
 // ===========================================================================
-
-void scenarioTlmOnStartsStreamingOnAParkedRobotAndStatusReportsIt() {
-  beginScenario("RobotLoop: \"TLM:ON\" over the wire sets Telemetry's mode to kOn and streams frames while parked");
-
-  LiveFixture fx;
-  checkTrue(fx.tlm.mode() == App::TlmMode::kAuto, "setup: mode defaults kAuto");
-
-  // Parked, kAuto: a few cycles first, confirm silence (the Part 3
-  // predicate this ticket builds on) as this scenario's own baseline.
-  fx.step(3);
-  checkUintEq(fx.tlm.primaryEmitCount(), 0, "parked + kAuto: zero unsolicited frames before TLM:ON");
-
-  fx.serialFake.enqueueInbound("TLM:ON");
-  fx.step(1);
-  checkTrue(fx.tlm.mode() == App::TlmMode::kOn, "TLM:ON reached Telemetry::setMode(kOn) via RobotLoop::cycle()");
-
-  bool sawStatusOn = false;
-  for (const auto& line : fx.serialFake.sentReliable()) {
-    if (line.rfind("STATUS:", 0) == 0 && line.find("tlm=on") != std::string::npos) sawStatusOn = true;
-  }
-  checkTrue(sawStatusOn, "TLM:ON's reply is a STATUS line with tlm=on");
-
-  const uint32_t beforeMore = fx.tlm.primaryEmitCount();
-  fx.step(5);
-  checkTrue(fx.tlm.primaryEmitCount() > beforeMore,
-            "kOn: a parked robot now streams unsolicited frames at cadence");
-}
-
-void scenarioTlmOffThenAutoRestoresDefaultBehavior() {
-  beginScenario("RobotLoop: \"TLM:OFF\" stops the stream, \"TLM:AUTO\" restores the default mode's behavior");
-
-  LiveFixture fx;
-  fx.serialFake.enqueueInbound("TLM:ON");
-  fx.step(1);
-  checkTrue(fx.tlm.mode() == App::TlmMode::kOn, "setup: TLM:ON took effect");
-  fx.step(3);
-  checkTrue(fx.tlm.primaryEmitCount() > 0, "setup: streaming while kOn");
-
-  fx.serialFake.enqueueInbound("TLM:OFF");
-  fx.step(1);
-  checkTrue(fx.tlm.mode() == App::TlmMode::kOff, "TLM:OFF reached Telemetry::setMode(kOff)");
-  bool sawStatusOff = false;
-  for (const auto& line : fx.serialFake.sentReliable()) {
-    if (line.rfind("STATUS:", 0) == 0 && line.find("tlm=off") != std::string::npos) sawStatusOff = true;
-  }
-  checkTrue(sawStatusOff, "TLM:OFF's reply is a STATUS line with tlm=off");
-
-  const uint32_t offSnapshot = fx.tlm.primaryEmitCount();
-  fx.step(5);
-  checkUintEq(fx.tlm.primaryEmitCount(), offSnapshot, "kOff: no further unsolicited frames on a parked robot");
-
-  fx.serialFake.enqueueInbound("TLM:AUTO");
-  fx.step(1);
-  checkTrue(fx.tlm.mode() == App::TlmMode::kAuto, "TLM:AUTO restored the default mode");
-  bool sawStatusAuto = false;
-  for (const auto& line : fx.serialFake.sentReliable()) {
-    if (line.rfind("STATUS:", 0) == 0 && line.find("tlm=auto") != std::string::npos) sawStatusAuto = true;
-  }
-  checkTrue(sawStatusAuto, "TLM:AUTO's reply is a STATUS line with tlm=auto");
-}
-
-void scenarioTlmGarbageArgumentChangesNothingAndRepliesHelp() {
-  beginScenario("RobotLoop: \"TLM:<garbage>\" changes no mode and replies with the HELP line");
-
-  LiveFixture fx;
-  checkTrue(fx.tlm.mode() == App::TlmMode::kAuto, "setup: mode defaults kAuto");
-
-  fx.serialFake.enqueueInbound("TLM:BOGUS");
-  fx.step(1);
-  checkTrue(fx.tlm.mode() == App::TlmMode::kAuto, "TLM:BOGUS changes no mode");
-
-  bool sawHelp = false;
-  for (const auto& line : fx.serialFake.sentReliable()) {
-    if (line.rfind("HELP:", 0) == 0 && line.find("TLM[:NOW|ON|AUTO|OFF]") != std::string::npos) sawHelp = true;
-  }
-  checkTrue(sawHelp, "TLM:BOGUS's reply is the HELP line, listing TLM's argument grammar");
-}
-
-void scenarioTlmModeNeverPersistsAcrossAFreshBoot() {
-  beginScenario(
-      "RobotLoop: TLM:ON never persists -- a fresh Telemetry/Comms construction (simulated reboot) starts kAuto");
-
-  LiveFixture fx;
-  fx.serialFake.enqueueInbound("TLM:ON");
-  fx.step(1);
-  checkTrue(fx.tlm.mode() == App::TlmMode::kOn, "setup: TLM:ON took effect on the first fixture");
-
-  // A SECOND, independent LiveFixture -- fresh Telemetry/Comms construction,
-  // exactly what a power cycle gives a real robot (Part 4's own "no
-  // persistence" decision: nothing is ever written to config, so there is
-  // nothing for a fresh instance to read back). No TLM: line is ever sent
-  // to this one.
-  LiveFixture rebooted;
-  checkTrue(rebooted.tlm.mode() == App::TlmMode::kAuto,
-            "a fresh boot always starts kAuto, regardless of any prior session's TLM:ON/OFF");
-}
 
 }  // namespace
 
@@ -2771,10 +2687,8 @@ int main() {
 
   scenarioEncoderAgesAreIndependentAndReflectRealCollectSkew();
 
-  scenarioTlmOnStartsStreamingOnAParkedRobotAndStatusReportsIt();
-  scenarioTlmOffThenAutoRestoresDefaultBehavior();
-  scenarioTlmGarbageArgumentChangesNothingAndRepliesHelp();
-  scenarioTlmModeNeverPersistsAcrossAFreshBoot();
+  // TLM command-surface scenarios relocated 125-006 -- see the comment
+  // block above this main() where they used to live.
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::RobotLoop scenarios passed\n");

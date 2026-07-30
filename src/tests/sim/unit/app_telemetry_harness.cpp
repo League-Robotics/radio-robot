@@ -1054,6 +1054,300 @@ void scenarioSetModeControlsUnsolicitedStreamInOffAndOn() {
                                                       "is parked");
 }
 
+// ===========================================================================
+// 15. THE regression (125-006, issue Part 8 acceptance criterion #2 --
+//     explicitly called out as "the single most important test in the whole
+//     sprint"): a PARKED robot with line AND color sensors delivering FRESH
+//     readings that ALTERNATE every cycle -- exactly the pattern
+//     RobotLoop::publishLineColor(tickedLine) produces in production
+//     (robot_loop.cpp: "`tickedLine` says which leaf the loop just ticked;
+//     the untouched leaf's fresh flag stays false" -- exactly one of
+//     {line, color} fresh per cycle, never both, never neither) -- must
+//     still emit ZERO frames. The pre-125-002 design could not pass this:
+//     kFlagLinePresent/kFlagColorPresent toggling every cycle meant flags_
+//     never held still for kBootStableCycles, so report-on-change never
+//     armed -- and HAD it armed, that same toggling would have defeated
+//     idle silence and streamed at 25 Hz forever (issue's own "Why"
+//     paragraph). The rebuilt predicate (issue Part 3) never inspects a
+//     Freshness bit at all, so this must pass now.
+// ===========================================================================
+
+void scenarioParkedRobotWithAlternatingFreshLineColorStaysSilent() {
+  beginScenario("issue Part 8 #2 (THE regression): parked robot, line/color alternating fresh every cycle "
+                "(exactly RobotLoop's own publishLineColor() pattern) -- primaryEmitCount() stays 0");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms);
+
+  bool sawLineBitSet = false;
+  bool sawLineBitClear = false;
+  bool sawColorBitSet = false;
+  bool sawColorBitClear = false;
+
+  bool tickedLine = true;  // mirrors robot_loop.cpp's own alternation flip-flop
+  for (uint32_t now = 0; now <= 5000; now += App::kPrimaryPeriod) {
+    Types::RobotState state;  // moveActive false, wheel velocities 0 -- genuinely parked, never moved
+    state.time.cycleStart = now;
+    state.wheelLeft.sampleTime = now;
+    state.wheelRight.sampleTime = now;
+    // Exactly one of {line, color} fresh THIS cycle, alternating -- the
+    // real RobotLoop::publishLineColor(tickedLine) pattern, not a
+    // simplified stand-in.
+    state.perception.lineFresh = tickedLine;
+    state.perception.colorFresh = !tickedLine;
+    state.perception.line = tickedLine ? 0xAABBCCDDu : 0u;
+    state.perception.color = !tickedLine ? 0x11223344u : 0u;
+    telemetry.update(state);
+
+    if (telemetry.flags() & App::kFlagLinePresent) {
+      sawLineBitSet = true;
+    } else {
+      sawLineBitClear = true;
+    }
+    if (telemetry.flags() & App::kFlagColorPresent) {
+      sawColorBitSet = true;
+    } else {
+      sawColorBitClear = true;
+    }
+
+    telemetry.emit(now, /*force=*/false);
+    tickedLine = !tickedLine;
+  }
+
+  checkTrue(sawLineBitSet && sawLineBitClear,
+            "sanity: kFlagLinePresent genuinely toggled across cycles -- this scenario really exercises "
+            "the alternation, not a simplified stand-in");
+  checkTrue(sawColorBitSet && sawColorBitClear, "sanity: kFlagColorPresent genuinely toggled across cycles");
+  checkU64Eq(telemetry.primaryEmitCount(), 0,
+             "issue Part 8 #2: a parked robot with fresh-alternating line/color sensors emits ZERO frames -- "
+             "the structural defect the old design could not pass");
+}
+
+// ===========================================================================
+// 16. issue Part 8 #3: a command to a parked robot -- its ack rides a frame
+//     within 2x kPrimaryPeriod, exactly kAckRepeats frames carry it, then
+//     the link falls silent again (pendingAckDeliveries() stops forcing
+//     once every ring entry has been carried kAckRepeats times, and a
+//     parked kAuto robot has no other reason to emit).
+// ===========================================================================
+
+void scenarioAckOnParkedRobotRidesExactlyKAckRepeatsFramesThenSilence() {
+  beginScenario("issue Part 8 #3: an ack pushed to a parked robot rides exactly kAckRepeats frames, the "
+                "first within 2x kPrimaryPeriod, then the link goes silent again");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms);
+
+  Types::RobotState parked;  // moveActive false, everMoved_ stays false -- purely at rest
+  telemetry.update(parked);
+
+  constexpr uint32_t kAckTime = 0;
+  telemetry.ack(42, 0);
+
+  uint32_t firstFrameTime = 0;
+  bool sawFirstFrame = false;
+  for (uint32_t now = kAckTime; now <= 5000; now += App::kPrimaryPeriod) {
+    const uint64_t before = telemetry.primaryEmitCount();
+    telemetry.emit(now, /*force=*/false);
+    if (!sawFirstFrame && telemetry.primaryEmitCount() > before) {
+      sawFirstFrame = true;
+      firstFrameTime = now;
+    }
+  }
+
+  checkTrue(sawFirstFrame, "the ack produced at least one frame");
+  checkTrue(firstFrameTime <= kAckTime + 2 * App::kPrimaryPeriod,
+            "the ack's first carrying frame arrives within 2x kPrimaryPeriod of the ack() call");
+  checkU64Eq(telemetry.primaryEmitCount(), App::kAckRepeats,
+             "exactly kAckRepeats frames carried the ack, then the parked/kAuto link fell silent again -- "
+             "no further frames over 5s of continued cadence gating");
+}
+
+// ===========================================================================
+// 17. issue Part 8 #6: bare TLM (force=true) on a parked robot produces
+//     exactly one frame. TLM:NOW is structurally identical to bare TLM --
+//     comms.cpp's dispatchLine() maps BOTH to the same TlmAction::kFrame
+//     (app_comms_harness.cpp's own
+//     scenarioBareTlmAndTlmNowBothProduceKFrameNoModeChange()), and
+//     RobotLoop::cycle() has exactly ONE call site that turns kFrame into
+//     tlm_.emit(now, force=true) -- there is no separate code path either
+//     could diverge through, so proving force=true here proves both.
+// ===========================================================================
+
+void scenarioBareTlmForceOnParkedRobotProducesExactlyOneFrame() {
+  beginScenario("issue Part 8 #6: bare TLM/TLM:NOW (force=true) on a parked robot produces exactly one frame");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms);
+
+  Types::RobotState parked;
+  telemetry.update(parked);
+
+  for (uint32_t now = 0; now <= 2000; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
+  checkU64Eq(telemetry.primaryEmitCount(), 0, "setup: parked robot silent before the request");
+
+  telemetry.emit(2040, /*force=*/true);
+  checkU64Eq(telemetry.primaryEmitCount(), 1, "bare TLM/TLM:NOW: exactly one frame");
+
+  for (uint32_t now = 2080; now <= 4000; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
+  checkU64Eq(telemetry.primaryEmitCount(), 1, "no further unsolicited frames after the single requested one");
+}
+
+// ===========================================================================
+// 18. issue Part 8 #7: TLM:OFF, then a Move runs -- ONLY ack frames appear
+//     (enqueue + completion, kAckRepeats each), no stream, even though
+//     kFlagActive is set the whole time the Move runs; a bare TLM request
+//     still answers with one frame on top of the ack-carried total.
+// ===========================================================================
+
+void scenarioTlmOffThenMoveOnlyAckFramesNoStream() {
+  beginScenario("issue Part 8 #7: TLM:OFF, then a Move runs -- ONLY ack frames appear (enqueue + completion, "
+                "kAckRepeats each), no stream while moving; a bare TLM still answers with one frame");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms);
+
+  telemetry.setMode(App::TlmMode::kOff);
+
+  // Enqueue ack -- mirrors RobotLoop's own handleMove(), which acks the
+  // instant a Move is accepted, before it starts moving.
+  telemetry.ack(/*corrId=*/100, 0);
+
+  uint32_t now = 0;
+  Types::RobotState moving;
+  moving.command.moveActive = true;
+  // Many cycles of the Move actually running -- kOff must produce NO
+  // unsolicited frames despite kFlagActive being set every one of them,
+  // only the pending enqueue ack's own bounded kAckRepeats burst.
+  for (int i = 0; i < 20; ++i, now += App::kPrimaryPeriod) {
+    moving.time.cycleStart = now;
+    telemetry.update(moving);
+    telemetry.emit(now, /*force=*/false);
+  }
+  checkU64Eq(telemetry.primaryEmitCount(), App::kAckRepeats,
+             "kOff + moving: only the enqueue ack's own kAckRepeats burst, no stream");
+
+  // Completion ack -- mirrors RobotLoop's own moveQueue completion
+  // (tlm_.ack(moveId, 0)) call site.
+  telemetry.ack(/*corrId=*/100, 0);
+  Types::RobotState parked;  // the Move completed -- moveActive drops
+  for (int i = 0; i < 20; ++i, now += App::kPrimaryPeriod) {
+    parked.time.cycleStart = now;
+    telemetry.update(parked);
+    telemetry.emit(now, /*force=*/false);
+  }
+  checkU64Eq(telemetry.primaryEmitCount(), 2 * App::kAckRepeats,
+             "kOff: the completion ack adds exactly ANOTHER kAckRepeats frames, still no unsolicited stream");
+
+  // A bare TLM request still answers with one frame, on top of the
+  // ack-carried total -- reason 1 (force) is honored in EVERY mode.
+  telemetry.emit(now, /*force=*/true);
+  checkU64Eq(telemetry.primaryEmitCount(), 2 * App::kAckRepeats + 1,
+             "a bare TLM request in kOff still answers with exactly one frame");
+}
+
+// ===========================================================================
+// 19. issue Part 8 #8: TLM:ON streams a parked robot at cadence; TLM:OFF
+//     stops the stream within one kPrimaryPeriod (the very next cadence
+//     tick after the mode change produces no frame); TLM:AUTO restores the
+//     default mode-2 (silent-when-parked) behavior.
+// ===========================================================================
+
+void scenarioTlmOnThenOffStopsWithinOnePeriodThenAutoRestoresModeTwoBehavior() {
+  beginScenario("issue Part 8 #8: TLM:ON streams a parked robot at cadence; TLM:OFF stops it within one "
+                "kPrimaryPeriod; TLM:AUTO restores the default (silent-when-parked) behavior");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms);
+
+  Types::RobotState parked;
+  telemetry.update(parked);
+
+  telemetry.setMode(App::TlmMode::kOn);
+  uint32_t now = 0;
+  for (; now <= 800; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
+  const uint64_t onCount = telemetry.primaryEmitCount();
+  checkTrue(onCount > 15, "kOn: a parked robot streams at cadence (roughly one frame per kPrimaryPeriod)");
+
+  telemetry.setMode(App::TlmMode::kOff);
+  now += App::kPrimaryPeriod;
+  telemetry.emit(now, /*force=*/false);
+  checkU64Eq(telemetry.primaryEmitCount(), onCount,
+             "kOff: the very next cadence tick after the mode change produces no frame -- the stream "
+             "stopped within one kPrimaryPeriod");
+  for (int i = 0; i < 10; ++i) {
+    now += App::kPrimaryPeriod;
+    telemetry.emit(now, /*force=*/false);
+  }
+  checkU64Eq(telemetry.primaryEmitCount(), onCount, "kOff: stays silent, parked");
+
+  telemetry.setMode(App::TlmMode::kAuto);
+  const uint64_t offCount = telemetry.primaryEmitCount();
+  for (int i = 0; i < 20; ++i) {
+    now += App::kPrimaryPeriod;
+    telemetry.emit(now, /*force=*/false);
+  }
+  checkU64Eq(telemetry.primaryEmitCount(), offCount,
+             "kAuto: restores mode-2 (silent-when-parked) behavior -- a parked robot stays silent under "
+             "kAuto exactly like it did before it was ever switched kOn");
+}
+
+// ===========================================================================
+// 20. issue Part 8 #10: mode is not persistent. Set kOn (or kOff), then a
+//     FRESH Telemetry construction -- the only "reboot" semantics
+//     App::Telemetry has, since mode_ is a plain member with no persistence
+//     store at all (issue Part 4's explicit "no persistence" decision) --
+//     reads back kAuto. See app_robot_loop_harness.cpp's own note (moved
+//     125-006) for the wire-level ("TLM:ON" then simulated reboot) version
+//     of the same property.
+// ===========================================================================
+
+void scenarioModeNotPersistedAcrossFreshConstruction() {
+  beginScenario("issue Part 8 #10: mode is not persistent -- set kOn (or kOff), then a fresh Telemetry "
+                "construction (the only 'reboot' semantics it has) reads back kAuto");
+
+  FakeTransport serialFake1;
+  FakeTransport radioFake1;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms1(serialFake1, radioFake1, banner);
+  App::Telemetry telemetry1(comms1);
+  telemetry1.setMode(App::TlmMode::kOn);
+  checkTrue(telemetry1.mode() == App::TlmMode::kOn, "setup: kOn took effect on the first instance");
+
+  // "Simulate reboot": a fresh Comms/Telemetry construction -- nothing
+  // written to config, nothing carried over. This IS what a power cycle
+  // does in production (mode_ resets to kAuto by construction every boot,
+  // issue Part 3).
+  FakeTransport serialFake2;
+  FakeTransport radioFake2;
+  App::Comms comms2(serialFake2, radioFake2, banner);
+  App::Telemetry telemetry2(comms2);
+  checkTrue(telemetry2.mode() == App::TlmMode::kAuto,
+            "a fresh boot always starts kAuto, regardless of the prior session's kOn/kOff");
+
+  telemetry1.setMode(App::TlmMode::kOff);
+  FakeTransport serialFake3;
+  FakeTransport radioFake3;
+  App::Comms comms3(serialFake3, radioFake3, banner);
+  App::Telemetry telemetry3(comms3);
+  checkTrue(telemetry3.mode() == App::TlmMode::kAuto, "same for kOff: a fresh boot forgets it too");
+}
+
 }  // namespace
 
 int main() {
@@ -1071,6 +1365,12 @@ int main() {
   scenarioHandSpunWheelBeforeFirstMoveNeverWakesTheLink();
   scenarioActivityWindowRefreshesOnActiveAndCoastsThenClosesAfterHoldoff();
   scenarioSetModeControlsUnsolicitedStreamInOffAndOn();
+  scenarioParkedRobotWithAlternatingFreshLineColorStaysSilent();
+  scenarioAckOnParkedRobotRidesExactlyKAckRepeatsFramesThenSilence();
+  scenarioBareTlmForceOnParkedRobotProducesExactlyOneFrame();
+  scenarioTlmOffThenMoveOnlyAckFramesNoStream();
+  scenarioTlmOnThenOffStopsWithinOnePeriodThenAutoRestoresModeTwoBehavior();
+  scenarioModeNotPersistedAcrossFreshConstruction();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Telemetry scenarios passed\n");

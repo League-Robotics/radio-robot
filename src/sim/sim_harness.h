@@ -316,6 +316,24 @@ class SimHarness {
     return result;
   }
 
+  // 125-006: cleartext replies (HELLO's DEVICE: banner, PING/PONG, ID,
+  // VER, READY, STATUS, HELP) ride App::Transport::sendReliable() --
+  // App::Comms's OWN send-path split, comms.h's file header -- which lands
+  // in FakeTransport's separate sentReliable_ capture, never sent_ (that
+  // one is send()'s own capture: Telemetry's armored binary frames only).
+  // drainTelemetry()/drainRawTelemetry() above therefore NEVER see a
+  // STATUS/HELP/READY line -- a caller that needs one (e.g. a TLM:ON/OFF
+  // mode-change's own STATUS reply) drains this instead. Own drain index,
+  // symmetric with the other two drains.
+  std::vector<std::string> drainReliable() {
+    std::vector<std::string> result;
+    const auto& sent = serialLink_.sentReliable();
+    for (; reliableDrainIndex_ < sent.size(); ++reliableDrainIndex_) {
+      result.push_back(sent[reliableDrainIndex_]);
+    }
+    return result;
+  }
+
   bool booted() const { return booted_; }
   int cycleCount() const { return cycleCount_; }  // total robotLoop_.cycle() calls made so far
 
@@ -443,6 +461,7 @@ class SimHarness {
 
   size_t telemetryDrainIndex_ = 0;  // index into serialLink_.sent() already returned by drainTelemetry()
   size_t rawTelemetryDrainIndex_ = 0;  // index into serialLink_.sent() already returned by drainRawTelemetry()
+  size_t reliableDrainIndex_ = 0;  // index into serialLink_.sentReliable() already returned by drainReliable()
 
   // configureMotor()'s own test-only readback state -- see motorConfig().
   Devices::MotorConfig lastMotorConfigL_ = {};
