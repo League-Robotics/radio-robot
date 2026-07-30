@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: 'Part 8 acceptance: sim criteria 1-12 + bench criteria 13-16'
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 - SUC-002

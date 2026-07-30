@@ -2,7 +2,7 @@
 id: 008
 title: 'Fix planned-stop vs panic-stop safety defect: add estop(), repoint halt-now
   call sites, sim+bench regression tests'
-status: in-progress
+status: done
 use-cases: []
 depends-on: []
 github-issue: ''
