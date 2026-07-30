@@ -59,14 +59,20 @@ def _cm(mm: float) -> float:
 
 def test_max_wheel_step_derivation():
     """Locks the derived constant to its documented first-principles
-    formula (module docstring): aDecel * controlPeriod, hil_drive.py's
-    measured host-loop constants (aDecel=120 mm/s^2, controlPeriod=50ms)."""
-    assert MAX_WHEEL_STEP == pytest.approx(120.0 * (50.0 / 1000.0))
-    assert MAX_WHEEL_STEP == pytest.approx(6.0)
-    # ~72x smaller than ticket 001's measured Edge-B hazard (433.3333 mm/s,
-    # sim tier, CASE2_EDGE_B_DISCONTINUITY_MM_S) -- the whole point of the
-    # derivation.
-    assert 433.3333 / MAX_WHEEL_STEP == pytest.approx(72.22, abs=0.5)
+    formula (module docstring, out-of-process fix 2026-07-30): a slew
+    budget (_SLEW_ACCEL, a deliberate fraction of the plant's own
+    kPlantGain/kPlantTau acceleration authority) spent once per planner
+    solve (_SOLVE_PERIOD, matching planner.CYCLE_PERIOD), NOT the old
+    braking-derived aDecel * controlPeriod figure."""
+    assert MAX_WHEEL_STEP == pytest.approx(2500.0 * 0.1)
+    assert MAX_WHEEL_STEP == pytest.approx(250.0)
+    # Still comfortably under ticket 001's measured Edge-B hazard
+    # (433.3333 mm/s, sim tier, CASE2_EDGE_B_DISCONTINUITY_MM_S) -- the
+    # whole point of the derivation -- while sitting above the firmware's
+    # own plannerLimits.aMax = 300 mm/s^2 authority per solve (30 mm/s per
+    # 0.1s), so aMax stays the binding constraint in normal operation.
+    assert MAX_WHEEL_STEP < 433.3333
+    assert MAX_WHEEL_STEP > 300.0 * 0.1
 
 
 def test_default_behind_angle_is_90_degrees():
@@ -175,30 +181,40 @@ def test_target_at_robots_own_position_triggers_stop():
 
 
 # --- Curvature slew limit -- ramp, never step -----------------------------
+#
+# With the corrected MAX_WHEEL_STEP (250.0 mm/s per solve, up from the old
+# 6.0), maxOmegaStep = 2*250/128 = 3.90625 rad/s -- large enough that the
+# 90-degree/100mm target used pre-fix (unclamped omega 3.0 rad/s) no
+# longer exceeds the budget at all, so it can't demonstrate clamping any
+# more. These tests use a closer 90-degree target (25.6mm, chosen so the
+# unclamped omega, 11.71875 rad/s, is an exact 3x multiple of the new
+# maxOmegaStep) so the clamp still visibly engages.
+
+_CLOSE_LEFT_TARGET = Pose(x=0.0, y=_cm(25.6), heading=0.0)
+_CLOSE_RIGHT_TARGET = Pose(x=0.0, y=_cm(-25.6), heading=0.0)
+_CLOSE_UNCLAMPED_OMEGA = 11.71875  # [rad/s] speed * 2*sin(90deg) / 25.6mm
+
 
 def test_slew_limit_clamps_a_single_large_curvature_step():
-    # Same 90-degree-left target as the geometry test above, whose
-    # UNCLAMPED omega is 3.0 rad/s -- but this time with the real
-    # (default, derived) limits, starting from rest.
-    target = Pose(x=0.0, y=_cm(100.0), heading=0.0)
-    result = solveArcToPoint(_HERE, target, _DEFAULT, previousOmega=0.0)
+    # 90-degree-left target close enough that its unclamped omega
+    # (11.71875 rad/s) is well above the derived per-solve budget --
+    # with the real (default, derived) limits, starting from rest.
+    result = solveArcToPoint(_HERE, _CLOSE_LEFT_TARGET, _DEFAULT, previousOmega=0.0)
     maxOmegaStep = 2.0 * MAX_WHEEL_STEP / _TRACK_WIDTH
     assert result.omega == pytest.approx(maxOmegaStep)
-    # Nowhere near the naive/unclamped 3.0 rad/s -- this is the "ramp not
-    # step" property under test.
-    assert result.omega < 0.5
+    # Nowhere near the naive/unclamped 11.71875 rad/s -- this is the
+    # "ramp not step" property under test.
+    assert result.omega < _CLOSE_UNCLAMPED_OMEGA
 
 
 def test_slew_limit_ramps_toward_the_target_over_successive_calls():
-    target = Pose(x=0.0, y=_cm(100.0), heading=0.0)
     maxOmegaStep = 2.0 * MAX_WHEEL_STEP / _TRACK_WIDTH
-    unclampedOmega = 3.0
+    unclampedOmega = _CLOSE_UNCLAMPED_OMEGA
 
-    omega = 0.0
     previous = 0.0
     steps = 0
     for _ in range(64):
-        result = solveArcToPoint(_HERE, target, _DEFAULT, previousOmega=previous)
+        result = solveArcToPoint(_HERE, _CLOSE_LEFT_TARGET, _DEFAULT, previousOmega=previous)
         delta = result.omega - previous
         # Never a step larger than the derived per-solve budget.
         assert delta <= maxOmegaStep + 1e-9
@@ -210,20 +226,22 @@ def test_slew_limit_ramps_toward_the_target_over_successive_calls():
 
     assert previous == pytest.approx(unclampedOmega)
     # Converges in exactly the number of steps the budget predicts
-    # (3.0 / 0.09375 == 32), not in one jump.
+    # (11.71875 / 3.90625 == 3), not in one jump.
     assert steps == round(unclampedOmega / maxOmegaStep)
     assert steps > 1
 
 
 def test_slew_limit_clamps_an_abrupt_reversal():
-    # Steady state at +3.0 rad/s (as if converged toward a left target),
-    # then the target flips to the mirror-image right target (naive
-    # unclamped omega -3.0). Must ramp down, not jump straight to -3.0.
-    target = Pose(x=0.0, y=_cm(-100.0), heading=0.0)
+    # Steady state at the close-left target's own unclamped omega (as if
+    # converged toward it), then the target flips to the mirror-image
+    # right target (naive unclamped omega is the negative of that). Must
+    # ramp down, not jump straight to the naive reversed value.
     maxOmegaStep = 2.0 * MAX_WHEEL_STEP / _TRACK_WIDTH
-    result = solveArcToPoint(_HERE, target, _DEFAULT, previousOmega=3.0)
-    assert result.omega == pytest.approx(3.0 - maxOmegaStep)
-    assert result.omega > 0.0  # nowhere near the naive -3.0 in a single call
+    previousOmega = _CLOSE_UNCLAMPED_OMEGA
+    result = solveArcToPoint(_HERE, _CLOSE_RIGHT_TARGET, _DEFAULT, previousOmega=previousOmega)
+    assert result.omega == pytest.approx(previousOmega - maxOmegaStep)
+    # Nowhere near the naive -11.71875 in a single call.
+    assert result.omega > 0.0
 
 
 # --- Purity / final-heading-ignored ---------------------------------------

@@ -50,64 +50,81 @@ Decision 4 and the design issue's own T4 section:
 --------------------------------------------------------------------------
 Curvature slew limit -- derivation
 --------------------------------------------------------------------------
-Ticket 001 (127-001) measured the hazard this limit exists to prevent:
-replacing an in-flight 150 mm/s straight (``axisPerLambda = 1.0``) with a
-tight arc (``unitLeft=-0.5, unitRight=1.0``, ``axisPerLambda = 0.25``) via
-``replace=True`` makes the firmware's carried ``profileVelocity_`` (held
-in axis/body-speed units) get reinterpreted under the NEW move's
-``axisPerLambda`` at ``src/motion/planner/planner.cpp:1075``
-(``profileVelocity_ / active_.axisPerLambda``), producing a single-tick
-commanded-wheel discontinuity of
+This bound exists for exactly one reason: to keep a ``replace=True``
+transition from landing as an abrupt step while the firmware's own
+profiler cannot ramp it cleanly. ``src/motion/planner/planner.cpp:1075``
+reinterprets the carried ``profileVelocity_`` (held in axis/body-speed
+units) under the NEW move's ``axisPerLambda`` on every ``replace`` -- a
+firmware defect tracked separately as
+``clasi/issues/replace-rescales-carried-profile-velocity-by-new-shape.md``
+-- and ticket 001 (127-001) measured the single-tick commanded-wheel
+discontinuity that bug produces: replacing an in-flight 150 mm/s straight
+(``axisPerLambda = 1.0``) with a tight arc (``unitLeft=-0.5,
+unitRight=1.0``, ``axisPerLambda = 0.25``) produces
 
     CASE2_EDGE_B_DISCONTINUITY_MM_S = 433.3333 mm/s
 
 (ticket 001 Completion Notes, sim tier -- ``Planner::commandedLeft()``/
 ``commandedRight()``, the raw value the firmware's profiler computes with
-zero actuation lag, i.e. the quantity the HOST controls). Ticket 001
-explicitly recommends sizing against this sim figure rather than its own
-bench-measured ~20 mm/s figure: the bench number is downstream of ~150 ms
-actuation delay plus the wheel-velocity PID's own damping, both of which
-are tuning artifacts a future retune could remove, not a safety property
-to depend on.
+zero actuation lag, i.e. the quantity the HOST controls). This solver
+cannot fix the firmware's carry-over bug itself (host-only change) --
+instead it bounds how much the CURVATURE is allowed to change between
+successive solves, so the host never asks for a step anywhere near Edge
+B's own numbers, regardless of how the firmware's carry-over bug
+reinterprets whatever it is asked for.
 
-This solver cannot fix the firmware's carry-over bug itself (host-only
-change; the firmware defect is tracked separately as
-``clasi/issues/replace-rescales-carried-profile-velocity-by-new-shape.md``
-for a later sprint) -- instead it bounds how much the CURVATURE is
-allowed to change between successive solves, from first principles: the
-change in each wheel's commanded speed that a curvature step induces (at
-a fixed forward speed) must stay within what the drivetrain's own
-acceleration authority could physically achieve in one control period:
+**This is NOT an acceleration limiter.** The firmware's own profiler
+already enforces one, on every wheel command it receives, independent of
+anything this host solver does:
 
-    maxWheelStep = aDecel * controlPeriod
+    plannerLimits.aMax = 300 mm/s^2   (src/firm/main.cpp)
 
-``aDecel``/``controlPeriod`` are taken from ``hil_drive.py``'s
-``hilLimits()`` (``src/motion/planner/bench/hil_drive.py``) -- the
-MEASURED host-loop constants for this exact host-controls-a-replace-loop
-topology, not ``src/firm/main.cpp``'s own book values (``aDecel=250``,
-``controlPeriod=47ms``, an un-measured design target). ``aDecel=120
-mm/s^2`` is documented there as "measured: bridge braking authority ~4x
-weaker than sim plant" -- the most conservative (weakest) real
-deceleration figure on record -- and ``controlPeriod=50ms`` is the exact
-cadence ticket 001's own case 5 (20 Hz high-rate replacement) exercised
-cleanly on hardware. Using the weaker authority figure is deliberate: a
-safety bound should use the worst-case measured capability, not the
-nominal one.
+A host-side slew bound set BELOW that figure would fight the firmware's
+own limiter for no reason; one set comfortably ABOVE it never binds in
+normal operation, because the firmware's profiler is always the tighter
+constraint by construction. This bound is sized to stay above ``aMax``
+deliberately, so it is only ever felt on the specific ``replace``
+discontinuity it exists to smooth, not as a general motion limiter.
 
-    maxWheelStep = aDecel * (controlPeriod / 1000.0)
-                 = 120.0 * 0.050
-                 = 6.0 mm/s per solve
+The budget is a deliberate fraction of the wheel's own physical
+acceleration authority, taken from the plant model in
+``src/firm/main.cpp``:
 
-6.0 mm/s is ~72x smaller than ticket 001's measured 433.3333 mm/s hazard
-figure -- this physically-grounded, per-control-period authority bound
-lands nowhere near the discontinuity that made Edge B unsafe, which is
-exactly the point: this solver never asks for a curvature step large
-enough to reproduce Edge B's own numbers, regardless of how the
-firmware's carry-over bug reinterprets whatever it is asked for. A future
-reader re-deriving this after ``hilLimits()``'s constants change need only
-recompute ``aDecel * (controlPeriod / 1000.0)`` and re-check it stays
-comfortably below whatever ticket 001 (or a future re-measurement of
-Edge B) reports.
+    kPlantGain = 1370.0   [mm/s per duty]
+    kPlantTau  = 0.23     [s]
+    plantAccel = kPlantGain / kPlantTau ~= 5957 mm/s^2  -- what a wheel
+                                                            can PHYSICALLY do
+
+``_SLEW_ACCEL = 2500 mm/s^2`` is ~42% of that -- comfortably above the
+firmware's own ``aMax = 300 mm/s^2`` (so ``aMax`` stays the binding
+constraint in normal operation) while remaining well short of the plant's
+own physical ceiling:
+
+    MAX_WHEEL_STEP = _SLEW_ACCEL * _SOLVE_PERIOD
+                   = 2500.0 * 0.1
+                   = 250.0 mm/s per solve
+
+``_SOLVE_PERIOD`` is the planner loop's own re-solve cadence
+(``planner.CYCLE_PERIOD = 0.1``): the budget is spent once per SOLVE, not
+once per control tick, so it must be derived from the solve interval, not
+from some other loop's period. If ``planner.CYCLE_PERIOD`` ever changes,
+``_SOLVE_PERIOD`` here must be updated to match or this budget silently
+drifts out of sync with the loop that actually spends it -- exactly the
+mistake in the derivation this replaces, which derived a 50 ms
+``_CONTROL_PERIOD`` from ``hil_drive.py``'s host-bench control-loop
+constant but then spent it once every 100 ms (the real
+``planner.CYCLE_PERIOD``), silently halving the already-too-conservative
+budget a second time.
+
+250.0 mm/s per solve stays comfortably under ticket 001's measured
+433.3333 mm/s Edge-B hazard figure -- this solver still never asks for a
+curvature step large enough to reproduce Edge B's own numbers -- while no
+longer sitting ~100x below what the drivetrain, and the firmware's own
+``aMax`` limiter, can actually do. (The prior derivation borrowed
+``hil_drive.py``'s weakest measured BRAKING figure, ``aDecel=120 mm/s^2``,
+to bound a STEERING change -- a different physical quantity with no
+principled connection to Edge B's own failure mode. That reasoning is
+retired, not merely adjusted; see git history if it is ever needed again.)
 """
 
 from __future__ import annotations
@@ -119,10 +136,22 @@ from robot_radio.nav.pose import Pose
 
 _POSITION_SCALE = 10.0  # [mm/cm] Pose.x/y are cm; this module's own geometry and returns are mm.
 
-_A_DECEL = 120.0  # [mm/s^2] hil_drive.py hilLimits() -- measured, weaker than the sim plant's book value
-_CONTROL_PERIOD = 50.0  # [ms] hil_drive.py hilLimits() controlPeriod -- matches ticket 001's 20 Hz case 5 cadence
+_PLANT_GAIN = 1370.0  # [mm/s per duty] src/firm/main.cpp kPlantGain
+_PLANT_TAU = 0.23  # [s] src/firm/main.cpp kPlantTau
+_PLANT_ACCEL = _PLANT_GAIN / _PLANT_TAU  # [mm/s^2] ~5957 -- what a wheel can PHYSICALLY do
 
-MAX_WHEEL_STEP = _A_DECEL * (_CONTROL_PERIOD / 1000.0)  # [mm/s] per solve; see module docstring derivation (== 6.0)
+# [mm/s^2] slew budget -- a deliberate fraction (~42%) of plant capability.
+# NOT an acceleration limit: the firmware's own profiler owns that
+# (plannerLimits.aMax = 300). See the module docstring derivation.
+_SLEW_ACCEL = 2500.0
+
+# [s] the planner loop's own re-solve cadence (planner.CYCLE_PERIOD). The
+# budget is spent once per SOLVE, so it must be derived from the solve
+# interval -- deriving from a 50 ms control period and spending it every
+# 100 ms was a 2x error.
+_SOLVE_PERIOD = 0.1
+
+MAX_WHEEL_STEP = _SLEW_ACCEL * _SOLVE_PERIOD  # [mm/s] per solve; see module docstring derivation (== 250.0)
 
 _MIN_DISTANCE = 1e-6  # [mm] below this, target is the robot's own position -- stop rather than divide by ~0
 _MIN_BEARING = 1e-9  # [rad] below this, treat as exactly on-heading -- avoids a 0/0 in the general arc formula
