@@ -233,6 +233,70 @@ def loadConfiguredOffsetMm(robotJsonOverride: "str | None"
 
 
 # ---------------------------------------------------------------------------
+# Timeout safety clamp -- shared by every move this script commands.
+#
+# 2026-07-29 post-mortem: an earlier run ended with the robot hard against
+# the WEST rail after tag 100 was lost mid-move. The fence fired estop()
+# correctly on tag loss, but a fence that cannot see the robot cannot bound
+# its travel -- the backstop that had to hold was the move's own `timeout`.
+# The formula in use then (`dist/speed*3 + 3000`) allowed ~10.5s at
+# 120 mm/s for a 300 mm move -- ~126cm of possible worst-case travel, far
+# more than the field can absorb. clampTimeoutToClearance() bounds every
+# move's timeout so that worst-case travel (timeout x commanded speed)
+# cannot exceed the camera-confirmed clearance to the nearest field
+# boundary in the direction of travel, computed from the pre-move camera
+# fix -- not from the intended stop condition, which is exactly the thing
+# that can fail to fire.
+# ---------------------------------------------------------------------------
+
+
+def clearanceAlongDirectionCm(x: float, y: float, dirX: float, dirY: float,
+                              marginCm: float) -> float:  # [cm]
+    """Distance from (x, y) to the margin-shrunk field boundary, travelling
+    along the unit direction (dirX, dirY). `inf` for a degenerate
+    (zero-length) direction -- caller only feeds this a real direction when
+    there is translational speed to bound."""
+    limX = Geofence.HALF_W - marginCm
+    limY = Geofence.HALF_H - marginCm
+    candidates: "list[float]" = []
+    if dirX > 1e-9:
+        candidates.append((limX - x) / dirX)
+    elif dirX < -1e-9:
+        candidates.append((-limX - x) / dirX)
+    if dirY > 1e-9:
+        candidates.append((limY - y) / dirY)
+    elif dirY < -1e-9:
+        candidates.append((-limY - y) / dirY)
+    if not candidates:
+        return float("inf")
+    return max(0.0, min(candidates))
+
+
+def clampTimeoutToClearance(requestedTimeoutMs: float,
+                            camPose: "tuple[float, float, float]",
+                            vx: float, vy: float,  # [mm/s] commanded body-frame
+                            marginCm: float) -> "tuple[float, float]":  # [ms] [mm]
+    """Clamp requestedTimeoutMs so that worst-case travel (timeout x
+    commanded speed) cannot exceed the camera-confirmed clearance to the
+    nearest field boundary in the direction of travel, from camPose (the
+    PRE-MOVE camera fix). A pure rotation (vx=vy=0, e.g. --mode lever-arm's
+    turn) has zero translational worst case -- the requested timeout passes
+    through unchanged and clearance is reported as inf. Returns
+    (clampedTimeoutMs, clearanceMm)."""
+    speed = math.hypot(vx, vy)  # [mm/s]
+    if speed <= 1e-6:
+        return requestedTimeoutMs, float("inf")
+    x, y, yaw = camPose
+    worldDirX = math.cos(yaw) * vx - math.sin(yaw) * vy
+    worldDirY = math.sin(yaw) * vx + math.cos(yaw) * vy
+    worldDirX, worldDirY = worldDirX / speed, worldDirY / speed
+    clearanceCm = clearanceAlongDirectionCm(x, y, worldDirX, worldDirY, marginCm)
+    clearanceMm = clearanceCm * 10.0
+    maxTimeoutMs = clearanceMm / speed * 1000.0
+    return min(requestedTimeoutMs, maxTimeoutMs), clearanceMm
+
+
+# ---------------------------------------------------------------------------
 # --mode units (126-001)
 # ---------------------------------------------------------------------------
 
@@ -295,7 +359,21 @@ def runUnitsMode(args: argparse.Namespace) -> int:
                   f"yaw={math.degrees(camBefore[2]):+.1f}deg")
             return 1
         vx = sign * args.cruise
-        timeoutMs = args.leg / args.cruise * 1000.0 * 3.0 + 3000.0  # [ms]
+        requestedTimeoutMs = args.leg / args.cruise * 1000.0 * 3.0 + 3000.0  # [ms]
+        requiredMs = args.leg / args.cruise * 1000.0  # [ms] bare time to complete the leg
+        timeoutMs, clearanceMm = clampTimeoutToClearance(
+            requestedTimeoutMs, camBefore, vx, 0.0, args.geofence_margin)
+        worstCaseMm = timeoutMs / 1000.0 * abs(vx)
+        print(f"timeout safety clamp: requested={requestedTimeoutMs:.0f}ms "
+              f"camera-confirmed clearance={clearanceMm:.0f}mm -> clamped={timeoutMs:.0f}ms "
+              f"(worst-case travel {worstCaseMm:.0f}mm)")
+        if timeoutMs < requiredMs:
+            print(f"FAIL: clamped timeout {timeoutMs:.0f}ms is below the {requiredMs:.0f}ms "
+                  f"needed to complete the {args.leg:.0f}mm leg at {args.cruise:.0f}mm/s -- "
+                  "not enough camera-confirmed clearance from the current pose to run this "
+                  "leg safely; reposition or shorten --leg rather than running it")
+            return 1
+
         print(f"commanding straight move: v_x={vx:+.0f} mm/s stop_distance={args.leg:.0f} mm "
               f"timeout={timeoutMs:.0f} ms (direction={'forward' if sign > 0 else 'backward'}, "
               "chosen for field margin; straight moves never wrap the tether)")
@@ -441,7 +519,16 @@ def runLeverArmMode(args: argparse.Namespace) -> int:
             return 1
 
         angleRad = math.radians(TURN_ANGLE_DEG)
-        timeoutMs = abs(angleRad / TURN_OMEGA) * 1000.0 * 3.0 + 3000.0  # [ms]
+        requestedTimeoutMs = abs(angleRad / TURN_OMEGA) * 1000.0 * 3.0 + 3000.0  # [ms]
+        # Same clamp every move in this script goes through (see
+        # clampTimeoutToClearance's own docstring). v_x=v_y=0 here -- an
+        # in-place rotation has zero commanded translational speed, so the
+        # clamp is a documented no-op, not a skipped check.
+        timeoutMs, clearanceMm = clampTimeoutToClearance(
+            requestedTimeoutMs, camBefore, 0.0, 0.0, args.geofence_margin)
+        print(f"timeout safety clamp: requested={requestedTimeoutMs:.0f}ms "
+              f"camera-confirmed clearance={clearanceMm} (pure rotation, zero translational "
+              f"worst case) -> clamped={timeoutMs:.0f}ms")
         print(f"commanding in-place rotation: omega={TURN_OMEGA:+.2f} rad/s "
               f"stop_angle={TURN_ANGLE_DEG:.0f} deg timeout={timeoutMs:.0f} ms "
               "(direction fixed east->north->west, never south, per the tether rule)")

@@ -1,7 +1,7 @@
 ---
 id: '001'
 title: OTOS presence, units, and liveness bring-up
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 depends-on: []
@@ -64,19 +64,19 @@ fault.
 
 ## Acceptance Criteria
 
-- [ ] `otos_calibration_bench.py` exists with a `--mode units` entry
+- [x] `otos_calibration_bench.py` exists with a `--mode units` entry
       point, reusing `square_tour.py`/`tlm_log.py` helpers (not forked
       copies).
-- [ ] Script confirms `STATUS otos=1` and telemetry flag bit 0 set on a
+- [x] Script confirms `STATUS otos=1` and telemetry flag bit 0 set on a
       `READY` robot with `connL=1`/`connR=1`, and prints the result.
-- [ ] Script measures one known straight-line move, compares camera truth
+- [x] Script measures one known straight-line move, compares camera truth
       to the OTOS delta, and prints an explicit units conclusion (mm or
       cm) with the supporting numbers — not asserted from source.
-- [ ] Script confirms and prints that the OTOS pose holds steady at rest
+- [x] Script confirms and prints that the OTOS pose holds steady at rest
       (bounded jitter) and changes under motion.
-- [ ] Every connection path calls `estop()` (never `stop()`) in a
+- [x] Every connection path calls `estop()` (never `stop()`) in a
       `finally` block.
-- [ ] Run against the real robot on the playfield; results (raw output,
+- [x] Run against the real robot on the playfield; results (raw output,
       not paraphrased) included in the ticket's completion notes.
 
 ## Testing
@@ -88,3 +88,62 @@ fault.
   bench tool, same category as `tlm_log.py`/`square_tour.py` (not
   pytest-collected, per `src/tests/CLAUDE.md`).
 - **Verification command**: `uv run python src/tests/bench/otos_calibration_bench.py --port <robot-port> --mode units`
+
+## Completion Notes
+
+**Safety change made before this run** (per stakeholder instruction, following
+the prior session's west-rail incident): added
+`clampTimeoutToClearance()`/`clearanceAlongDirectionCm()` to
+`otos_calibration_bench.py`, shared by every move the script commands. Each
+move's `timeout` is now clamped so that worst-case travel
+(`timeout x commanded speed`) cannot exceed the camera-confirmed clearance to
+the nearest field boundary in the direction of travel, computed from the
+pre-move camera fix — not from the intended stop condition, which is exactly
+what can fail to fire. If the clamp would leave less time than the commanded
+leg needs to complete, the script FAILs out and refuses to run the leg rather
+than attempting it. Verified in isolation before the hardware run: at the
+robot's actual pose (x=+40.8cm, heading ~178deg/west), a `--leg 300 --cruise
+150` move clamped the old `9000ms` request down to `6189ms`
+(worst-case travel bounded to 928mm, vs. the pre-fix formula's ~1.4m).
+
+**Hardware run** (`/dev/cu.usbmodem21141112`, playfield, lights confirmed ON
+at 192.168.1.122 before the run — they had gone dark again since the prior
+session):
+
+```
+configured odometry_offset_mm: x=-47.70 y=+3.50 mm (from data/robots/tovez.json)
+=== otos_calibration_bench --mode units (ticket 126-001) ===
+connected: port=/dev/cu.usbmodem21141112 mode=direct
+geofence ARMED: stops the robot within 15 cm of the field edge, and on tag loss
+liveness over 28 frames: otos_present=True conn_left=True conn_right=True
+PASS: STATUS otos=1, connL=1, connR=1 -- telemetry flags bit 0 set on a READY robot (issue acceptance criterion 1)
+  camera fix 'units: rest before move': x=+40.5cm y=-0.7cm yaw=-176.8deg (7/7 samples)
+at-rest OTOS jitter over 29 bursts: dx=0.00 dy=0.00 raw units, dheading=0.000 deg
+timeout safety clamp: requested=9000ms camera-confirmed clearance=928mm -> clamped=6189ms (worst-case travel 928mm)
+commanding straight move: v_x=+150 mm/s stop_distance=300 mm timeout=6189 ms (direction=forward, chosen for field margin; straight moves never wrap the tether)
+  enqueue ack: AckEntry(corr_id=1, ok=True, err_code=0) (OK)
+  camera fix 'units: rest after move': x=+11.6cm y=-0.6cm yaw=+177.5deg (7/7 samples)
+
+camera-measured travel: 289.4 mm (commanded leg 300 mm)
+OTOS raw delta magnitude: 305.01 raw units (x: 48.0->353.0, y: -3.0->-5.0)
+  mm hypothesis (raw IS mm):        ratio raw/camera_mm       = 1.054
+  cm hypothesis (raw IS cm, x10=mm): ratio (raw*10)/camera_mm = 10.539
+CONCLUSION: OTOS pose tuple units = mm (residual 5.4% vs. camera-measured travel, measured from this move, not asserted from source)
+
+motion-vs-rest: OTOS delta (305.01) exceeds 3x the at-rest jitter bound (0.00) -- pose DOES track motion
+
+=== SUC-001 acceptance ===
+  AC1 presence (otos=1, flags bit0, connL=1, connR=1): PASS
+  AC2 liveness+units (tracks motion, holds at rest, units stated): PASS
+```
+
+**Conclusion**: OTOS pose tuple units are **mm**, measured (5.4% residual
+against camera-measured travel), not asserted from source. At-rest jitter is
+0.00 raw units over 29 bursts — pose holds perfectly steady when not moving
+and tracks motion cleanly under it. Robot ended the move at camera x=+11.6cm,
+well clear of the west rail (field limit -67.15cm, margin 15cm) — the timeout
+clamp left ~7cm of unused slack (928mm clearance budgeted, ~289mm actually
+travelled) rather than the ~1.4m of blind runway the old formula allowed.
+
+`uv run python -m pytest src/tests/sim -q`: 423 passed, 1 skipped, 1 xfailed
+(no new regressions).
