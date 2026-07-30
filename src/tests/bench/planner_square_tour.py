@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import argparse
 import math
+import signal
 import sys
 import time
 
@@ -84,6 +85,40 @@ def tour(omega: float = OMEGA) -> list[dict]:
     return moves
 
 
+def _install_estop_signal_handler(proto: NezhaProtocol) -> None:
+    """Guarantee `estop()` fires even under an external SIGTERM/SIGINT.
+
+    127-002 (2026-07-30): a hardware batch running this script was killed
+    mid-Move by its orchestrating process's own session boundary, and the
+    robot was found still driving afterward -- the `try/finally` below
+    never ran. Python's default SIGTERM disposition terminates the
+    process immediately WITHOUT running `finally` blocks (unlike SIGINT,
+    which raises `KeyboardInterrupt` and IS caught by `finally` -- so a
+    Ctrl-C was already safe; a bare kill was not). This installs an
+    explicit handler for both signals so an external terminate -- not
+    just an in-process exception or a clean Ctrl-C -- also estops before
+    the process exits. Installed as early as `proto` exists (right after
+    connect(), before the boot-wait sleep) so the whole run is covered,
+    not just the tour loop.
+
+    This is defense in depth, not a complete guarantee: a SIGKILL cannot
+    be caught by any process-level handler. The operational mitigation
+    for that remaining gap is procedural, not code -- never run this
+    script as an unsupervised background batch; run it in the foreground
+    and wait for it to actually exit before considering the robot idle.
+    """
+
+    def _handler(signum: int, _frame) -> None:
+        try:
+            proto.estop()
+        except Exception:
+            pass
+        sys.exit(1)
+
+    signal.signal(signal.SIGTERM, _handler)
+    signal.signal(signal.SIGINT, _handler)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--port", default=DEFAULT_PORT)
@@ -107,6 +142,7 @@ def main() -> int:
                             mode="relay" if args.relay else None)
     conn.connect()
     proto = NezhaProtocol(conn)
+    _install_estop_signal_handler(proto)
     print(f"connected on {args.port}; waiting {BOOT_WAIT:.0f}s for boot preamble")
     time.sleep(BOOT_WAIT)
     proto.read_pending_binary_tlm_frames()
