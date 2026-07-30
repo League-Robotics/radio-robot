@@ -224,14 +224,14 @@ class WorldPose:
             ages = [r.age for r in (frame.enc_left, frame.enc_right) if r is not None]
             encAge = max(ages) if ages else 0
 
-        x_mm, y_mm, heading_cdeg = frame.pose
-        encPose = Pose(x=x_mm / _POSITION_SCALE, y=y_mm / _POSITION_SCALE,
-                        heading=math.radians(heading_cdeg / 100.0))
+        x, y, heading = frame.pose  # [mm] [mm] [cdeg]
+        encPose = Pose(x=x / _POSITION_SCALE, y=y / _POSITION_SCALE,
+                        heading=math.radians(heading / 100.0))
         # frame.twist is (v [mm/s], omega [mrad/s]) fused body-frame
         # velocity; v_y is always zero on the wire for this differential
         # build (TLMFrame's own docstring).
-        v_mmps, omega_mradps = frame.twist if frame.twist is not None else (0, 0)
-        encVelocity = (v_mmps / _POSITION_SCALE, 0.0, omega_mradps / 1000.0)
+        velocity, omega = frame.twist if frame.twist is not None else (0, 0)  # [mm/s] [mrad/s]
+        encVelocity = (velocity / _POSITION_SCALE, 0.0, omega / 1000.0)
         self._latestEnc = _OdomSample(pose=encPose, velocity=encVelocity,
                                        hostTime=recvTime - encAge / 1000.0,
                                        wrapHeading=False)
