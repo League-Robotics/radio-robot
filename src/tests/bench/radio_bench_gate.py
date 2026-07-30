@@ -164,7 +164,22 @@ ACK_TIMEOUT = 500  # [ms] wait_for_ack() bound for each command's enqueue ack
 # convention as move_protocol_bench.py/test_sim_wire_loopback.py -- so a
 # completion ack (keyed by Move.id) is never confused with an enqueue ack
 # (keyed by the envelope's own corr_id).
-_NEXT_MOVE_ID = 9000
+# Move ids must be unique PER RUN, not a fixed base.
+#
+# The firmware keeps a 16-slot ring of accepted move ids so a retried enqueue
+# whose ack was lost is not executed twice (robot_loop.cpp alreadyAccepted()).
+# It ACKS a duplicate and DISCARDS it. The robot does not reboot between runs
+# over the relay, so a fixed base meant the second and later runs of this
+# script re-sent ids the robot had already accepted: the move never ran, and
+# the gate reported it as "active flag never True", "encoder positions did not
+# climb" and "completion=None" -- which reads exactly like an encoder/bus
+# fault and cost a bench session being diagnosed as one (2026-07-29).
+#
+# A move sent with id 0 is exempt from dedup ("every id-0 move is its own
+# move"), which is why ad-hoc probes that omit move_id kept working while this
+# gate failed minutes later -- the very contrast that made it look
+# intermittent.
+_NEXT_MOVE_ID = 9000 + (int(time.time()) % 50000) * 10
 
 
 def _next_move_id() -> int:
