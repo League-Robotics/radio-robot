@@ -103,8 +103,40 @@ TURN_ARC = TRACK * math.pi / 4.0  # [mm] per-wheel travel for a 90 deg pivot
 BOOT_WAIT = 6.0        # [s] hardware only -- the sim boots synchronously
 TAU = 0.23             # [s] plant time constant (spin-up transient)
 DWELL = 0.10           # [s] armor reversal dwell (sign-flip wheel holds 0)
-SEGMENT_REST = 0.9     # [s] rest after each segment, so the next starts from rest
 CYCLE_S = 0.04         # [s] one SimLoop.step() -- App::RobotLoop::kCycle
+
+# Two dwells for two different jobs -- conflating them into one SEGMENT_REST
+# was itself a defect (2026-07-30 finding, out-of-process, stakeholder-
+# instrumented): a 1.63 s per-segment gap on hardware decomposed as
+#   SEGMENT_REST (was 0.9 s) + planner settle 0.52 s + command latency
+#   0.21 s + poll granularity <=0.10 s.
+#
+# `_awaitMove` observes the planner's own `active` flag fall only ~0.52 s
+# AFTER the wheels actually stopped (motion ended 5.61 s, `active` fell
+# 6.13 s in the instrumented run) -- by the time any dwell here even starts,
+# the robot has already been at rest for about half a second. The OLD
+# SEGMENT_REST (0.9 s) was stacking a SECOND dwell on top of a settle that
+# had already happened; its own docstring ("rest after each segment, so the
+# next starts from rest") was satisfied before it ran.
+#
+# INTER_SEGMENT_DWELL is the short one: safe to shrink to near-zero because
+# the planner settle above already covers "start the next segment from
+# rest". Used whenever nothing downstream needs the chassis motionless for
+# a camera read -- sim, bench, and any hardware run with no geofence/camera
+# armed (--no-geofence, or a bench script with no camera at all).
+INTER_SEGMENT_DWELL = 0.1  # [s] short inter-segment gap, no camera fix follows
+
+# CAMERA_FIX_DWELL preserves the OLD SEGMENT_REST value and behavior
+# unchanged: `.claude/rules/playfield-testing.md` MANDATES a camera pose
+# fix at every segment boundary "at REST (after the settle dwell, so there
+# is no velocity lag)" -- this is a playfield-rule requirement, not a
+# preference, and `Tour.captureFix()`'s own docstring already assumes the
+# caller has settled first. There is also a recorded ~1.2 s post-STOP
+# settle figure elsewhere in the bench notes (chassis rocking can outlast
+# the planner's own 0.52 s `active`-flag settle), so this dwell stays
+# conservative rather than being cut to match INTER_SEGMENT_DWELL -- a
+# camera fix taken while the chassis is still rocking is worse than no fix.
+CAMERA_FIX_DWELL = 0.9  # [s] dwell before a camera fix capture, at rest
 
 DEFAULT_PORT = "/dev/cu.usbmodem2121102"
 DEFAULT_ROBOT_JSON = _REPO_ROOT / "data" / "robots" / "tovez_nocal.json"
@@ -375,6 +407,17 @@ class Tour:
             "camera": geofence.captureFix(label),
         })
 
+    def restDwell(self) -> float:
+        """CAMERA_FIX_DWELL if a camera fix is about to be taken (a geofence
+        is armed, i.e. `captureFix()` above will not no-op), else the short
+        INTER_SEGMENT_DWELL -- see the module-level comment on those two
+        constants for the measured decomposition that justifies the split.
+        Every `run()` iteration calls `captureFix()` right after its
+        `run*()` call regardless of backend, so this mirrors that same
+        no-op condition rather than duplicating a second one."""
+        armed = getattr(self.backend, "geofence", None) is not None
+        return CAMERA_FIX_DWELL if armed else INTER_SEGMENT_DWELL
+
     def record(self, frames: "list") -> None:
         truth = self.backend.truePose()
         for f in frames:
@@ -491,7 +534,7 @@ class Tour:
                 if frames[-1].active:
                     seen = True
                 elif seen:
-                    self.advance(SEGMENT_REST)
+                    self.advance(self.restDwell())
                     return
         waited = time.monotonic() - start
         reason = ("started but never completed -- 'active' rose but never "
@@ -499,7 +542,7 @@ class Tour:
                   "never started -- 'active' never rose (command likely lost)")
         print(f"TIMEOUT (hey jackass, it timed out): {label} (move {moveId}) "
               f"{reason}; waited {waited:.1f}s of a {budget:.1f}s budget")
-        self.advance(SEGMENT_REST)
+        self.advance(self.restDwell())
 
     def runTurnMove(self, label: str, moveId: int) -> bool:
         """A 90 deg corner as an ANGLE-stopped MOVE, not a timed WHEELS pivot.
@@ -535,10 +578,12 @@ class Tour:
             return False
         # The ack round trip already consumed part of the window; drive the
         # rest of it, then rest so the next segment starts from rest (the
-        # condition the calibration was measured under).
+        # condition the calibration was measured under) -- CAMERA_FIX_DWELL
+        # when a fix follows, else the short INTER_SEGMENT_DWELL; see
+        # restDwell().
         self.advance(durationMs / 1000.0)
         self.cmdL = self.cmdR = 0.0
-        self.advance(SEGMENT_REST)
+        self.advance(self.restDwell())
         return True
 
     # --- calibration prelude (unchanged in intent from wheel-layer-v1) ---
@@ -653,9 +698,11 @@ class Tour:
                 ok = self.runSegment(label, vL, vR, durMs, moveId)
             if not ok:
                 return False
-            # Each run*() above already ends with a settle dwell (SEGMENT_REST
-            # or _awaitMove's own advance(SEGMENT_REST)) -- REST, per the
-            # stakeholder mandate's own requirement.
+            # Each run*() above already ends with a settle dwell
+            # (runSegment()/_awaitMove()'s own advance(self.restDwell())) --
+            # REST, per the stakeholder mandate's own requirement. restDwell()
+            # picks CAMERA_FIX_DWELL exactly when a geofence is armed, i.e.
+            # exactly when the captureFix() below is not a no-op.
             self.captureFix(label)
         self.advance(1.0)  # final coast-down
         return True
@@ -1151,7 +1198,13 @@ def runActuationFloorMeasurement(backend: "_Backend", args) -> int:
         distinguishes) -- duplicated here rather than shared because this
         function reads `backend.advance()` directly (no `Tour`/log in this
         code path), which already returns its drained frames and was never
-        subject to the `Tour.advance()` bug fixed above."""
+        subject to the `Tour.advance()` bug fixed above.
+
+        Always dwells CAMERA_FIX_DWELL, not the shorter INTER_SEGMENT_DWELL:
+        this whole mode refuses to run without a geofence (see the guard at
+        the top of `runActuationFloorMeasurement`), so every call here is
+        immediately followed by a `captureFixWithRetry()` -- there is no
+        no-camera case to shortcut."""
         seen = False
         start = time.monotonic()
         budget = timeout / 1000.0 + 2.0
@@ -1162,7 +1215,7 @@ def runActuationFloorMeasurement(backend: "_Backend", args) -> int:
                 if frames[-1].active:
                     seen = True
                 elif seen:
-                    backend.advance(SEGMENT_REST)
+                    backend.advance(CAMERA_FIX_DWELL)
                     return
         waited = time.monotonic() - start
         reason = ("started but never completed -- 'active' rose but never "
@@ -1170,7 +1223,7 @@ def runActuationFloorMeasurement(backend: "_Backend", args) -> int:
                   "never started -- 'active' never rose (command likely lost)")
         print(f"TIMEOUT (hey jackass, it timed out): {label} (move {moveId}) "
               f"{reason}; waited {waited:.1f}s of a {budget:.1f}s budget")
-        backend.advance(SEGMENT_REST)
+        backend.advance(CAMERA_FIX_DWELL)
 
     results = {"distance": [], "angle": []}
 
