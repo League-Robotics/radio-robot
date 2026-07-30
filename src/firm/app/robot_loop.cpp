@@ -333,25 +333,19 @@ void RobotLoop::boot() {
     bootState.otos.connected = preamble_.otosConnected();
     tlm_.update(bootState);
     // NOT forced. Forcing here pushed one frame per probe pass -- a ~5s
-    // flood on every reset, and since opening a serial port asserts DTR and
-    // resets the board, that meant a wall of binary every single time a
-    // monitor was attached, ahead of the DEVICE banner and READY.
+    // flood on every reset, ahead of the DEVICE banner and READY.
     //
-    // The report-on-change arm already emits the boot frames that carry
-    // information: motors connecting, OTOS connecting, kFlagEventBootReady
-    // coming up. Those are a handful of frames, each marking a real
-    // transition, instead of a per-pass stream of identical ones.
+    // Under the three-mode emit predicate (issue Part 3: mode_ defaults
+    // kAuto, everMoved_ is still false, no motion is possible before the
+    // preamble even finishes) this emits nothing on its own -- a silent
+    // host sees zero binary bytes during boot. A host that DOES transmit
+    // during boot still gets served: a bare TLM request forces one frame
+    // (reason 1), and any early command's NACK rides the ack ring (reason
+    // 3, rejectDuringBoot() above) -- both honored in every mode.
     tlm_.emit(bootState.time.cycleStart);
 
     sleeper_.sleepMillis(kPreamblePace);  // paces probes AND yields (radio RX)
   }
-  tlm_.setLiveFlag(kFlagEventBootReady, true);
-
-  // Arm report-on-change now, adopting the settled boot state as the
-  // baseline. Everything before this point -- motors connecting, the OTOS
-  // probe, boot-ready itself -- is deliberately unreported: powering the
-  // robot on should put the banner and READY in a terminal and nothing else.
-  tlm_.markBootComplete();
 
   comms_.sendBanner();
   // READY last, and only here: past this point the loop dispatches commands
@@ -543,11 +537,11 @@ void RobotLoop::cycle() {
     publishTiming(cycleStartUs);
 
     tlm_.update(state_);
-    tlm_.tickBootSettle();  // arms report-on-change once boot state settles
     // A bare `TLM` line is a request for one frame NOW -- force past the
-    // idle gate, since "nothing is happening" is exactly the state someone
-    // asking is trying to observe. Still subject to the cadence gate, so a
-    // request storm cannot outrun the wire.
+    // mode-gated unsolicited check (issue Part 3, reason 1), since "nothing
+    // is happening" is exactly the state someone asking is trying to
+    // observe. Still subject to the cadence gate, so a request storm cannot
+    // outrun the wire.
     tlm_.emit(state_.time.cycleStart, /*force=*/comms_.takeTelemetryRequest());
 
     // Refresh what STATUS answers from. Sourced from the SAME state_ the

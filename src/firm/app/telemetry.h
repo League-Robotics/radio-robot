@@ -126,8 +126,15 @@ namespace App {
 //   bit 10 (kFlagEventDeadmanExpired) -- Deadman staleness timer expired
 //                                    (App::Deadman::expired()), the
 //                                    transition cycle only.
-//   bit 11 (kFlagEventBootReady)    -- boot-ready transition
-//                                    (Preamble::done() first true).
+//   bit 11 -- RESERVED (125-002, telemetry-emit-policy-rebuild-spec.md
+//                                    Part 1 item 8: formerly the boot-ready
+//                                    event bit -- deleted. It was set once,
+//                                    latched forever, and its transition
+//                                    was unobservable by construction (boot
+//                                    ends before any frame that could carry
+//                                    the edge). The `READY` cleartext line
+//                                    already announces this, same
+//                                    treatment as bit 5.
 //   bit 12 (kFlagEventConfigApplied) -- a ConfigDelta was applied.
 //                                    Declared, not yet wired.
 //   bit 13 (kFlagLinePresent)       -- line word fresh THIS frame.
@@ -189,7 +196,7 @@ constexpr uint32_t kFlagFaultWedgeLatch = 1u << 7;
 constexpr uint32_t kFlagFaultI2CNak = 1u << 8;
 constexpr uint32_t kFlagFaultCommsMalformed = 1u << 9;
 constexpr uint32_t kFlagEventDeadmanExpired = 1u << 10;
-constexpr uint32_t kFlagEventBootReady = 1u << 11;
+// bit 11 -- RESERVED (125-002, formerly the boot-ready event bit) -- see above.
 constexpr uint32_t kFlagEventConfigApplied = 1u << 12;
 constexpr uint32_t kFlagLinePresent = 1u << 13;
 constexpr uint32_t kFlagColorPresent = 1u << 14;
@@ -230,6 +237,22 @@ constexpr uint8_t kAckRingDepth = 12;
 // How many emitted frames a freshly-pushed ack forces before it is treated as
 // delivered. See Telemetry::ackSends_ for why this is >1.
 constexpr uint8_t kAckRepeats = 3;
+
+// TlmMode -- the three-state, host-controllable emit policy (issue Part 3).
+// A single member (Telemetry::mode_) with a single writer (ticket 003's TLM
+// command handler, via setMode() below); resets to kAuto at construction
+// every boot -- it is never persisted. Namespace scope (not a nested class
+// type) so ticket 003's comms.cpp (the STATUS `tlm=` field) and its wire
+// parsing can name it without reaching into Telemetry's own scope.
+enum class TlmMode : uint8_t { kOff, kAuto, kOn };
+
+// How long an activity window stays open after the last thing that opened
+// or refreshed it (kFlagActive, or -- only while already open -- nonzero
+// staged wheel velocity). Replaces the deleted boot-settle cycle-count
+// constant and the whole arming machine it used to gate: this is now the
+// ONE tunable in the emit policy. Sized to cover the bench-observed ~1.2s
+// post-STOP settle with margin (issue Part 3).
+constexpr uint32_t kCoastHoldoff = 2000;  // [ms]
 
 class Telemetry {
  public:
@@ -309,12 +332,6 @@ class Telemetry {
   //     would otherwise reach update()'s next call). RobotLoop::cycle()
   //     calls this immediately after moveQueue_.tick(), the same position
   //     the pre-124-009 code called tlm_.setFlag() from directly.
-  //   - kFlagEventBootReady -- boot()'s own one-shot transition (see that
-  //     method), fired once, outside cycle() entirely (update() is never
-  //     the only writer of every bit -- boot() has no RobotState worth
-  //     building yet at that instant beyond the per-device connectivity
-  //     bits it already folds into its own throwaway RobotState/update()
-  //     call).
   // Mechanically identical to the private setFlag() update() uses
   // internally (a level-set OR/AND-NOT bit mutation) -- only the name and
   // caller differ, so `grep setFlag src/firm/app/robot_loop.cpp` (SUC-004's
@@ -322,6 +339,15 @@ class Telemetry {
   void setLiveFlag(uint32_t bit, bool active);
 
   uint32_t flags() const { return flags_; }
+
+  // setMode/mode -- the TLM three-mode policy surface (issue Part 3). The
+  // ONE writer is ticket 003's `TLM:` command handler
+  // (RobotLoop::cycle() -> tlm_.setMode(...)) -- Telemetry itself never
+  // parses wire text. No persistence (Part 4's own explicit decision):
+  // mode_ resets to kAuto at construction, so a power cycle always forgets
+  // a prior session's TLM:ON/TLM:OFF.
+  void setMode(TlmMode mode) { mode_ = mode; }
+  TlmMode mode() const { return mode_; }
 
   // ack -- pushes to the bounded ack ring (120, ADDITIVE -- see
   // kAckRingDepth's own comment below and telemetry.proto's Telemetry.acks
@@ -338,28 +364,22 @@ class Telemetry {
   // `update()` last staged when due; a no-op otherwise. Bounded work: one
   // frame build, one encode, one armor, one Transport-pair send (via
   // Comms::sendReply()) -- never sleeps, never touches the I2C bus.
-  // ALWAYS ON from boot: the first call always sends (no arming step).
   // 124-009: TelemetrySecondary's tie-break/alternation cadence machinery
   // is GONE with the message type itself -- there is only one frame type
-  // to pace any more, so this is a plain "due since last send" gate.
-  // emit -- cadence-gated send. Sends only when there is something to say
-  // (motion, or an undelivered ack) so a parked robot leaves the link quiet
-  // and a serial terminal stays typeable.
+  // to pace any more, so `primaryDue()` is a plain "due since last send"
+  // gate.
   //
-  // `force` bypasses the has-something-to-say test for callers whose frames
-  // ARE the message regardless of motion -- specifically RobotLoop::boot(),
-  // whose per-probe status frames are how a host watches the preamble
-  // progress. Bounded: boot ends, and with it the forcing.
+  // emit -- the whole three-mode policy (issue Part 3), and nothing more:
+  // a frame goes out only for one of three reasons, `force` (a bare
+  // TLM/TLM:NOW request, or RobotLoop::boot()'s own per-probe forced call),
+  // `unsolicited` (mode-dependent: never in kOff, the activity window in
+  // kAuto, every cadence tick in kOn), or pendingAckDeliveries() (an
+  // undelivered ack, honored in EVERY mode -- protocol v5 has no separate
+  // ack message, so the telemetry frame is the ack's only vehicle). No
+  // fourth reason: no flag-change push, no arming state, no boot-completion
+  // signal into this class. A freshly constructed Telemetry behaves
+  // identically to one that has run for an hour.
   void emit(uint32_t now, bool force = false);
-
-  // markBootComplete -- called once by RobotLoop::boot() at its tail. Arms
-  // report-on-change and adopts the current flags word as the baseline, so
-  // the settled post-boot state does not itself read as news and emit a
-  // frame. Until this call telemetry stays SILENT unless the robot is
-  // genuinely moving or an ack is outstanding, so powering on produces the
-  // DEVICE banner and READY and nothing else -- both cleartext, both
-  // readable in a terminal (stakeholder directive 2026-07-29).
-  void markBootComplete();
 
   // Measurement/test seam -- lets a HOST_BUILD test report the realized
   // cadence without parsing a FakeTransport's send log.
@@ -368,12 +388,14 @@ class Telemetry {
 
  private:
   bool primaryDue(uint32_t now) const;
-  // True when there is something worth sending: motion in progress, or an
-  // ack that has not yet been carried kAckRepeats times. False means the
-  // robot is parked with nothing to report and the link stays SILENT --
-  // which is what makes a serial terminal usable for typing HELLO/VER/PING
-  // (stakeholder directive 2026-07-29).
-  bool hasSomethingToSay() const;
+  // pendingAckDeliveries -- issue Part 3, reason 3: true while any ack-ring
+  // entry has not yet been carried kAckRepeats times. A rename of the old
+  // four-arm hasSomethingToSay()'s arm 3, moved verbatim -- honored in
+  // EVERY mode (emit()'s own call site), never gated on mode_ or activity:
+  // kOff suppressing ack frames would strand the outcome of any command
+  // issued to a parked robot, the "acked but nothing happened" failure
+  // class this class exists to prevent.
+  bool pendingAckDeliveries() const;
   void emitPrimary(uint32_t now);
   void pushAckRing(uint32_t corrId, uint32_t errCode);
 
@@ -426,21 +448,32 @@ class Telemetry {
   // (3 x kPrimaryPeriod = 120 ms).
   uint8_t ackSends_[kAckRingDepth]{};
 
-  // The flags word as of the last emitted frame, for the report-on-change
-  // arm of hasSomethingToSay(). Seeded to a value flags_ can never hold so
-  // the FIRST frame always sends: a robot whose very first flags word
-  // happened to equal a zero-initialised member would otherwise start life
-  // invisible.
-  uint32_t lastEmittedFlags_ = 0xFFFFFFFFu;
+  // TlmMode policy state (issue Part 3, "New state replacing old arms
+  // 1+2") -- this IS the emit policy; there is no other lifecycle beyond
+  // it. mode_ resets to kAuto by construction every boot; ONE writer
+  // (setMode(), ticket 003's TLM: handler).
+  TlmMode mode_ = TlmMode::kAuto;
 
-  // Report-on-change is armed only AFTER boot. During the preamble the flags
-  // word churns constantly -- each motor connecting, the OTOS probe,
-  // kFlagEventBootReady itself -- and every one of those is a "change", so
-  // an armed change-detector turns power-on into a burst of binary in
-  // whatever terminal happens to be attached. Boot's OWN output is the
-  // DEVICE banner and READY, both cleartext and both readable; the binary
-  // frames add nothing a human wants and nothing STATUS cannot answer.
-  bool changeReportingArmed_ = false;
+  // everMoved_ -- latches true the first time kFlagActive is seen this
+  // power cycle, never cleared. This is what makes power-on silence
+  // unconditional: before the first commanded motion, wheel velocity (a
+  // bogus first-sample read, or a hand-spun wheel on the stand) can never
+  // open the activity window. Belt-and-suspenders with 125-001's
+  // Devices::Motor::velocity() two-sample floor, not a substitute for it.
+  bool everMoved_ = false;
+
+  // lastActivity_ -- refreshed to `now` (update()'s own `state.time.
+  // cycleStart`, the SAME clock domain emit()'s `now` parameter lives in)
+  // whenever kFlagActive is set, and -- ONLY while the window is already
+  // open -- whenever either wheel's staged velocity (frame_.encLeft/
+  // encRight.velocity, the value about to go out on the wire) is nonzero.
+  // That window-open precondition on the velocity refresh is deliberate:
+  // coasting wheels keep an ALREADY-OPEN window alive (so a STOP's
+  // deceleration tail keeps streaming), but wheels alone can never OPEN a
+  // CLOSED window (so a hand-spun wheel with everMoved_ still false, or a
+  // wheel reading arriving kCoastHoldoff after the last real activity,
+  // wakes nothing).
+  uint32_t lastActivity_ = 0;  // [ms]
 
   uint32_t seq_ = 0;  // increments once per SENT primary frame
 

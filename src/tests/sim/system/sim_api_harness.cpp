@@ -91,13 +91,6 @@ std::vector<DecodedLine> onlyTelemetry(const std::vector<DecodedLine>& lines) {
   return out;
 }
 
-bool anyEventSet(const std::vector<DecodedLine>& frames, uint32_t bit) {
-  for (const auto& f : frames) {
-    if (f.telemetry.flags & bit) return true;
-  }
-  return false;
-}
-
 // Matches against the bounded ack ring (Telemetry.acks, 124-008: packed
 // uint32 corr_id<<4|err -- the single "freshest ack" scalar slot/
 // kFlagAckFresh this used to gate on is DELETED, issue §B4; ring membership
@@ -119,17 +112,20 @@ bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId, bool
 }
 
 // ===========================================================================
-// 1. Boot: SimHarness::boot() drives App::Preamble to done() and calls
-//    the REAL App::RobotLoop::boot() -- both motors and OTOS resolve
-//    connected (scripted success); kEventBootReady becomes visible in
-//    decoded telemetry once at least one cycle() has run past boot (the
-//    bit is SET at the end of boot() but only actually EMITTED by the next
-//    cycle()'s own tlm_.emit() call -- robot_loop.cpp's own boot()/cycle()
-//    split).
+// 1. Boot: SimHarness::boot() drives App::Preamble to done() and calls the
+//    REAL App::RobotLoop::boot() -- both motors and OTOS resolve connected
+//    (scripted success). 125-002 (telemetry-emit-policy-rebuild-spec.md
+//    Part 1 item 8/Part 8 #1): there is no boot-ready telemetry bit any
+//    more, and a silent host gets ZERO unsolicited frames after boot (mode_
+//    defaults kAuto, everMoved_ is still false) -- so this scenario now
+//    proves connectivity via a bare TLM request (reason 1, honored in every
+//    mode) instead of watching for an unsolicited boot-ready frame that no
+//    longer exists.
 // ===========================================================================
 
 void scenarioBootCompletesThroughRealRobotLoop() {
-  beginScenario("boot: SimHarness drives the REAL RobotLoop::boot(), motors+OTOS connect, kEventBootReady visible");
+  beginScenario("boot: SimHarness drives the REAL RobotLoop::boot(), motors+OTOS connect; a silent host stays "
+                "silent (issue Part 8 #1); a bare TLM request confirms connectivity");
 
   TestSim::SimHarness sim;
   TestSupport::configureSimForBenchTest(sim);
@@ -142,10 +138,18 @@ void scenarioBootCompletesThroughRealRobotLoop() {
   checkTrue(sim.motorLeft().connected(), "left motor connected after boot");
   checkTrue(sim.motorRight().connected(), "right motor connected after boot");
 
-  sim.step(1);  // one main cycle -- this is what actually EMITS the boot-ready bit
+  sim.step(3);  // a few idle cycles -- a silent host, parked robot
+  std::vector<DecodedLine> idleFrames = onlyTelemetry(sim.drainTelemetry());
+  checkTrue(idleFrames.empty(), "issue Part 8 #1: silent host + parked robot -> zero unsolicited telemetry "
+                                "frames after boot (kAuto default, everMoved_ still false)");
+
+  // Bare TLM (reason 1, honored in every mode) forces exactly one frame --
+  // use it to confirm connectivity is really up, now that there is no
+  // unsolicited boot-ready frame to observe it on.
+  sim.injectCommand("TLM");
+  sim.step(1);
   std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
-  checkTrue(!frames.empty(), "at least one telemetry frame decoded after boot + one cycle");
-  checkTrue(anyEventSet(frames, App::kFlagEventBootReady), "kFlagEventBootReady visible in decoded telemetry");
+  checkTrue(!frames.empty(), "the bare TLM request produced telemetry");
 
   bool sawConnected = false;
   for (const auto& f : frames) {

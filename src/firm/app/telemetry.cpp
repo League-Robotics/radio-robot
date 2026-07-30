@@ -146,6 +146,25 @@ void Telemetry::update(const Types::RobotState& state) {
   setFlag(kFlagLinePresent, state.perception.lineFresh);
   setFlag(kFlagColorPresent, state.perception.colorFresh);
   setFlag(kFlagFaultPositionClamped, state.health.positionClamped);
+
+  // lastActivity_/everMoved_ (issue Part 3, "New state replacing old arms
+  // 1+2") -- computed against state.time.cycleStart, NOT the `now` local
+  // above: that local is the age-computation instant (cycleStart +
+  // cycleBusy); emit()'s own `now` parameter -- the clock domain
+  // lastActivity_ is compared against -- is always the bare
+  // state.time.cycleStart RobotLoop::cycle() passes it. Order matters:
+  // windowOpen is evaluated against lastActivity_'s value BEFORE this
+  // cycle's own refresh, so wheels alone can never open a window that was
+  // already closed -- only kFlagActive can do that.
+  if (flags_ & kFlagActive) {
+    everMoved_ = true;
+    lastActivity_ = state.time.cycleStart;
+  } else {
+    const bool windowOpen =
+        everMoved_ && (state.time.cycleStart - lastActivity_) < kCoastHoldoff;
+    const bool wheelsMoving = frame_.encLeft.velocity != 0 || frame_.encRight.velocity != 0;
+    if (windowOpen && wheelsMoving) lastActivity_ = state.time.cycleStart;
+  }
 }
 
 void Telemetry::ack(uint32_t corrId, uint32_t errCode) {
@@ -172,7 +191,7 @@ void Telemetry::pushAckRing(uint32_t corrId, uint32_t errCode) {
   // Packed word (124-008, issue §B4): corr_id<<4 | err.
   ackRing_[tail] = (corrId << kAckErrBits) | (errCode & kAckErrMask);
   // Undelivered: this entry now forces frames until it has been carried
-  // kAckRepeats times (hasSomethingToSay). Reset explicitly rather than
+  // kAckRepeats times (pendingAckDeliveries()). Reset explicitly rather than
   // relying on the slot's prior value -- a reused slot would otherwise
   // inherit the evicted entry's delivered count and never be sent at all.
   ackSends_[tail] = 0;
@@ -183,60 +202,49 @@ bool Telemetry::primaryDue(uint32_t now) const {
   return (now - lastPrimaryEmit_) >= kPrimaryPeriod;
 }
 
-// hasSomethingToSay -- the idle-silence gate (stakeholder directive
-// 2026-07-29: "I don't want telemetry when the robot's not moving").
-//
-// Two reasons to speak, and the second is what keeps the wire honest:
-//   - motion in progress (kFlagActive): the host needs the stream.
-//   - an ack not yet carried kAckRepeats times: acks ride telemetry frames
-//     and there is no other delivery path, so going silent with an
-//     undelivered ack would strand the outcome of any command issued to a
-//     parked robot -- reintroducing the "acked but nothing happened" class
-//     that cost this project a bench session.
-bool Telemetry::hasSomethingToSay() const {
-  // 1. A Move is running.
-  if (flags_ & kFlagActive) return true;
-
-  // 2. The WHEELS are turning, whether or not a Move owns them. "Not moving"
-  //    has to mean the wheels, not the queue: after a STOP the Move ends
-  //    immediately but the chassis coasts, and gating on kFlagActive alone
-  //    cut telemetry mid-deceleration -- a harness watching velocity settle
-  //    saw it frozen at 366 mm/s because the frames stopped, not the wheels.
-  if (frame_.encLeft.velocity != 0 || frame_.encRight.velocity != 0) return true;
-
-  // 3. An ack not yet carried kAckRepeats times. Acks ride telemetry frames
-  //    and have no other delivery path, so silence with an undelivered ack
-  //    would strand the outcome of any command sent to a parked robot.
+// pendingAckDeliveries -- issue Part 3, reason 3 (rename of the old
+// hasSomethingToSay()'s arm 3, moved verbatim): true while any ack-ring
+// entry has not yet been carried kAckRepeats times. Honored in EVERY mode
+// (see emit() below), never gated: a host that commands the robot the
+// instant READY lands must still get its ack, in kOff exactly like every
+// other mode -- protocol v5 has no separate ack message, so the telemetry
+// frame is the ack's only vehicle, and suppressing it would strand the
+// outcome of any command issued to a parked robot ("acked but nothing
+// happened", the failure class that cost this project a bench session).
+bool Telemetry::pendingAckDeliveries() const {
   for (uint8_t i = 0; i < ackRingCount_; ++i) {
     const uint8_t idx = static_cast<uint8_t>((ackRingHead_ + i) % kAckRingDepth);
     if (ackSends_[idx] < kAckRepeats) return true;
   }
-
-  // 4. Anything in the flags word CHANGED since the last frame -- boot-ready
-  //    coming up, a motor dropping off the bus, a fault latching. Report on
-  //    change: a state transition nobody can observe is a state transition
-  //    that will be debugged the hard way, and this is the difference
-  //    between "quiet because nothing is happening" and "quiet because we
-  //    stopped listening".
-  //    Armed only after boot: during the preamble the flags word churns on
-  //    every probe (each motor connecting, the OTOS, kFlagEventBootReady),
-  //    and reporting each one turns power-on into a burst of binary in
-  //    whatever terminal is attached.
-  if (changeReportingArmed_ && flags_ != lastEmittedFlags_) return true;
-
   return false;
 }
 
-void Telemetry::markBootComplete() {
-  // Adopt the settled flags word as the baseline BEFORE arming, so the
-  // post-boot state is not itself reported as a change -- otherwise the
-  // first cycle after boot emits a frame saying nothing happened.
-  lastEmittedFlags_ = flags_;
-  changeReportingArmed_ = true;
-}
-
+// emit -- the whole three-mode policy (issue Part 3), and nothing more.
+// `activity` mirrors update()'s own lastActivity_/everMoved_ derivation
+// (kFlagActive live OR an already-open window kept alive by nonzero staged
+// wheel velocity within kCoastHoldoff of the last refresh). `unsolicited`
+// is what mode_ actually controls: never in kOff, the activity window in
+// kAuto (the default), every cadence tick in kOn. The three reasons to
+// emit -- force (a request), unsolicited (mode-dependent), or
+// pendingAckDeliveries() (an ack, honored regardless of mode) -- are the
+// ONLY three; there is no fourth (no flag-change push, no arming state, no
+// boot-completion signal here).
 void Telemetry::emit(uint32_t now, bool force) {
-  if (primaryDue(now) && (force || hasSomethingToSay())) {
+  const bool activity =
+      (flags_ & kFlagActive) || (everMoved_ && (now - lastActivity_) < kCoastHoldoff);
+  bool unsolicited = false;
+  switch (mode_) {
+    case TlmMode::kOff:
+      unsolicited = false;
+      break;
+    case TlmMode::kAuto:
+      unsolicited = activity;
+      break;
+    case TlmMode::kOn:
+      unsolicited = true;
+      break;
+  }
+  if (primaryDue(now) && (force || unsolicited || pendingAckDeliveries())) {
     emitPrimary(now);
   }
 }
@@ -298,9 +306,6 @@ void Telemetry::emitPrimary(uint32_t now) {
 
   everEmittedPrimary_ = true;
   lastPrimaryEmit_ = now;
-  // Record what this frame reported, so the next hasSomethingToSay() can
-  // tell "nothing has changed" from "something changed and nobody saw it".
-  lastEmittedFlags_ = flags_;
   ++primaryEmitCount_;
 }
 

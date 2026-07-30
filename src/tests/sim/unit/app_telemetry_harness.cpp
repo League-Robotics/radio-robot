@@ -637,7 +637,11 @@ void scenarioMeasuredCadenceReport() {
   // no telemetry while parked, so a serial terminal stays typeable), so this
   // scenario has to put the robot in the state whose cadence it is measuring
   // -- an idle robot is now correctly near-silent, and measuring IT would be
-  // measuring the wrong contract.
+  // measuring the wrong contract. No boot-boilerplate warm-up call of any
+  // kind is needed or permitted (125-002): App::Telemetry has no arming
+  // state at all any more -- a freshly constructed instance behaves
+  // identically to one that has run for an hour, so kFlagActive alone is
+  // enough to start the stream under the default kAuto mode.
   Types::RobotState moving;
   moving.command.moveActive = true;
   telemetry.update(moving);
@@ -658,27 +662,24 @@ void scenarioMeasuredCadenceReport() {
   checkTrue(primaryHz > 15.0 && primaryHz < 35.0, "measured primary Hz is in a sane neighborhood of the 25 Hz target");
 
   // The other half of the contract: once the robot parks, the link goes
-  // QUIET. Without this the gate could regress to always-on and only the
-  // hardware would notice.
+  // QUIET -- and (issue Part 1 item 6, report-on-change deleted outright)
+  // there is no longer a "park transition" frame either: the stream simply
+  // stops the moment activity's own window closes, it does not get one
+  // more frame to announce the stop. This robot's own coasting velocity is
+  // zero (never set), so the window closes immediately -- there is no
+  // coast-down tail to observe here (see this file's own dedicated
+  // coast-holdoff scenario below for that).
   const uint64_t whileMoving = telemetry.primaryEmitCount();
   Types::RobotState parked;  // moveActive false, zero velocity, same flags
+  parked.time.cycleStart = kEndTime;
   telemetry.update(parked);
 
-  // The park transition is reported on the next DUE tick, not on the very
-  // next emit() call -- the cadence gate still applies, so allow one full
-  // kPrimaryPeriod to pass before sampling.
   uint32_t now = kEndTime + kStep;
-  const uint32_t settleEnd = now + 200;  // [ms] comfortably > kPrimaryPeriod
+  const uint32_t settleEnd = now + 5000;  // [ms] comfortably > kCoastHoldoff (2000ms)
   for (; now <= settleEnd; now += kStep) telemetry.emit(now);
-  const uint64_t afterPark = telemetry.primaryEmitCount();
-
-  checkTrue(afterPark > whileMoving,
-            "the park transition itself IS reported (report-on-change), so the "
-            "host sees the robot stop rather than the stream simply ending");
-
-  for (; now <= settleEnd + 5000; now += kStep) telemetry.emit(now);
-  checkU64Eq(telemetry.primaryEmitCount(), afterPark,
-             "parked robot emits nothing further once the flags stop changing");
+  checkU64Eq(telemetry.primaryEmitCount(), whileMoving,
+             "parked robot emits nothing further once activity ends -- no report-on-change "
+             "transition frame, the stream simply stops");
 
   // Every send() call accounted for exactly -- no call produced an
   // untracked extra line (124-009: only ONE frame type exists, so this is
@@ -870,6 +871,189 @@ void scenarioAckRingPersistsAcrossEmitsBelowFullDepth() {
   }
 }
 
+// ===========================================================================
+// 11. Smoke coverage for the new policy state itself (issue Part 3, ticket
+//     125-002's own testing note: "at minimum a smoke test per new piece of
+//     state"). mode_ defaults kAuto: proven here by construction with NO
+//     setMode() call, so a parked robot stays silent (kOff/kAuto both do
+//     that) while a MOVING robot streams (only kAuto/kOn do that) --
+//     together the two halves pin the default to kAuto specifically. Also
+//     doubles as Part 8 acceptance criterion #1 (fresh boot, silent host ->
+//     primaryEmitCount()==0 after N cycles of parked idling) and this
+//     ticket's own "no arming state" acceptance bar: NO warm-up call of any
+//     kind precedes either half.
+// ===========================================================================
+
+void scenarioFreshConstructDefaultsAutoAndStaysSilentAtRest() {
+  beginScenario("fresh construct: mode() defaults kAuto; a silent, parked robot emits nothing over many cycles "
+                "(no arming state, no warm-up needed)");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms);
+
+  checkTrue(telemetry.mode() == App::TlmMode::kAuto, "mode() defaults kAuto immediately after construction");
+
+  // No update() call at all -- proves the class needs no priming: a
+  // never-updated instance is exactly as silent as one mid-session.
+  for (uint32_t now = 0; now <= 2000; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
+  checkU64Eq(telemetry.primaryEmitCount(), 0,
+             "issue Part 8 #1: fresh construct + parked idling -> primaryEmitCount()==0, no boot-warm-up call "
+             "of any kind preceded this");
+
+  // A parked robot that HAS been update()d (connectivity/health bits set,
+  // no motion) is equally silent -- the silence is a property of the
+  // predicate, not of never having called update().
+  Types::RobotState parked;
+  parked.wheelLeft.connected = true;
+  parked.wheelRight.connected = true;
+  telemetry.update(parked);
+  for (uint32_t now = 2040; now <= 4000; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
+  checkU64Eq(telemetry.primaryEmitCount(), 0, "an update()d-but-parked robot is still silent in kAuto");
+}
+
+// ===========================================================================
+// 12. Hand-spun-wheel / bogus-velocity case (issue Part 3's everMoved_
+//     rationale; Part 8 acceptance criterion #5): nonzero staged wheel
+//     velocity with kFlagActive never having been true -> everMoved_ stays
+//     false forever -> the activity window can never open -> zero frames.
+//     This is what makes power-on silence unconditional: a hand-spun wheel
+//     on the stand (or a bogus first-sample read, belt-and-suspenders with
+//     125-001's Devices::Motor::velocity() two-sample floor) cannot wake
+//     the link.
+// ===========================================================================
+
+void scenarioHandSpunWheelBeforeFirstMoveNeverWakesTheLink() {
+  beginScenario("everMoved_==false: nonzero wheel velocity with no Move ever active -> zero frames, ever");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms);
+
+  Types::RobotState spun;  // moveActive stays false -- never a real Move
+  spun.wheelLeft.velocity = 250.0f;   // hand-spun / bogus first-sample reading
+  spun.wheelRight.velocity = 250.0f;
+  telemetry.update(spun);
+
+  for (uint32_t now = 0; now <= 4000; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
+  checkU64Eq(telemetry.primaryEmitCount(), 0,
+             "issue Part 8 #5: nonzero wheel velocity with everMoved_==false -> zero frames");
+}
+
+// ===========================================================================
+// 13. lastActivity_ refresh discipline (issue Part 3): kFlagActive alone
+//     opens the window; once open, nonzero staged wheel velocity (coasting)
+//     keeps refreshing it after kFlagActive drops (a STOP's deceleration
+//     tail keeps streaming -- the "velocity frozen mid-decay" harness bug
+//     this replaces stays fixed); once wheel velocity reaches zero, the
+//     window stays open only until kCoastHoldoff elapses from the LAST
+//     refresh, and a stationary-wheel reading can never reopen it once
+//     closed (wheels alone never OPEN a window, only kFlagActive does).
+// ===========================================================================
+
+void scenarioActivityWindowRefreshesOnActiveAndCoastsThenClosesAfterHoldoff() {
+  beginScenario("lastActivity_: kFlagActive opens the window; coasting wheel velocity keeps an open window "
+                "alive; the window closes kCoastHoldoff after the last refresh and cannot be reopened by "
+                "wheels alone");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms);
+
+  // A Move is active -- opens the window and latches everMoved_.
+  Types::RobotState moving;
+  moving.time.cycleStart = 0;
+  moving.command.moveActive = true;
+  moving.wheelLeft.velocity = 200.0f;
+  moving.wheelRight.velocity = 200.0f;
+  telemetry.update(moving);
+  telemetry.emit(0);
+  checkU64Eq(telemetry.primaryEmitCount(), 1, "moving: kFlagActive alone is enough to emit");
+
+  // STOP: kFlagActive drops, but the wheels are still coasting (nonzero
+  // staged velocity) and the window was already open -- must keep emitting.
+  Types::RobotState coasting;
+  coasting.time.cycleStart = 40;
+  coasting.command.moveActive = false;
+  coasting.wheelLeft.velocity = 50.0f;
+  coasting.wheelRight.velocity = 50.0f;
+  telemetry.update(coasting);
+  telemetry.emit(40);
+  checkU64Eq(telemetry.primaryEmitCount(), 2,
+             "coast-down: nonzero staged velocity with an already-open window keeps the stream alive after "
+             "kFlagActive drops");
+
+  // Wheels reach zero -- no further refresh, but the window stays open
+  // until kCoastHoldoff elapses from the LAST refresh (now=40 above).
+  Types::RobotState stopped;
+  stopped.time.cycleStart = 80;
+  stopped.command.moveActive = false;
+  stopped.wheelLeft.velocity = 0.0f;
+  stopped.wheelRight.velocity = 0.0f;
+  telemetry.update(stopped);
+  telemetry.emit(80);
+  checkU64Eq(telemetry.primaryEmitCount(), 3,
+             "just past coast: still inside kCoastHoldoff of the last refresh (40), even though wheels are "
+             "now at zero");
+
+  // Well past kCoastHoldoff (2000ms) from the last refresh (40) -- the
+  // window has closed, and a stationary-wheel reading cannot reopen it.
+  telemetry.emit(40 + App::kCoastHoldoff + 100);
+  checkU64Eq(telemetry.primaryEmitCount(), 3,
+             "well past kCoastHoldoff: the link goes silent, and wheels alone (now reading zero) cannot "
+             "reopen a closed window");
+}
+
+// ===========================================================================
+// 14. setMode() (issue Part 3's public policy surface; ticket 003 owns the
+//     wire parsing that calls it, this ticket owns the surface itself):
+//     kOff suppresses unsolicited frames even while a Move is active
+//     (only force/pendingAckDeliveries() still work); kOn streams even
+//     while parked. Exercises the FULL three-way switch in emit() end to
+//     end, not just the kAuto default every other scenario in this file
+//     already covers.
+// ===========================================================================
+
+void scenarioSetModeControlsUnsolicitedStreamInOffAndOn() {
+  beginScenario("setMode(): kOff suppresses unsolicited frames even while moving (force still works); kOn "
+                "streams even while parked");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms);
+
+  telemetry.setMode(App::TlmMode::kOff);
+  checkTrue(telemetry.mode() == App::TlmMode::kOff, "setMode(kOff) takes effect immediately");
+
+  Types::RobotState moving;
+  moving.time.cycleStart = 0;
+  moving.command.moveActive = true;
+  telemetry.update(moving);
+  for (uint32_t now = 0; now <= 400; now += App::kPrimaryPeriod) telemetry.emit(now);
+  checkU64Eq(telemetry.primaryEmitCount(), 0, "kOff: no unsolicited frames even though a Move is active");
+
+  // Bare TLM/force still works in kOff -- reason 1, honored in every mode.
+  telemetry.emit(440, /*force=*/true);
+  checkU64Eq(telemetry.primaryEmitCount(), 1, "kOff: a forced request still gets exactly one frame");
+
+  telemetry.setMode(App::TlmMode::kOn);
+  Types::RobotState parked;
+  parked.time.cycleStart = 440;
+  telemetry.update(parked);
+  const uint64_t beforeOn = telemetry.primaryEmitCount();
+  for (uint32_t now = 480; now <= 800; now += App::kPrimaryPeriod) telemetry.emit(now);
+  checkTrue(telemetry.primaryEmitCount() > beforeOn, "kOn: unsolicited frames stream even though the robot "
+                                                      "is parked");
+}
+
 }  // namespace
 
 int main() {
@@ -883,6 +1067,10 @@ int main() {
   scenarioMalformedFrameSetsCommsMalformedFlagBit();
   scenarioAckRingEvictsOldestPastDepthAndPreservesOrder();
   scenarioAckRingPersistsAcrossEmitsBelowFullDepth();
+  scenarioFreshConstructDefaultsAutoAndStaysSilentAtRest();
+  scenarioHandSpunWheelBeforeFirstMoveNeverWakesTheLink();
+  scenarioActivityWindowRefreshesOnActiveAndCoastsThenClosesAfterHoldoff();
+  scenarioSetModeControlsUnsolicitedStreamInOffAndOn();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Telemetry scenarios passed\n");

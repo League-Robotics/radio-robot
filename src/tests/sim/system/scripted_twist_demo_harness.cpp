@@ -211,29 +211,45 @@ int main() {
 
   // ===========================================================================
   // Phase 1: BOOT -- drives the REAL App::RobotLoop::boot(), motors + OTOS
-  // connect, kFlagEventBootReady becomes visible in decoded telemetry.
+  // connect. 125-002 (telemetry-emit-policy-rebuild-spec.md Part 1 item 8/
+  // Part 8 #1): there is no boot-ready telemetry bit any more, and a silent
+  // host gets ZERO unsolicited frames after boot (mode_ defaults kAuto,
+  // everMoved_ is still false) -- so connectivity is confirmed via a bare
+  // TLM request (reason 1, honored in every mode) instead of an unsolicited
+  // boot-ready frame that no longer exists.
   // ===========================================================================
-  beginScenario("boot: motors + OTOS connect, kFlagEventBootReady observed");
+  beginScenario("boot: motors + OTOS connect; silent host stays silent (issue Part 8 #1); a bare TLM request "
+                "confirms connectivity");
 
   sim.boot();
   checkTrue(sim.booted(), "booted() true after boot()");
   checkTrue(sim.motorLeft().connected(), "left motor connected after boot");
   checkTrue(sim.motorRight().connected(), "right motor connected after boot");
 
-  sim.step(3);  // settle: emits kFlagEventBootReady + both leaves' own activation writes land
+  sim.step(3);  // a few idle cycles -- a silent host, parked robot
+  {
+    std::vector<DecodedLine> idleLines = sim.drainTelemetry();
+    std::vector<DecodedLine> idleFrames = onlyTelemetry(idleLines);
+    checkTrue(idleFrames.empty(), "issue Part 8 #1: silent host + parked robot -> zero unsolicited telemetry "
+                                  "frames after boot (kAuto default, everMoved_ still false)");
+  }
+
+  // Bare TLM (reason 1, honored in every mode) forces exactly one frame --
+  // use it to confirm connectivity, now that there is no unsolicited
+  // boot-ready frame to observe it on.
+  sim.injectCommand("TLM");
+  sim.step(1);
   {
     std::vector<DecodedLine> bootLines = sim.drainTelemetry();
     std::vector<DecodedLine> bootFrames = onlyTelemetry(bootLines);
-    checkTrue(!bootFrames.empty(), "telemetry decoded during boot settle");
-    bool sawBootReady = false;
+    checkTrue(!bootFrames.empty(), "the bare TLM request produced telemetry");
     for (const auto& f : bootFrames) {
-      if (f.telemetry.flags & App::kFlagEventBootReady) sawBootReady = true;
       if (f.telemetry.flags & kWatchedFaultMask) anyWatchedFaultEver = true;
       if (!(f.telemetry.flags & App::kFlagConnLeft) || !(f.telemetry.flags & App::kFlagConnRight))
         connHealthyThroughout = false;
     }
-    checkTrue(sawBootReady, "kFlagEventBootReady observed in decoded telemetry");
-    std::printf("  BOOT OK: motors + OTOS connected, kFlagEventBootReady observed\n\n");
+    std::printf("  BOOT OK: motors + OTOS connected, silent host confirmed silent, connectivity confirmed via "
+                "bare TLM\n\n");
   }
 
   // ===========================================================================
