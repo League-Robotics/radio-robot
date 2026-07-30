@@ -181,10 +181,34 @@ class NezhaState:
             self.encoders = (0, 0)
 
     def stop(self) -> None:
-        """Stop motors immediately (STOP command)."""
+        """Enqueue a PLANNED stop (STOP command).
+
+        NOT a halt-now: this is an ordinary planner queue entry that waits
+        behind whatever is already in flight, then ramps down at the decel
+        ceiling once its turn comes. Measured on hardware (2026-07-29): sent
+        0.5s into a 400mm leg, the robot travelled the ENTIRE leg (39.8cm)
+        before this command took effect. For "halt everything now" call
+        ``estop()`` instead — see its own docstring, and
+        ``NezhaProtocol.stop()``/``NezhaProtocol.estop()`` for the full
+        wire-level explanation.
+        """
         with self._lock:
             self._wheel_speeds = [0, 0]
         self._proto.stop()
+
+    def estop(self) -> None:
+        """Halt everything NOW (ESTOP command) — the panic stop.
+
+        Zeroes wheel targets AND clears the planner's active + pending queue
+        in the same cycle. Measured on hardware (2026-07-29): sent 0.5s into
+        a 400mm leg, the robot travelled only 2.9cm and ``kFlagActive``
+        dropped within 0.10s. Mirrors ``stop()``'s own local wheel-speed
+        zeroing so a subsequent read of ``wheel_speeds`` reflects the halt
+        immediately, without waiting on a TLM round trip.
+        """
+        with self._lock:
+            self._wheel_speeds = [0, 0]
+        self._proto.estop()
 
     def set_world_pose(self, x: float, y: float, heading: float) -> None:  # [mm], [mm], [deg]
         """Set OTOS world-frame pose (OV command). Heading in degrees."""

@@ -29,8 +29,11 @@ What this script proves, in order:
   3. Telemetry pushes show the encoders actually moving while the Move's
      `stop_time` window runs — the real point of a bench gate: not just
      "the ack came back", but "the wheels actually turned".
-  4. `stop()` halts the drivetrain and its own ack is confirmed the same
-     way.
+  4. `estop()` (the panic stop, halt-now) halts the drivetrain and its own
+     ack is confirmed the same way. NOT `stop()` — since the 2026-07-29
+     command-ingestion rework, `stop()` is a PLANNED stop that queues
+     behind whatever `Move` is already active and would not interrupt the
+     one just started above; see `NezhaProtocol.estop()`'s own docstring.
 
 No "arm telemetry" step: the P4 firmware pushes `Telemetry` UNCONDITIONALLY
 at all times (~25 Hz primary / 5 Hz secondary) — there is no `STREAM` verb
@@ -148,13 +151,14 @@ def main() -> int:
         result.record("encoders moving during move_twist()", moved,
                        f"before={enc_before} after={enc_after}")
 
-        # --- stop() --------------------------------------------------------
+        # --- estop() (halt now, NOT the planned stop() -- see this file's
+        # own header) --------------------------------------------------------
         stop_corr_id = proto.estop()
-        result.record("stop() returns a corr_id", stop_corr_id != 0,
+        result.record("estop() returns a corr_id", stop_corr_id != 0,
                        f"corr_id={stop_corr_id}")
 
         stop_ack = proto.wait_for_ack(stop_corr_id, timeout=ACK_TIMEOUT)
-        result.record("stop() ack confirmed via ack ring",
+        result.record("estop() ack confirmed via ack ring",
                        stop_ack is not None and stop_ack.ok, f"ack={stop_ack}")
     finally:
         # Guaranteed stop: motors must never be left running on an

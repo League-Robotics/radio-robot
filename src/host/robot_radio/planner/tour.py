@@ -578,9 +578,23 @@ def run_tour(
     `stopped_outcome` identify which leg and why. `should_stop`, if given, is
     polled once per ack-slot poll (not just once per leg) so a caller
     (ticket 003's `_TourRunner.stop()`) can interrupt mid-leg -- on a `True`
-    result `transport.stop()` is called (flushes the firmware queue and
-    stops immediately, same as the pre-109-008 path's `stop_now()`) and the
-    leg is reported `RunOutcome.STOPPED`.
+    result `transport.stop()` is called and the leg is reported
+    `RunOutcome.STOPPED`.
+
+    STALE CLAIM CORRECTED (2026-07-29 safety fix): this docstring used to
+    say `transport.stop()` here "flushes the firmware queue and stops
+    immediately" -- true of the pre-109-008 `stop_now()` path and of `STOP`
+    before the command-ingestion rework, but NOT true of the CURRENT
+    `NezhaProtocol.stop()`, which is a PLANNED stop that queues behind
+    whatever leg is already active and only takes effect once that leg
+    ends on its own (measured on hardware: 39.8cm of travel on a 40cm leg
+    before a mid-leg `stop()` took effect). `_TourRunner.stop()`'s "Stop
+    Tour" button therefore does NOT halt the robot immediately today --
+    flagged here rather than silently changed, since a queued stop may be
+    the deliberately gentler choice for a UI-driven tour interrupt (unlike
+    a geofence breach or Ctrl-C); if immediate halt is actually wanted here
+    too, that is a follow-up call for the stakeholder, not this docstring
+    fix.
 
     One-leg lookahead (SUC-003): leg N+1's own `Move` is sent immediately
     after leg N's (while leg N is still active, not after it completes) --

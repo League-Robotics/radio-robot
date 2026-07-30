@@ -48,28 +48,50 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 TRACK = 128.0          # [mm] PHYSICAL wheel separation (caliper-measured)
 
-# The track this script must use for ANGLE math is the EFFECTIVE one:
-# trackwidth / rotational_slip. A skid-steer robot scrubs its wheels
-# sideways through a pivot and rotates LESS than ideal kinematics predict,
-# and every angle here -- the commanded pivot arc, the self-calibration
-# measurement, and the reported heading -- is wheel-difference over track.
+# Two different tracks for two different jobs -- conflating them was itself
+# a defect (2026-07-29 finding, see below).
 #
-# Using the physical 128 over-reported rotation by 1/slip (9.7% on tovez).
-# That corrupted BOTH ends of the measurement: the pivot self-calibration
-# read 93.6 deg for a true 85.3, then SHORTENED already-short turns by
-# 0.962, and the final heading came out 383.6 for a true ~345. Set from the
-# robot config at backend init so sim (slip 1.0 -> 128) is unchanged.
+# EFFECTIVE_TRACK (trackwidth / rotational_slip) is for GENERATING a
+# command: a skid-steer robot scrubs its wheels sideways through a pivot and
+# rotates LESS than ideal kinematics predict for a given wheel-speed
+# difference, so the commanded pivot arc (TURN_ARC) has to be inflated by
+# 1/slip to actually deliver 90 degrees.
+#
+# PHYSICAL_TRACK (the caliper-measured 128 mm, from the robot config's
+# `trackwidth`) is for INTERPRETING encoders after the fact: the encoders
+# report how far the wheels actually turned, and converting that back to an
+# actual rotation is plain differential-drive kinematics -- the physical
+# track the wheels really pivot about, not the inflated one used to
+# compensate for scrub when the wheel speeds were chosen. Scrub already
+# happened by the time the encoder counted it; dividing by the
+# slip-inflated track a SECOND time double-counts it and under-reports the
+# true rotation.
+#
+# This was gotten backwards previously: EFFECTIVE_TRACK was used for BOTH
+# jobs, on the theory that "every angle here... is wheel-difference over
+# track." MEASURED 2026-07-29 (playfield run): encoders (via
+# EFFECTIVE_TRACK) reported heading 322.8 deg / closure 226 mm for a run the
+# camera measured at 368.9 deg / 71.7 mm -- the encoder-interpreted heading
+# was suppressed by the same 1/slip factor that inflated the command, i.e.
+# double-corrected. PHYSICAL_TRACK is the fix for every encoder-INTERPRETING
+# use (headingDeg, integrateEncoderPath, the moving prelude's test-pivot
+# measurement); EFFECTIVE_TRACK stays for TURN_ARC, the only
+# command-GENERATING use. Both set from the robot config at backend init so
+# sim (slip 1.0 -> both equal 128) is unchanged.
+PHYSICAL_TRACK = TRACK
 EFFECTIVE_TRACK = TRACK
 
 
 def _set_effective_track(robot_config) -> None:
-    """Derive EFFECTIVE_TRACK from the active robot config, once."""
-    global EFFECTIVE_TRACK, TURN_ARC
-    tw = robot_config.trackwidth or TRACK
+    """Derive PHYSICAL_TRACK and EFFECTIVE_TRACK from the active robot
+    config, once. See the module-level comment above these globals for
+    which one each downstream use needs."""
+    global PHYSICAL_TRACK, EFFECTIVE_TRACK, TURN_ARC
+    PHYSICAL_TRACK = robot_config.trackwidth or TRACK
     slip = getattr(robot_config.calibration, "rotational_slip", None) or 1.0
-    EFFECTIVE_TRACK = tw / slip if slip > 0 else tw
+    EFFECTIVE_TRACK = PHYSICAL_TRACK / slip if slip > 0 else PHYSICAL_TRACK
     TURN_ARC = EFFECTIVE_TRACK * math.pi / 4.0
-LEG = 500.0            # [mm]
+LEG = 500.0            # [mm] default leg length; overridden by --leg
 CRUISE = 150.0         # [mm/s] leg speed, both wheels
 TURN_SPEED = 120.0     # [mm/s] pivot wheel speed (above the crawl boundary)
 TURN_ARC = TRACK * math.pi / 4.0  # [mm] per-wheel travel for a 90 deg pivot
@@ -201,12 +223,28 @@ class Geofence:
         self.last = None
 
     def _halt(self, why: str):
+        # estop(), not stop(): a geofence breach is a "halt now" event --
+        # stop() is a PLANNED stop that would wait behind whatever is
+        # already queued and coast the robot the rest of the way off the
+        # field (measured on hardware 2026-07-29: 39.8cm of travel on a
+        # 40cm leg before a stop() sent mid-leg took effect).
+        halt_error: Exception | None = None
         for _ in range(3):
             try:
-                self._proto.stop()
-            except Exception:
-                pass
+                self._proto.estop()
+                halt_error = None
+                break
+            except Exception as exc:
+                halt_error = exc
             time.sleep(0.05)
+        if halt_error is not None:
+            # A halt that silently failed is indistinguishable from one
+            # that worked -- exactly what let the robot drive off the
+            # table before this was caught by hand. Surface it.
+            raise GeofenceViolation(
+                f"{why} -- AND estop() failed on all 3 attempts, last "
+                f"error: {halt_error!r} -- ROBOT MAY STILL BE MOVING"
+            ) from halt_error
         raise GeofenceViolation(why)
 
     def check(self) -> None:
@@ -225,11 +263,79 @@ class Geofence:
                        f"{time.monotonic()-self._last_seen:.1f}s -- "
                        f"position unknown, last {self.last}")
 
+    def captureFix(self, label: str, samples: int = 7
+                   ) -> "tuple[float, float, float] | None":
+        """Median-of-`samples` camera pose fix for tag 100: (x_cm, y_cm,
+        yaw_rad). Caller is responsible for having settled to REST first --
+        this does not wait. Returns None (never raises) if the tag was not
+        seen on ANY sample -- a missing fix degrades the tour's report, it
+        must not abort the tour (stakeholder mandate, 2026-07-29: a camera
+        fix at every segment boundary, per `.claude/rules/
+        playfield-testing.md`)."""
+        xs: "list[float]" = []
+        ys: "list[float]" = []
+        yaws: "list[float]" = []
+        for _ in range(samples):
+            for t in self._dc.get_tags(self._cam).tags:
+                if t.id == 100 and t.world_xy is not None and t.yaw is not None:
+                    xs.append(t.world_xy[0])
+                    ys.append(t.world_xy[1])
+                    yaws.append(t.yaw)
+                    break
+            time.sleep(0.03)
+        if not xs:
+            print(f"  camera fix '{label}': tag 100 not seen")
+            return None
+        xs.sort()
+        ys.sort()
+        yaws.sort()
+        n = len(xs)
+        fix = (xs[n // 2], ys[n // 2], yaws[n // 2])
+        print(f"  camera fix '{label}': x={fix[0]:+.1f}cm y={fix[1]:+.1f}cm "
+              f"yaw={math.degrees(fix[2]):+.1f}deg ({n}/{samples} samples)")
+        return fix
+
     def close(self):
         try:
             self._dc.close()
         except Exception:
             pass
+
+
+PLAYFIELD_LIGHTS_URL = "http://192.168.1.122/rpc/Switch.GetStatus?id=0"
+
+
+def checkPlayfieldLights() -> None:
+    """Preflight: FAIL loudly if the playfield room lights (Shelly Plus 1,
+    192.168.1.122 -- same relay as the bench room, `.claude/rules/
+    playfield-testing.md`) are off. A dark field makes every AprilTag
+    vanish and reads exactly like a broken camera or a lost robot -- this
+    check exists so that failure mode is named immediately instead of sent
+    hunting the camera (2026-07-29: a tour aborted with "tag 100 not seen"
+    for exactly this reason).
+
+    Non-fatal if the relay itself is unreachable (a different network
+    problem, not this script's to diagnose) -- warns and continues.
+    """
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(PLAYFIELD_LIGHTS_URL, timeout=2.0) as resp:
+            status = json.loads(resp.read())
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        print(f"WARNING: could not reach the playfield lights relay "
+              f"({PLAYFIELD_LIGHTS_URL}): {exc!r} -- continuing without "
+              f"checking. If tags vanish, suspect the lights first.")
+        return
+
+    if not status.get("output"):
+        raise SystemExit(
+            "FAIL: the playfield room LIGHTS are OFF (Shelly relay "
+            "192.168.1.122) -- a dark field makes every AprilTag vanish and "
+            "looks exactly like a broken camera. Turn them on: curl -s "
+            "'http://192.168.1.122/rpc/Switch.Set?id=0&on=true'")
 
 
 class _Backend:
@@ -382,6 +488,26 @@ class Tour:
         self.cmdR = 0.0
         self.elapsed = 0.0  # [s] script-local clock, so both backends chart alike
         self._seenAcks: "set[int]" = set()
+        # Camera pose fix at every segment boundary (stakeholder mandate,
+        # 2026-07-29, `.claude/rules/playfield-testing.md`) -- one dict per
+        # boundary: {"label", "logIndex" (index into self.log at capture
+        # time), "camera" ((x_cm, y_cm, yaw_rad) or None)}. Populated only
+        # when a camera (backend.geofence) is present -- no-op on sim or
+        # --no-geofence, which have no camera to fix against.
+        self.fixes: "list[dict]" = []
+
+    def captureFix(self, label: str) -> None:
+        """Capture a camera pose fix at a segment boundary, at REST (the
+        caller has already run the settle dwell). No-op when there is no
+        camera (sim, or --no-geofence)."""
+        geofence = getattr(self.backend, "geofence", None)
+        if geofence is None:
+            return
+        self.fixes.append({
+            "label": label,
+            "logIndex": len(self.log["t"]) - 1,
+            "camera": geofence.captureFix(label),
+        })
 
     def record(self, frames: "list") -> None:
         truth = self.backend.truePose()
@@ -587,7 +713,11 @@ class Tour:
             return 1.0
         dL = self.log["posL"][-1] - self.log["posL"][base]
         dR = self.log["posR"][-1] - self.log["posR"][base]
-        degMeasured = abs(math.degrees((dR - dL) / EFFECTIVE_TRACK))
+        # PHYSICAL_TRACK, not EFFECTIVE_TRACK: this INTERPRETS the encoder
+        # delta as an actual rotation, the same job headingDeg/
+        # integrateEncoderPath do -- see the module-level PHYSICAL_TRACK/
+        # EFFECTIVE_TRACK comment.
+        degMeasured = abs(math.degrees((dR - dL) / PHYSICAL_TRACK))
         turnScale = 90.0 / degMeasured if degMeasured > 10 else 1.0
         print(f"test pivot: {degMeasured:.1f} deg -> turn duration scale {turnScale:.3f}")
         self.cmdL = self.cmdR = 0.0
@@ -606,6 +736,7 @@ class Tour:
         segs = [(vL, vR, dur * (turnScale if idx % 2 == 1 else 1.0), mid)
                 for idx, (vL, vR, dur, mid) in enumerate(segments())]
         self._tourStartIndex = len(self.log["t"])
+        self.captureFix("start")
         for idx, (vL, vR, durMs, moveId) in enumerate(segs):
             label = f"leg {idx // 2 + 1}" if idx % 2 == 0 else f"turn {idx // 2 + 1}"
             isTurn = idx % 2 == 1
@@ -617,6 +748,10 @@ class Tour:
                 ok = self.runSegment(label, vL, vR, durMs, moveId)
             if not ok:
                 return False
+            # Each run*() above already ends with a settle dwell (SEGMENT_REST
+            # or _awaitMove's own advance(SEGMENT_REST)) -- REST, per the
+            # stakeholder mandate's own requirement.
+            self.captureFix(label)
         self.advance(1.0)  # final coast-down
         return True
 
@@ -636,14 +771,76 @@ def integrateEncoderPath(log, start: int):
         dL = log["posL"][i] - log["posL"][i - 1]
         dR = log["posR"][i] - log["posR"][i - 1]
         ds = 0.5 * (dL + dR)
-        dTheta = (dR - dL) / EFFECTIVE_TRACK
+        # PHYSICAL_TRACK: interpreting encoders, not generating a command --
+        # see the module-level PHYSICAL_TRACK/EFFECTIVE_TRACK comment.
+        dTheta = (dR - dL) / PHYSICAL_TRACK
         heading += dTheta
         xs.append(xs[-1] + ds * math.cos(heading - dTheta / 2.0))
         ys.append(ys[-1] + ds * math.sin(heading - dTheta / 2.0))
     return xs, ys
 
 
+def reportSegmentFixes(tour: "Tour", log: dict) -> None:
+    """Per-segment report from the camera fixes captured at every segment
+    boundary (stakeholder mandate, 2026-07-29, `.claude/rules/
+    playfield-testing.md`): leg length / turn angle / per-leg cross-track
+    from the camera, printed ALONGSIDE the encoder-odometry estimate for
+    the SAME segment, plus overall closure computed from the first vs last
+    fix. No-op when fewer than 2 fixes were captured (sim, --no-geofence,
+    or a tour that aborted before its first boundary)."""
+    fixes = tour.fixes
+    if len(fixes) < 2:
+        return
+
+    print(f"\nper-segment camera vs. encoder-odometry ({len(fixes)} fixes):")
+    for prev, cur in zip(fixes, fixes[1:]):
+        label = cur["label"]
+        isTurn = label.startswith("turn")
+
+        i0, i1 = prev["logIndex"], cur["logIndex"]
+        encLength = encAngle = None
+        if 0 <= i0 < i1 < len(log["posL"]):
+            dL = log["posL"][i1] - log["posL"][i0]
+            dR = log["posR"][i1] - log["posR"][i0]
+            encLength = 0.5 * (dL + dR)  # [mm]
+            # PHYSICAL_TRACK: interpreting encoders -- see the module-level
+            # PHYSICAL_TRACK/EFFECTIVE_TRACK comment.
+            encAngle = math.degrees((dR - dL) / PHYSICAL_TRACK)  # [deg]
+
+        camPrev, camCur = prev["camera"], cur["camera"]
+        if camPrev is None or camCur is None:
+            encTxt = (f"length={encLength:.1f}mm heading_delta={encAngle:+.1f}deg"
+                      if encLength is not None else "no encoder samples either")
+            print(f"  {label}: camera fix missing -- encoder only: {encTxt}")
+            continue
+
+        x0, y0, yaw0 = camPrev
+        x1, y1, yaw1 = camCur
+        dx, dy = x1 - x0, y1 - y0  # [cm]
+        camLength = math.hypot(dx, dy) * 10.0  # [mm]
+        dyaw = ((yaw1 - yaw0 + math.pi) % (2.0 * math.pi)) - math.pi
+        camAngle = math.degrees(dyaw)  # [deg]
+
+        if isTurn:
+            encTxt = f"{encAngle:+.1f}deg" if encAngle is not None else "n/a"
+            print(f"  {label}: turn angle -- camera {camAngle:+.1f}deg | "
+                  f"encoder {encTxt}")
+        else:
+            crossTrack = (dx * -math.sin(yaw0) + dy * math.cos(yaw0)) * 10.0  # [mm]
+            encTxt = f"{encLength:.1f}mm" if encLength is not None else "n/a"
+            print(f"  {label}: leg length -- camera {camLength:.1f}mm | "
+                  f"encoder {encTxt} | cross-track {crossTrack:+.1f}mm (camera)")
+
+    first, last = fixes[0]["camera"], fixes[-1]["camera"]
+    if first is not None and last is not None:
+        closureCam = math.hypot(last[0] - first[0], last[1] - first[1]) * 10.0
+        print(f"camera closure (first vs last fix): {closureCam:.1f} mm")
+    else:
+        print("camera closure: unavailable -- start or end fix missing")
+
+
 def main() -> int:
+    global LEG
     p = argparse.ArgumentParser(description=__doc__)
     backend_group = p.add_mutually_exclusive_group(required=True)
     backend_group.add_argument("--sim", action="store_true",
@@ -652,6 +849,10 @@ def main() -> int:
                                help="run against a real robot on this serial port")
     p.add_argument("--robot-json", default=str(DEFAULT_ROBOT_JSON),
                    help="robot config the sim backend configures from")
+    p.add_argument("--leg", type=float, default=LEG,
+                   help="[mm] length of each side of the square (default "
+                        f"{LEG:.0f}). The playfield is 134.3x89.3 cm -- 500mm "
+                        "leaves under 10cm of margin per side, 400mm ~24cm.")
     p.add_argument("--max-closure", type=float, default=DEFAULT_MAX_CLOSURE,
                    help="[mm] fail if the tour's end point is farther than this from its start")
     p.add_argument("--heading-tolerance", type=float, default=DEFAULT_HEADING_TOLERANCE,
@@ -676,10 +877,13 @@ def main() -> int:
                    help="output PNG path (default: src/tests/bench/square_tour_<backend>.png)")
     args = p.parse_args()
 
+    LEG = args.leg
+
     backend: _Backend = (SimBackend(args.robot_json) if args.sim
                          else HardwareBackend(args.port, args.robot_json))
     tour = Tour(backend)
     if not args.sim and not args.no_geofence:
+        checkPlayfieldLights()
         backend.geofence = Geofence(backend.proto, margin=args.geofence_margin)
         print(f"geofence ARMED: stops the robot within "
               f"{args.geofence_margin:.0f} cm of the field edge, and on tag loss")
@@ -707,7 +911,12 @@ def main() -> int:
     dTotL = log["posL"][-1] - log["posL"][start]
     dTotR = log["posR"][-1] - log["posR"][start]
     path = 0.5 * (dTotL + dTotR)
-    headingDeg = math.degrees((dTotR - dTotL) / EFFECTIVE_TRACK)
+    # PHYSICAL_TRACK: interpreting encoders, not generating a command -- see
+    # the module-level PHYSICAL_TRACK/EFFECTIVE_TRACK comment. MEASURED
+    # 2026-07-29: using EFFECTIVE_TRACK here double-corrected for scrub and
+    # reported heading 322.8 deg / closure 226 mm for a run camera truth
+    # put at 368.9 deg / 71.7 mm.
+    headingDeg = math.degrees((dTotR - dTotL) / PHYSICAL_TRACK)
     closure = math.hypot(xs[-1], ys[-1])
 
     # Plant truth wins where it exists: on the sim the encoder integration
@@ -725,6 +934,8 @@ def main() -> int:
     print(f"[{backend.label}] path {path:.1f} mm (target {4 * LEG:.0f}), "
           f"heading {headingDeg:.1f} deg (target 360), closure {closure:.1f} mm"
           + (" (plant truth)" if truthClosure is not None else " (encoder odometry)"))
+
+    reportSegmentFixes(tour, log)
 
     chartPath = args.chart or f"src/tests/bench/square_tour_{backend.label}.png"
     writeChart(log, tour.marks, xs, ys, path, headingDeg, closure, chartPath,

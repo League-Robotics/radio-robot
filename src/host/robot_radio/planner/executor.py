@@ -104,6 +104,8 @@ class TwistTransport(Protocol):
 
     def stop(self) -> int: ...
 
+    def estop(self) -> int: ...
+
     def read_pending_binary_tlm_frames(self) -> "list[TLMFrame]": ...
 
 
@@ -269,13 +271,21 @@ class StreamingExecutor:
         self.begin(setpoints, target, axis)
 
     def stop_now(self) -> None:
-        """Immediate stop, no replan -- calls `NezhaProtocol.stop()` and
+        """Immediate stop, no replan -- calls `NezhaProtocol.estop()` and
         ends the current run (binding requirement #4's "stop() immediate"
-        half; `preempt()` is the "then replan" half)."""
+        half; `preempt()` is the "then replan" half).
+
+        MEANING CHANGED (2026-07-29 safety fix, command-ingestion-ring-
+        buffered-comms-subsystem-routing-two-stops.md §2): this used to
+        call `.stop()`. `stop()` is now a PLANNED stop that waits behind
+        whatever is already in flight -- exactly wrong for a method whose
+        entire contract is "immediate, no replan." `estop()` zeroes wheel
+        targets and clears the queue in the same cycle; see
+        `NezhaProtocol.estop()`'s own docstring."""
         logger.warning(
-            "StreamingExecutor.stop_now(): stopping (state=%s, %d/%d "
+            "StreamingExecutor.stop_now(): estopping (state=%s, %d/%d "
             "setpoints sent)", self._state, self._index, len(self._setpoints))
-        self._transport.stop()
+        self._transport.estop()
         self._state = RunState.DONE
 
     # ------------------------------------------------------------------

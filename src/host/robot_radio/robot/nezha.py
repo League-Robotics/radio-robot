@@ -177,8 +177,31 @@ class Nezha(Robot):
     # ------------------------------------------------------------------
 
     def stop(self) -> None:
-        """Stop motors immediately (STOP command)."""
+        """Enqueue a PLANNED stop (STOP command).
+
+        This is NOT a halt-now — it is an ordinary planner queue entry that
+        waits behind whatever is already in flight, then ramps down at the
+        decel ceiling once its turn comes. Measured on hardware (2026-07-29):
+        sent 0.5s into a 400mm leg, the robot travelled the ENTIRE leg (39.8cm)
+        and ``kFlagActive`` stayed set for 5.9s before this command took
+        effect. For "halt everything now" — the panic stop, clears the
+        planner queue and zeroes wheel targets in one cycle — call
+        ``estop()`` instead. See ``NezhaProtocol.stop()``'s own docstring for
+        the full wire-level explanation.
+        """
         self._proto.stop()
+
+    def estop(self) -> None:
+        """Halt everything NOW (ESTOP command) — the panic stop.
+
+        Zeroes wheel targets AND clears the planner's active + pending queue
+        in the same cycle. Measured on hardware (2026-07-29): sent 0.5s into
+        a 400mm leg, the robot travelled only 2.9cm and ``kFlagActive``
+        dropped within 0.10s. This is what every "halt now" call site (a
+        geofence breach, Ctrl-C, an emergency-stop button) must call — never
+        ``stop()``, which is a planned stop that waits its turn in the queue.
+        """
+        self._proto.estop()
 
     def grip(self, angle: int) -> None:
         """Set gripper servo angle (GRIP <deg> command)."""

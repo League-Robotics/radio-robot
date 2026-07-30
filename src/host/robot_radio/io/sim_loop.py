@@ -750,12 +750,26 @@ class SimLoop:
         return corr_id
 
     def stop(self) -> int:
-        """Fire-and-poll, matching ``NezhaProtocol.stop()``'s own contract."""
+        """Fire-and-poll. NOTE: ``sim_inject_stop`` (``sim_ctypes.cpp``) is
+        retargeted at ESTOP, not the planned STOP -- see that function's own
+        comment (command-ingestion-ring-buffered-comms-subsystem-routing-
+        two-stops.md §2: "every existing caller of this entry point means
+        'halt the drivetrain now'"). This method's NAME is unchanged for
+        back-compat with existing ``TwistTransport`` callers; ``estop()``
+        below is the same call under its own, unambiguous name."""
         self._require_connected()
         corr_id = self._next_corr_id()
         self._run_or_enqueue(
             lambda: self._lib.sim_inject_stop(self._handle, ctypes.c_uint32(corr_id)))
         return corr_id
+
+    def estop(self) -> int:
+        """``TwistTransport.estop()`` -- the SAME injection ``stop()``
+        already performs (``sim_inject_stop`` sends ESTOP on the wire; see
+        that method's own docstring), exposed under its real name so a
+        caller migrating off the "stop() means halt-now" assumption has an
+        unambiguous method to call."""
+        return self.stop()
 
     def move(self, *, v_x: float = 0.0, v_y: float = 0.0, omega: float = 0.0,
              v_left: "float | None" = None, v_right: "float | None" = None,

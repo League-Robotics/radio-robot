@@ -8,6 +8,7 @@ tickets:
 - 125-004
 - 125-005
 - 125-006
+- 125-008
 ---
 
 # Telemetry emit-policy rebuild: delete the arming machinery, make the on/off policy explicit

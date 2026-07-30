@@ -680,6 +680,146 @@ void scenarioReplacePreemptsMidMotionSameCycle() {
 }
 
 // ===========================================================================
+// 125-008 safety fix: mid-move ESTOP clears the planner queue (active +
+// pending) AND zeroes wheel targets within one cycle -- the panic-stop half
+// of the stop()/estop() split (command-ingestion-ring-buffered-comms-
+// subsystem-routing-two-stops.md \xc2\xa72/\xc2\xa73). Regression lock for the
+// 2026-07-29 hardware finding: a host "halt now" call site was calling the
+// PLANNED stop() by mistake and the robot rode out an entire in-flight leg
+// (39.8cm of a 40cm leg, kFlagActive held 5.9s) before it took effect;
+// estop() measured 2.9cm / 0.10s on the same repro. Companion to
+// scenarioStopMidMoveDoesNotAbortInFlightMove() below, which locks in the
+// OPPOSITE behavior for the planned stop -- together they pin the direction
+// of the fix so neither verb's meaning drifts back.
+// ===========================================================================
+
+void scenarioEstopMidMoveClearsQueueAndZeroesWheelsWithinOneCycle() {
+  beginScenario("125-008: mid-move ESTOP clears the planner queue (active + pending) and zeroes "
+                "wheel targets within one cycle");
+
+  TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
+  sim.boot();
+  sim.step(3);
+  (void)sim.drainTelemetry();
+
+  constexpr float kVxA = 150.0f;
+  // A's own stop condition never fires on its own within this scenario's
+  // window -- only the estop (or the test ending) can end it.
+  constexpr float kStopTimeMsA = 100000.0f;  // [ms]
+  constexpr float kTimeoutMsA = 200000.0f;   // [ms]
+  constexpr uint32_t kIdA = 60;
+  constexpr uint32_t kCorrA = 160;
+
+  constexpr float kVxB = 200.0f;
+  constexpr float kStopTimeMsB = 500.0f;  // [ms]
+  constexpr float kTimeoutMsB = 5000.0f;  // [ms]
+  constexpr uint32_t kIdB = 61;
+  constexpr uint32_t kCorrB = 161;
+
+  constexpr uint32_t kCorrEstop = 199;
+
+  sim.injectMove(kVxA, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime, kStopTimeMsA,
+                kTimeoutMsA, /*replace=*/true, kIdA, kCorrA);
+  sim.step(3);
+
+  // B queues BEHIND A (replace=false) -- pending, never activated.
+  sim.injectMove(kVxB, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime, kStopTimeMsB,
+                kTimeoutMsB, /*replace=*/false, kIdB, kCorrB);
+  sim.step(3);
+
+  checkTrue(sim.planner().active(), "A is genuinely active before the estop");
+  checkUintEq(static_cast<uint32_t>(sim.planner().pendingCount()), 1u,
+              "B is genuinely pending before the estop");
+  checkFloatEq(sim.driveTargetVelLeft(), kVxA, 1.0f, "A's target is staged before the estop");
+
+  std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
+
+  sim.injectEstop(kCorrEstop);
+  sim.step(1);
+  for (const auto& f : onlyTelemetry(sim.drainTelemetry())) frames.push_back(f);
+
+  checkTrue(!sim.planner().active(), "the active Move is cleared within one cycle of the estop");
+  checkUintEq(static_cast<uint32_t>(sim.planner().pendingCount()), 0u,
+              "the pending queue is cleared within one cycle of the estop");
+  checkFloatEq(sim.driveTargetVelLeft(), 0.0f, 1.0f, "left wheel target zeroes within one cycle of the estop");
+  checkFloatEq(sim.driveTargetVelRight(), 0.0f, 1.0f, "right wheel target zeroes within one cycle of the estop");
+
+  // Run a few more cycles: NEITHER A nor B ever gets a completion ack --
+  // "the discarded queue entries get NO completion acks" (NezhaProtocol.
+  // estop()'s own docstring, protocol.py).
+  for (int i = 0; i < 10; ++i) {
+    sim.step(1);
+    for (const auto& f : onlyTelemetry(sim.drainTelemetry())) frames.push_back(f);
+  }
+
+  checkTrue(anyAckMatches(frames, kCorrEstop), "the ESTOP command itself was acked OK");
+  uint32_t unusedErr = 0, unusedFlags = 0;
+  checkTrue(!findFreshAck(frames, kIdA, &unusedErr, &unusedFlags),
+            "A never receives a completion ack -- discarded, not completed");
+  checkTrue(!findFreshAck(frames, kIdB, &unusedErr, &unusedFlags),
+            "B never receives a completion ack -- discarded before ever activating");
+}
+
+// ===========================================================================
+// 125-008 safety fix: mid-move STOP does NOT abort the in-flight Move -- it
+// is an ordinary queue entry that waits behind whatever is already running
+// (the planned-stop half of the split). See
+// scenarioEstopMidMoveClearsQueueAndZeroesWheelsWithinOneCycle() above for
+// the ESTOP half and the shared rationale.
+// ===========================================================================
+
+void scenarioStopMidMoveDoesNotAbortInFlightMove() {
+  beginScenario("125-008: mid-move STOP does not abort the in-flight Move -- it queues behind it");
+
+  TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
+  sim.boot();
+  sim.step(3);
+  (void)sim.drainTelemetry();
+
+  constexpr float kVxA = 150.0f;
+  // A's own stop condition never fires on its own within this scenario's
+  // window -- only its own natural completion could end it, and this
+  // scenario never lets it run that long.
+  constexpr float kStopTimeMsA = 100000.0f;  // [ms]
+  constexpr float kTimeoutMsA = 200000.0f;   // [ms]
+  constexpr uint32_t kIdA = 70;
+  constexpr uint32_t kCorrA = 170;
+  constexpr uint32_t kIdStop = 71;
+  constexpr uint32_t kCorrStop = 171;
+
+  sim.injectMove(kVxA, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime, kStopTimeMsA,
+                kTimeoutMsA, /*replace=*/true, kIdA, kCorrA);
+  sim.step(3);
+  checkFloatEq(sim.driveTargetVelLeft(), kVxA, 1.0f, "A is genuinely mid-motion before the STOP");
+  (void)sim.drainTelemetry();
+
+  sim.injectStop(kCorrStop, kIdStop);
+
+  // Measured on hardware (2026-07-29): a stop() sent 0.5s into a 400mm leg
+  // did nothing until the ENTIRE leg finished 5.9s later. Ten more cycles
+  // here (well inside A's own never-ending window) is the sim-scale
+  // equivalent of that same observation.
+  std::vector<DecodedLine> frames;
+  for (int i = 0; i < 10; ++i) {
+    sim.step(1);
+    for (const auto& f : onlyTelemetry(sim.drainTelemetry())) frames.push_back(f);
+    checkFloatEq(sim.driveTargetVelLeft(), kVxA, 1.0f,
+                 "A's target is UNCHANGED after the STOP -- it is not aborted");
+    checkTrue(sim.planner().active(), "A is still the active Move after the STOP");
+    checkUintEq(sim.planner().activeMoveId(), kIdA, "A is still the active Move (by id) after the STOP");
+  }
+
+  checkTrue(anyAckMatches(frames, kCorrStop), "the STOP's own enqueue ack was OK -- it was queued, not rejected");
+  uint32_t unusedErr = 0, unusedFlags = 0;
+  checkTrue(!findFreshAck(frames, kIdA, &unusedErr, &unusedFlags),
+            "A has NOT completed -- it is still running its own course, undisturbed by the STOP");
+  checkTrue(!findFreshAck(frames, kIdStop, &unusedErr, &unusedFlags),
+            "the STOP has NOT completed either -- it is still waiting behind A in the queue");
+}
+
+// ===========================================================================
 // SUC-052: a 5th pending MOVE is rejected ERR_FULL; the existing active + 4
 // pending Moves are unchanged -- proved behaviorally: all 5 still complete,
 // in order, with the exact IDs originally sent, and the rejected 6th Move
@@ -943,6 +1083,8 @@ int main() {
   scenarioDistanceTimeoutWithStalledWheelsSetsFaultFlag();
   scenarioChainHandoffSeamlessNoZeroCycle();
   scenarioReplacePreemptsMidMotionSameCycle();
+  scenarioEstopMidMoveClearsQueueAndZeroesWheelsWithinOneCycle();
+  scenarioStopMidMoveDoesNotAbortInFlightMove();
   scenarioFifthPendingRejectedErrFullQueueUnchanged();
   scenarioEmptyQueueExpiryStopsMotorsNoFurtherTraffic();
   scenarioConfigMidMoveDoesNotChangeCompletionOutcome();

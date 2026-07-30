@@ -135,11 +135,15 @@ def spin_to_yaw_camera(
         remaining = diff - total
         projected_err = diff - (total + ang_vel * COAST_S)
         if abs(projected_err) <= tol and abs(ang_vel) > 5.0:
-            proto.stop()
+            # estop(), not stop(): this arrests rotation right AT the
+            # target heading. A planned stop() waits behind whatever is
+            # already queued and coasts through the window this closed
+            # loop is trying to land in, injecting overshoot.
+            proto.estop()
             time.sleep(max(COAST_S * 1.5, 0.4))
             break
         if now - t0 > max_secs:
-            proto.stop()
+            proto.estop()
             break
         direction = 1 if remaining > 0 else -1
         proto.drive(-direction * speed, direction * speed)

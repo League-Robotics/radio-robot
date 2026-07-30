@@ -9,16 +9,16 @@ SafeRun provides:
    reply.  For sim targets the preflight is a no-op (the sim is always
    "live" after connect()).
 
-2. **SIGINT handler** — Ctrl-C calls ``robot.stop()`` then re-raises so
+2. **SIGINT handler** — Ctrl-C calls ``robot.estop()`` then re-raises so
    the robot is always halted before the process exits.
 
-3. **Guaranteed stop on exit** — ``__exit__`` always calls ``robot.stop()``
+3. **Guaranteed stop on exit** — ``__exit__`` always calls ``robot.estop()``
    regardless of whether the block exited normally, raised, or was
    interrupted.
 
 4. **Wall-clock cap** — a background daemon thread monitors elapsed time;
    if ``max_seconds`` passes without the ``with``-block completing normally,
-   ``robot.stop()`` is called and the block raises ``RunawayAbortError``.
+   ``robot.estop()`` is called and the block raises ``RunawayAbortError``.
 
 Usage::
 
@@ -39,10 +39,13 @@ from this module as a convenience alias.
 
 from __future__ import annotations
 
+import logging
 import signal
 import threading
 import time
 from typing import TYPE_CHECKING, Any
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from robot_radio.testkit.target import TestRobot
@@ -223,11 +226,39 @@ class SafeRun:
     # ------------------------------------------------------------------ #
 
     def _stop(self) -> None:
-        """Send STOP (then STREAM 0) to the robot; suppress all exceptions."""
-        try:
-            self._robot.stop()
-        except Exception:  # noqa: BLE001
-            pass
+        """Send ESTOP (halt now), then STREAM 0, to the robot.
+
+        Both the Ctrl-C handler and the guaranteed exit path need a
+        halt-now, not a planned stop: ``robot.stop()`` (the ``Nezha``/
+        ``Robot`` interface's queued STOP) waits behind whatever is already
+        in flight and would let a runaway ride out its current move --
+        exactly wrong for "something went wrong, kill it." ``estop()``
+        zeroes wheel targets and clears the queue in one cycle.
+        ``_ProtoShim`` (the legacy bare-``NezhaProtocol`` wrapper) has no
+        ``estop()`` of its own -- its ``stop()`` already sends the
+        hard-cancel ``X`` -- so this falls back to ``.stop()`` there.
+
+        Retries up to 3 times. A halt that silently fails is
+        indistinguishable from one that worked, which is exactly what let
+        a planned stop masquerade as a real one -- so if every attempt
+        fails, that is logged rather than swallowed.
+        """
+        halt_error: Exception | None = None
+        for _ in range(3):
+            try:
+                if hasattr(self._robot, "estop"):
+                    self._robot.estop()
+                else:
+                    self._robot.stop()
+                halt_error = None
+                break
+            except Exception as exc:  # noqa: BLE001
+                halt_error = exc
+            time.sleep(0.05)
+        if halt_error is not None:
+            logger.error(
+                "SafeRun._stop(): halt failed on all 3 attempts, last "
+                "error: %r -- ROBOT MAY STILL BE MOVING", halt_error)
         # Disable streaming.  NezhaProtocol (or _ProtoShim._proto) has .stream(0).
         try:
             proto = self._robot._proto
