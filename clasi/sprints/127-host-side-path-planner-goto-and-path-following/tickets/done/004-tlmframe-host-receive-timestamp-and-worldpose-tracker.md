@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: TLMFrame host receive timestamp and WorldPose tracker
-status: open
+status: done
 use-cases:
 - SUC-004
 depends-on:
@@ -65,21 +65,21 @@ lowerCamelCase functions/variables, UpperCamelCase types (`WorldPose`).
 
 ## Acceptance Criteria
 
-- [ ] `TLMFrame` gains one new field, default `None`, populated only at
+- [x] `TLMFrame` gains one new field, default `None`, populated only at
       `read_pending_binary_tlm_frames()`; every other existing consumer of
       `TLMFrame` is confirmed unaffected (a frame built any other way
       still leaves the field `None`, per the dataclass's own documented
       convention).
-- [ ] `WorldPose` unit tests cover the transform math (re-anchor from a
+- [x] `WorldPose` unit tests cover the transform math (re-anchor from a
       camera fix updates `T_world_from_odom` correctly) and the age-based
       extrapolation (`t - age`) with **no hardware or sim dependency**.
-- [ ] `WorldPose` exposes encoder-vs-OTOS divergence as a plain,
+- [x] `WorldPose` exposes encoder-vs-OTOS divergence as a plain,
       independently-testable method/property — not internal-only state —
       with its own unit test using synthetic diverging inputs.
-- [ ] `WorldPose`'s re-anchor path imports camera-fix access from
+- [x] `WorldPose`'s re-anchor path imports camera-fix access from
       `robot_radio.field` (ticket 003's promoted module), not a
       reimplementation.
-- [ ] No `ClockSync` activation anywhere in this ticket's diff.
+- [x] No `ClockSync` activation anywhere in this ticket's diff.
 
 ## Testing
 

@@ -389,6 +389,25 @@ class TLMFrame:
     than ``enc``/``vel``/``otos`` above (they add each reading's OWN
     collect/burst time), for a caller (e.g. ticket 008's ``tlm_log.py``)
     that wants the raw per-sample stamps rather than the legacy tuples.
+
+    ``recvTime`` (127-004, ADDITIVE) is the HOST's own monotonic clock
+    (``time.monotonic()``, not wall clock) at the instant the host drained
+    this frame off the wire — ``t`` above is the ROBOT's clock, and the two
+    are never the same timebase (``ClockSync`` would reconcile them; it is
+    not activated by this field — see ``pathplan.world_pose`` for why).
+    Combined with a reading's own ``age`` (``EncoderReading``/
+    ``OtosReading``, both ``# [ms] behind TLMFrame.t``), a caller can
+    recover that reading's own approximate HOST-clock capture instant —
+    ``recvTime - age / 1000.0`` — the frame-age extrapolation pattern
+    ``src/motion/planner/bench/hil_drive.py``'s ``ingestTelemetry()``
+    already uses (there, entirely within the ROBOT's own clock via
+    ``t - age``; here, anchored onto the HOST's clock so it can be compared
+    against a camera fix's own host-clock capture time). Populated ONLY by
+    ``read_pending_binary_tlm_frames()`` at the point each frame is drained
+    — NOT by ``from_pb2()`` itself (decode time is not receive time) and
+    NOT by any other frame source (``read_binary_tlm_frames()`` included);
+    every other builder of a ``TLMFrame`` leaves this at its ``None``
+    default, the same "never decoded" convention as every other field.
     """
     t: int | None = None
     mode: str | None = None
@@ -415,6 +434,7 @@ class TLMFrame:
     otos_reading: "OtosReading | None" = None      # full OTOS burst (adds v_x/v_y/omega/time over `otos`); valid iff otos_present
     cycle_busy: int | None = None                 # [us] cycleStart -> frame-staging instant, THIS cycle (123-004, migrated from TelemetrySecondary)
     cycle_period: int | None = None               # [us] this cycle's cycleStart minus the previous cycle's (123-004)
+    recvTime: float | None = None                 # [s] HOST monotonic clock at frame decode (127-004) -- NOT populated by from_pb2() itself; set by read_pending_binary_tlm_frames() at the point each frame is drained off the wire. See that method's own docstring; every other builder of a TLMFrame (from_pb2() alone, or a hand-built test double) leaves this at its None default, same "never decoded" convention as every other field.
 
     # ------------------------------------------------------------------
     # flags-derived properties (115-003) -- see this class's own docstring.
@@ -1603,9 +1623,17 @@ class NezhaProtocol:
         """Non-blocking drain of every currently-queued binary telemetry
         frame as ``TLMFrame`` objects (097-003) -- the binary-plane
         counterpart of ``read_pending_lines()``.
+
+        127-004: stamps each frame's ``recvTime`` (host ``time.monotonic()``,
+        not wall clock) at the point it is drained here -- the ONE call site
+        that populates it (see ``TLMFrame.recvTime``'s own docstring).
         """
-        return [TLMFrame.from_pb2(reply.tlm)
-                for reply in self._conn.drain_binary_tlm()]
+        frames = []
+        for reply in self._conn.drain_binary_tlm():
+            frame = TLMFrame.from_pb2(reply.tlm)
+            frame.recvTime = time.monotonic()
+            frames.append(frame)
+        return frames
 
     # ------------------------------------------------------------------
     # Telemetry mode control (125-003, telemetry-emit-policy-rebuild-spec.md
