@@ -49,10 +49,10 @@ from __future__ import annotations
 import math
 from types import SimpleNamespace
 
-from robot_radio.planner.executor import RunOutcome
 from robot_radio.planner.heading import HeadingCorrector
 from robot_radio.planner.model import PlannerParams
 from robot_radio.planner.tour import (
+    RunOutcome,
     TourLeg,
     _drain_and_poll,
     _outcome_for_terminal_frame,

@@ -47,10 +47,10 @@ import logging
 import math
 import time
 from dataclasses import dataclass
+from enum import Enum
 from typing import TYPE_CHECKING, Callable, Literal, Protocol, Sequence
 
 from robot_radio.controllers.pid import normalize_angle
-from robot_radio.planner.executor import RunOutcome, RunState, TickResult
 
 if TYPE_CHECKING:
     from robot_radio.planner.heading import HeadingCorrector
@@ -58,6 +58,42 @@ if TYPE_CHECKING:
     from robot_radio.robot.protocol import AckEntry, TLMFrame
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Run-result shells -- 128-007: relocated here from the now-deleted
+# `planner/executor.py` (`StreamingExecutor`, zero production callers --
+# `pathplan/planner.py` built its own `gotoWorld`/`followPath` loop from
+# scratch rather than adopting it). `run_tour()` below is the only LIVE
+# producer of these; `RunState` has no consumer of its own left now that
+# `StreamingExecutor`'s state machine is gone, but is kept as part of this
+# module's public run-result vocabulary alongside `RunOutcome`/`TickResult`.
+# ---------------------------------------------------------------------------
+
+
+class RunState(str, Enum):
+    IDLE = "idle"
+    RUNNING = "running"
+    DONE = "done"
+
+
+class RunOutcome(str, Enum):
+    COMPLETED = "completed"      # setpoints exhausted, terminal stop() sent
+    STOPPED = "stopped"          # preempt()/stop_now() ended the run early
+    FAULT = "fault"              # a drained frame's fault_bits was nonzero
+    OVERSHOOT = "overshoot"      # measured progress left the outer bound
+
+
+@dataclass(frozen=True)
+class TickResult:
+    """What one poll of a leg's own terminal-ack wait did (see
+    `_wait_for_move_terminal()` below)."""
+
+    v_x: float  # [mm/s] the (validated) value actually sent
+    omega: float  # [rad/s] the (validated) value actually sent, trim included
+    corr_id: int  # the twist()/stop() corr_id this tick sent
+    done: bool  # True once this tick ended the run (any RunOutcome)
+    outcome: RunOutcome | None  # set only when done is True
 
 
 class MoveTransport(Protocol):

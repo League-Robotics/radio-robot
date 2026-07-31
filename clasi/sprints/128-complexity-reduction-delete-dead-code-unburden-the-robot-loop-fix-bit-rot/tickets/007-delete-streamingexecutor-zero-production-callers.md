@@ -1,8 +1,9 @@
 ---
 id: '007'
 title: Delete StreamingExecutor (zero production callers)
-status: open
-use-cases: [SUC-006]
+status: in-progress
+use-cases:
+- SUC-006
 depends-on: []
 github-issue: ''
 issue: streaming-executor-delete-or-adopt-for-pathplan.md
@@ -38,20 +39,20 @@ actually true.
 
 ## Acceptance Criteria
 
-- [ ] `planner/executor.py` (`StreamingExecutor` and its untrue
+- [x] `planner/executor.py` (`StreamingExecutor` and its untrue
       `TwistTransport` Protocol claim) is deleted.
-- [ ] The `RunOutcome`/`RunState`/`TickResult` shells `tour.py` imports
+- [x] The `RunOutcome`/`RunState`/`TickResult` shells `tour.py` imports
       are kept — either left in a slimmed `executor.py` or moved into
       `tour.py` directly (programmer's call; moving into `tour.py` is
       the cleaner outcome if `executor.py` would otherwise be nearly
       empty).
-- [ ] `grep -rn "StreamingExecutor" src/` shows no construction site
+- [x] `grep -rn "StreamingExecutor" src/` shows no construction site
       anywhere (docstring/comment mentions of the historical name in
       other files, e.g. `robot_radio/DESIGN.md`'s own narrative, may
       remain as history — only the class and its construction must be
       gone).
-- [ ] `tour.py` still passes its existing test suite unchanged.
-- [ ] No Protocol in `planner/`/`pathplan/` carries an untested "a real
+- [x] `tour.py` still passes its existing test suite unchanged.
+- [x] No Protocol in `planner/`/`pathplan/` carries an untested "a real
       X satisfies this" claim after this ticket (the one this issue
       found is deleted with its host).
 

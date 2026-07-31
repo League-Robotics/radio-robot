@@ -68,28 +68,14 @@ def loop():
 
 
 # ---------------------------------------------------------------------------
-# TwistTransport protocol shape (planner/executor.py's own TwistTransport)
+# 128-007: the `test_satisfies_twist_transport_protocol_shape` test that used
+# to live here checked SimLoop against `planner/executor.py`'s `TwistTransport`
+# Protocol -- deleted along with `StreamingExecutor` (zero production callers;
+# `TwistTransport`'s own "a real NezhaProtocol already satisfies this" claim
+# was false besides -- see the ticket). `SimLoop.twist()`/`.stop()`/
+# `.read_pending_binary_tlm_frames()` are still exercised directly by the
+# tests below; there is no live Protocol left to check the shape against.
 # ---------------------------------------------------------------------------
-
-
-def test_satisfies_twist_transport_protocol_shape(loop):
-    """SimLoop exposes twist()/stop()/read_pending_binary_tlm_frames() --
-    the exact three methods planner/executor.py's TwistTransport structural
-    Protocol declares (read directly off that class, not assumed).
-    TwistTransport is not @runtime_checkable, so this is a direct
-    attribute-presence check rather than isinstance() -- the same
-    duck-typing guarantee a real NezhaProtocol relies on to satisfy the
-    Protocol with no adapter."""
-    from robot_radio.planner.executor import TwistTransport
-
-    expected_methods = [
-        name for name in vars(TwistTransport)
-        if not name.startswith("_")
-    ]
-    assert expected_methods, "TwistTransport declared no public methods to check"
-    for name in expected_methods:
-        assert callable(getattr(loop, name, None)), (
-            f"SimLoop is missing TwistTransport method {name!r}")
 
 
 def test_twist_then_stop_round_trip_returns_corr_ids(loop):
