@@ -84,6 +84,30 @@ duty-per-speed — **the same duty-stage code ticket 015 parks**. Before
 dispatching 015, re-read its premise against whatever that fix actually
 landed. Do not let the two silently disagree and discover it at merge.
 
+### The other session is a MOVING TARGET — re-check before each dispatch
+
+The OOP reason changed once already inside a single hour. By 16:50 it read:
+
+> "stakeholder: remove the TestGUI Geometry & Actuation overrides; always use
+> the robot's configured values"
+
+That session has moved from firmware into **TestGUI** — precisely where
+tickets 003, 004, 005, 010 and 011 work. Assume the main checkout's TestGUI
+tree is being rewritten underneath this sprint.
+
+**Before dispatching any testgui ticket**, run `clasi oop status` and
+`git -C /Volumes/Proj/proj/RobotProjects/radio-robot-elite status --short`
+(read-only — never write there) to see what that session currently has in
+flight, and weigh it against the ticket's file list. Two live edits to
+`testgui/transport.py` or `testgui/__main__.py` from different repos will not
+merge cleanly. It may be worth running the firmware and non-testgui tickets
+(001, 002, 006, 007, 008, 012, 013) first and letting the TestGUI work settle
+before touching 003/004/005/010/011 at all.
+
+Related: the six baseline failures in §4 are themselves testgui fake-drift.
+If that session repairs or further disturbs them, re-measure the baseline
+rather than trusting the numbers recorded here.
+
 ## 4. The test baseline is RED — six known failures
 
 Measured in the clone at `c7a955c2`, before any sprint changes:
