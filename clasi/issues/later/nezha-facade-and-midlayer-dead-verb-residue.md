@@ -1,6 +1,17 @@
 ---
 status: pending
+superseded_by:
+  - rebuild-nezha-facade-on-the-v5-binary-surface.md
+  - rewrite-io-calibrate-on-the-v5-binary-surface.md
+  - nav-goto-stack-is-dead-gate-it-loudly-then-rebuild-or-delete.md
 ---
+
+> **SUPERSEDED (2026-07-31):** the 2026-07-30 craftsmanship review confirmed
+> everything below is still true and split it into three actionable issues
+> (see `superseded_by`). Note: this file's "no liveness/identity replacement
+> exists" blocker is RESOLVED — protocol v5 restored cleartext
+> `HELLO`/`PING`/`ID`/`VER`. Kept for its per-module history; work from the
+> new issues.
 
 # Nezha facade + mid-layer host code still call dead-verb NezhaProtocol methods
 
