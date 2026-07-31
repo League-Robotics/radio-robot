@@ -78,13 +78,12 @@ SimTransport()
     substitute) -- so ``send()``/``command()`` on this class cannot route an
     arbitrary text-v2 verb through ``binary_bridge.translate_command()`` the
     way ``_HardwareTransport`` does; SimTransport never touches
-    ``binary_bridge`` at all (that module's ``translate_command()`` /
-    ``segment``/``replace`` builders stay real-hardware-only -- see
-    ``clasi/issues/binary-bridge-segment-replace-arms-deleted.md``).  A
-    ``send()``/``command()`` call is accepted, logged, and is a no-op
-    (returns ``""`` for ``command()``) -- driving the sim for real happens
-    exclusively through ``.protocol``'s ``twist()``/``stop()`` surface (a
-    tour, or ``KeyboardDriver``'s direct twist calls).
+    ``binary_bridge`` at all (128-004: that module is real-hardware-only --
+    see its own module docstring for the current direct-call-helper
+    surface).  A ``send()``/``command()`` call is accepted, logged, and is a
+    no-op (returns ``""`` for ``command()``) -- driving the sim for real
+    happens exclusively through ``.protocol``'s ``twist()``/``stop()``
+    surface (a tour, or ``KeyboardDriver``'s direct twist calls).
 
     Unit conversion: sim true-pose is (x, y, h) in (mm, mm, rad); on_truth receives
     (x_cm, y_cm, yaw_rad) — x and y are divided by 10; heading is passed
@@ -1043,12 +1042,11 @@ class _HardwareTransport(Transport):
         testgui-motion-paths-dead-after-move-cutover fix: ``D``/``RT``/
         ``SEG 0 <cdeg>`` are intercepted by ``_dispatch_managed_move()``
         BEFORE ``binary_bridge.translate_command()`` ever sees them -- that
-        module's own dispatch is a permanent dead stub (``legacy_render``/
-        ``legacy_verbs`` were deleted wholesale, see its own module
-        docstring) that sends nothing for ANY verb, including these. Every
-        other line still routes through ``translate_command()`` unchanged
-        (kept as the fallback for genuinely legacy verbs -- it now just
-        never actually translates any of them).
+        module's own dispatch sends nothing for these three regardless (see
+        its own module docstring: only ``OI``/``OL``/``OA``/``SET``/
+        ``STREAM`` have a live binary-plane translation at all, 128-004).
+        Every other line still routes through ``translate_command()``
+        unchanged.
 
         The reply string is discarded here (fire-and-forget contract),
         matching the ``send_fast()`` pre-migration behavior's "no reply
@@ -1473,9 +1471,10 @@ _SIM_READY_TIMEOUT_S = 5.0
 # Sim-mode config path (109-002, Architecture Revision 1): SET/GET-shaped
 # host needs route through typed ConfigDelta patches with REAL firmware
 # consumers, constructed via the SAME NezhaProtocol.config()/wait_for_ack()
-# hardware transports already use -- never through binary_bridge.
-# translate_command() (a universal dead stub on every transport since
-# legacy_render/legacy_verbs were deleted, see Architecture Revision 1).
+# hardware transports already use -- never through SimTransport's own
+# separate binary_bridge.translate_command() path (SimTransport never
+# touches binary_bridge.py at all, live or dead -- see this module's own
+# class docstring).
 # ---------------------------------------------------------------------------
 
 # The ConfigDelta patch kinds RobotLoop::handleConfig() applies live
@@ -1786,15 +1785,13 @@ class SimTransport(Transport):
     # ``SimLoop`` has no generic wire/config-channel simulation surface for
     # an arbitrary text-v2 line to translate onto the way
     # ``binary_bridge.translate_command()`` does for real hardware (and
-    # neither method calls into that module -- SimTransport's own call
-    # graph never reaches binary_bridge's segment/replace builders; see
-    # this class's module-docstring entry and
-    # clasi/issues/binary-bridge-segment-replace-arms-deleted.md). This
-    # follow-up fix (TestGUI Sim command-surface) routes the handful of
+    # neither method calls into that module -- SimTransport never touches
+    # binary_bridge.py at all; see this class's own module-docstring entry).
+    # This follow-up fix (TestGUI Sim command-surface) routes the handful of
     # wire verbs the GUI's OWN buttons actually send through command()/
     # send() -- STOP/X, the Turn buttons' "SEG 0 <cdeg>" pivots, the
-    # COMMANDS panel's "D <l> <r> <mm>"/"RT <cdeg>" direct-motion rows, and
-    # the pose-reset verbs _set_origin() sends (SI/OZ/ZERO enc) -- onto
+    # Managed panel's "D <l> <r> <mm>"/"RT <cdeg>" direct-motion presets,
+    # and the pose-reset verbs _set_origin() sends (SI/OZ/ZERO enc) -- onto
     # ``self._loop`` so Sim mode's direct buttons are no longer silent.
     # Every other verb (S/T/R/TURN/G, and anything else) still has no sim
     # backing -- accepted-and-logged, just with a short message instead of

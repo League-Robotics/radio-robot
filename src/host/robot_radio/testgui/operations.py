@@ -579,9 +579,10 @@ class OpsController:
         the-dead-bridge.md): steps 2-3 used to send the wire strings
         ``"STOP"``/``"STREAM 0"`` through ``transport.command()``, which on
         ``_HardwareTransport`` routes into ``binary_bridge.
-        translate_command()`` — an unconditional dead stub (``legacy_verbs``
-        was deleted wholesale, 107-003) that returns an ``ERR`` reply without
-        ever touching the wire, while this method logged
+        translate_command()`` — an unconditional dead stub (the module its
+        verb-translation table used to dispatch through was deleted
+        wholesale, 107-003) that returns an ``ERR`` reply without ever
+        touching the wire, while this method logged
         ``"[INFO] STOP sent"`` regardless — a robot on real hardware kept
         driving. ``"STOP"`` also mapped to the PLANNED stop even when the
         stub DID work (queues behind whatever ``Move`` is already in
@@ -617,10 +618,13 @@ class OpsController:
         # 3. Stop telemetry directly via the protocol so the firmware stops
         #    streaming TLM, and reflect the toggle in the UI. Best-effort —
         #    an unavailable/failed telemetry-off must not mask the halt
-        #    above, which is the actually safety-critical step. Full
-        #    removal of the STREAM verb's dead binary_bridge path is
-        #    ticket 004's job; this only stops on_stop() itself from
-        #    depending on that dead layer for its own STOP handling.
+        #    above, which is the actually safety-critical step. (128-004
+        #    separately gave STREAM itself a live direct-call translation in
+        #    binary_bridge.py, so ``on_stream_toggled()`` below now works on
+        #    hardware too -- but THIS call stays a direct ``proto.tlmOff()``
+        #    rather than routing through ``transport.command("STREAM 0")``,
+        #    since on_stop()'s own halt step must not depend on
+        #    binary_bridge at all.)
         proto = getattr(transport, "protocol", None)
         if proto is not None and hasattr(proto, "tlmOff"):
             try:

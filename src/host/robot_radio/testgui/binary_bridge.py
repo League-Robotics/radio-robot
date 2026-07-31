@@ -1,194 +1,94 @@
-"""robot_radio.testgui.binary_bridge — in-process text-v2 -> binary
-translation for the TestGUI transports (097, min-viable migration).
+"""robot_radio.testgui.binary_bridge — direct-call helpers for the TestGUI's
+in-process text-verb entry points, plus the message-monitor line renderer.
 
-Firmware is binary-only plus a 6-verb text rump (HELP/HELLO/PING/ID/VER/
-STOP, docs/protocol-v3.md section 6) — every motion/config/telemetry text
-verb the TestGUI's ``commands.COMMANDS`` schema or its Operations panel
-still builds (``S``/``T``/``D``/``RT``/``SET``/``GET``/``STREAM``/``SNAP``/
-...) gets ``ERR unknown`` if sent as literal text. This module is the ONE
-place both transports (``transport.py``'s ``_HardwareTransport`` and
-``SimTransport``) route every outbound command line through so a text line
-never reaches the wire un-translated.
+This module is the ONE place both hardware transports (``transport.py``'s
+``_HardwareTransport``) route every outbound command line NOT already
+intercepted by ``_dispatch_managed_move()`` (``D``/``RT``/``SEG 0 <cdeg>``,
+which go straight to ``NezhaProtocol.move_twist()``/``move_wheels()``) --
+``translate_command(proto, raw_line)`` is the single entry point.
 
-It is the SAME routing table ``io/proxy.py``'s ``ProtocolBridge.
-_handle_client_line`` already implements for the ``rogo proxy`` PTY bridge
-— reused here (not re-derived): ``legacy_verbs.tokenize_send_line()``/
-``BINARY_DISPATCH`` for the tokenizer + one-arm verb builders,
-``legacy_render`` for reply-line formatting, ``protocol.py``'s
-``NezhaProtocol``/config key-target maps for SET/GET/STREAM. Trimmed to
-what the TestGUI needs and stripped of the PTY/EVT-watcher machinery that
-module owns (the GUI has its own tour idle-detection via live telemetry,
-not a synthesized ``EVT``).
+Of the legacy text-v2 verb surface the TestGUI still builds wire strings
+for, exactly THREE verbs still have a live binary-plane translation, each a
+short, direct call to a live ``NezhaProtocol`` method -- no intermediate
+translation layer, table, or reply-rendering module:
 
-``translate_command(proto, raw_line)`` is the single entry point. For a
-verb with no binary arm at all — the legacy pose family (SI/ZERO/OZ —
-envelope.proto's ``pose`` oneof arm is declared-only until 098), GRIP/QLEN
-(never had a binary arm), and the legacy ``DEV`` debug family (retired with
-the rest of the text plane, no binary arm was ever planned for it) — it
-returns a typed ``ERR ...`` reply line WITHOUT sending anything on the
-wire. The remaining OTOS-chip hardware verbs with no direct-patch-send
-equivalent (OV/OP/OR — raw position write/query, Kalman reset) render with
-the ``nodev`` code specifically (not ``unsupported``): this preserves
-``calibration_commands()``'s existing NODEV-tolerant push loop
-(``__main__.py``'s ``_push_robot_calibration`` / ``push.py``'s own
-docstring) — those three verbs already meant "no physical OTOS chip
-attached" in Sim mode on the old text plane, and read the same way today
-for the same physical reason (096/098 have not wired a real detection path
-either way).
+- ``OI``/``OL``/``OA`` -- OTOS calibration, via ``NezhaProtocol.
+  otos_config()`` (``_handle_otos_patch()``).
+- ``SET key=value ...`` -- config push, via ``NezhaProtocol.set_config()``
+  (``_handle_set_patch()``). Stakeholder bench finding 2026-07-22: SET was
+  found rejecting nearly every pushed calibration value against real
+  hardware (log: ``'SET pid.kaw=0' rejected: ERR unavailable legacy verb
+  translation removed``) -- this direct call is the fix.
+- ``STREAM <period>`` -- telemetry mode, via ``NezhaProtocol.tlmOn()``/
+  ``tlmOff()`` (``_handle_stream_patch()``, 128-004). The current wire has
+  no per-call streaming PERIOD control (``TLM:ON``/``TLM:OFF`` are flat
+  mode switches) -- a nonzero period means ON, zero means OFF, preserving
+  the on/off semantic the GUI's STREAM button/connect-time push already
+  used (``operations.py``'s toggle, ``__main__.py``'s connect-time
+  ``STREAM 50``).
 
-109-004 (Architecture Revision 1): OI/OL/OA are NO LONGER part of that
-gated set — each now constructs and sends an ``OtosConfigPatch``
-``ConfigDelta`` directly via ``NezhaProtocol.otos_config()``
-(``_handle_otos_patch()`` below), intercepted at the very top of
-``translate_command()`` before even the ``_LEGACY_TRANSLATION_AVAILABLE``
-check — never through this module's dead ``legacy_verbs``/
-``translate_command()`` dispatch. This is the SAME mechanism on every
-transport (``SerialTransport``/``RelayTransport`` via this function;
-``SimTransport`` via its own ``_handle_otos_patch()`` in ``transport.py``,
-reusing ``NezhaProtocol.otos_config()`` for envelope construction the exact
-same way ``_handle_config_set()``/``config()`` already do for SET/GET).
+Every other verb this module used to translate through a shared
+verb-tokenizer/reply-renderer module pair (the text-v2 translation
+machinery deleted wholesale by commit ``129cbcb3``, 104-002) -- ``S``/``T``/
+``D``/``R``/``TURN``/``RT``/``G`` (the ``commands.py`` COMMANDS schema,
+itself deleted 128-004; ``D``/``RT`` are still live, but via
+``_dispatch_managed_move()``, never through this module), ``GET``,
+``SNAP``, the pose-reset family ``SI``/``ZERO``/``OZ``, ``GRIP``/``QLEN``,
+and the OTOS-device verbs ``OV``/``OP``/``OR`` -- has no binary-plane arm
+at all on the current wire (``docs/protocol-v5.md``: exactly three
+``CommandEnvelope`` arms, ``move``/``config``/``stop``, plus ``wheels``/
+``estop``; no ``get``/``stream``/``pose_fix``/``otos`` reply arms survive
+either, see ``src/protos/envelope.proto``'s own reserved-field history).
+``translate_command()`` returns a generic ``ERR unsupported <verb>`` reply
+for these without ever touching the wire -- the exact same "parsed, never
+sent, replies ERR" outcome every one of these verbs already had (a
+permanent unavailable-gate flag this module used to carry made that
+outcome universal, not verb-specific).
 
-Stakeholder bench finding 2026-07-22 (curve on an unmanaged straight drive,
-GUI log showing ``'SET pid.kaw=0' rejected: ERR unavailable legacy verb
-translation removed`` and only 1/12 calibration values applied): ``SET``
-is fixed the SAME way — ``_handle_set_patch()`` below intercepts ``SET
-key=value ...`` at the very top of ``translate_command()``, alongside
-OI/OL/OA, and calls ``NezhaProtocol.set_config()`` directly. Before this
-fix, ``SET`` fell through to the ``_LEGACY_TRANSLATION_AVAILABLE`` guard
-below and got ``_LEGACY_UNAVAILABLE_REPLY`` unconditionally on every
-hardware transport — even though ``set_config()`` (protocol.py) is fully
-live and is exactly what ``SimTransport._handle_config_set()`` already
-calls for Sim. This was the root cause of ``__main__.py``'s
-``_push_robot_calibration()`` (the robot-select calibration push, which
-sends its ``SET``/``OI``/``OL``/``OA`` sequence via
-``calibration.push.calibration_commands()``) reporting nearly every
-pushed value REJECTED against real hardware, silently leaving the
-firmware on its compiled-in gains (curve = uncorrected wheel travel
-calib / trackwidth / rotational-slip, sluggish PID = uncalibrated
-velocity gains) — and also broke the Configurator panel's live gain
-``SET`` on hardware for the same reason. ``GET`` is NOT restored here:
-the binary ``get`` arm was pruned by 103-001 and
-``NezhaProtocol.get_config_binary()``/``get_config()`` no longer exist at
-all (see the "Config: SET" section header below) — there is no live
-binary consumer to route a `GET` to, unlike `SET`, so `GET` keeps
-returning the launch-unblock reply, which is the honest answer for a
-verb with no wire arm.
-
-R/TURN/G (097, this ticket): UN-GATED — each now translates to an
-open-loop ``segment``/``replace`` envelope via ``legacy_translate.
-segment_for_arc()``/``segment_for_turn()``/``segment_for_goto_relative()``
-(``legacy_verbs.envelope_for_r/turn/g``). None of the three need the
-Planner motion oneof arm (still reserved, not declared, per envelope.proto
-field 5's own comment) — they are approximations of their original
-closed-loop/continuous firmware behavior, each documented at its
-translator function. The genuinely fused-pose/OTOS-chip/camera-dependent
-verbs above stay gated.
-
-107-003 launch-unblock: ``legacy_render``/``legacy_verbs`` were deleted
-wholesale by commit ``129cbcb3`` (104-002) with no replacement, and were
-never re-pointed here — every name below was already dead-verb residue
-(see ``clasi/issues/binary-bridge-segment-replace-arms-deleted.md``), but
-the unconditional module-level import made this an ``ImportError`` that
-prevented ``transport.py`` — and therefore the whole TestGUI — from
-importing at all, blocking sprint 107's own tour path along with
-everything else (docs/issue updated to record this). Both imports are now
-guarded: when unavailable, ``translate_command()`` short-circuits to a
-single explicit ``ERR`` line (``_LEGACY_UNAVAILABLE_REPLY``) for every
-verb, and ``render_log_line()`` falls back to ``google.protobuf.
-text_format`` rendering (already its fallback for reply kinds
-``legacy_render`` never covered). This is a MINIMAL launch-unblock only —
-it does not restore legacy verb translation or rewrite this module's
-segment/replace logic; that remains the filed issue's own, separate scope.
+History (128-004): the two modules this module used to dispatch the WHOLE
+text-v2 surface through were deleted wholesale by commit ``129cbcb3``
+(104-002), leaving a permanent "translation unavailable" gate flag over
+~250 lines that could never execute (``_handle_binary_verb()``,
+``_handle_set()``/``_handle_get()``, ``_handle_stream()``,
+``_handle_snap()``, and the reply-renderer-specific branches of
+``render_log_line()``). 109-004 (OI/OL/OA) and the 2026-07-22 stakeholder
+bench fix (SET) had already carved live exceptions out from under that
+gate via the same direct-call pattern this module now uses exclusively;
+128-004 deletes the dead gate and everything behind it, adds the STREAM
+direct call ticket 003 called for, and repoints the old
+``ERR unavailable ...`` reply's ``clasi/issues/
+binary-bridge-segment-replace-arms-deleted.md`` citation (a file that was
+never actually filed) at this docstring instead.
 """
 
 from __future__ import annotations
-
-from typing import Any
 
 from robot_radio.robot import protocol
 from robot_radio.robot.pb2 import envelope_pb2
 from robot_radio.robot.protocol import NezhaProtocol
 
-try:
-    from robot_radio.robot import legacy_render as render
-    from robot_radio.robot import legacy_verbs
-    _LEGACY_TRANSLATION_AVAILABLE = True
-except ImportError:
-    render = None  # type: ignore[assignment]
-    legacy_verbs = None  # type: ignore[assignment]
-    _LEGACY_TRANSLATION_AVAILABLE = False
-
-# Fixed reply for every verb when legacy_render/legacy_verbs are missing
-# (see this module's own docstring, "107-003 launch-unblock"). Deliberately
-# NOT built via `render.render_err()` -- render itself may be the thing
-# that's unavailable.
-#
-# testgui-motion-paths-dead-after-move-cutover fix: D/RT/SEG (managed
-# straight-drive/turn) are no longer routed here at all -- transport.py's
-# `_HardwareTransport._dispatch_managed_move()` intercepts them in
-# `send()`/`command()` BEFORE `translate_command()` is ever called, sending
-# a real `Move` via `NezhaProtocol.move_twist()`/`move_wheels()` against
-# the current protocol-v4 wire (`docs/protocol-v4.md`). This stub remains
-# the fallback for every OTHER legacy verb this wire's text plane no
-# longer has any translation for at all.
-_LEGACY_UNAVAILABLE_REPLY = (
-    "ERR unavailable legacy verb translation removed -- protocol-v4 "
-    "(docs/protocol-v4.md) has no binary arm for this verb -- see "
-    "clasi/issues/binary-bridge-segment-replace-arms-deleted.md"
-)
-
-# kStreamFloorMs mirror (src/firm/commands/telemetry_commands.cpp /
-# binary_channel.cpp) — same floor protocol.py's own NezhaProtocol.stream()/
-# snap() and io/proxy.py's ProtocolBridge use.
-_STREAM_FLOOR_MS = 20  # [ms]
-
-# Verbs with NO binary arm at all, ever. GRIP/QLEN never had any binary arm
-# planned. (097, this ticket: G/R/TURN REMOVED from this set -- they now
-# translate to open-loop segment/replace envelopes; see this module's own
-# docstring and legacy_translate.py's segment_for_arc()/segment_for_turn()/
-# segment_for_goto_relative(). io/proxy.py's OWN, separate
-# _ALWAYS_UNSUPPORTED_VERBS copy for the rogo proxy PTY bridge is untouched
-# -- out of this ticket's scope.)
-_ALWAYS_UNSUPPORTED_VERBS = frozenset({"QLEN", "GRIP"})
-
-# Pose-reset verbs: envelope.proto's `pose`/`otos` oneof arms exist
-# (SetPose/OdometerCommand) but are declared-only -- BinaryChannel replies
-# ERR_UNIMPLEMENTED for them until sprint 098. SI/ZERO/OZ specifically
-# reset SOFTWARE pose state (fused EKF pose / encoder counters / the OTOS
-# chip's own zero reference) -- not "is a physical device attached"
-# questions, so these render generic "unsupported", unlike the OTOS-chip
-# verbs below.
-_POSE_RESET_VERBS = frozenset({"SI", "ZERO", "OZ"})
-
-# OTOS-chip hardware verbs: OI (init)/OL (linear scalar)/OA (angular
-# scalar)/OV (raw position write)/OP (position query)/OR (Kalman reset).
-# 109-004 (Architecture Revision 1): OL/OA/OI are no longer gated here --
-# each now constructs and sends an OtosConfigPatch ConfigDelta DIRECTLY via
-# NezhaProtocol.otos_config() (see _handle_otos_patch() below), bypassing
-# this module's dead translate_command()/legacy_verbs path entirely, on
-# EVERY transport (this function is what SerialTransport/RelayTransport
-# route every outbound line through). OV/OP/OR have no direct-patch-send
-# equivalent yet (no wire arm for a raw position write/query, and OR --
-# Kalman reset -- has no ConfigDelta field) -- they keep rendering "nodev",
-# same as before.
+# OTOS-chip calibration verbs with a live direct-patch-send equivalent
+# (109-004, Architecture Revision 1): each constructs and sends an
+# OtosConfigPatch ConfigDelta directly via NezhaProtocol.otos_config().
+# OV (raw position write)/OP (position query)/OR (Kalman reset) have no
+# ConfigDelta field to patch and are not in this set -- they fall to the
+# generic unsupported reply below, same as before.
 _OTOS_PATCH_VERBS = frozenset({"OI", "OL", "OA"})
-_OTOS_DEVICE_VERBS = frozenset({"OV", "OP", "OR"})
 
-_UNSUPPORTED_REASON = "requires sprint 098 (no binary arm yet)"
+_UNSUPPORTED_REPLY_FMT = (
+    "ERR unsupported {verb} -- no binary-plane translation on the current "
+    "wire (docs/protocol-v5.md; see testgui/binary_bridge.py's own module "
+    "docstring)"
+)
 
 
 def _handle_otos_patch(proto: NezhaProtocol, verb: str, pos: list[str]) -> str:
     """``OL <scale>``/``OA <scale>``/``OI`` -> direct ``OtosConfigPatch``
     construct-and-send (109-004, Architecture Revision 1's direct-patch-send
     mechanism), reusing ``NezhaProtocol.otos_config()`` -- the SAME
-    envelope-building path on every transport, never ``translate_command()``
-    's dead legacy-verb dispatch. Called BEFORE the
-    ``_LEGACY_TRANSLATION_AVAILABLE`` short-circuit below, so this works
-    whether or not ``legacy_verbs``/``legacy_render`` are importable.
+    envelope-building path on every transport.
 
-    Returns a plain, hand-rolled ``OK``/``ERR`` reply line (not built via
-    ``render.render_ok``/``render_err`` -- those may be unavailable, and
-    this path must not depend on them).
+    Returns a plain, hand-rolled ``OK``/``ERR`` reply line.
     """
     try:
         if verb == "OL":
@@ -216,11 +116,7 @@ def _handle_otos_patch(proto: NezhaProtocol, verb: str, pos: list[str]) -> str:
 
 def _parse_set_kv(tokens: list[str]) -> dict[str, str]:
     """Parse ``SET``'s own ``key=value key2=value2 ...`` positional tokens
-    into a kv dict. Raises ``ValueError`` on a malformed token (no ``=``) --
-    the same tolerance ``legacy_verbs.tokenize_send_line()`` gave this verb
-    before it was deleted, reimplemented minimally here (this module must
-    not depend on that module -- see ``_handle_set_patch()``'s own
-    docstring)."""
+    into a kv dict. Raises ``ValueError`` on a malformed token (no ``=``)."""
     kv: dict[str, str] = {}
     for tok in tokens:
         if "=" not in tok:
@@ -234,23 +130,10 @@ def _handle_set_patch(proto: NezhaProtocol, tokens: list[str]) -> str:
     """``SET key=value ...`` -> direct ``NezhaProtocol.set_config()`` binary
     round trip -- the SAME direct-patch-send mechanism ``_handle_otos_patch()``
     uses for ``OI``/``OL``/``OA`` above, and the SAME method
-    ``SimTransport._handle_config_set()`` (``transport.py``) already calls for
-    Sim. Intercepted at the very top of ``translate_command()``, BEFORE the
-    ``_LEGACY_TRANSLATION_AVAILABLE`` short-circuit -- ``SET`` used to fall
-    through to that dead ``legacy_verbs``/``legacy_render`` dispatch (deleted
-    by 104-002, see this module's own docstring) and so got
-    ``_LEGACY_UNAVAILABLE_REPLY`` unconditionally on every hardware
-    transport, even though ``set_config()`` (protocol.py) is fully live.
-    This was the root cause of the robot-select calibration push
-    (``__main__.py``'s ``_push_robot_calibration()`` /
-    ``calibration.push.calibration_commands()``) reporting nearly every
-    pushed value REJECTED against real hardware (stakeholder bench finding
-    2026-07-22) -- see this module's own docstring for the full incident.
+    ``SimTransport._handle_config_set()`` (``transport.py``) already calls
+    for Sim.
 
-    Returns a plain, hand-rolled ``OK set ...``/``ERR ...`` reply line (not
-    built via ``render.render_ok``/``render_err`` -- those may be
-    unavailable, and this path, like ``_handle_otos_patch()``, must not
-    depend on them).
+    Returns a plain, hand-rolled ``OK set ...``/``ERR ...`` reply line.
     """
     try:
         kv = _parse_set_kv(tokens)
@@ -272,228 +155,66 @@ def _handle_set_patch(proto: NezhaProtocol, tokens: list[str]) -> str:
     return f"OK set {body}"
 
 
+def _handle_stream_patch(proto: NezhaProtocol, pos: list[str]) -> str:
+    """``STREAM <period>`` -> ``NezhaProtocol.tlmOn()``/``tlmOff()`` direct
+    call (128-004, per ticket 003's own note). A nonzero period means ON, a
+    zero (or unparsable) period means OFF -- the v5 wire has no per-call
+    streaming PERIOD control any more (``tlmOn()``/``tlmOff()`` are flat
+    ``TLM:ON``/``TLM:OFF`` mode switches, see their own docstrings); this
+    only preserves the on/off SEMANTIC the GUI's STREAM controls already
+    used (``operations.py``'s toggle sends ``STREAM 50``/``STREAM 0``,
+    ``__main__.py``'s connect-time push sends ``STREAM 50``).
+
+    Returns a plain, hand-rolled ``OK stream ...`` reply line -- this call
+    is fire-and-forget on the wire (``send_fast()``, no ack), so unlike
+    ``_handle_otos_patch()``/``_handle_set_patch()`` there is no ack to
+    wait on and no ``ERR nak``/``ERR unknown timeout`` outcome.
+    """
+    if not pos:
+        return "ERR badarg period"
+    try:
+        requested = int(float(pos[0]))
+    except ValueError:
+        return "ERR badarg period"
+    if requested <= 0:
+        proto.tlmOff()
+        return "OK stream period=0"
+    proto.tlmOn()
+    return f"OK stream period={requested}"
+
+
 def translate_command(proto: NezhaProtocol, raw_line: str) -> str:
     """Translate one text-v2 line to binary, send it, and return the
     rendered text-v2 reply line.
 
     Empty/whitespace-only input returns ``""`` (no verb to dispatch, no
-    wire traffic) -- mirrors ``ProtocolBridge._handle_client_line``'s own
-    "not stripped, no verb -> None" short-circuit, translated to this
-    module's "always return a string" contract.
+    wire traffic).
 
-    109-004: ``OL``/``OA``/``OI`` are intercepted here, BEFORE the
-    ``_LEGACY_TRANSLATION_AVAILABLE`` short-circuit below -- they construct
-    and send an ``OtosConfigPatch`` directly (``_handle_otos_patch()``) and
-    never touch ``legacy_verbs``/``legacy_render`` at all, so they work even
-    though that layer stays permanently unavailable (107-003).
-
-    Stakeholder bench fix (2026-07-22): ``SET`` is intercepted the same way,
-    BEFORE the short-circuit below -- ``_handle_set_patch()`` sends a real
-    ``NezhaProtocol.set_config()`` round trip. ``GET`` is NOT restored (no
-    live binary read-back arm exists at all -- see ``_handle_set_patch()``'s
-    own docstring and this module's top-of-file incident note).
-
-    107-003 launch-unblock: if ``legacy_render``/``legacy_verbs`` are not
-    importable (see this module's own docstring), every OTHER non-empty
-    line short-circuits to ``_LEGACY_UNAVAILABLE_REPLY`` instead of
-    dispatching -- parsing the line at all is itself `legacy_verbs`' job, so
-    there is no partial/degraded dispatch to fall back to.
+    ``OI``/``OL``/``OA`` (109-004), ``SET`` (stakeholder bench fix,
+    2026-07-22), and ``STREAM`` (128-004) are the only verbs with a live
+    binary-plane translation -- each constructs and sends a real envelope
+    (or, for STREAM, a real cleartext ``TLM:ON``/``TLM:OFF`` line) directly
+    via a live ``NezhaProtocol`` method. Every other verb returns a generic
+    ``ERR unsupported <verb>`` reply without ever touching the wire -- see
+    this module's own docstring for why (no binary-plane arm exists for it
+    on the current wire).
     """
-    stripped_for_otos = raw_line.strip()
-    if stripped_for_otos:
-        tokens_for_early_dispatch = stripped_for_otos.split()
-        first_verb = tokens_for_early_dispatch[0].upper()
-        if first_verb in _OTOS_PATCH_VERBS:
-            return _handle_otos_patch(
-                proto, first_verb, tokens_for_early_dispatch[1:])
-        if first_verb == "SET":
-            return _handle_set_patch(proto, tokens_for_early_dispatch[1:])
-
-    if not _LEGACY_TRANSLATION_AVAILABLE:
-        return _LEGACY_UNAVAILABLE_REPLY if raw_line.strip() else ""
-
-    stripped, corr_id_str = legacy_verbs.split_corr_id(raw_line)
-    corr_id = int(corr_id_str) if corr_id_str else None
-    verb, pos, kv = legacy_verbs.tokenize_send_line(stripped)
-    if not verb:
+    stripped = raw_line.strip()
+    if not stripped:
         return ""
 
-    if verb in _OTOS_DEVICE_VERBS:
-        return render.render_err("nodev", f"{verb} {_UNSUPPORTED_REASON}", corr_id)
-    if verb in _POSE_RESET_VERBS or verb in _ALWAYS_UNSUPPORTED_VERBS or verb.startswith("DEV"):
-        return render.render_err("unsupported", f"{verb} {_UNSUPPORTED_REASON}", corr_id)
+    tokens = stripped.split()
+    verb = tokens[0].upper()
+    pos = tokens[1:]
 
+    if verb in _OTOS_PATCH_VERBS:
+        return _handle_otos_patch(proto, verb, pos)
     if verb == "SET":
-        return _handle_set(proto, kv, corr_id)
-    if verb == "GET":
-        return _handle_get(proto, pos, corr_id)
+        return _handle_set_patch(proto, pos)
     if verb == "STREAM":
-        return _handle_stream(proto, pos, corr_id)
-    if verb == "SNAP":
-        return _handle_snap(proto, corr_id)
+        return _handle_stream_patch(proto, pos)
 
-    if verb in legacy_verbs.BINARY_DISPATCH:
-        return _handle_binary_verb(proto, verb, pos, kv, corr_id)
-
-    # Unknown verb (P/PA/DBG/anything else the text plane used to answer) --
-    # never forwarded as raw text (the firmware would just ERR unknown on
-    # it anyway); a typed reply here at least tells the caller why.
-    return render.render_err("unsupported", verb, corr_id)
-
-
-# ---------------------------------------------------------------------------
-# One-arm binary verbs (S/D/T/RT/MOVE/MOVER/ECHO/PING/STOP/ID/HELLO/VER/HELP)
-# ---------------------------------------------------------------------------
-
-
-def _handle_binary_verb(proto: NezhaProtocol, verb: str, pos: list[str],
-                        kv: dict[str, str], corr_id: int | None) -> str:
-    try:
-        envs = legacy_verbs.BINARY_DISPATCH[verb](pos, kv)
-    except ValueError as exc:
-        return render.render_err("badarg", str(exc), corr_id)
-
-    # (100-007, THE CUTOVER) envs may hold up to 3 envelopes (MOVE's
-    # <=3-primitive decomposition) or 2 (G's) -- send every one IN ORDER,
-    # stopping at the first rejected/timed-out reply. NezhaProtocol.
-    # _send_envelope() normalizes SerialConnection's (dict-wrapped) vs.
-    # SimConnection's (bare ReplyEnvelope) different send_envelope() return
-    # shapes -- see that method's own docstring.
-    reply = None
-    for env in envs:
-        reply = proto._send_envelope(env, read_timeout=500)
-        if reply is None:
-            return render.render_err("unknown", "timeout", corr_id)
-        if reply.WhichOneof("body") == "err":
-            return render.render_error(reply.err, corr_id)
-
-    if reply is None:
-        return render.render_ok_for_verb(verb, pos, kv, envelope_pb2.Ack(), corr_id)
-
-    which = reply.WhichOneof("body")
-    if which == "echo":
-        return render.render_ok("echo", reply.echo.payload.decode("utf-8", "replace"), corr_id)
-    if which == "id":
-        if verb == "VER":
-            return render.render_ok("ver", render.render_ver_body(reply.id), corr_id)
-        return render.render_id_line(reply.id, corr_id)
-    if which == "helptext":
-        return render.render_ok("help", reply.helptext.text, corr_id)
-    if which == "ok":
-        return render.render_ok_for_verb(verb, pos, kv, reply.ok, corr_id)
-    return render.render_err("unknown", None, corr_id)
-
-
-# ---------------------------------------------------------------------------
-# Config (SET/GET) -- reuses NezhaProtocol/protocol.py's own key-target maps
-# rather than reimplementing the fan-out (mirrors io/proxy.py's
-# ProtocolBridge._handle_set/_handle_get exactly).
-# ---------------------------------------------------------------------------
-
-
-def _handle_set(proto: NezhaProtocol, kv: dict[str, str], corr_id: int | None) -> str:
-    if not kv:
-        return render.render_err("badarg", "no key=value pairs", corr_id)
-    bad = [k for k in kv if k not in protocol._ALL_SET_KEYS]
-    if bad:
-        return render.render_err("badkey", bad[0], corr_id)
-    try:
-        kwargs = {k: float(v) for k, v in kv.items()}
-    except ValueError:
-        return render.render_err("badarg", "bad value", corr_id)
-    applied = proto.set_config(**kwargs)
-    if applied is None:
-        return render.render_err("badarg", "set failed", corr_id)
-    body = " ".join(f"{k}={v}" for k, v in applied.items())
-    return render.render_ok("set", body, corr_id)
-
-
-def _handle_get(proto: NezhaProtocol, pos: list[str], corr_id: int | None) -> str:
-    requested = tuple(pos) if pos else render.ALL_GET_KEYS
-    bad = [k for k in requested if k not in protocol._TARGET_FOR_KEY]
-    if bad:
-        return render.render_err("badkey", bad[0], corr_id)
-
-    from robot_radio.io.proxy import _raw_config_snapshot_value
-
-    targets = sorted({protocol._TARGET_FOR_KEY[k] for k in requested})
-    snapshots: dict[int, Any] = {}
-    for target in targets:
-        snapshot = proto.get_config_binary(target)
-        if snapshot is not None:
-            snapshots[target] = snapshot
-
-    values: dict[str, float] = {}
-    for key in requested:
-        snapshot = snapshots.get(protocol._TARGET_FOR_KEY[key])
-        if snapshot is None:
-            continue
-        raw = _raw_config_snapshot_value(key, snapshot)
-        if raw is not None:
-            values[key] = raw
-    return render.render_cfg_line(values, corr_id, keys=requested)
-
-
-# ---------------------------------------------------------------------------
-# Telemetry (STREAM/SNAP)
-# ---------------------------------------------------------------------------
-
-
-def _handle_stream(proto: NezhaProtocol, pos: list[str], corr_id: int | None) -> str:
-    """``STREAM <period>`` -> ``StreamControl{binary: true, period}``.
-
-    This is the ONE place ``STREAM 50``/``STREAM 0`` (connect-time arm in
-    ``__main__.py``, the Operations panel's STREAM toggle, and
-    ``SimTransport``'s own tick-thread startup) turns into a binary
-    envelope -- no call site needs to build the envelope itself.
-    """
-    if not pos:
-        return render.render_err("badarg", "period", corr_id)
-    try:
-        requested = int(float(pos[0]))
-    except ValueError:
-        return render.render_err("badarg", "period", corr_id)
-    period = 0 if requested <= 0 else max(_STREAM_FLOOR_MS, requested)
-    proto.stream(period)
-    return render.render_ok("stream", f"period={period}", corr_id)
-
-
-def _handle_snap(proto: NezhaProtocol, corr_id: int | None) -> str:
-    """One-shot ``SNAP`` -- arm-wait-disarm synthesis (NezhaProtocol.snap()'s
-    own strategy, architecture-update.md (097) Decision 4), reimplemented
-    here instead of called directly because it needs the RAW
-    ``telemetry_pb2.Telemetry`` (for ``legacy_render.render_tlm_line()``),
-    not ``snap()``'s own parsed ``TLMFrame``.
-
-    The only caller today is ``_TourRunner._wait_for_idle``'s fire-and-forget
-    ``send("SNAP")`` nudge (``__main__.py``) -- implemented anyway so a
-    stray/future ``SNAP`` never silently falls through to the catch-all
-    "unsupported" reply.
-    """
-    import time as _time
-
-    conn = proto._conn
-    conn.drain_binary_tlm()
-    proto.stream(_STREAM_FLOOR_MS)
-    read_binary_tlm = getattr(conn, "read_binary_tlm", None)
-    if read_binary_tlm is not None:
-        frames = read_binary_tlm(duration=400)
-    else:
-        # SimConnection path (no read_binary_tlm): frames only exist after
-        # whoever ticks the sim has ticked (SimTransport's tick-thread when
-        # the GUI is connected), so a single non-blocking drain immediately
-        # after arming RACES that thread -- which drains each frame into the
-        # trace pipeline first -- and lost every time: the recurring
-        # "ERR unknown snap-timeout" console noise. Poll briefly instead,
-        # matching read_binary_tlm()'s own 400ms window.
-        frames = conn.drain_binary_tlm()
-        deadline = _time.monotonic() + 0.4
-        while not frames and _time.monotonic() < deadline:
-            _time.sleep(0.02)
-            frames = conn.drain_binary_tlm()
-    if not frames:
-        return render.render_err("unknown", "snap-timeout", corr_id)
-    return render.render_tlm_line(frames[0].tlm)
+    return _UNSUPPORTED_REPLY_FMT.format(verb=verb)
 
 
 # ---------------------------------------------------------------------------
@@ -515,6 +236,16 @@ def _handle_snap(proto: NezhaProtocol, corr_id: int | None) -> str:
 # ``bytes`` for a binary frame (post-delimiter-strip, still COBS+CRC-encoded)
 # and a plain ``str`` for a text-plane line, so the dispatch below is by
 # Python TYPE, not by string prefix.
+#
+# 128-004: the reply-renderer-specific rendering this function used to fall
+# back onto for ``err``/``id``/``echo``/``helptext`` replies was already
+# permanently unreachable (the module it called into was deleted wholesale
+# by 104-002, and ``id``/``echo``/``helptext`` no longer exist as
+# ``ReplyEnvelope.body`` oneof fields at all -- only ``ok``/``err``/``tlm``
+# do). Every reply now renders via ``google.protobuf.text_format``
+# unconditionally -- this is the SAME text_format fallback this function
+# already fell to for every reply in practice, just without the dead
+# "renderer available" branch that could never be taken.
 # ---------------------------------------------------------------------------
 
 
@@ -542,17 +273,9 @@ def render_log_line(raw_line: "str | bytes", *, outbound: bool) -> str | None:
         fails to COBS/CRC-decode or protobuf-parse (defensive; never raises
         out of a log hook).
       - Otherwise, a single-line human-readable rendering of the decoded
-        envelope: a received reply uses ``legacy_render``'s own
-        context-free renderers where one exists for that oneof arm
-        (``err``/``id``/``echo``/``helptext``); ``ok`` (Ack) and ``cfg``
-        (ConfigSnapshot) have no verb-agnostic ``legacy_render`` renderer
-        (``render_ok_for_verb()``/``render_cfg_line()`` both need the
-        ORIGINAL request's verb/keys, which a bare reply line does not
-        carry) -- rendered instead via ``google.protobuf.text_format``, the
-        same "readable text instead of raw frame bytes" outcome without
-        inventing a verb-guessing scheme. A sent command (outbound) has no
-        ``legacy_render`` equivalent at all (that module renders replies,
-        not requests) -- always rendered via ``text_format``.
+        envelope via ``google.protobuf.text_format`` (128-004: unconditional
+        -- see this section's own header comment for why there is no other
+        rendering path any more).
 
     Received (``outbound=False``) frames are exactly one message shape now
     (124-009, robot-state-blackboard-...md, issue's own "TelemetrySecondary
@@ -571,7 +294,6 @@ def render_log_line(raw_line: "str | bytes", *, outbound: bool) -> str | None:
     from google.protobuf import text_format  # type: ignore[import-untyped]
 
     from robot_radio.io.wire_codec import decode_frame
-    from robot_radio.robot.pb2 import envelope_pb2
 
     def _malformed_marker() -> str:
         return f"<binary: malformed, {len(raw_line)} bytes>"
@@ -597,7 +319,6 @@ def render_log_line(raw_line: "str | bytes", *, outbound: bool) -> str | None:
             return _malformed_marker()
         return text_format.MessageToString(cmd, as_one_line=True).strip() or _malformed_marker()
 
-    reply = None
     try:
         reply = envelope_pb2.ReplyEnvelope.FromString(raw_bytes)
     except Exception:
@@ -610,23 +331,6 @@ def render_log_line(raw_line: "str | bytes", *, outbound: bool) -> str | None:
         return _malformed_marker()
 
     which = reply.WhichOneof("body")
-    corr_id = reply.corr_id or None
     if which == "tlm":
         return None
-    # 107-003 launch-unblock: render may be None (legacy_render unavailable
-    # -- see this module's own docstring); every branch below falls through
-    # to the text_format fallback in that case, same as "ok"/"cfg"/"evt".
-    if render is not None:
-        if which == "err":
-            return render.render_error(reply.err, corr_id)
-        if which == "id":
-            return render.render_id_line(reply.id, corr_id)
-        if which == "echo":
-            return render.render_ok("echo", reply.echo.payload.decode("utf-8", "replace"), corr_id)
-        if which == "helptext":
-            return render.render_ok("help", reply.helptext.text, corr_id)
-    # "ok" (Ack)/"cfg" (ConfigSnapshot)/"evt" (EventNotify) -- no verb-
-    # agnostic legacy_render renderer exists (see this function's own
-    # docstring); text_format gives readable text without guessing. Also
-    # reached for err/id/echo/helptext when render itself is unavailable.
     return text_format.MessageToString(reply, as_one_line=True).strip() or _malformed_marker()

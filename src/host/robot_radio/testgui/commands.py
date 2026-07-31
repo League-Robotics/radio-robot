@@ -1,43 +1,24 @@
-"""robot_radio.testgui.commands — Schema-driven motion command definitions.
+"""robot_radio.testgui.commands — command-row schema (empty, 128-004) and
+the wire-string builder that used to be schema-driven from it.
 
-This module defines the data-driven command schema (``COMMANDS``) and the
-pure wire-string builder (``build_wire_string``) used by the Robot Test GUI's
-command-entry rows.
+``COMMANDS`` used to be a list of ``CommandSpec`` dicts describing seven
+firmware motion verbs (``S``/``T``/``D``/``R``/``TURN``/``RT``/``G``), each
+rendered as a parameter-field row in a hidden GUI panel
+(``__main__.py``'s ``_build_command_row()``, deleted 128-004). It is now
+EMPTY: five of the seven verbs (``S``/``T``/``R``/``TURN``/``G``) never had
+a binary-plane arm on the current wire at all (see ``testgui/
+binary_bridge.py``'s own module docstring for the full accounting), and the
+remaining two (``D``/``RT``) were already superseded by the Managed/
+Unmanaged preset-button panel (stakeholder 2026-07-17: "I don't need full
+parameters, I just need buttons") before this ticket -- the schema-driven
+panel itself was already hidden (``cmd_rows_widget.setVisible(False)``),
+never shown to an operator. ``build_wire_string()`` is kept as a small,
+independently-tested pure function (a ``CommandSpec``-shaped dict in,
+a wire string out) in case a future command row needs it again -- it no
+longer has any live caller.
 
 No PySide6 imports here — this module is usable in headless tests without a
 display server or a Qt application instance.
-
-Command schema
---------------
-``COMMANDS`` is a list of ``CommandSpec`` dicts.  Each entry describes one
-firmware motion command.  The ``build_command_rows`` helper in ``__main__.py``
-reads the list and constructs one ``QHBoxLayout`` per entry.
-
-Wire formats
-------------
-=================== ===========================================
-Command             Wire string
-=================== ===========================================
-S  left right       ``S <left> <right>``
-T  left right ms    ``T <left> <right> <ms>``
-D  left right mm    ``D <left> <right> <mm>``
-R  speed radius     ``R <speed> <radius>``
-TURN hdg [eps]      ``TURN <hdg_cdeg>`` or ``TURN <h> eps=<e>``
-RT deg              ``RT <rel_cdeg>``
-G  x y speed        ``G <x> <y> <speed>``
-=================== ===========================================
-
-TURN heading and eps are supplied in degrees (human-friendly) but sent in
-centidegrees (``deg * 100``) on the wire.  The heading field accepts any
-angle (e.g. 270, -450); values outside [-180, 180] are wrapped onto the
-equivalent absolute heading in (-180, 180] before conversion, so
-``TURN 270°`` is sent as ``TURN -9000``.  The eps field is *optional*: when
-its value equals the field default (0) it is omitted from the wire string,
-producing a bare ``TURN <heading_cdeg>``.
-
-RT is a RELATIVE in-place turn (positive = CCW/left) computed on the robot
-from the encoder arc.  Its ``deg`` field is entered in degrees but sent in
-centidegrees, producing ``RT <rel_cdeg>``.
 """
 
 from __future__ import annotations
@@ -136,97 +117,15 @@ class CommandSpec(TypedDict, total=False):
 # Command schema table
 # ---------------------------------------------------------------------------
 #
-# Wire-shape range audit (sprint 085 ticket 001).  Every ``min``/``max`` below
-# was checked by hand against ``docs/protocol-v2.md`` §10 (Motion Commands),
-# implemented in sprint 084 — the citation is repeated per row so a future
-# editor can re-verify a single row without re-reading the whole section.
-# ``min``/``max`` here are in the UI's units (degrees for ``cdeg_fields``
-# members; the firmware's own cdeg ceiling is noted alongside). Rows NOT
-# listed as degree fields are already in the firmware's native unit (mm,
-# mm/s, ms) and the UI range equals the wire range exactly.
-#
-#   S    -- "### S — Streaming (Watchdog) Drive": left/right -1000..1000 mm/s
-#   T    -- "### T — Timed Drive": left/right -1000..1000 mm/s;
-#           ms 1..30000 ms
-#   D    -- "### D — Distance Drive": left/right -1000..1000 mm/s;
-#           mm 1..10000 mm
-#   R    -- "### R — Arc Drive (constant curvature, open-loop)":
-#           speed -1000..1000 mm/s; radius -10000..10000 mm
-#   TURN -- "### TURN — Absolute-Heading Turn-in-Place (closed-loop, fused
-#           heading)": heading -18000..+18000 cdeg (±180°) — the UI's
-#           heading field instead wraps any entered angle onto (-180, 180]
-#           before conversion (see ``wrap_deg_fields`` below), so it need not
-#           be range-limited to match; eps 10..1800 cdeg (0.1°..18°), i.e.
-#           0.1..18 deg, default 300 cdeg (3°). The UI's eps min stays 0
-#           (below the firmware's own 10 cdeg floor) as the sentinel for
-#           "omit eps entirely, let the firmware apply its own 300 cdeg
-#           default" — see ``optional_zero_fields`` below — but the UI max
-#           must be 18 (deg) = 1800 cdeg, the firmware ceiling.
-#   RT   -- "### RT — Relative Turn-in-Place (closed-loop, encoder arc)":
-#           relAngle -180000..+180000 cdeg (±1800°) = deg -1800..1800.
-#   G    -- "### G — Go-To (relative XY)": x/y -10000..10000 mm;
-#           speed 1..1000 mm/s
+# EMPTY (128-004) -- see this module's own docstring. The seven-row table
+# that used to live here (S/T/D/R/TURN/RT/G, each range-audited against
+# docs/protocol-v2.md §10 at sprint 085 ticket 001) drove a GUI panel that
+# was already hidden before this ticket and translated verbs that have no
+# binary-plane arm on the current wire (``testgui/binary_bridge.py``'s own
+# module docstring has the full accounting). ``CommandSpec``/``ParamSpec``
+# stay declared above for ``build_wire_string()``'s type signature.
 
-COMMANDS: list[CommandSpec] = [
-    {
-        "label": "S",
-        "params": [
-            {"name": "left",  "type": int, "min": -1000, "max": 1000, "default": 200, "unit": "mm/s"},
-            {"name": "right", "type": int, "min": -1000, "max": 1000, "default": 200, "unit": "mm/s"},
-        ],
-    },
-    {
-        "label": "T",
-        "params": [
-            {"name": "left",  "type": int, "min": -1000, "max": 1000, "default": 200, "unit": "mm/s"},
-            {"name": "right", "type": int, "min": -1000, "max": 1000, "default": 200, "unit": "mm/s"},
-            {"name": "ms",    "type": int, "min": 1,     "max": 30000, "default": 1000, "unit": "ms"},
-        ],
-    },
-    {
-        "label": "D",
-        "params": [
-            {"name": "left",  "type": int, "min": -1000, "max": 1000, "default": 200, "unit": "mm/s"},
-            {"name": "right", "type": int, "min": -1000, "max": 1000, "default": 200, "unit": "mm/s"},
-            {"name": "mm",    "type": int, "min": 1,     "max": 10000, "default": 500, "unit": "mm"},
-        ],
-    },
-    {
-        "label": "R",
-        "params": [
-            {"name": "speed",  "type": int, "min": -1000,  "max": 1000,  "default": 200, "unit": "mm/s"},
-            {"name": "radius", "type": int, "min": -10000, "max": 10000, "default": 500, "unit": "mm"},
-        ],
-    },
-    {
-        "label": "TURN",
-        "params": [
-            {"name": "heading", "type": int, "min": -3600, "max": 3600, "default": 90, "unit": "deg"},
-            {"name": "eps",     "type": int, "min": 0,     "max": 18,   "default": 0,  "unit": "deg", "optional": True},
-        ],
-        # heading/eps are entered in degrees (human-friendly) but sent in centidegrees.
-        # heading accepts any angle; it is wrapped onto (-180, 180] on the wire.
-        "cdeg_fields": ["heading", "eps"],
-        "optional_zero_fields": ["eps"],
-        "wrap_deg_fields": ["heading"],
-    },
-    {
-        "label": "RT",
-        "params": [
-            {"name": "deg", "type": int, "min": -1800, "max": 1800, "default": 90, "unit": "deg"},
-        ],
-        # deg is entered in degrees (human-friendly) but sent in centidegrees.
-        "cdeg_fields": ["deg"],
-    },
-    {
-        "label": "G",
-        "params": [
-            {"name": "x",     "type": int, "min": -10000, "max": 10000, "default": 0,   "unit": "mm"},
-            {"name": "y",     "type": int, "min": -10000, "max": 10000, "default": 0,   "unit": "mm"},
-            {"name": "speed", "type": int, "min": 1,      "max": 1000,  "default": 200, "unit": "mm/s"},
-        ],
-    },
-]
+COMMANDS: list[CommandSpec] = []
 
 
 # ---------------------------------------------------------------------------

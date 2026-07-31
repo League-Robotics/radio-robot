@@ -310,7 +310,8 @@ def _build_main_window():  # type: ignore[return]
 
     Layout (left-to-right via QSplitter):
     - Left panel: transport selector QComboBox, port QLineEdit, Connect
-      button, schema-driven command rows, and placeholder operations panel.
+      button, the Managed/Unmanaged motion preset panel, tour buttons, and
+      the Operations panel.
     - Right panel: QGraphicsView playfield canvas with trace paths and robot
       marker (top) and timestamped log pane QPlainTextEdit (bottom).
 
@@ -323,11 +324,12 @@ def _build_main_window():  # type: ignore[return]
     on_log callback, delivered safely from background threads via
     QMetaObject.invokeMethod.
 
-    Command rows are built from the ``COMMANDS`` schema in
-    ``robot_radio.testgui.commands``.  Each row has a label, one labeled
-    input field per parameter, and a Send button.  Send buttons are disabled
-    when no transport is connected.  Clicking Send assembles the wire string
-    via ``build_wire_string`` and calls ``transport.command(line)``.
+    128-004: the parameter-field command-row panel this docstring used to
+    describe (schema-driven from ``robot_radio.testgui.commands.COMMANDS``,
+    one Send button per row) is deleted -- it was already hidden and its
+    verbs either had no binary-plane arm at all or were already superseded
+    by the Managed/Unmanaged preset panel below (see ``commands.py``'s own
+    module docstring).
     """
     # PySide6 imports are intentionally deferred here.
     from PySide6.QtWidgets import (  # type: ignore[import-untyped]
@@ -360,9 +362,7 @@ def _build_main_window():  # type: ignore[return]
         list_ports,
     )
     from robot_radio.testgui.commands import (
-        COMMANDS,
         TOURS,
-        build_wire_string,
         goto_distance,
         goto_reached,
     )
@@ -603,139 +603,20 @@ def _build_main_window():  # type: ignore[return]
     session_btn_layout.addWidget(stop_btn)
     left_layout.addWidget(session_btn_row)
 
-    # Command rows — built from the COMMANDS schema.
-    # Each row: Send button | verb label | field1 | field2 …
-    # Send buttons and verb labels are fixed-width so they line up in columns.
-    # All Send buttons are collected so we can enable/disable them together.
-    cmd_rows_widget = QWidget()
-    cmd_rows_widget.setObjectName("cmd_rows")
-    cmd_rows_layout = QVBoxLayout(cmd_rows_widget)
-    cmd_rows_layout.setContentsMargins(0, 4, 0, 4)
-    cmd_rows_layout.setSpacing(4)
-
-    # List of all Send buttons — disabled until a transport connects.
+    # Send buttons — collected so every motion control (Managed/Unmanaged
+    # preset buttons, tour buttons, etc.) enables/disables together on
+    # connect/disconnect. 128-004: the parameter-field COMMANDS-schema
+    # command-row panel that used to populate part of this list (Send
+    # button per S/T/D/R/TURN/RT/G row, built by ``_build_command_row()``/
+    # ``_wire_send_button()``) is deleted outright -- it was already hidden
+    # (``setVisible(False)``, stakeholder 2026-07-17: "I don't need full
+    # parameters, I just need buttons") and translated verbs with no
+    # binary-plane arm on the current wire (``testgui/binary_bridge.py``'s
+    # own module docstring has the full accounting). The Managed/Unmanaged
+    # preset-button panel below (and, for D/RT specifically, its fixed
+    # presets) is the live replacement; see ``commands.py``'s own module
+    # docstring for the fuller history.
     _send_buttons: list[QPushButton] = []
-
-    def _build_command_row(spec) -> tuple[QWidget, list]:
-        """Build one command row widget from a CommandSpec.
-
-        Returns (row_widget, field_getters) where ``field_getters`` is an
-        ordered list of callables; each callable returns the current numeric
-        value of the corresponding field.
-        """
-        row = QWidget()
-        row_layout = QHBoxLayout(row)
-        row_layout.setContentsMargins(0, 0, 0, 0)
-        row_layout.setSpacing(4)
-
-        # Send button first so all Send buttons form a left-justified column.
-        send_btn = QPushButton("Send")
-        send_btn.setObjectName(f"send_btn_{spec['label'].lower()}")
-        send_btn.setEnabled(False)
-        send_btn.setFixedWidth(52)
-        row_layout.addWidget(send_btn)
-
-        # Command verb label (fixed-width so verb names align in their own column).
-        verb_label = QLabel(spec["label"])
-        verb_label.setFixedWidth(44)
-        row_layout.addWidget(verb_label)
-
-        field_getters: list = []
-
-        for param in spec["params"]:
-            name = param["name"]
-            unit = param.get("unit", "")
-            p_type = param.get("type", int)
-            p_min = param.get("min", -10000)
-            p_max = param.get("max", 10000)
-            p_default = param.get("default", 0)
-
-            # Short label above (or beside) the field.
-            param_label = QLabel(f"{name}:")
-            param_label.setFixedWidth(46)
-            row_layout.addWidget(param_label)
-
-            if p_type is float:
-                spin = QDoubleSpinBox()
-                spin.setRange(float(p_min), float(p_max))
-                spin.setValue(float(p_default))
-                spin.setDecimals(1)
-                spin.setFixedWidth(80)
-                row_layout.addWidget(spin)
-                field_getters.append(lambda s=spin: s.value())
-            else:
-                spin = QSpinBox()
-                spin.setRange(int(p_min), int(p_max))
-                spin.setValue(int(p_default))
-                spin.setFixedWidth(80)
-                row_layout.addWidget(spin)
-                field_getters.append(lambda s=spin: s.value())
-
-            # Unit label OUTSIDE the edit box (not a spin-box suffix).
-            if unit:
-                row_layout.addWidget(QLabel(unit))
-
-        row_layout.addStretch()
-
-        _send_buttons.append(send_btn)
-        return row, field_getters
-
-    # Wire up each row's Send button to build + dispatch the wire string.
-    def _wire_send_button(btn: QPushButton, spec, getters: list) -> None:
-        """Connect btn.clicked to a closure that builds + sends the wire string."""
-        def _on_send():
-            transport: Transport | None = _state.get("transport")
-            if transport is None:
-                _append_log("[WARN] Not connected")
-                return
-            values = {
-                param["name"]: getter()
-                for param, getter in zip(spec["params"], getters)
-            }
-            line = build_wire_string(spec, values)
-            # The transport itself logs both the outbound line and its reply
-            # via on_log (routed through _rx_bridge, which infers TX/RX from
-            # the >/< marker for the recorder) — echoing them here too would
-            # duplicate every line in the console and the recording.
-            try:
-                transport.command(line, read_timeout=500)
-            except Exception as exc:
-                _append_log(f"[ERROR] {exc}")
-
-        btn.clicked.connect(_on_send)
-
-    # 097 (this ticket): every COMMANDS-schema motion verb (S/T/D/R/TURN/RT/
-    # G) now translates to a binary segment/replace/drive envelope --
-    # binary_bridge.translate_command()'s _ALWAYS_UNSUPPORTED_VERBS no
-    # longer includes R/TURN/G (see that module's docstring for the
-    # open-loop segment approximations legacy_translate.py builds for
-    # them). No COMMANDS row is gated any more; every Send button enables
-    # on connect like S/T/D/RT already did. The only motion controls that
-    # STAY gated are the ones that genuinely need fused pose/OTOS/camera --
-    # the Operations panel's OTOS ops (OI/OL/OA/OV/OP/OR), the origin
-    # reset's OZ/SI (see _set_origin()), and the camera-based GOTO button
-    # below (world-absolute closed-loop pursuit, distinct from this
-    # schema's own relative-open-loop "G" row).
-
-    # Build one row per command in the COMMANDS schema.
-    _row_send_getters: list[tuple[QPushButton, "object", list]] = []
-    for cmd_spec in COMMANDS:
-        row_widget, getters = _build_command_row(cmd_spec)
-        cmd_rows_layout.addWidget(row_widget)
-        # Find the Send button just appended.
-        btn = _send_buttons[-1]
-        _row_send_getters.append((btn, cmd_spec, getters))
-
-    # Parameter-field command rows are no longer SHOWN -- the two-column
-    # Managed/Unmanaged preset-button panel below replaces them (stakeholder
-    # 2026-07-17: "I don't need full parameters, I just need buttons"). The
-    # widget must still be ADDED (parented, kept alive) and only HIDDEN: its
-    # Send buttons live in `_send_buttons`, and the connect-time enable loop
-    # (`for _sb in _send_buttons: _sb.setEnabled(True)`) raises "C++ object
-    # already deleted" -- aborting before it enables the tour/motion buttons --
-    # if the widget is orphaned and garbage-collected instead.
-    left_layout.addWidget(cmd_rows_widget)
-    cmd_rows_widget.setVisible(False)
 
     # Two-column motion panel (Unmanaged direct-twist | Managed MOVE-queue).
     # Each sends the binary SEG primitive (arc_length=0 => pure pivot), CCW+,
@@ -935,12 +816,13 @@ def _build_main_window():  # type: ignore[return]
     # Each button resets the robot to the origin, then sends the tour's moves
     # one at a time on a background thread, waiting for each to complete.
     #
-    # 097 (this ticket): un-gated. Every tour step (D/RT) already translates
-    # to an open-loop segment envelope (D/RT had binary arms before this
-    # ticket; see binary_bridge.py). _set_origin()'s own OZ/SI/ZERO calls
-    # stay gated (still reply typed ERR "unsupported" -- see
-    # binary_bridge.py's _POSE_RESET_VERBS) and are therefore no-ops on the
-    # binary plane today, but that no longer blocks the tour from running:
+    # Tour steps (D/RT) go straight to NezhaProtocol.move_twist()/
+    # move_wheels() via transport.py's _dispatch_managed_move() -- never
+    # through binary_bridge.py. _set_origin()'s own OZ/SI/ZERO calls stay
+    # gated (generic ERR "unsupported" reply -- neither has a binary-plane
+    # arm on the current wire, see ``testgui/binary_bridge.py``'s own module
+    # docstring) and are therefore no-ops on the binary plane today, but
+    # that no longer blocks the tour from running:
     # _set_origin() also halts (128-003: transport.halt(), estop) and resets
     # the DISPLAY (TraceModel
     # anchor/clear, canvas avatar) unconditionally, and the sim plant is
@@ -1004,14 +886,14 @@ def _build_main_window():  # type: ignore[return]
     # GOTO — synthetic camera-based go-to: drive to a world (x, y) point by
     # repeatedly correcting the robot's pose from the camera and re-issuing G.
     #
-    # 097 (this ticket): this is the WORLD-ABSOLUTE, camera-closed-loop GOTO
-    # -- distinct from the COMMANDS schema's own "G" row (relative, open-
-    # loop, now un-gated -- see above). This button stays gated: its pursuit
-    # loop repeatedly snaps the robot's pose to camera truth (SI) between
-    # re-issued G's, and SI has no binary arm until sprint 098 (SI/OZ are
-    # still in binary_bridge.py's _POSE_RESET_VERBS). A world-absolute
-    # closed-loop GOTO genuinely needs 098's fused pose; the relative
-    # open-loop "G" row does not and already works.
+    # This is the WORLD-ABSOLUTE, camera-closed-loop GOTO. This button stays
+    # gated: its pursuit loop repeatedly snaps the robot's pose to camera
+    # truth (SI) between re-issued G's, and neither SI nor G has a
+    # binary-plane arm on the current wire (128-004: see
+    # ``testgui/binary_bridge.py``'s own module docstring for the full
+    # accounting -- the old COMMANDS schema's relative-open-loop "G" row
+    # this comment used to point to as a working alternative is itself
+    # deleted, for the same reason).
     goto_row = QWidget()
     goto_layout = QHBoxLayout(goto_row)
     goto_layout.setContentsMargins(0, 0, 0, 0)
@@ -1024,8 +906,7 @@ def _build_main_window():  # type: ignore[return]
     goto_btn.setToolTip(
         "World-absolute camera GOTO requires sprint 098 -- the pursuit loop "
         "repeatedly re-anchors the robot's pose to camera truth (SI), which "
-        "has no binary arm yet. For an open-loop relative go-to that works "
-        "today, use the COMMANDS schema's G row above."
+        "has no binary-plane arm on the current wire."
     )
     goto_layout.addWidget(goto_btn)
 
@@ -2515,10 +2396,6 @@ def _build_main_window():  # type: ignore[return]
 
     robot_combo.currentIndexChanged.connect(_on_robot_changed)
 
-    # Wire Send buttons — must happen after _append_log / _state are in scope.
-    for _btn, _spec, _getters in _row_send_getters:
-        _wire_send_button(_btn, _spec, _getters)
-
     # ---------------------------------------------------------------- ops panel callbacks
 
     def _clear_playfield_traces() -> None:
@@ -2603,10 +2480,11 @@ def _build_main_window():  # type: ignore[return]
         so the GUI stays consistent.  In Sim mode a transport IS present, so
         all three wire commands are sent.
 
-        097 (this ticket): ``ZERO``/``OZ``/``SI`` still have no binary arm
-        (``binary_bridge.py``'s ``_POSE_RESET_VERBS`` -- genuinely gated
-        pending sprint 098's fused pose) and are therefore no-ops on the
-        wire today -- steps 1-3 are sent but change nothing firmware-side.
+        ``ZERO``/``OZ``/``SI`` still have no binary-plane arm on the current
+        wire (genuinely gated pending sprint 098's fused pose -- see
+        ``testgui/binary_bridge.py``'s own module docstring) and are
+        therefore no-ops on the wire today -- steps 1-3 are sent but change
+        nothing firmware-side.
         This no longer blocks a tour from running, though: step 0's
         halt/Sim-plant-teleport and step 4's display reset (which also
         re-zeros the host-side ``EncoderDeadReckoner`` via ``TraceModel.

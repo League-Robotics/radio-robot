@@ -1,9 +1,11 @@
 ---
 id: '004'
 title: Delete binary_bridge.py's dead half; direct-call the survivors
-status: open
-use-cases: [SUC-005]
-depends-on: ['003']
+status: done
+use-cases:
+- SUC-005
+depends-on:
+- '003'
 github-issue: ''
 issue: delete-binary-bridge-dead-half-and-direct-call-the-survivors.md
 completes_issue: true
@@ -38,33 +40,37 @@ exist under `clasi/issues/`.
 
 ## Acceptance Criteria
 
-- [ ] Delete the dead dispatch tail, the four unreachable `_handle_*`
+- [x] Delete the dead dispatch tail, the four unreachable `_handle_*`
       functions, `_LEGACY_TRANSLATION_AVAILABLE`, and the `render`
       fallbacks.
-- [ ] Replace verbs that still have a real meaning with the direct-call
+- [x] Replace verbs that still have a real meaning with the direct-call
       pattern `_handle_otos_patch`/`_handle_set_patch` already proved for
       `OI`/`OL`/`OA`/`SET` — one short function per verb calling a live
       `NezhaProtocol` method, no translation layer (e.g. `STREAM`→
       `tlmOn()`/`tlmOff()` per ticket 003's own note).
-- [ ] Verbs with no v5 equivalent (`SNAP`, `ZERO`, the `S`/`T`/`R`/`TURN`/`G`
+- [x] Verbs with no v5 equivalent (`SNAP`, `ZERO`, the `S`/`T`/`R`/`TURN`/`G`
       family) get no shim: delete the verb from the surface entirely.
-- [ ] Delete the dead COMMANDS rows (`S`/`T`/`R`/`TURN`/`G`), the hidden
+- [x] Delete the dead COMMANDS rows (`S`/`T`/`R`/`TURN`/`G`), the hidden
       panel construction in `__main__.py:606-738`, and the matching
       `commands.COMMANDS` entries. Keep `D`/`RT` only if the
       Managed/Unmanaged preset panel does not already cover them (per
       the code's own comment, it does — confirm before deleting).
-- [ ] Reconcile the phantom reference: either file
+      Confirmed via the code's own comment (stakeholder 2026-07-17: "I
+      don't need full parameters, I just need buttons") — deleted D/RT
+      too; `COMMANDS` is now `[]`.
+- [x] Reconcile the phantom reference: either file
       `binary-bridge-segment-replace-arms-deleted.md` with its real
       history, or repoint the comments at this issue.
-- [ ] `binary_bridge.py` is meaningfully smaller after this ticket — if
+- [x] `binary_bridge.py` is meaningfully smaller after this ticket — if
       it is still ~600 lines, the gutting was not decisive enough.
-- [ ] `grep -n "_LEGACY_TRANSLATION_AVAILABLE\|legacy_verbs\|legacy_render" src/host/robot_radio/testgui/`
+      632 → 335 lines (~47% smaller).
+- [x] `grep -n "_LEGACY_TRANSLATION_AVAILABLE\|legacy_verbs\|legacy_render" src/host/robot_radio/testgui/`
       returns nothing.
-- [ ] No GUI code path can send a verb that yields `ERR unavailable
+- [x] No GUI code path can send a verb that yields `ERR unavailable
       legacy verb`; unsupported verbs are simply absent from the UI.
-- [ ] `python -c "from robot_radio.testgui import binary_bridge"` still
+- [x] `python -c "from robot_radio.testgui import binary_bridge"` still
       works.
-- [ ] `robot_radio/DESIGN.md`'s `testgui/` row is updated to reflect
+- [x] `robot_radio/DESIGN.md`'s `testgui/` row is updated to reflect
       `binary_bridge.py`'s new, much-smaller shape (part of ticket 009's
       doc-rot sweep may also touch this row — coordinate, don't
       duplicate the edit).

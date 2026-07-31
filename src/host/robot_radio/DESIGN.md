@@ -60,7 +60,7 @@ both, file-by-file or even function-by-function.
 | `planner/` | **Mixed — `tour.py` LIVE, the rest still dormant** | `tour.py`'s `TOUR_1`/`TOUR_2`/`parse_tour()`/`run_tour()` were ported (2026-07-22, `testgui-motion-paths-dead-after-move-cutover.md`) onto protocol v4's `Move`/single-ack-slot wire shape — the pre-port `AttributeError`-at-import state this row used to describe (a reference to the deleted `telemetry_pb2.ACK_STATUS_DONE`) is fixed. Verified empirically: `from robot_radio.planner.tour import TOUR_1, TOUR_2` imports cleanly (re-checked 2026-07-23), and `run_tour()` is called directly by both `src/tests/testgui/test_tour_closure_gate.py`'s gate tests and `test_gui_button_acceptance.py`'s managed-motion tests. `executor.py`'s `StreamingExecutor` and `heading.py`/`model.py`/`profile.py` remain genuinely dormant — `tour.py` itself no longer routes through them (one `Move` per leg via `MoveTransport.move()`, not `StreamingExecutor`/`profile.py`'s setpoint-sequence path); nothing in the shipped app constructs a `StreamingExecutor` outside `src/tests/bench/`'s own scripts. |
 | `path/` | **Dormant (orphaned)** | Pure geometry (`arc.py`/`bezier.py`/`builder.py`/`catmull_rom.py`/`obstacle.py`/`patterns.py`/`sampled_path.py`) with no firmware wire dependency of its own — not itself broken, but its only real callers are the dormant `io/robot_mcp.py` MCP tools (`navigate_to`/`follow_path`/`plan_path`/`preview_path`). |
 | `nav/` | **Dormant, by stakeholder decision** | `navigator.py`'s own docstring: "Navigator is a route planner: it sequences firmware G commands... the sole steering loop" — `navigate()`/`follow_path()` call `Robot.go_to()`, which is one of `nezha.py`'s dead methods. `camera_goto.py` feeds `cli.py`'s already-dormant `goto`/`rot`/`ang` subcommands. `nav_params.py` tunes a Stanley controller `navigator.py` itself says predates the gut (already deleted pre-gut in favor of the now-also-dead G-command path). `pose_align.py` calls the dormant `Otos.align_to()`. The one exception: `pose.py` (`Pose`/`Waypoint` frozen dataclasses, zero logic) is a plain coordinate type reused by several genuinely live modules (`robot/nezha_state.py`, `robot/robot_state.py`, `sensors/odometry.py`, `sensors/otos.py`) — importing it is not itself a sign of dormancy. |
-| `testgui/` | **Mixed** | Live: `drive.py`, `canvas.py`, `live_view.py`, `telemetry_panel.py`, `recorder.py`, `traces.py`, `camera_prefs.py`, `sim_prefs.py`, `binary_bridge.py` (a translation shim converting legacy text verbs to binary `CommandEnvelope` calls — see §3), and `__main__.py`'s "Unmanaged" direct-twist/stop controls (explicitly labeled "direct twist... no planner, no heading loop" in its own comments). Dormant, by file name: `commands.py` (37 lines of first-party dormancy commentary, quoting sprint 115's own Decision 6), `transport.py` (imports `planner.executor.TwistTransport`/`planner.tour.run_tour`/`parse_tour`), `__main__.py`'s tour-button block, `turn_control.py` (a TCP socket sending a pruned `"SEG pivot"` text command), `turn_graphs.py` (visualization for tour/turn-driven telemetry — passive, no live driver), and `turn_shape.py` (its capture functions call `SimLoop.move()`, which builds a `CommandEnvelope{move: Move{...}}` — `envelope_pb2.Move` does not exist in the current schema, confirmed empirically). |
+| `testgui/` | **Mixed** | Live: `drive.py`, `canvas.py`, `live_view.py`, `telemetry_panel.py`, `recorder.py`, `traces.py`, `camera_prefs.py`, `sim_prefs.py`, `binary_bridge.py` (128-004: gutted from a ~630-line legacy-verb translation shim down to a ~330-line module of direct-call helpers — `OI`/`OL`/`OA`/`SET`/`STREAM` each call a live `NezhaProtocol` method directly, no translation table; every other verb gets a generic `ERR unsupported <verb>` reply with no wire call — see §3), and `__main__.py`'s "Unmanaged"/"Managed" direct-twist/MOVE-queue preset controls (explicitly labeled "direct twist... no planner, no heading loop" in its own comments). `commands.py`'s `COMMANDS` schema (the old S/T/D/R/TURN/RT/G parameter-field command-row panel) is DELETED (128-004: five of the seven verbs had no binary-plane arm at all, the remaining two — D/RT — were already superseded by the Managed/Unmanaged preset panel and the panel itself was already hidden); `build_wire_string()`/`TOUR_1`/`TOUR_2`/`TOURS`/`goto_distance`/`goto_reached`/`parse_tlm_mode` stay as independently-tested pure helpers. Dormant, by file name: `transport.py` (imports `planner.executor.TwistTransport`/`planner.tour.run_tour`/`parse_tour`), `__main__.py`'s tour-button block, `turn_control.py` (a TCP socket sending a pruned `"SEG pivot"` text command), `turn_graphs.py` (visualization for tour/turn-driven telemetry — passive, no live driver), and `turn_shape.py` (its capture functions call `SimLoop.move()`, which builds a `CommandEnvelope{move: Move{...}}` — `envelope_pb2.Move` does not exist in the current schema, confirmed empirically). |
 | `testkit/` | **Mixed** | `camera.py` (tag-averaging) and `dash.py` (generic dashboard) are wire-independent and live. `pose.py`'s `FirmwarePose` reads `SNAP` telemetry — one of the arms pruned by 104-002 — dormant; its `CameraPose` (aprilcam-based) is fine. `safety.py`'s `SafeRun` preflight sends `PING` (dormant — maps to the dead `Nezha.ping()`); its `stop()`-on-exit guarantee still works (`stop()` is live). `target.py`'s "sim" branch explicitly raises `NotImplementedError`; "bench"/"production" branches inherit the OTOS/SNAP dormancy above. |
 
 ## 3. Constraints and Invariants
@@ -80,17 +80,19 @@ both, file-by-file or even function-by-function.
   entry point calls a firmware verb that no longer exists. Before adding
   a new caller of anything in this package, check §2's per-file notes,
   not just which directory the file lives in.
-- **`testgui/binary_bridge.py` is the one sanctioned text→binary
-  translation shim** — its own docstring: "Firmware is binary-only plus
-  a 6-verb text rump (HELP/HELLO/PING/ID/VER/STOP)... every motion/
-  config/telemetry text verb... gets ERR unknown if sent as literal
-  text." Any NEW code that still thinks in terms of a text verb
-  (`SET`/`OI`/`OL`/`TN...`) must go through this shim's translation
-  layer or `NezhaProtocol`'s binary methods directly — never emit a bare
-  text line and expect the firmware to answer it. This is the same
-  "legacy text clients go through a host-side translator proxy, never
-  through firmware text parsing" stakeholder decision recorded in
-  [`../../firm/DESIGN.md`](../../firm/DESIGN.md) §4.
+- **`testgui/binary_bridge.py` is the one sanctioned text-verb entry
+  point for the TestGUI's transports** — 128-004 gutted its dead
+  translation-table half; it is now a small module of direct-call
+  helpers, one per verb with a live binary-plane meaning (`OI`/`OL`/
+  `OA` → `NezhaProtocol.otos_config()`, `SET` → `set_config()`, `STREAM`
+  → `tlmOn()`/`tlmOff()`), plus a generic `ERR unsupported <verb>` reply
+  (no wire call) for every verb without one. Any NEW code that still
+  thinks in terms of a text verb (`SET`/`OI`/`OL`/...) must go through
+  this module's direct-call helpers or `NezhaProtocol`'s binary methods
+  directly — never emit a bare text line and expect the firmware to
+  answer it. This is the same "legacy text clients go through a
+  host-side translator, never through firmware text parsing" stakeholder
+  decision recorded in [`../../firm/DESIGN.md`](../../firm/DESIGN.md) §4.
 - **`io/robot_mcp.py`'s `connect` tool pushes calibration via the dead
   text path on every connection, silently.** `push_calibration()`'s
   default branch (no `push_calibration` method on `NezhaProtocol`) falls
