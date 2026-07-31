@@ -1,9 +1,11 @@
 ---
 id: '005'
 title: 'testgui keyboard drive: delete (dead in Sim and hardware)'
-status: open
-use-cases: [SUC-006]
-depends-on: ['004']
+status: done
+use-cases:
+- SUC-006
+depends-on:
+- '004'
 github-issue: ''
 issue: testgui-keyboard-drive-is-dead-port-to-move-twist-or-delete.md
 completes_issue: true
@@ -38,13 +40,13 @@ machinery.
 
 ## Acceptance Criteria
 
-- [ ] `testgui/drive.py` is deleted.
-- [ ] Its `attach()` call site and the key-event plumbing in
+- [x] `testgui/drive.py` is deleted.
+- [x] Its `attach()` call site and the key-event plumbing in
       `__main__.py` are deleted.
-- [ ] `grep -rn "DEV DT" src/host/robot_radio/` returns nothing.
-- [ ] The GUI builds and the existing headless button-acceptance suite
+- [x] `grep -rn "DEV DT" src/host/robot_radio/` returns nothing.
+- [x] The GUI builds and the existing headless button-acceptance suite
       passes with no arrow-key-drive references remaining.
-- [ ] Gamepad/preset-button teleop paths are confirmed unaffected (not
+- [x] Gamepad/preset-button teleop paths are confirmed unaffected (not
       touched by this ticket).
 
 ## Testing

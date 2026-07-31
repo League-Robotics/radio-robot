@@ -380,7 +380,6 @@ def _build_main_window():  # type: ignore[return]
         build_telemetry_panel,
         is_telemetry_log_line,
     )
-    from robot_radio.testgui.drive import KeyboardDriver
     from robot_radio.testgui.recorder import SessionRecorder, direction_from_marker
     from robot_radio.testgui import camera_prefs
     from robot_radio.testgui import sim_prefs
@@ -417,9 +416,6 @@ def _build_main_window():  # type: ignore[return]
         # docstring.
         "shaping_disabled_active": False,
     }
-
-    # Keyboard driver — wires cursor-key VW driving onto the main window.
-    _driver = KeyboardDriver()
 
     # Session recorder — Qt-free; accumulates TX/RX lines to a JSONL file.
     # Manual recorder: driven by the Record/Pause/Stop buttons, writes a
@@ -3038,9 +3034,6 @@ def _build_main_window():  # type: ignore[return]
             except Exception as exc:
                 _append_log(f"[WARN] Could not start live-view worker: {exc}")
 
-        # Attach cursor-key driving to the window.
-        _driver.attach(window, transport)
-
         # Update button states.
         connect_btn.setEnabled(False)
         disconnect_btn.setEnabled(True)
@@ -3081,8 +3074,6 @@ def _build_main_window():  # type: ignore[return]
         _state["last_tlm"] = None
         # Stop the live-view worker first so it doesn't race with cleanup.
         _stop_live_worker()
-        # Detach cursor-key driving before the transport goes away.
-        _driver.detach()
         # Best-effort: restore the real OTOS if this was a bench (Serial)
         # session, so a later playfield run doesn't inherit bench mode.
         if isinstance(transport, SerialTransport):

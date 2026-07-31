@@ -16,9 +16,10 @@ Keys
 ----
 083-001: the sprint-069 ``SIMSET`` wire protocol this module used to target
 no longer exists — ``src/firm/commands/`` has no ``SIMSET`` verb (confirmed by
-reading every ``makeCmd``/``makeSchemaCmd`` registration; the current verb
-set is ``PING``/``VER``/``HELP``/``ECHO``/``ID``/``STREAM``/``SNAP``/
-``DEV M``/``DEV DT``/``DEV STATE``/``DEV STOP``/``DEV WD``).
+reading every ``makeCmd``/``makeSchemaCmd`` registration; the verb set at the
+time was ``PING``/``VER``/``HELP``/``ECHO``/``ID``/``STREAM``/``SNAP``, plus
+the ``DEV`` family (``M``/``DT``/``STATE``/``STOP``/``WD``) — the entire
+``DEV`` family has since had no firmware handler at all, see 128-005).
 
 108-007: repointed a SECOND time, from the deleted ``SimConnection``
 (sprint 081/082's ~40-symbol ctypes ABI) onto
