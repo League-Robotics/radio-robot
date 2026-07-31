@@ -37,23 +37,31 @@ import time
 import pytest
 
 from robot_radio.nav.pose import Pose
-from robot_radio.pathplan.solver import ArcSolution
+from robot_radio.pathplan.solver import ArcSolution, SolverLimits
 from robot_radio.pathplan.world_pose import WorldPose
-from robot_radio.robot.protocol import EncoderReading, TLMFrame
+from robot_radio.robot.protocol import AckEntry, EncoderReading, TLMFrame
 
 import robot_radio.pathplan.planner as planner_mod
 from robot_radio.pathplan.planner import (
     TERMINATION_TOLERANCE,
+    AckRetry,
     GiveUpLimits,
     GotoResult,
     MoveIdAllocator,
+    MoveRejected,
+    ProgressCheck,
     ReplaceThreshold,
     _advance,
+    _ERR_FULL,
     _giveUpReason,
+    _moveTimeoutFor,
     _readFrames,
+    _recordAcks,
+    _sendVerifiedTwist,
     _shouldReplace,
     _targetBehindReason,
     gotoRobot,
+    gotoWorld,
 )
 
 
@@ -362,3 +370,243 @@ def test_advance_never_checks_a_none_geofence():
     # No exception, no-op -- a caller with no camera (e.g. a bare sim run).
     frames = _advance(proto, seconds=0.02, geofence=None)
     assert frames == []
+
+
+# ---------------------------------------------------------------------------
+# 8. OOP fix (2026-07-30): _moveTimeoutFor() -- per-move timeout derivation.
+# ---------------------------------------------------------------------------
+
+
+def test_move_timeout_scales_with_arc_length():
+    short = _moveTimeoutFor(arcLength=100.0, speed=150.0)
+    long = _moveTimeoutFor(arcLength=2000.0, speed=150.0)
+    assert long > short
+
+
+def test_move_timeout_has_a_floor_for_a_tiny_move():
+    # A near-zero arcLength still gets a floor big enough to cover an
+    # actual accel/decel ramp and one ack round trip, never ~0ms.
+    timeout = _moveTimeoutFor(arcLength=1.0, speed=150.0)
+    assert timeout >= 3000.0
+
+
+def test_move_timeout_is_capped_for_a_huge_arc_length():
+    # A pathological/huge arcLength (e.g. an unreachable, far-off-field
+    # solve) must not be able to request an enormous timeout that would
+    # itself blow past this loop's own give-up budget.
+    timeout = _moveTimeoutFor(arcLength=1_000_000.0, speed=150.0)
+    assert timeout == planner_mod._MOVE_TIMEOUT_CAP
+
+
+def test_move_timeout_guards_against_zero_speed():
+    # A misconfigured/zero speed must not raise ZeroDivisionError.
+    timeout = _moveTimeoutFor(arcLength=250.0, speed=0.0)
+    assert timeout > 0.0
+
+
+# ---------------------------------------------------------------------------
+# 9. OOP fix: _sendVerifiedTwist() -- ack verification and retry.
+# ---------------------------------------------------------------------------
+
+
+class _FakeAckFrame:
+    """The minimal frame shape `_sendVerifiedTwist()`/`_recordAcks()` need
+    -- just `.acks`, no pose/encoder fields (this test drives the ack
+    state machine in isolation from `WorldPose`/pose tracking, which
+    `test_progress_check_forces_resend_when_robot_is_stalled()` below
+    covers separately via full `TLMFrame`s)."""
+
+    def __init__(self, acks):
+        self.acks = acks
+
+
+class _NullWorldPose:
+    """A no-op stand-in for `WorldPose` -- `_sendVerifiedTwist()` calls
+    `.ingest()` on every frame it drains; these tests don't care about
+    pose tracking, only about the ack state machine."""
+
+    def ingest(self, frame):
+        pass
+
+
+class _AckScheduleProto:
+    """Fakes `NezhaProtocol` for `_sendVerifiedTwist()` tests: each
+    `move_twist()` call is one "attempt" (1-based); `ackByAttempt` maps
+    attempt number -> `(ok, err_code)` to hand back (as an `AckEntry`
+    matching that attempt's own assigned corr_id) on every subsequent
+    `read_pending_binary_tlm_frames()` poll, until superseded by the next
+    attempt's own send. An attempt number absent from `ackByAttempt`
+    never acks at all within its window -- exercises the retry-on-no-ack
+    path distinctly from the retry-on-ERR_FULL path."""
+
+    _conn = None
+
+    def __init__(self, ackByAttempt: dict):
+        self._ackByAttempt = ackByAttempt
+        self._attempt = 0
+        self._nextCorr = 100
+        self._currentCorr = None
+        self.moveIds = []
+
+    def move_twist(self, *, move_id, **kwargs):
+        self._attempt += 1
+        self.moveIds.append(move_id)
+        self._currentCorr = self._nextCorr
+        self._nextCorr += 1
+        return self._currentCorr
+
+    def read_pending_binary_tlm_frames(self):
+        spec = self._ackByAttempt.get(self._attempt)
+        if spec is None:
+            return []
+        ok, errCode = spec
+        return [_FakeAckFrame([AckEntry(corr_id=self._currentCorr, ok=ok, err_code=errCode)])]
+
+
+def _verify(proto, *, moveId=1, maxAttempts=4, ackTimeout=0.03, cyclePeriod=0.01):
+    ackSeen: "dict[int, object]" = {}
+    return _sendVerifiedTwist(
+        proto, _NullWorldPose(), None, ackSeen, moveId=moveId,
+        kwargs=dict(v_x=150.0, v_y=0.0, omega=0.0, stop_distance=250.0, timeout=3000.0),
+        cyclePeriod=cyclePeriod, ackRetry=AckRetry(maxAttempts=maxAttempts, ackTimeout=ackTimeout))
+
+
+def test_send_verified_twist_acked_on_first_attempt():
+    proto = _AckScheduleProto({1: (True, 0)})
+    acked, attempts = _verify(proto)
+    assert acked is True
+    assert attempts == 1
+    assert proto.moveIds == [1]  # exactly one wire attempt -- no retry needed
+
+
+def test_send_verified_twist_retries_on_lost_ack_reusing_the_same_move_id():
+    # Attempt 1 never acks at all (simulates a dropped inbound packet);
+    # attempt 2 acks ok.
+    proto = _AckScheduleProto({2: (True, 0)})
+    acked, attempts = _verify(proto, moveId=7)
+    assert acked is True
+    assert attempts == 2
+    # Both wire attempts of ONE logical send reuse the SAME Move.id -- the
+    # firmware's dedup ring is what makes that retry idempotent
+    # (RobotLoop::handleMove()'s own documented contract).
+    assert proto.moveIds == [7, 7]
+
+
+def test_send_verified_twist_retries_on_err_full():
+    proto = _AckScheduleProto({1: (False, _ERR_FULL), 2: (True, 0)})
+    acked, attempts = _verify(proto)
+    assert acked is True
+    assert attempts == 2
+
+
+def test_send_verified_twist_raises_on_non_retryable_err():
+    _ERR_BADARG = 2  # envelope.proto ErrCode.ERR_BADARG
+    proto = _AckScheduleProto({1: (False, _ERR_BADARG)})
+    with pytest.raises(MoveRejected):
+        _verify(proto)
+    # A non-retryable NACK fails LOUDLY on the first bad ack -- it must
+    # not burn the rest of the retry budget on a command that can never
+    # succeed.
+    assert proto.moveIds == [1]
+
+
+def test_send_verified_twist_exhausts_retries_and_reports_unacked():
+    proto = _AckScheduleProto({})  # never acks at all
+    acked, attempts = _verify(proto, maxAttempts=3)
+    assert acked is False
+    assert attempts == 3
+    assert proto.moveIds == [1, 1, 1]  # every retry of ONE send reuses the id
+
+
+def test_record_acks_folds_every_frame_ring_into_the_shared_dict():
+    ackSeen: "dict[int, object]" = {}
+    frames = [
+        _FakeAckFrame([AckEntry(corr_id=5, ok=True, err_code=0)]),
+        _FakeAckFrame([AckEntry(corr_id=6, ok=False, err_code=_ERR_FULL)]),
+    ]
+    _recordAcks(frames, ackSeen)
+    assert ackSeen[5].ok is True
+    assert ackSeen[6].ok is False
+
+
+# ---------------------------------------------------------------------------
+# 10. OOP fix: gotoWorld() integration -- ProgressCheck forces a resend
+#     when the robot is stalled even though every send is acked ok.
+# ---------------------------------------------------------------------------
+
+
+class _StallFakeProto:
+    """A `NezhaProtocol`-shaped fake for `gotoWorld()` integration tests:
+    the world pose it reports NEVER MOVES (simulating a stalled/deadband
+    move, or a genuinely stuck robot) while every `move_twist()` send is
+    acked OK immediately -- isolating `ProgressCheck`'s own forced-resend
+    behavior from `AckRetry`'s (covered directly above). This is the
+    exact shape of the OOP ticket's own measured failure: commands land
+    and ack fine, the robot just never moves, and the old throttle-only
+    loop sent exactly once over 264 iterations because the (unmoving)
+    solution never looked "materially different" from the last one sent.
+    """
+
+    _conn = None  # no connection-level reader -- _readFrames() falls back to this object's own
+
+    def __init__(self, x_mm: float, y_mm: float, heading_cdeg: float):
+        self._x_mm = x_mm
+        self._y_mm = y_mm
+        self._heading_cdeg = heading_cdeg
+        self._nextCorr = 1
+        self._pendingAck = None
+        self.moveIds: "list[int]" = []
+
+    def move_twist(self, *, move_id, **kwargs):
+        corr = self._nextCorr
+        self._nextCorr += 1
+        self.moveIds.append(move_id)
+        self._pendingAck = AckEntry(corr_id=corr, ok=True, err_code=0)
+        return corr
+
+    def read_pending_binary_tlm_frames(self):
+        acks = []
+        if self._pendingAck is not None:
+            acks = [self._pendingAck]
+            self._pendingAck = None
+        return [TLMFrame(
+            t=1000, pose=(self._x_mm, self._y_mm, self._heading_cdeg), twist=(0, 0),
+            recvTime=time.monotonic(),
+            enc_left=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
+            enc_right=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
+            acks=acks)]
+
+    def estop(self):
+        pass
+
+
+def test_progress_check_forces_resend_when_robot_is_stalled():
+    worldPose = WorldPose()
+    proto = _StallFakeProto(x_mm=0.0, y_mm=0.0, heading_cdeg=0.0)
+    limits = SolverLimits(trackWidth=120.0, speed=150.0)
+    # A target far enough away that TERMINATION_TOLERANCE is never met
+    # (the robot never moves in this fake), so the loop runs until
+    # giveUp.giveUpTimeout -- short here so the test stays fast.
+    giveUp = GiveUpLimits(maxIterations=100_000, giveUpTimeout=0.25)
+    progress = ProgressCheck(window=0.05, threshold=20.0)
+    ackRetry = AckRetry(maxAttempts=1, ackTimeout=0.02)
+
+    result = gotoWorld(
+        proto, worldPose, x=100.0, y=0.0,  # [cm] -- 1000 mm straight ahead
+        limits=limits, geofence=None, tolerance=50.0,
+        giveUp=giveUp, progress=progress, ackRetry=ackRetry, cyclePeriod=0.01)
+
+    assert result.success is False
+    # Every send WAS acked -- this is purely a liveness stall, not a link
+    # problem, and the result must say so distinctly.
+    assert result.unacked == 0
+    assert "did not converge" in result.reason
+    # The throttle alone (unchanged solution every cycle, since the pose
+    # never moves) would have sent exactly once -- ProgressCheck must have
+    # forced at least one more.
+    assert result.forcedResends >= 1
+    assert result.sent >= 2
+    # Every logical send -- throttle-triggered OR forced -- drew a FRESH
+    # Move.id (never reused across DIFFERENT logical sends; only WITHIN
+    # one send's own ack-loss retries, covered separately above).
+    assert len(set(proto.moveIds)) == len(proto.moveIds)

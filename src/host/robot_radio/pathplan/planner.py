@@ -66,6 +66,45 @@ block in `gotoWorld()` that runs on every return AND on any exception
 (including a `GeofenceViolation` raised out of `_advance()`) -- a halt
 that raises must not be swallowed, so that exception is left to
 propagate after the `finally` block's own `estop()` runs.
+
+Ack verification, retry, and liveness (OOP fix, 2026-07-30, stakeholder
+directive -- a live playfield run measured `gotoWorld()` sending exactly
+ONE `move_twist()` over 264 solve iterations and 30s, with the robot
+never moving at all): this loop used to discard `move_twist()`'s own
+returned `corr_id` and never checked it -- a lost enqueue command (the
+radio relay has documented sporadic loss, `.claude/rules/
+hardware-bench-testing.md`) was invisible, and `_shouldReplace()`'s own
+throttle then made the loss PERMANENT, since a stationary robot keeps
+re-solving to the same (therefore suppressed) solution forever. Two
+independent defenses now exist, and they are deliberately NOT the same
+mechanism:
+
+1. `_sendVerifiedTwist()` verifies the ENQUEUE ack for every send,
+   retrying (`AckRetry`) up to a bounded number of attempts, matching
+   `square_tour.Tour.sendVerified()`'s own approach -- scanning the SAME
+   `_advance()` drain this loop already runs, never a second
+   `wait_for_ack()` read (`sendVerified()`'s own docstring: "on a
+   single-consumer telemetry queue two readers starve each other"). Every
+   RETRY of one logical send reuses the SAME `Move.id` -- see
+   `_sendVerifiedTwist()`'s own docstring for why that specific reuse is
+   correct (it mirrors `RobotLoop::handleMove()`'s own documented
+   dedup-ring contract), and why it is the ONE exception to "every
+   logical send gets a fresh id" below.
+2. `ProgressCheck` is a liveness backstop independent of ack outcome: if
+   the robot's own world pose has not moved past `threshold` for
+   `window` seconds, this loop force-resends regardless of what
+   `_shouldReplace()` says -- because an enqueue can be acked OK and the
+   robot still not move (a stalled/deadband move, or a move that
+   finished short and the loop's solve happens to look unchanged). A
+   forced resend always draws a FRESH `Move.id` from the allocator
+   (unlike the ack-retry case above): it needs the firmware to actually
+   restart the move via `planner_.move()`, not be silently re-acked as a
+   no-op duplicate of a move already (believed) in flight.
+
+`GotoResult.retries`/`.forcedResends`/`.unacked` (below) surface this
+machinery's own activity, so a run that failed because commands were not
+being acked no longer looks identical, in its own printed reason, to one
+where the robot moved but simply never converged.
 """
 
 from __future__ import annotations
@@ -107,10 +146,48 @@ _POSITION_SCALE = 10.0  # [mm/cm] Pose.x/y are cm (nav.pose's own convention); t
 # keep up -- has to be >=100 mm. 100 mm is exactly that floor.
 TERMINATION_TOLERANCE = 100.0  # [mm] world-frame distance from target counted as "arrived"
 
-MOVE_TIMEOUT = 3000.0    # [ms] move_twist()'s own safety backstop -- well above this loop's re-issue cadence, so a stalled host loop still self-stops the firmware
+# --- Per-move timeout (move_twist()'s own safety backstop) -----------------
+#
+# Previously a single flat MOVE_TIMEOUT = 3000.0 ms for every move,
+# regardless of arcLength -- fine for a 250 mm/150 mm/s leg (~1.7s) but
+# scales badly: a longer leg's ideal drive time can exceed a flat 3s
+# backstop outright, aborting a move that was still genuinely converging.
+# _moveTimeoutFor() (below) derives the timeout from THIS solve's own
+# arcLength and the solver's cruise speed instead, mirroring
+# square_tour.py's own leg-timeout shape (`LEG / CRUISE * 1000 * 3 +
+# 3000`) -- ideal duration times a generous multiplier, plus a floor
+# covering accel/decel ramps and one ack round trip, capped so a bad
+# solve (e.g. an unreachable, far-off-field target) cannot request an
+# enormous timeout that would itself blow past this loop's own
+# GiveUpLimits budget.
+_MOVE_TIMEOUT_MULTIPLIER = 3.0    # generous margin over the ideal (arcLength / speed) drive duration
+_MOVE_TIMEOUT_FLOOR = 3000.0      # [ms] additive floor -- accel/decel ramps + one ack round trip
+_MOVE_TIMEOUT_CAP = 20000.0       # [ms] hard cap regardless of arcLength
+
 CYCLE_PERIOD = 0.1       # [s] outer loop pacing / time-advance window -- matches sprint.md's stated realistic ~10 Hz outer-loop rate and the geofence's own ~10 Hz check cadence
 _GEOFENCE_CHECK_PERIOD = 0.1  # [s] matches the "~10 Hz" geofence cadence -- never between segments
 _POLL_SLEEP = 0.01       # [s] telemetry poll granularity inside _advance()
+
+_ERR_FULL = 4  # envelope.proto ErrCode.ERR_FULL -- "destination queue full" (retryable; matches square_tour.py's own local ERR_FULL constant)
+
+
+def _moveTimeoutFor(arcLength: float, speed: float) -> float:
+    """Derive one move's `timeout` [ms] from its own `arcLength` [mm] and
+    the solver's configured cruise `speed` [mm/s] -- see the module-level
+    comment above this function for the rationale and the constants it
+    uses. Pure, no I/O -- unit-testable standalone."""
+    safeSpeed = max(speed, 1.0)  # guard a zero/misconfigured speed rather than divide by zero
+    idealDuration = abs(arcLength) / safeSpeed * 1000.0  # [ms]
+    return min(idealDuration * _MOVE_TIMEOUT_MULTIPLIER + _MOVE_TIMEOUT_FLOOR, _MOVE_TIMEOUT_CAP)
+
+
+class MoveRejected(RuntimeError):
+    """Raised by `_sendVerifiedTwist()` when the firmware NACKs a
+    `move_twist()` with a non-retryable `ErrCode` -- anything other than
+    `ERR_FULL` (e.g. `ERR_BADARG`: a malformed Move, a caller bug no
+    retry can fix). Propagates out of `gotoWorld()` after its own
+    `finally` block's `estop()` runs -- "a halt that raises must not be
+    swallowed" (this module's own docstring)."""
 
 
 @dataclass(frozen=True)
@@ -155,6 +232,58 @@ class GiveUpLimits:
 
 
 @dataclass(frozen=True)
+class AckRetry:
+    """Enqueue-ack verification/retry policy for `gotoWorld()`'s own
+    `move_twist()` sends (`_sendVerifiedTwist()`, below) -- mirrors
+    `square_tour.Tour.sendVerified()`'s own measured DAPLink/radio
+    inbound-loss workaround (~20% of inbound command packets dropped by
+    the USB->UART bridge in that script's own measurement), applied here
+    to `gotoWorld()`'s send path, which previously discarded
+    `move_twist()`'s returned `corr_id` entirely.
+
+    maxAttempts: wire sends of ONE logical move before giving up on it
+        (matches `sendVerified()`'s own 4).
+    ackTimeout: [s] per-attempt ack deadline (matches `sendVerified()`'s
+        own 0.5s-per-attempt window).
+    """
+
+    maxAttempts: int = 4
+    ackTimeout: float = 0.5  # [s]
+
+
+@dataclass(frozen=True)
+class ProgressCheck:
+    """Liveness backstop independent of ack outcome -- forces a re-send
+    even when `_shouldReplace()` says "unchanged" if the robot's own
+    world pose has not advanced past `threshold` for `window` seconds.
+    Needed because `_shouldReplace()` only ever compares the newest solve
+    against the last SENT solution: with the robot genuinely stationary
+    (a stalled/deadband move, or an ack that was lost despite
+    `AckRetry`'s own retries) the solve keeps returning close to the same
+    solution forever, so the throttle alone would never re-send -- this
+    is exactly the OOP ticket's own measured failure (264 solve
+    iterations, 1 send, 0 motion, 30s give-up).
+
+    window: [s] how long the pose may sit within `threshold` before this
+        loop force-resends regardless of the throttle. 2.0s is several
+        multiples of the ~150ms actuation delay
+        (`TERMINATION_TOLERANCE`'s own docstring) and matches
+        `AckRetry`'s OWN worst-case single-send budget (4 attempts *
+        0.5s ackTimeout = 2.0s) -- long enough that one send's own
+        internal ack retries never themselves look like a stall, short
+        enough to catch a genuinely stuck robot within a handful of
+        cycles rather than riding out the whole `GiveUpLimits.
+        giveUpTimeout`.
+    threshold: [mm] minimum world-frame displacement inside `window` to
+        count as "made progress" -- set a small margin above
+        `ReplaceThreshold.arcLengthThreshold`'s own 15 mm noise floor.
+    """
+
+    window: float = 2.0     # [s]
+    threshold: float = 20.0  # [mm]
+
+
+@dataclass(frozen=True)
 class GotoResult:
     """One `gotoWorld()`/`gotoRobot()` call's outcome.
 
@@ -164,9 +293,21 @@ class GotoResult:
     finalPose: the last known world-frame `Pose`, or None if no
         telemetry was ever ingested during the call.
     iterations: total solve cycles run.
-    sent: total `move_twist()` replacements actually issued (<=
+    sent: total LOGICAL `move_twist()` replacements decided upon (<=
         iterations, since throttling suppresses most of them once the
-        solution has converged).
+        solution has converged) -- each one may itself have taken more
+        than one wire attempt; see `retries` below.
+    retries: total EXTRA wire `move_twist()` attempts beyond each logical
+        send's own first attempt, summed across the whole call (`AckRetry`
+        -- visibility into ack loss on the link, not solver behavior).
+    forcedResends: how many of `sent` were triggered by `ProgressCheck`'s
+        liveness backstop rather than `_shouldReplace()`'s own throttle
+        -- a nonzero count means the robot sat still long enough to force
+        a fresh `Move.id` at least once.
+    unacked: how many of `sent` NEVER received a clean ack despite
+        `AckRetry.maxAttempts` tries -- a nonzero count on a give-up
+        result means the link/command channel was the problem, not the
+        solver.
     """
 
     success: bool
@@ -174,6 +315,9 @@ class GotoResult:
     finalPose: "Pose | None"
     iterations: int
     sent: int
+    retries: int = 0
+    forcedResends: int = 0
+    unacked: int = 0
 
 
 class MoveIdAllocator:
@@ -307,13 +451,98 @@ def _advance(proto: NezhaProtocol, seconds: float,
     return frames
 
 
+def _recordAcks(frames: "list", ackSeen: "dict[int, object]") -> None:
+    """Fold every frame's bounded ack ring into `ackSeen` (corr_id ->
+    `AckEntry`) -- shared by `gotoWorld()`'s own per-cycle drain and
+    `_sendVerifiedTwist()`'s own retry-wait drain, mirroring
+    `square_tour.Tour.record()`'s identical fold (that one keyed by both
+    corr_id and Move.id, since it also awaits completion acks; this
+    module never does, so corr_id is the only key space it needs)."""
+    for frame in frames:
+        for ack in frame.acks:
+            ackSeen[ack.corr_id] = ack
+
+
+def _sendVerifiedTwist(proto: NezhaProtocol, worldPose: WorldPose,
+                       geofence: "Geofence | None", ackSeen: "dict[int, object]",
+                       *, moveId: int, kwargs: dict, cyclePeriod: float,
+                       ackRetry: AckRetry) -> "tuple[bool, int]":
+    """Send one `move_twist(..., move_id=moveId, **kwargs)`, verifying the
+    ENQUEUE ack and retrying on loss -- mirrors `square_tour.Tour.
+    sendVerified()`'s own approach (this module's own OOP-fix docstring
+    instruction): matches on the envelope's own `corr_id` (what
+    `move_twist()` returns -- NOT `moveId`, which the firmware only
+    echoes on the separate COMPLETION ack) by scanning frames THIS
+    function's own `_advance()` calls drain, never a second
+    `wait_for_ack()` read -- `sendVerified()`'s own docstring: "on a
+    single-consumer telemetry queue two readers starve each other."
+    Ingests every drained frame into `worldPose` exactly like the main
+    loop does, so a multi-attempt wait never starves pose tracking.
+
+    Every retry attempt of this call reuses the SAME `moveId` -- deliberate,
+    not an oversight. `RobotLoop::handleMove()`'s own comment
+    (`src/firm/app/robot_loop.cpp`) documents exactly this shape: "a
+    retried enqueue whose original ack was lost carries this same id
+    under a fresh corr_id... ack it as success... skips [estop()]...
+    precedes any replace handling, so a duplicate cannot restart a move
+    mid-flight." The firmware's dedup ring (`alreadyAccepted()`) exists
+    precisely so a retried SEND of the SAME intended move is idempotent:
+    if the original enqueue actually landed and only its ack was lost on
+    the way back, a same-id retry gets silently re-acked OK without
+    restarting a move already in flight. A NEW id per retry would defeat
+    that protection -- the firmware would see a genuinely new move and
+    restart it, mid-flight, on every lost ack. Contrast this with
+    `gotoWorld()`'s own call site, which allocates a FRESH id every time
+    it decides to (re-)send AT ALL (including a `ProgressCheck`-forced
+    resend of an apparently-unchanged solution) -- see that call site's
+    own comment for why a fresh id is correct there.
+
+    Treats `ERR_FULL` (queue transiently full) as retryable. Any OTHER
+    nonzero `err_code` (e.g. `ERR_BADARG`) is a caller bug a retry cannot
+    fix -- raises `MoveRejected` immediately rather than burning the rest
+    of `ackRetry.maxAttempts` on a command that will never succeed.
+
+    Returns `(acked, attempts)`: `acked` is True iff a clean
+    (`err_code == 0`) ack was observed within `ackRetry.maxAttempts`
+    tries; `attempts` is how many `move_twist()` calls were actually made
+    (1..`maxAttempts`) -- the caller derives `attempts - 1` as this one
+    send's own RETRY count for `GotoResult.retries`.
+    """
+    for attempt in range(1, ackRetry.maxAttempts + 1):
+        corr = proto.move_twist(move_id=moveId, **kwargs)
+        waited = 0.0
+        entry = None
+        while waited < ackRetry.ackTimeout:
+            frames = _advance(proto, cyclePeriod, geofence)
+            _recordAcks(frames, ackSeen)
+            for frame in frames:
+                worldPose.ingest(frame)
+            waited += cyclePeriod
+            entry = ackSeen.get(corr)
+            if entry is not None:
+                break
+        if entry is None:
+            continue  # no ack at all within this attempt's window -- retry
+        if entry.ok:
+            return True, attempt
+        if entry.err_code != _ERR_FULL:
+            raise MoveRejected(
+                f"move_twist() (move_id={moveId}, corr_id={corr}) was NACKed with "
+                f"a non-retryable ErrCode {entry.err_code} (not ERR_FULL) -- "
+                f"retrying would not help")
+        # ERR_FULL -- fall through and retry with a fresh corr_id, same moveId.
+    return False, ackRetry.maxAttempts
+
+
 def gotoWorld(proto: NezhaProtocol, worldPose: WorldPose, x: float, y: float,
               theta: "float | None" = None, *, limits: SolverLimits,
               geofence: "Geofence | None" = None,
               tolerance: float = TERMINATION_TOLERANCE,
               giveUp: GiveUpLimits = GiveUpLimits(),
               throttle: ReplaceThreshold = ReplaceThreshold(),
-              moveTimeout: float = MOVE_TIMEOUT,
+              ackRetry: AckRetry = AckRetry(),
+              progress: ProgressCheck = ProgressCheck(),
+              moveTimeout: "float | None" = None,
               cyclePeriod: float = CYCLE_PERIOD,
               moveIds: "MoveIdAllocator | None" = None) -> GotoResult:
     """Drive the robot to a WORLD-frame target `(x, y)` -- the ONE control
@@ -340,7 +569,17 @@ def gotoWorld(proto: NezhaProtocol, worldPose: WorldPose, x: float, y: float,
     giveUp: the give-up policy (`GiveUpLimits`) -- iteration and
         wall-clock caps.
     throttle: the replacement-throttle policy (`ReplaceThreshold`).
+    ackRetry: the enqueue-ack verification/retry policy (`AckRetry`) --
+        see `_sendVerifiedTwist()`'s own docstring for the full mechanism
+        and the move-id-reuse rationale.
+    progress: the liveness backstop (`ProgressCheck`) that forces a
+        re-send when the pose has not moved for too long, independent of
+        both the throttle and the ack outcome -- see its own docstring.
     moveTimeout: [ms] each issued `move_twist()`'s own safety backstop.
+        `None` (the default) derives it per-move from that move's own
+        `arcLength` and `limits.speed` (`_moveTimeoutFor()`) -- a fixed
+        value here overrides that derivation for every move this call
+        sends.
     cyclePeriod: [s] this loop's own re-solve cadence / `_advance()`
         window.
     moveIds: the `Move.id` source -- see `MoveIdAllocator`'s own
@@ -352,8 +591,10 @@ def gotoWorld(proto: NezhaProtocol, worldPose: WorldPose, x: float, y: float,
     Returns a `GotoResult` -- never raises for an ordinary give-up
     (target-behind, iteration cap, or timeout); DOES let a
     `GeofenceViolation` (or any other exception `_advance()`/the wire
-    layer raises) propagate after this function's own `finally` block
-    has sent `estop()` -- "a halt that raises must not be swallowed."
+    layer raises), or a `MoveRejected` (a non-retryable NACK -- see
+    `_sendVerifiedTwist()`), propagate after this function's own
+    `finally` block has sent `estop()` -- "a halt that raises must not be
+    swallowed."
     """
     target = Pose(x=x, y=y, heading=theta if theta is not None else 0.0)
     allocator = moveIds if moveIds is not None else MoveIdAllocator()
@@ -361,12 +602,24 @@ def gotoWorld(proto: NezhaProtocol, worldPose: WorldPose, x: float, y: float,
     startTime = time.monotonic()
     iterations = 0
     sentCount = 0
+    retryCount = 0
+    forcedResendCount = 0
+    unackedCount = 0
     sentSolution: "ArcSolution | None" = None
     sentOmega = 0.0
+    ackSeen: "dict[int, object]" = {}
+    # ProgressCheck bookkeeping: the pose/time this loop last saw the
+    # robot make material progress toward the target. Seeded from the
+    # FIRST pose this loop ever sees (below), not from `None`/time-zero,
+    # so the window starts counting from when navigation actually begins,
+    # not from before the first telemetry frame arrives.
+    progressPose: "Pose | None" = None
+    progressCheckTime = time.monotonic()
 
     try:
         while True:
             frames = _advance(proto, cyclePeriod, geofence)
+            _recordAcks(frames, ackSeen)
             for frame in frames:
                 worldPose.ingest(frame)
             currentPose = worldPose.worldPose()
@@ -379,7 +632,8 @@ def gotoWorld(proto: NezhaProtocol, worldPose: WorldPose, x: float, y: float,
                     return GotoResult(
                         success=True,
                         reason=f"arrived within {tolerance:.0f} mm (distance={distance:.1f} mm)",
-                        finalPose=currentPose, iterations=iterations, sent=sentCount)
+                        finalPose=currentPose, iterations=iterations, sent=sentCount,
+                        retries=retryCount, forcedResends=forcedResendCount, unacked=unackedCount)
 
             iterations += 1
             elapsed = time.monotonic() - startTime
@@ -387,33 +641,97 @@ def gotoWorld(proto: NezhaProtocol, worldPose: WorldPose, x: float, y: float,
             if giveUpReason is not None:
                 detail = ("no telemetry received" if currentPose is None
                           else f"closest distance reached: {distance:.1f} mm")
+                # Distinguish "the link was the problem" from "the robot
+                # moved but never converged" -- the OOP ticket's own
+                # complaint: an unqualified give-up reason sent the
+                # stakeholder hunting the solver when the solver was
+                # innocent and the commands simply never landed.
+                if unackedCount > 0:
+                    detail += (f"; {unackedCount} of {sentCount} move(s) never received a "
+                              f"clean ack despite {ackRetry.maxAttempts} attempts each -- "
+                              f"link/command loss, not a solver problem")
+                elif sentCount > 0:
+                    detail += (f"; all {sentCount} move(s) acked ok "
+                              f"({forcedResendCount} forced by the progress-stall backstop) -- "
+                              f"the robot moved but did not converge within tolerance")
+                else:
+                    detail += "; no move was ever sent"
                 return GotoResult(success=False, reason=f"{giveUpReason} ({detail})",
-                                  finalPose=currentPose, iterations=iterations, sent=sentCount)
+                                  finalPose=currentPose, iterations=iterations, sent=sentCount,
+                                  retries=retryCount, forcedResends=forcedResendCount,
+                                  unacked=unackedCount)
 
             if currentPose is None:
                 continue  # no pose yet -- nothing to solve against
 
+            # ProgressCheck: has the pose moved past `progress.threshold`
+            # since the last checkpoint? If so, reset the checkpoint --
+            # the robot is making progress and the throttle should be
+            # left alone. If not, and `progress.window` has elapsed,
+            # force a resend below regardless of the throttle.
+            if progressPose is None:
+                progressPose = currentPose
+                progressCheckTime = time.monotonic()
+                forceResend = False
+            else:
+                moved = math.hypot(currentPose.x - progressPose.x,
+                                   currentPose.y - progressPose.y) * _POSITION_SCALE
+                if moved > progress.threshold:
+                    progressPose = currentPose
+                    progressCheckTime = time.monotonic()
+                    forceResend = False
+                else:
+                    forceResend = (time.monotonic() - progressCheckTime) >= progress.window
+
             solution = solveArcToPoint(currentPose, target, limits, previousOmega=sentOmega)
             if solution.stop:
                 return GotoResult(success=False, reason=_targetBehindReason(solution.bearing),
-                                  finalPose=currentPose, iterations=iterations, sent=sentCount)
+                                  finalPose=currentPose, iterations=iterations, sent=sentCount,
+                                  retries=retryCount, forcedResends=forcedResendCount,
+                                  unacked=unackedCount)
 
             if _shouldReplace(sentSolution, solution, throttle.omegaThreshold,
-                              throttle.arcLengthThreshold):
+                              throttle.arcLengthThreshold) or forceResend:
+                # Every logical send here -- whether from the ordinary
+                # throttle or a ProgressCheck-forced resend -- draws a
+                # FRESH Move.id. A forced resend in particular needs the
+                # firmware to actually restart the move via
+                # planner_.move(), not be silently re-acked as a no-op
+                # duplicate of a move already believed in flight -- see
+                # _sendVerifiedTwist()'s own docstring for the contrasting
+                # case (an ack-loss RETRY of one send, which DOES reuse
+                # its id).
                 moveId = allocator.next()
-                proto.move_twist(v_x=solution.v_x, v_y=0.0, omega=solution.omega,
-                                 stop_distance=solution.arcLength, timeout=moveTimeout,
-                                 replace=True, move_id=moveId)
+                effectiveTimeout = (moveTimeout if moveTimeout is not None
+                                    else _moveTimeoutFor(solution.arcLength, limits.speed))
+                acked, attempts = _sendVerifiedTwist(
+                    proto, worldPose, geofence, ackSeen,
+                    moveId=moveId,
+                    kwargs=dict(v_x=solution.v_x, v_y=0.0, omega=solution.omega,
+                               stop_distance=solution.arcLength, timeout=effectiveTimeout,
+                               replace=True),
+                    cyclePeriod=cyclePeriod, ackRetry=ackRetry)
                 sentSolution = solution
                 sentOmega = solution.omega
                 sentCount += 1
+                retryCount += attempts - 1
+                if forceResend:
+                    forcedResendCount += 1
+                if not acked:
+                    unackedCount += 1
+                # Whether or not this send was acked, give it a full
+                # progress window before judging the robot stalled again
+                # -- otherwise an unacked-but-not-yet-window-expired send
+                # would force ANOTHER resend on literally the next cycle.
+                progressPose = currentPose
+                progressCheckTime = time.monotonic()
     finally:
         # estop(), never the PLANNED stop() -- every halt path in this
         # module funnels through this one call site. Runs on every return
         # above AND on any exception (e.g. GeofenceViolation out of
-        # _advance()); the exception is not caught here, so it still
-        # propagates after this line -- a halt that raises must not be
-        # swallowed.
+        # _advance(), or MoveRejected out of _sendVerifiedTwist()); the
+        # exception is not caught here, so it still propagates after this
+        # line -- a halt that raises must not be swallowed.
         proto.estop()
 
 
@@ -423,7 +741,9 @@ def gotoRobot(proto: NezhaProtocol, worldPose: WorldPose, x: float, y: float,
               tolerance: float = TERMINATION_TOLERANCE,
               giveUp: GiveUpLimits = GiveUpLimits(),
               throttle: ReplaceThreshold = ReplaceThreshold(),
-              moveTimeout: float = MOVE_TIMEOUT,
+              ackRetry: AckRetry = AckRetry(),
+              progress: ProgressCheck = ProgressCheck(),
+              moveTimeout: "float | None" = None,
               cyclePeriod: float = CYCLE_PERIOD,
               moveIds: "MoveIdAllocator | None" = None) -> GotoResult:
     """Drive the robot to a ROBOT-frame target `(x, y)` -- a THIN
@@ -469,5 +789,5 @@ def gotoRobot(proto: NezhaProtocol, worldPose: WorldPose, x: float, y: float,
     composedTheta = None if theta is None else worldTarget.heading
     return gotoWorld(proto, worldPose, worldTarget.x, worldTarget.y, composedTheta,
                      limits=limits, geofence=geofence, tolerance=tolerance,
-                     giveUp=giveUp, throttle=throttle, moveTimeout=moveTimeout,
-                     cyclePeriod=cyclePeriod, moveIds=moveIds)
+                     giveUp=giveUp, throttle=throttle, ackRetry=ackRetry, progress=progress,
+                     moveTimeout=moveTimeout, cyclePeriod=cyclePeriod, moveIds=moveIds)
