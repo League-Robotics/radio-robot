@@ -95,6 +95,12 @@ constexpr float kUnitEpsilon = 1e-6f;  // [1]
 // wheel's (exact) answer wins.
 constexpr float kRatioTie = 1e-6f;  // [1]
 
+// Below this a wheel's own last commanded velocity is indistinguishable
+// from "not moving" -- planWheels() treats it as directionally compatible
+// with anything (no meaningful direction to conflict with) rather than
+// testing its sign.
+constexpr float kMinWheelSpeed = 1e-3f;  // [mm/s]
+
 // One wheel's share of the shape-space ceilings. profileStep() is
 // homogeneous of degree 1, so scaling every limit by the wheel's unit
 // magnitude is exactly equivalent to profiling in shape space and scaling
@@ -525,7 +531,36 @@ TickResult Planner::tick(const Types::RobotState& state) {
   }
 
   bool done = timedOut || stalled;
-  if (!done && active_.settling) {
+  // ARRIVED: a Distance/Angle Move that is inside the robot's own
+  // configured arrival tolerance (settleEpsilonLinear/Angular) AND at rest
+  // is finished. The kDoneEpsilon* tests below are float NOISE FLOORS, not
+  // reachability tolerances -- a real wheel parks a fraction of a mm short
+  // because the profile's terminal step falls under the motor
+  // write-suppression deadband, and with the wheels stopped the in-flight
+  // prediction that would carry the residual negative is also zero, so the
+  // residual is PINNED and the Move waits out the whole kStallWindow
+  // (measured on the robot 2026-07-30: ~0.4-0.5 s of dead time per
+  // boundary, concentrated on turns; measured in the planner harness: the
+  // residual pinned at 0.8764 mm for 11 consecutive ticks == 0.517 s ==
+  // kStallWindow). settleReached() is already computed here and already
+  // reported as TickResult::settled; this lets it END the Move rather than
+  // only describe it.
+  //
+  // Cannot fire early: it requires the body to be AT REST, so it is
+  // unreachable at cruise. Suppressed for a Move handing off at speed
+  // (activeBoundary_ > 0), which is not supposed to stop at all, and gated
+  // on hasMoved so a Move cannot complete on its own activation tick before
+  // breaking away. Residual left on the target is absorbed by the next
+  // chained Move through the cumulative baseline ledger -- exactly the
+  // mechanism src/firm/main.cpp already relies on with requireSettle off.
+  const bool arrived =
+      activeBoundary_ <= 0.0f && active_.hasMoved &&
+      m.velocityKind == Move::VelocityKind::Twist &&
+      (m.kind == Move::Kind::Distance || m.kind == Move::Kind::Angle) &&
+      settleReached(measured, dt);
+  if (!done && arrived) {
+    done = true;
+  } else if (!done && active_.settling) {
     done = true;  // profile-complete already fired; only the gate is pending
   } else if (!done) {
     switch (m.kind) {
@@ -846,38 +881,89 @@ Planner::Axis Planner::axisOf(const Move& m) {
 // speed) to land the active Move at, so a chain flows at speed instead of
 // stopping between legs.
 //
-// Compatibility is now a single geometric identity -- do the two Moves
-// command the same left:right ratio? -- rather than an enumeration over
-// (kind, kind) pairs. That one predicate subsumes every case the old
-// enumeration hand-coded (same-direction straights carry; a reversal, an
-// axis change, or an opposite turn do not) AND two it could not express:
-// two Moves along the same ARC radius now carry, and two Wheels Moves of
-// identical ratio now carry, where before every Wheels Move landed at
-// zero. It is also automatically right about a planned stop, whose shape
-// is invalid by construction -- nothing ever hands off at speed into a
-// stop.
+// Two tiers of compatibility, not one:
+//
+//   EXACT (shapesCompatible()) -- the two Moves command the identical
+//   left:right ratio. Free pass: no landing-lambda cap beyond distance
+//   feasibility, because nothing about the wheels' commands changes across
+//   the hand-off. Still the ONLY tier available to a Wheels-velocityKind
+//   Move (direct per-wheel commands are not profiled the way Distance/
+//   Angle Moves are) and to a Distance<->Angle axis change (axisOf()) --
+//   both land at rest exactly as before.
+//
+//   RELAXED (shapeDirectionsAgree() + curvatureHandoffLambdaCap(), same
+//   axis, neither Move a Wheels Move) -- the ratios may differ, so long as
+//   neither wheel's rotation direction reverses, and the landing lambda is
+//   capped so the per-wheel differential the ratio change itself demands
+//   fits inside a bounded number of control cycles at that wheel's own
+//   accel authority. This is what lets a chain of continuously-varying-
+//   curvature segments (a rounded rectangle, a figure-eight, a spline) flow
+//   through a boundary instead of decelerating to rest at every one, which
+//   the exact-ratio-only test forced (every curvature change is a ratio
+//   change). See planWheels() for how the incoming Move consumes the
+//   landing state this produces.
+//
+// It is automatically right about a planned stop, whose shape is invalid
+// by construction -- nothing ever hands off at speed into a stop.
 float Planner::boundaryLambda(float dt) const {
   if (pendingCount_ == 0) return 0.0f;
   // Fail closed: never plan a hand-off we have no configured authority to
   // brake out of.
   if (limits_.aDecel <= 0.0f) return 0.0f;
 
-  const MoveShape next = shapeOf(pending_[0], limits_.trackWidth);
-  if (!shapesCompatible(active_.shape, next)) return 0.0f;
+  const Move& next = pending_[0];
+  const MoveShape nextShape = shapeOf(next, limits_.trackWidth);
+  if (!nextShape.valid || !active_.shape.valid) return 0.0f;
+
+  const bool exactRatio = shapesCompatible(active_.shape, nextShape);
+  if (!exactRatio) {
+    // A Distance<->Angle hand-off, or anything touching a Wheels-
+    // velocityKind Move, is not a curvature change to relax at all -- it
+    // needs rest, same as always.
+    if (axisOf(active_.move) != axisOf(next)) return 0.0f;
+    if (active_.move.velocityKind == Move::VelocityKind::Wheels ||
+        next.velocityKind == Move::VelocityKind::Wheels) {
+      return 0.0f;
+    }
+    if (!shapeDirectionsAgree(active_.shape, nextShape)) return 0.0f;
+  }
 
   // Neither Move's own cruise may be exceeded at the hand-off.
-  float cap = std::min(active_.shape.cruise, next.cruise);
+  float cap = std::min(active_.shape.cruise, nextShape.cruise);
 
   // And the successor must still be able to land: enter no faster than it
   // can brake to rest within its own distance. A Time successor has no
   // distance to land within, so its cruise is the only cap -- tighter, and
   // more honest, than the blanket vMax the per-Kind version used.
-  if (next.hasDistanceTarget) {
-    const float dominantDistance = std::max(std::fabs(next.distanceLeft),
-                                            std::fabs(next.distanceRight));
+  if (nextShape.hasDistanceTarget) {
+    const float dominantDistance = std::max(std::fabs(nextShape.distanceLeft),
+                                            std::fabs(nextShape.distanceRight));
     cap = std::min(cap, maxEntryVelocity(dominantDistance, 0.0f,
-                                         shapeLimits(next, limits_), dt));
+                                         shapeLimits(nextShape, limits_), dt));
   }
+
+  if (!exactRatio) {
+    // Bound the landing speed so the per-wheel differential the curvature
+    // change demands -- |unit_w(next) - unit_w(active)| * lambda -- is
+    // absorbable within a handful of control cycles at this wheel's own
+    // accel ceiling, rather than handed to planWheels() as a step. A few
+    // cycles (not one): the goal is a brief, visible-but-minor slow-into-
+    // the-curve, not a hair-trigger cap that forces near-rest on any
+    // curvature change at all -- and planWheels() ramps whatever residual
+    // gap remains over the following ticks regardless, same as any other
+    // acceleration. See curvatureHandoffLambdaCap()'s own doc comment for
+    // the derivation and clasi/issues/replace-rescales-carried-profile-
+    // velocity-by-new-shape.md for what an UNBOUNDED shape change at speed
+    // does today (measured: 433 mm/s of misinterpreted per-wheel command).
+    constexpr int kHandoffBlendCycles = 8;
+    const float wheelDecelCeiling = axisOf(active_.move) == Axis::Angular
+        ? limits_.alphaDecel * 0.5f * limits_.trackWidth
+        : limits_.aDecel;
+    cap = std::min(cap, curvatureHandoffLambdaCap(active_.shape, nextShape,
+                                                  wheelDecelCeiling, dt,
+                                                  kHandoffBlendCycles));
+  }
+
   return std::max(0.0f, cap);
 }
 
@@ -1072,11 +1158,47 @@ void Planner::planWheels(float dt, const Measurement& measured) {
   // Axis units -> shape space. plannedRemaining is already positive-frame.
   const float remainingLambda =
       std::max(0.0f, measured.plannedRemaining) / active_.axisPerLambda;
-  const float previousLambda = profileVelocity_ / active_.axisPerLambda;
   const float previousAccelLambda = profileAccel_ / active_.axisPerLambda;
 
   const float boundary = boundaryLambda(dt);         // [mm/s] shape space
   activeBoundary_ = boundary * active_.axisPerLambda;  // [axis units]
+
+  // Per-wheel `previous`: THIS WHEEL'S OWN last commanded velocity
+  // (cmdLeftPrevious_/cmdRightPrevious_), not profileVelocity_ rescaled by
+  // axisPerLambda. The rescale is exact only when this Move's ratio
+  // matches the predecessor's (axisPerLambda unchanged, the old
+  // shapesCompatible()-only world); across a curvature-changing hand-off
+  // it is the measured defect in clasi/issues/replace-rescales-carried-
+  // profile-velocity-by-new-shape.md -- 433 mm/s of misinterpreted
+  // per-wheel command from dividing a carried BODY-frame speed by the
+  // NEW Move's (possibly very different) axisPerLambda. Reading the
+  // wheel's own last command instead sidesteps that division entirely,
+  // is bit-identical to the old formula in the steady-state (no hand-off)
+  // case -- both reduce to lambda_prev * magnitude[w] -- and is exactly
+  // right across ANY hand-off, chained or replace(): it is simply what
+  // this wheel was actually last asked to do.
+  //
+  // profileStep()'s `previous` is a POSITIVE-frame magnitude: valid only
+  // when the wheel's actual last direction already agrees with THIS
+  // Move's own unit sign for it. A wheel that must reverse direction has
+  // no such value -- profileStep() has no notion of "still coasting the
+  // wrong way," it would misread a negative previous as already past
+  // zero and about to overshoot. boundaryLambda() already refuses an
+  // at-speed hand-off across a direction reversal
+  // (shapeDirectionsAgree()), so a same-direction mismatch here can only
+  // come from replace() (which bypasses that gate) -- treated the same
+  // as an axis change always was: start this wheel fresh from rest
+  // rather than trust a value the profiler cannot interpret. That is a
+  // strictly safer fallback than today's rescale, which can command a
+  // wheel PAST its own ceiling in the wrong direction; starting from
+  // rest never can.
+  const float cmdPreviousWheel[2] = {cmdLeftPrevious_, cmdRightPrevious_};
+  float previousWheel[2] = {0.0f, 0.0f};
+  for (int w = 0; w < 2; ++w) {
+    const bool sameDirection = std::fabs(cmdPreviousWheel[w]) <= kMinWheelSpeed ||
+                               cmdPreviousWheel[w] * unit[w] >= 0.0f;
+    previousWheel[w] = sameDirection ? std::fabs(cmdPreviousWheel[w]) : 0.0f;
+  }
 
   // Profile each wheel against ITS OWN remaining distance, cruise, and
   // ceilings -- all just this wheel's share of the shape.
@@ -1090,7 +1212,7 @@ void Planner::planWheels(float dt, const Measurement& measured) {
     const AxisLimits lim = scaleLimits(active_.wheelLimits, magnitude[w]);
     const ProfileResult step =
         profileStep(remainingLambda * magnitude[w],
-                    previousLambda * magnitude[w], shape.cruise * magnitude[w],
+                    previousWheel[w], shape.cruise * magnitude[w],
                     boundary * magnitude[w], lim, dt,
                     previousAccelLambda * magnitude[w]);
     allowed[w] = step.velocity / magnitude[w];  // back to shape space
@@ -1120,13 +1242,51 @@ void Planner::planWheels(float dt, const Measurement& measured) {
     binding = other;
   }
 
+  // Hard per-wheel ACCEL ceiling, independent of the tie-break above.
+  // allowed[w] is each wheel's own accel-respecting optimum IN ISOLATION;
+  // adopting the more-constrained wheel's answer for BOTH wheels is only
+  // guaranteed safe for the non-binding wheel when its `previousWheel[]`
+  // was already proportional to THIS Move's own ratio -- true on every
+  // tick but the first after a curvature-changing hand-off, where it
+  // still carries the PREDECESSOR Move's ratio (see previousWheel[]'s own
+  // comment above). On that one tick the two wheels' individually-optimal
+  // answers, reinterpreted through THIS Move's (different) per-wheel
+  // magnitude, can disagree by far more than either wheel's own accel
+  // authority -- and the tie-break's plain min-selection does not by
+  // itself protect the wheel it did NOT bind on. This closes that gap
+  // directly, wheel by wheel, rather than trusting the tie-break alone.
+  //
+  // Ceiling only, never floor: pushing a wheel to decelerate harder than
+  // its configured aDecel is a harder brake than planned, not a runaway
+  // -- always the SAFE direction to be wrong in, unlike exceeding aMax,
+  // which is the actual defect this whole change guards against (see
+  // clasi/issues/replace-rescales-carried-profile-velocity-by-new-shape.md).
+  // boundaryLambda()'s curvatureHandoffLambdaCap() already keeps this
+  // rail from doing the real work in the common case; it only bites on
+  // the rare tick where that cap and the tie-break still disagree.
+  for (int w = 0; w < 2; ++w) {
+    if (!constrains[w]) continue;
+    const AxisLimits lim = scaleLimits(active_.wheelLimits, magnitude[w]);
+    if (lim.aMax <= 0.0f) continue;  // unconfigured: no ceiling to enforce
+    const float ceilLambda = (previousWheel[w] + lim.aMax * dt) / magnitude[w];
+    lambda = std::min(lambda, ceilLambda);
+  }
+
   // Never accelerate at the end: once braking has begun, the command may
   // fall or hold but never rise again. Deliberately non-INCREASING rather
   // than strictly decreasing -- if a successor is queued mid-decel and
   // lifts the boundary, holding is right and re-accelerating is not.
+  // The clamp is the BINDING wheel's own previous command translated back
+  // to shape space (previousWheel[binding]/magnitude[binding]), the same
+  // per-wheel-actual quantity profileStep() was just fed for it -- not the
+  // old axisPerLambda-rescaled scalar, for the same reason planWheels()
+  // stopped feeding that to profileStep() above.
   StepPhase raw = phase[binding];
   if (active_.decelLatched) {
-    lambda = std::min(lambda, previousLambda);
+    const float previousLambdaBinding = magnitude[binding] > kUnitEpsilon
+        ? previousWheel[binding] / magnitude[binding]
+        : 0.0f;
+    lambda = std::min(lambda, previousLambdaBinding);
     if (raw != StepPhase::Closing) raw = StepPhase::Decel;
   } else if (raw == StepPhase::Decel || raw == StepPhase::Closing) {
     active_.decelLatched = true;

@@ -1,5 +1,14 @@
 ---
-status: pending
+status: in-progress
+sprint: '127'
+tickets:
+- 127-001
+- 127-003
+- 127-004
+- 127-005
+- 127-006
+- 127-007
+- 127-008
 ---
 
 # Host-side path planner — `goto` and path following

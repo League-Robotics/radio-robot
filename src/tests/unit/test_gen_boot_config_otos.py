@@ -45,7 +45,10 @@ def test_otos_boot_config_values_reads_tovez_json():
     assert offset_x == -47.7
     assert offset_y == 3.5
     assert offset_yaw == 0.0
-    assert linear_scale == 1.067
+    # 1.0275, not the original 1.067: sprint 126-003 corrected otos_linear_scale
+    # against overhead-camera truth (18 runs, fit slope 1.0384, post-reflash
+    # residual +0.37% +/- 0.34%). tovez.json carries the full provenance note.
+    assert linear_scale == 1.0275
     assert angular_scale == 0.987
 
 
@@ -77,7 +80,7 @@ def test_generate_emits_default_otos_boot_config_additively():
     assert "cfg.offsetX = -47.7f;" in content
     assert "cfg.offsetY = 3.5f;" in content
     assert "cfg.offsetYaw = 0.0f;" in content
-    assert "cfg.linearScale = 1.067f;" in content
+    assert "cfg.linearScale = 1.0275f;" in content  # see the note above
     assert "cfg.angularScale = 0.987f;" in content
 
 
