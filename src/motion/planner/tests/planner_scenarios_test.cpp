@@ -317,6 +317,111 @@ void testTimeMoveRuns() {
   CHECK_NEAR(state.wheelLeft.cmdVelocity, 0.0f, 1e-6);
 }
 
+// Two same-direction Distance legs of DIFFERENT curvature: a straight
+// followed by a gentle left arc. testSameAxisChainExactAndCarried() above
+// covers the EXACT-ratio hand-off (same shape both legs); this is the NEW
+// relaxed case shapesCompatible() alone used to refuse outright, landing
+// the straight fully at rest before ever starting the arc. Neither wheel
+// reverses direction, so boundaryLambda()'s relaxed path applies: the
+// hand-off must still occur at meaningfully-nonzero speed (never a full
+// stop), and the DOMINANT wheel's own per-tick step must never exceed its
+// configured accel ceiling -- planWheels()'s new per-wheel ceiling rail
+// (see its own comment) is what guarantees that regardless of what the
+// ratio lock's tie-break alone would have picked.
+void testCurvatureChainAtSpeed() {
+  Planner planner(benchLimits());
+  PerfectPlant plant;
+  Types::RobotState state;
+  uint32_t now = 0;
+
+  Move straight = distanceMove(40, 500.0f, 300.0f);  // ratio 1:1, cruise 300
+  Move arc = distanceMove(41, 400.0f, 300.0f);
+  arc.omega = 0.9f;  // wheels (255, 345): ratio 0.7391:1, cruise 345
+  CHECK(planner.move(straight, false));
+  CHECK(planner.move(arc, false));
+
+  int completions = 0;
+  float minRight = 1e9f;   // [mm/s] dominant wheel's minimum after ramp-up
+  float previousRight = 0.0f;
+  float maxDominantStep = 0.0f;  // [mm/s] largest one-tick |delta right|
+  bool rampDone = false;
+  bool sawRatioAfterHandoff = false;
+  for (int i = 0; i < 800 && completions < 2; ++i) {
+    const TickResult r = cycle(planner, state, plant, now, kPeriod);
+    const float left = state.wheelLeft.cmdVelocity;
+    const float right = state.wheelRight.cmdVelocity;
+    CHECK(std::fabs(left) <= 600.0f + 1e-3f);
+    CHECK(std::fabs(right) <= 600.0f + 1e-3f);
+    if (right >= 300.0f - 1e-2f) rampDone = true;
+    // Track the boundary dip only from first reaching the straight's
+    // cruise until recovering to near the arc's own cruise -- past that
+    // point the arc is running normally and will (correctly) decelerate
+    // toward rest as IT completes, which is not what this test is about.
+    if (rampDone && !sawRatioAfterHandoff) minRight = std::min(minRight, right);
+    if (i > 0) {
+      maxDominantStep = std::max(maxDominantStep, std::fabs(right - previousRight));
+    }
+    if (r.completed) {
+      ++completions;
+      CHECK(r.moveId == (completions == 1 ? 40u : 41u));
+    }
+    // Once the arc is active and past its own initial transient, the
+    // commanded ratio must sit exactly on 255/345 -- the ratio lock's
+    // guarantee holds ACROSS the relaxed hand-off, not just within a move
+    // that never changed shape.
+    if (completions == 1 && right > 340.0f) {
+      CHECK_NEAR(left / right, 255.0f / 345.0f, 1e-3);
+      sawRatioAfterHandoff = true;
+    }
+    previousRight = right;
+  }
+  CHECK(completions == 2);
+  CHECK(sawRatioAfterHandoff);
+
+  // Never lands at rest at the boundary: the dominant wheel stayed well
+  // above zero the whole way through (a full land-at-zero hand-off, the
+  // pre-existing exact-ratio-only behavior, would have touched 0).
+  CHECK(minRight > 100.0f);
+  // The dominant (right) wheel's own per-tick step never exceeds a small,
+  // generous multiple of what one control cycle's accel ceiling allows --
+  // far below the UNBOUNDED per-wheel jump the axisPerLambda rescale
+  // defect produced (433 mm/s, clasi/issues/replace-rescales-carried-
+  // profile-velocity-by-new-shape.md).
+  CHECK(maxDominantStep <= 50.0f);
+}
+
+// A curvature change that would REVERSE a wheel's direction (a tight
+// left arc into a comparatively straight leg reverses the inner wheel) is
+// explicitly excluded from the relaxed path (shapeDirectionsAgree()) --
+// this must still land at rest, exactly as shapesCompatible()-only ever
+// did.
+void testCurvatureReversalStillLandsAtRest() {
+  Planner planner(benchLimits());
+  PerfectPlant plant;
+  Types::RobotState state;
+  uint32_t now = 0;
+
+  Move tightArc = distanceMove(50, 400.0f, 300.0f);
+  tightArc.omega = 8.0f;  // wheels (-100, 700): left reverses
+  Move straight = distanceMove(51, 300.0f, 150.0f);
+  CHECK(planner.move(tightArc, false));
+  CHECK(planner.move(straight, false));
+
+  int completions = 0;
+  bool sawRestAtBoundary = false;
+  for (int i = 0; i < 800 && completions < 2; ++i) {
+    const TickResult r = cycle(planner, state, plant, now, kPeriod);
+    if (completions == 1 &&
+        std::fabs(state.wheelLeft.cmdVelocity) < 1.0f &&
+        std::fabs(state.wheelRight.cmdVelocity) < 1.0f) {
+      sawRestAtBoundary = true;
+    }
+    if (r.completed) ++completions;
+  }
+  CHECK(completions == 2);
+  CHECK(sawRestAtBoundary);
+}
+
 }  // namespace
 
 int main() {
@@ -331,6 +436,8 @@ int main() {
   testQueueFullRejected();
   testInvalidMovesRejected();
   testTimeMoveRuns();
+  testCurvatureChainAtSpeed();
+  testCurvatureReversalStillLandsAtRest();
   std::printf("planner_scenarios_test: all checks passed\n");
   return 0;
 }

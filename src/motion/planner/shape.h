@@ -71,6 +71,51 @@ AxisLimits shapeLimits(const MoveShape& shape, const PlannerLimits& limits);
 // geometry, same direction. A reversal, a turn following a straight, or a
 // change of arc radius all answer false, and the predecessor must land at
 // zero. Invalid shapes always answer false.
+//
+// This is the STRICT (exact-ratio) test. It remains the right test for a
+// Wheels-velocityKind Move (direct per-wheel commands, not profiled
+// against a distance/angle target the way Distance/Angle Moves are) and
+// as the free-pass fast path everywhere else -- when it is true, none of
+// the relaxed machinery below (shapeDirectionsAgree(),
+// curvatureHandoffLambdaCap()) needs to be, or should be, consulted; the
+// old, exact hand-off applies unchanged.
 bool shapesCompatible(const MoveShape& current, const MoveShape& next);
+
+// A necessary (not sufficient) condition for a RELAXED at-speed hand-off
+// between two Moves of the SAME axis whose ratios differ: does either
+// wheel's commanded rotation direction reverse? True when no wheel's sign
+// flips between `current` and `next` (a wheel with negligible magnitude in
+// EITHER shape never blocks the hand-off on its own -- it has no direction
+// to conflict with). Invalid shapes always answer false.
+//
+// Direction agreement is required, not merely preferred, because
+// planWheels() feeds each wheel's OWN last commanded velocity to
+// profileStep() as a positive-frame `previous` -- valid only when that
+// velocity is already signed the way the new shape needs it. A wheel that
+// must reverse has no such value; profileStep() has no notion of "still
+// coasting the wrong way," so that case is treated the same as an axis
+// change and lands at rest, same as shapesCompatible() already did.
+bool shapeDirectionsAgree(const MoveShape& current, const MoveShape& next);
+
+// The additional landing-lambda cap a RELAXED (non-identical-ratio)
+// hand-off needs: for each wheel whose unit ratio changes between
+// `current` and `next`, the per-wheel commanded-speed step the hand-off
+// implies at candidate landing speed lambda -- |unit_w(next) -
+// unit_w(current)| * lambda -- must be absorbable within `blendCycles`
+// control cycles at `wheelDecelCeiling` (the physical per-wheel accel/decel
+// ceiling this axis implies -- PlannerLimits::aDecel for a Linear axis,
+// PlannerLimits::alphaDecel * trackWidth/2 for an Angular one; the caller
+// derives it, since axis identity is a Planner::axisOf() concept this pure
+// function has no access to).
+//
+// Returns +infinity when every wheel's ratio already matches (nothing to
+// bound) and 0 when `wheelDecelCeiling` is unconfigured (fail closed: never
+// plan a differential hand-off with no declared authority to absorb it).
+// Unbounded by design otherwise -- a large per-wheel delta simply forces a
+// low landing lambda rather than being rejected outright, which is the
+// whole point of this over shapesCompatible()'s exact-match-or-nothing.
+float curvatureHandoffLambdaCap(const MoveShape& current, const MoveShape& next,
+                                float wheelDecelCeiling, float dt,
+                                int blendCycles);  // [mm/s^2] [s] -> [mm/s]
 
 }  // namespace Motion

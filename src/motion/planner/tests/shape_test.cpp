@@ -11,9 +11,11 @@
 #include "tests/test_support.h"
 
 using Motion::AxisLimits;
+using Motion::curvatureHandoffLambdaCap;
 using Motion::Move;
 using Motion::MoveShape;
 using Motion::PlannerLimits;
+using Motion::shapeDirectionsAgree;
 using Motion::shapeLimits;
 using Motion::shapeOf;
 using Motion::shapesCompatible;
@@ -269,6 +271,82 @@ void testCompatibility() {
   CHECK(!shapesCompatible(MoveShape{}, fwd));
 }
 
+void testDirectionsAgree() {
+  auto shape = [](float v_x, float omega) {
+    return shapeOf(twistMove(Move::Kind::Distance, 500.0f, v_x, omega),
+                   kTrack);
+  };
+  const MoveShape straight = shape(300.0f, 0.0f);          // (1, 1)
+  const MoveShape gentleArc = shape(300.0f, 0.9f);         // (0.7391, 1) -- both positive
+  const MoveShape sharpArc = shape(300.0f, 2.0f);          // (0.5, 1) -- both positive
+  const MoveShape tightReverseArc = shape(300.0f, 8.0f);   // left goes negative
+  const MoveShape rev = shape(-300.0f, 0.0f);              // (-1, -1)
+
+  // Identical ratio: trivially agrees (this is what shapesCompatible()
+  // already covers, but the direction test must not regress it).
+  CHECK(shapeDirectionsAgree(straight, straight));
+  // Curvature changes that keep every wheel's sign: agree, regardless of
+  // how different the ratios are.
+  CHECK(shapeDirectionsAgree(straight, gentleArc));
+  CHECK(shapeDirectionsAgree(straight, sharpArc));
+  CHECK(shapeDirectionsAgree(gentleArc, sharpArc));
+  CHECK(shapeDirectionsAgree(sharpArc, straight));  // symmetric
+  // A wheel that must reverse: disagrees.
+  CHECK(!shapeDirectionsAgree(straight, tightReverseArc));
+  CHECK(!shapeDirectionsAgree(tightReverseArc, straight));
+  CHECK(!shapeDirectionsAgree(straight, rev));
+  // Invalid shapes never agree.
+  CHECK(!shapeDirectionsAgree(MoveShape{}, straight));
+  CHECK(!shapeDirectionsAgree(straight, MoveShape{}));
+}
+
+void testCurvatureHandoffLambdaCap() {
+  auto shape = [](float v_x, float omega) {
+    return shapeOf(twistMove(Move::Kind::Distance, 500.0f, v_x, omega),
+                   kTrack);
+  };
+  const MoveShape straight = shape(300.0f, 0.0f);   // (1, 1)
+  const MoveShape gentleArc = shape(300.0f, 0.4f);  // small delta
+  const MoveShape sharpArc = shape(300.0f, 3.0f);   // large delta
+
+  constexpr float kDt = 0.05f;       // [s]
+  constexpr float kCeiling = 300.0f;  // [mm/s^2]
+
+  // Identical ratio: no wheel's unit changes, nothing to bound -- the cap
+  // is unbounded (the caller's own cruise/distance caps are what apply).
+  const float exact = curvatureHandoffLambdaCap(straight, straight, kCeiling,
+                                                kDt, 8);
+  CHECK(exact > 1.0e6f);
+
+  // A bigger curvature change yields a TIGHTER (smaller) cap -- the
+  // landing speed must fall as the differential the hand-off demands
+  // grows, exactly the "slow for that arc, not globally" property the
+  // relaxed hand-off is supposed to have.
+  const float gentleCap =
+      curvatureHandoffLambdaCap(straight, gentleArc, kCeiling, kDt, 8);
+  const float sharpCap =
+      curvatureHandoffLambdaCap(straight, sharpArc, kCeiling, kDt, 8);
+  CHECK(gentleCap > 0.0f);
+  CHECK(sharpCap > 0.0f);
+  CHECK(sharpCap < gentleCap);
+
+  // More blend cycles (more time to absorb the differential) relaxes the
+  // cap; fewer tightens it.
+  const float wideBudget =
+      curvatureHandoffLambdaCap(straight, gentleArc, kCeiling, kDt, 16);
+  const float narrowBudget =
+      curvatureHandoffLambdaCap(straight, gentleArc, kCeiling, kDt, 2);
+  CHECK(wideBudget > gentleCap);
+  CHECK(narrowBudget < gentleCap);
+
+  // Fail closed: no declared decel authority means no cap can be derived,
+  // same posture as boundaryLambda()'s own aDecel <= 0 guard.
+  CHECK(curvatureHandoffLambdaCap(straight, gentleArc, 0.0f, kDt, 8) == 0.0f);
+  // Invalid shapes: no cap can be derived either.
+  CHECK(curvatureHandoffLambdaCap(MoveShape{}, gentleArc, kCeiling, kDt, 8) ==
+        0.0f);
+}
+
 }  // namespace
 
 int main() {
@@ -280,6 +358,8 @@ int main() {
   testDegenerateGuards();
   testShapeLimitsReduceExactly();
   testCompatibility();
+  testDirectionsAgree();
+  testCurvatureHandoffLambdaCap();
   std::printf("shape_test: all checks passed\n");
   return 0;
 }

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace Motion {
 
@@ -195,6 +196,46 @@ bool shapesCompatible(const MoveShape& current, const MoveShape& next) {
   if (!current.valid || !next.valid) return false;
   return std::fabs(current.unitLeft - next.unitLeft) <= kShapeTol &&
          std::fabs(current.unitRight - next.unitRight) <= kShapeTol;
+}
+
+bool shapeDirectionsAgree(const MoveShape& current, const MoveShape& next) {
+  if (!current.valid || !next.valid) return false;
+  const float currentUnit[2] = {current.unitLeft, current.unitRight};
+  const float nextUnit[2] = {next.unitLeft, next.unitRight};
+  for (int w = 0; w < 2; ++w) {
+    // Negligible in either shape: nothing to conflict with.
+    if (std::fabs(currentUnit[w]) <= kShapeTol ||
+        std::fabs(nextUnit[w]) <= kShapeTol) {
+      continue;
+    }
+    if ((currentUnit[w] > 0.0f) != (nextUnit[w] > 0.0f)) return false;
+  }
+  return true;
+}
+
+float curvatureHandoffLambdaCap(const MoveShape& current, const MoveShape& next,
+                                float wheelDecelCeiling, float dt,
+                                int blendCycles) {
+  constexpr float kNoCap = std::numeric_limits<float>::infinity();
+  if (!current.valid || !next.valid || dt <= 0.0f || blendCycles <= 0) {
+    return 0.0f;
+  }
+  // Fail closed: no declared per-wheel decel authority to absorb a
+  // differential hand-off with, same posture as boundaryLambda()'s own
+  // aDecel <= 0 guard.
+  if (wheelDecelCeiling <= 0.0f) return 0.0f;
+
+  const float currentUnit[2] = {current.unitLeft, current.unitRight};
+  const float nextUnit[2] = {next.unitLeft, next.unitRight};
+  const float budget =
+      wheelDecelCeiling * dt * static_cast<float>(blendCycles);  // [mm/s]
+  float cap = kNoCap;
+  for (int w = 0; w < 2; ++w) {
+    const float delta = std::fabs(nextUnit[w] - currentUnit[w]);
+    if (delta <= kShapeTol) continue;  // this wheel's ratio does not change
+    cap = std::min(cap, budget / delta);
+  }
+  return cap;
 }
 
 }  // namespace Motion
