@@ -112,7 +112,11 @@ file's own header. **Current safety contract (protocol v5,
 `docs/protocol-v5.md` §5, "no deadman")**: there is no session-wide
 serial-silence watchdog to widen/restore at all — every `Move` carries
 its own bounded `timeout` safety backstop by construction. What a bench/
-playfield script must still do: call `stop()` (the binary `STOP` verb) in
+playfield script must still do: call `estop()` (the binary `ESTOP` verb —
+via the shared `robot_radio.robot.halt.halt_now()` helper, 128-001) in
 a `finally` block on every connection it opens, so motors are never left
 running on an exception or Ctrl-C — see `src/tests/bench/radio_bench_gate.py`
-for the current reference implementation of that pattern.
+for the current reference implementation of that pattern. `stop()` is a
+PLANNED stop that queues behind whatever is already in flight (measured:
+39.8cm/5.9s to take effect mid-leg, vs. 2.9cm/0.10s for `estop()`) — never
+use it in a Ctrl-C/exception cleanup path.

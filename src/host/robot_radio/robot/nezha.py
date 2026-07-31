@@ -261,6 +261,15 @@ class Nezha(Robot):
 
             outcome, _ = self._proto.wait_for_evt_done("D", timeout=6000)
             if outcome == "timeout":
+                # Pre-104-002 text-plane D/EVT-done path; NezhaProtocol.distance()/
+                # wait_for_evt_done() (called above) were deleted by that ticket's
+                # dead-arm sweep (protocol.py's own module docstring), so this
+                # branch is unreachable in the current binary-only P4 firmware --
+                # it would AttributeError before ever reaching this stop() call.
+                # Left as a sequenced stop-then-raise (not a halt-now context)
+                # rather than rewritten, since fixing this dead text-plane path is
+                # out of this ticket's scope (128-001 is the repl/halt sweep, not
+                # a Nezha-class dead-code pass).
                 self._proto.stop()
                 raise TimeoutError(
                     f"Distance hop timed out: target={hop}mm at speeds {l},{r}"

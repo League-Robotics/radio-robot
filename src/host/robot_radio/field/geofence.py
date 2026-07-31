@@ -23,6 +23,8 @@ from __future__ import annotations
 import math
 import time
 
+from robot_radio.robot.halt import halt_now
+
 PLAYFIELD_LIGHTS_URL = "http://192.168.1.122/rpc/Switch.GetStatus?id=0"
 
 
@@ -76,24 +78,23 @@ class Geofence:
         # stop() is a PLANNED stop that would wait behind whatever is
         # already queued and coast the robot the rest of the way off the
         # field (measured on hardware 2026-07-29: 39.8cm of travel on a
-        # 40cm leg before a stop() sent mid-leg took effect).
-        halt_error: Exception | None = None
-        for _ in range(3):
-            try:
-                self._proto.estop()
-                halt_error = None
-                break
-            except Exception as exc:
-                halt_error = exc
-            time.sleep(0.05)
-        if halt_error is not None:
+        # 40cm leg before a stop() sent mid-leg took effect). Delegates to
+        # the shared halt_now() (128-001, robot_radio.robot.halt) -- the
+        # same retry-three-times-then-raise-loud idiom every other "halt
+        # now" call site in this tree now uses, so there is exactly one
+        # halt implementation to audit. This method's own remaining job is
+        # to wrap the outcome in a GeofenceViolation: check() always
+        # raises one on a breach, win or lose on the halt itself.
+        try:
+            halt_now(self._proto, log=print)
+        except Exception as exc:
             # A halt that silently failed is indistinguishable from one
             # that worked -- exactly what let the robot drive off the
             # table before this was caught by hand. Surface it.
             raise GeofenceViolation(
                 f"{why} -- AND estop() failed on all 3 attempts, last "
-                f"error: {halt_error!r} -- ROBOT MAY STILL BE MOVING"
-            ) from halt_error
+                f"error: {exc!r} -- ROBOT MAY STILL BE MOVING"
+            ) from exc
         raise GeofenceViolation(why)
 
     def check(self) -> None:

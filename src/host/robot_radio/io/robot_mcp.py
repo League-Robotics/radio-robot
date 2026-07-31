@@ -25,6 +25,7 @@ from robot_radio.io.serial_conn import (
 )
 from robot_radio.robot import Nezha, NezhaProtocol
 from robot_radio.robot.connection import make_robot as _make_robot
+from robot_radio.robot.halt import halt_now
 from robot_radio.calibration.push import push_calibration
 from robot_radio.nav.navigator import Navigator, log_record
 from robot_radio.nav.nav_params import NavParams
@@ -198,7 +199,7 @@ async def list_tools() -> list[types.Tool]:
                        "timeout": {"type": "number", "default": 30, "description": "Seconds to wait for G+DONE"},
                    }, "required": ["x", "y", "speed"]}),
         types.Tool(name="stop",
-                   description="Stop motors.",
+                   description="Halt motors immediately (estop) -- clears the planner queue too.",
                    inputSchema={"type": "object", "properties": {}, "required": []}),
         types.Tool(name="grip",
                    description="Set gripper servo angle (0=open, 180=closed).",
@@ -557,8 +558,12 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         if err:
             result = err
         else:
-            _robot.stop()
-            result = {"sent": "STOP"}
+            # The tool the LLM reaches for when it wants the robot stopped
+            # must halt NOW, not queue a planned stop behind whatever Move
+            # is already in flight (measured 39.8cm/5.9s vs 2.9cm/0.10s --
+            # robot_radio.robot.halt).
+            halt_now(_robot)
+            result = {"sent": "ESTOP"}
 
     elif name == "grip":
         err = _require_robot()

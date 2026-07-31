@@ -13,13 +13,13 @@ Three ways in, one grammar:
   * interactive   — ``rogo repl``  (prompts on a tty)
 
 Telemetry recording (``--record FILE``) taps the SAME frame stream the command
-loop drains: a command's ack rides inside a ``Telemetry`` frame's single ack
-slot (``TLMFrame.ack`` -- 115-003's frame-v2 rewrite replaced the pre-115
-depth-3 ack ring with this one slot), so a second, independent reader would
-steal an ack-bearing frame from the confirmer. Instead every frame is pumped
-exactly once — recorded to the JSONL file AND scanned for the pending corr_id
-in the same pass (``RogoSession.pump``). Single-threaded by construction;
-nothing is stolen.
+loop drains: a command's ack rides inside a ``Telemetry`` frame's bounded ack
+ring (``TLMFrame.acks`` -- 124-008 deleted the interim single-slot design
+115-003 had introduced; ring membership is now the only "really acked"
+signal), so a second, independent reader would steal an ack-bearing frame
+from the confirmer. Instead every frame is pumped exactly once — recorded to
+the JSONL file AND scanned for the pending corr_id in the same pass
+(``RogoSession.pump``). Single-threaded by construction; nothing is stolen.
 """
 from __future__ import annotations
 
@@ -33,6 +33,7 @@ from typing import Any, TextIO
 
 from robot_radio.robot import NezhaProtocol
 from robot_radio.robot.connection import make_robot as _make_robot
+from robot_radio.robot.halt import halt_now
 from robot_radio.robot.pb2 import envelope_pb2
 from robot_radio.robot.protocol import TLMFrame
 
@@ -88,7 +89,7 @@ class RogoSession:
     def pump(self) -> list[TLMFrame]:
         """Drain every pending telemetry frame ONCE: record it (if recording)
         and remember the freshest. Returns the drained frames so callers can
-        also scan their single ack slot (``TLMFrame.ack``)."""
+        also scan their bounded ack ring (``TLMFrame.acks``)."""
         frames = self.proto.read_pending_binary_tlm_frames()
         for f in frames:
             self._latest = f
@@ -98,12 +99,20 @@ class RogoSession:
 
     def confirm(self, corr_id: int, timeout_ms: int = ACK_TIMEOUT):
         """Pump frames until one carries an ack for ``corr_id`` (or timeout).
-        Returns the matching ``AckEntry`` or ``None``."""
+        Returns the matching ``AckEntry`` or ``None``.
+
+        Scans each frame's bounded ack ring (``TLMFrame.acks``) rather than
+        delegating to ``NezhaProtocol.wait_for_ack()`` — that method pumps
+        frames itself, which would bypass ``self.recorder`` and silently
+        drop frames from a recording (124-008 deleted the single "freshest
+        ack" scalar slot this method used to read; ring membership is now
+        the only "really acked" signal)."""
         deadline = time.monotonic() + timeout_ms / 1000.0
         while time.monotonic() < deadline:
             for f in self.pump():
-                if f.ack is not None and f.ack.corr_id == corr_id:
-                    return f.ack
+                for ack in f.acks:
+                    if ack.corr_id == corr_id:
+                        return ack
             time.sleep(0.005)
         return None
 
@@ -128,8 +137,11 @@ class RogoSession:
 
     def close(self) -> None:
         try:
-            self.proto.stop()
+            halt_now(self.proto)
         except Exception:
+            # halt_now already logged ROBOT MAY STILL BE MOVING; the
+            # operator has been told -- which is the entire point. A
+            # session teardown path must not raise past this.
             pass
         if self.recorder is not None:
             print(f"  recorded {self.recorder.count} telemetry frames -> {self.recorder.path}",
@@ -189,6 +201,9 @@ def verb_twist(session: RogoSession, tokens: list[str]) -> None:
 
 
 def verb_stop(session: RogoSession, tokens: list[str]) -> None:
+    """stop — the user typed the planned-stop verb by name; a Ctrl-C or
+    cleanup path elsewhere means "halt now" and must call halt_now()
+    instead (see robot_radio.robot.halt)."""
     cid = session.proto.stop()
     print(f"  stop  {_ack_str(session, cid)}")
 
@@ -210,6 +225,10 @@ def verb_drive(session: RogoSession, tokens: list[str]) -> None:
     cid = session.proto.twist(v_x=v_x, omega=0.0, duration=dur + 50)
     print(f"  drive {dist:g}mm @ {speed:g}mm/s (~{dur:.0f}ms, open-loop)  {_ack_str(session, cid)}")
     session.wait(dur)
+    # Deliberate, sequenced stop: the timed twist above has already run its
+    # full duration (session.wait(dur) already blocked for it), so this is
+    # "come to a clean stop now that the move is done", not a halt-now
+    # context -- planned stop() is correct here.
     session.proto.stop()
     session.wait(150)  # let it settle / record the stop
 
@@ -227,6 +246,8 @@ def verb_turn(session: RogoSession, tokens: list[str]) -> None:
     cid = session.proto.twist(v_x=0.0, omega=omega, duration=dur + 50)
     print(f"  turn {deg:g}deg @ {speed:g}deg/s (~{dur:.0f}ms, open-loop)  {_ack_str(session, cid)}")
     session.wait(dur)
+    # Deliberate, sequenced stop -- same rationale as verb_drive's own stop
+    # above: the timed spin has already run its full duration.
     session.proto.stop()
     session.wait(150)
 
@@ -305,6 +326,8 @@ def verb_raw(session: RogoSession, tokens: list[str]) -> None:
     arm = tokens[0]
     rest = tokens[1:]
     if arm == "stop":
+        # The user explicitly built a `raw stop` envelope by name --
+        # deliberate planned stop by request, same rationale as verb_stop.
         cid = session.proto.stop()
         print(f"  raw stop  {_ack_str(session, cid)}")
         return

@@ -12,6 +12,7 @@ import time
 
 from robot_radio.io.serial_conn import SerialConnection, list_serial_ports, DEFAULT_PORT
 from robot_radio.robot import QBotPro, Nezha, NezhaProtocol, Cutebot
+from robot_radio.robot.halt import halt_now
 from robot_radio.robot.pb2 import envelope_pb2
 from robot_radio.robot.protocol import TLMFrame
 from robot_radio.robot.connection import (
@@ -539,8 +540,8 @@ def cmd_drive(args):
                     print(f"ENC {left_enc} {right_enc}  VEL {vl} {vr}")
         except KeyboardInterrupt:
             print("\nCtrl-C caught, stopping...", file=sys.stderr)
-        _log("sending STOP")
-        robot.stop()
+        _log("sending halt (estop)")
+        halt_now(robot, log=_log)
         _log("waiting for motors to stop")
         lines = conn.read_lines(duration=500)
         for line in lines:
@@ -554,8 +555,8 @@ def cmd_drive(args):
                 print(f"ENC {left_enc} {right_enc}")
         except KeyboardInterrupt:
             print("\nCtrl-C caught, stopping...", file=sys.stderr)
-        _log("sending STOP")
-        robot.stop()
+        _log("sending halt (estop)")
+        halt_now(robot, log=_log)
         _log("waiting for motors to stop")
         # Give firmware time to process STOP and confirm
         lines = conn.read_lines(duration=500)
@@ -575,12 +576,15 @@ def cmd_drive_stream(args):
             print(f"ENC {left_enc} {right_enc}")
     except KeyboardInterrupt:
         pass
-    robot.stop()
+    halt_now(robot, log=_log)
     conn.disconnect()
 
 
 def cmd_stop(args):
-    """Stop motors (v2 STOP command)."""
+    """Send the planned STOP command (v2). This IS `rogo stop` -- the user
+    explicitly asked for the planned, sequenced stop by name; a Ctrl-C or
+    cleanup path elsewhere means "halt now" and must call halt_now()
+    instead (see robot_radio.robot.halt)."""
     robot, conn, _ = _make_robot(args)
     robot.stop()
     print("STOP")
@@ -674,8 +678,10 @@ def cmd_turnto(args):
         print(f"final error={err:+.1f}°  (target={target:+.1f}°)")
     finally:
         try:
-            proto.stop()
+            halt_now(proto, log=_log)
         except Exception:
+            # halt_now already logged ROBOT MAY STILL BE MOVING; the
+            # operator has been told -- which is the entire point.
             pass
         try:
             dc.close()
@@ -764,8 +770,10 @@ def cmd_goto(args):
         )
     finally:
         try:
-            proto.stop()
+            halt_now(proto, log=_log)
         except Exception:
+            # halt_now already logged ROBOT MAY STILL BE MOVING; the
+            # operator has been told -- which is the entire point.
             pass
         try:
             dc.close()
