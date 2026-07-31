@@ -81,6 +81,11 @@ def _make_fake_transport():
             self.sent.append(line)
             return "OK"
 
+        def halt(self) -> None:
+            # 128-003: Transport.halt() is now abstract; this file never
+            # exercises STOP/halt behavior, so a no-op satisfies the ABC.
+            pass
+
     return FakeTransport()
 
 

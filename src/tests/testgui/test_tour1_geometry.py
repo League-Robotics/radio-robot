@@ -352,6 +352,13 @@ def _make_fake_hardware_transport_class():
         def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
             return ""
 
+        def halt(self) -> None:
+            # 128-003: Transport.halt() is now abstract; this file drives
+            # tours via the twist surface (protocol.stop(), covered by
+            # _FakeTwistTransport below), not the STOP-button halt rewire,
+            # so a no-op satisfies the ABC.
+            pass
+
         # -- 107-003's twist surface (see transport.py's _HardwareTransport
         # -- this fake is the "Serial" stand-in, so it needs the SAME
         # protocol/suspend/resume surface _TourRunner.run() actually calls).

@@ -87,6 +87,7 @@ from __future__ import annotations
 
 import math
 import time
+from unittest.mock import Mock
 
 import pytest
 
@@ -1043,3 +1044,185 @@ def test_goto_button_stays_permanently_disabled(gui, recorder):
 )
 def test_goto_drives_to_target_pose_in_sim(gui, recorder):
     raise AssertionError("unreachable -- see skip reason")
+
+
+# ---------------------------------------------------------------------------
+# 6. Hardware-transport-shaped STOP acceptance (128-003,
+#    testgui-stop-paths-must-halt-through-the-transport-not-the-dead-
+#    bridge.md).
+# ---------------------------------------------------------------------------
+#
+# Every button battery above (including the STOP-mid-tour test) connects
+# through Sim, where SimLoop.stop() already halts correctly (that method's
+# own docstring: "sim_inject_stop is retargeted at ESTOP ... every existing
+# caller of this entry point means 'halt the drivetrain now'") -- which is
+# exactly what let hardware's STOP silently do nothing for as long as it
+# did: on _HardwareTransport, on_stop() used to send the wire string "STOP"
+# through binary_bridge.translate_command(), an unconditional dead stub
+# (legacy_verbs deleted wholesale, 107-003) that returns an ERR reply
+# without ever touching the wire, while on_stop() logged "[INFO] STOP sent"
+# regardless -- a robot on real hardware kept driving.
+#
+# This section connects the REAL GUI against a hardware-shaped
+# SerialTransport whose connect()/disconnect() are stubbed (no real serial
+# port) and whose self._proto is a mocked NezhaProtocol -- every OTHER
+# method, in particular halt() (the one this test exists to exercise), runs
+# the REAL _HardwareTransport implementation unmodified. This verifies
+# production code end to end through the real button click -> on_stop() ->
+# transport.halt() -> self.protocol.estop() path, not a hand-rolled
+# substitute for it (the exact duplication anti-pattern this ticket's own
+# Part 1 baseline fix just eliminated from the Sim-Errors tests -- see
+# _fake_sim_transport.py's module docstring).
+
+
+def _build_hw_gui(qapp, tmp_path_factory, monkeypatch):
+    """Build the REAL GUI window, connected via a hardware-shaped
+    SerialTransport with a mocked NezhaProtocol. Returns ``(window, app,
+    mock_proto)`` -- the caller may configure ``mock_proto.estop``'s
+    ``side_effect``/return value BEFORE clicking a button that reaches
+    ``transport.halt()`` (construction happens during this call; nothing
+    calls ``estop()`` until a caller does).
+
+    Function-scoped (unlike the module-scoped Sim ``gui`` fixture above):
+    each test wants its OWN mock estop() call-count/side-effect, not a
+    shared session -- mirrors ``_connect_real_sim()``'s pattern in
+    test_set_origin.py/test_tour1_geometry.py for the same reason.
+    """
+    import pathlib
+
+    from PySide6.QtWidgets import (  # type: ignore[import-untyped]
+        QComboBox,
+        QLineEdit,
+        QPushButton,
+    )
+
+    import robot_radio.testgui.__main__ as gui_main
+    from robot_radio.config import robot_config as rc_mod
+    from robot_radio.robot.protocol import NezhaProtocol
+    from robot_radio.testgui import sim_prefs
+    from robot_radio.testgui import transport as transport_mod
+
+    repo_root = pathlib.Path(__file__).resolve().parents[3]
+    cfg_path = repo_root / "data" / "robots" / "tovez_nocal.json"
+    assert cfg_path.exists(), f"missing {cfg_path}"
+
+    tmp_path = tmp_path_factory.mktemp("hw_stop_acceptance")
+    monkeypatch.setenv("ROBOT_CONFIG", str(cfg_path))
+    rc_mod._reset_robot_config()
+    monkeypatch.setattr(sim_prefs, "_PREFS_DIR", tmp_path)
+    monkeypatch.setattr(sim_prefs, "_PREFS_PATH", tmp_path / "sim_error_profile.json")
+
+    created: list = []
+    _RealSerialTransport = transport_mod.SerialTransport
+
+    class _StubSerialTransport(_RealSerialTransport):  # noqa: N801
+        """Hardware-shaped fake: connect()/disconnect() are stubbed to
+        avoid real serial I/O; self._proto is a spec-restricted mocked
+        NezhaProtocol (a call to a nonexistent method fails loudly rather
+        than returning a stray Mock). halt() is inherited UNMODIFIED from
+        _HardwareTransport -- it calls self.protocol.estop(), which is
+        exactly this mock, so the test observes the real production call.
+        """
+
+        def __init__(self, port: str = "fake-hw-port") -> None:
+            super().__init__(port)
+            self.mock_proto = Mock(spec=NezhaProtocol)
+            self._proto = self.mock_proto
+            created.append(self)
+
+        def connect(self, *, robot_config: "object | None" = None) -> None:
+            pass  # no real serial port to open -- self._proto is already set
+
+        def disconnect(self) -> None:
+            pass
+
+    monkeypatch.setattr(transport_mod, "SerialTransport", _StubSerialTransport)
+
+    window, app = gui_main._build_main_window()
+
+    combo = window.findChild(QComboBox, "transport_combo")
+    combo.setCurrentText("Serial")
+    port_edit = window.findChild(QLineEdit, "port_edit")
+    # Non-empty port text skips _on_connect()'s real-hardware auto-detect
+    # (find_robot_serial_port()/list_ports()), which would otherwise find
+    # nothing on a CI box with no robot plugged in and abort before ever
+    # constructing a transport.
+    port_edit.setText("fake-hw-port")
+
+    connect_btn = window.findChild(QPushButton, "connect_btn")
+    connect_btn.click()
+    app.processEvents()
+
+    assert created, "Connect did not construct a SerialTransport"
+    transport = created[-1]
+
+    return window, app, transport.mock_proto
+
+
+def _teardown_hw_gui(window, app) -> None:
+    from PySide6.QtWidgets import QPushButton  # type: ignore[import-untyped]
+
+    from robot_radio.config import robot_config as rc_mod
+
+    disconnect_btn = window.findChild(QPushButton, "disconnect_btn")
+    if disconnect_btn is not None and disconnect_btn.isEnabled():
+        disconnect_btn.click()
+        app.processEvents()
+    window.hide()
+    rc_mod._reset_robot_config()
+
+
+def test_stop_button_calls_estop_exactly_once_on_hardware_transport(
+    qapp, tmp_path_factory, monkeypatch
+):
+    """STOP on a (mocked) hardware transport must call estop() -- exactly
+    once, never zero (the pre-128-003 defect: the dead binary_bridge stub
+    made this a silent no-op) and never more than once (a retry loop
+    hiding a swallowed failure)."""
+    from PySide6.QtWidgets import QPushButton  # type: ignore[import-untyped]
+
+    window, app, mock_proto = _build_hw_gui(qapp, tmp_path_factory, monkeypatch)
+    try:
+        stop_btn = window.findChild(QPushButton, "ops_btn_stop")
+        assert stop_btn is not None and stop_btn.isEnabled(), (
+            "ops_btn_stop must be enabled once connected"
+        )
+
+        stop_btn.click()
+        app.processEvents()
+
+        mock_proto.estop.assert_called_once()
+    finally:
+        _teardown_hw_gui(window, app)
+
+
+def test_stop_button_raising_estop_logs_error_not_info(
+    qapp, tmp_path_factory, monkeypatch
+):
+    """A raising estop() must produce a loud [ERROR] HALT FAILED log line,
+    never an [INFO] success line -- on_stop() must not log success on
+    faith. This is exactly the class of defect that shipped undetected:
+    the Sim-only button battery above can never exercise it, since
+    SimLoop.stop() always halts correctly in Sim."""
+    from PySide6.QtWidgets import QPlainTextEdit, QPushButton  # type: ignore[import-untyped]
+
+    window, app, mock_proto = _build_hw_gui(qapp, tmp_path_factory, monkeypatch)
+    try:
+        mock_proto.estop.side_effect = ConnectionError("simulated estop failure")
+
+        stop_btn = window.findChild(QPushButton, "ops_btn_stop")
+        assert stop_btn is not None and stop_btn.isEnabled()
+
+        stop_btn.click()
+        app.processEvents()
+
+        mock_proto.estop.assert_called_once()
+        log_text = window.findChild(QPlainTextEdit, "log_pane").toPlainText()
+        assert "[ERROR]" in log_text and "HALT FAILED" in log_text, (
+            f"expected a loud [ERROR] HALT FAILED log line; got:\n{log_text}"
+        )
+        assert "[INFO] estop sent" not in log_text, (
+            "must never log success on faith after a raised halt failure"
+        )
+    finally:
+        _teardown_hw_gui(window, app)

@@ -941,7 +941,8 @@ def _build_main_window():  # type: ignore[return]
     # stay gated (still reply typed ERR "unsupported" -- see
     # binary_bridge.py's _POSE_RESET_VERBS) and are therefore no-ops on the
     # binary plane today, but that no longer blocks the tour from running:
-    # _set_origin() also sends STOP and resets the DISPLAY (TraceModel
+    # _set_origin() also halts (128-003: transport.halt(), estop) and resets
+    # the DISPLAY (TraceModel
     # anchor/clear, canvas avatar) unconditionally, and the sim plant is
     # teleported to (0,0,0) separately (is_sim_transport() branch) -- the
     # tour then drives for real via D/RT, and the avatar tracks it via
@@ -2122,11 +2123,23 @@ def _build_main_window():  # type: ignore[return]
                 self.finished.emit()
 
         def _safe_stop(self) -> None:
-            """Send a best-effort STOP to halt the robot."""
+            """Halt-now (estop) the robot -- best-effort cleanup call from a
+            worker thread (loop exit / exception path).
+
+            128-003: rewired off the dead ``transport.send()`` call sending
+            the wire verb ``STOP`` (routed through ``binary_bridge.
+            translate_command()``'s unconditional stub on hardware, and
+            even where it "worked" meant the PLANNED stop, not halt-now)
+            onto ``transport.halt()`` directly. A raised failure is logged
+            loudly -- never swallowed on faith -- but does not propagate
+            past this cleanup call.
+            """
             try:
-                self._transport.send("STOP")
-            except Exception:  # noqa: BLE001
-                pass
+                self._transport.halt()
+                self.log_line.emit("[INFO] estop sent -- motion halted", "")
+            except Exception as exc:  # noqa: BLE001
+                self.log_line.emit(
+                    f"[ERROR] HALT FAILED -- ROBOT MAY STILL BE MOVING: {exc}", "")
 
     def _on_telemetry_thread_v2(frame: "object") -> None:
         """Transport on_telemetry callback — fires on the reader/tick thread.
@@ -2559,10 +2572,16 @@ def _build_main_window():  # type: ignore[return]
         then click "Set Robot @ 0,0" to reset everything to (0, 0, heading 0).
 
         Steps:
-        0. Send ``STOP`` to halt motors and abort any in-flight motion goal,
-           so the pose reset starts from a truly idle robot.  In Sim mode this
-           is essential: a plant teleport is overwritten by the next tick if the
-           firmware is still driving toward an old goal (heading drifts back).
+        0. Call ``transport.halt()`` (estop) to halt motors and abort any
+           in-flight motion goal, so the pose reset starts from a truly idle
+           robot.  In Sim mode this is essential: a plant teleport is
+           overwritten by the next tick if the firmware is still driving
+           toward an old goal (heading drifts back). 128-003: rewired off
+           the dead ``transport.command()`` call sending the wire verb
+           ``STOP`` (a no-op on hardware via
+           ``binary_bridge.translate_command()``'s stub) onto
+           ``transport.halt()`` directly -- a raised failure is logged
+           loudly, never swallowed on faith.
         0b. In Sim mode only, teleport the plant ground-truth to (0, 0, 0°) via
            ``transport.set_true_pose`` — the sim avatar follows the plant, not
            the firmware belief, and there is no operator to place the robot.
@@ -2589,21 +2608,27 @@ def _build_main_window():  # type: ignore[return]
         pending sprint 098's fused pose) and are therefore no-ops on the
         wire today -- steps 1-3 are sent but change nothing firmware-side.
         This no longer blocks a tour from running, though: step 0's
-        ``STOP``/Sim-plant-teleport and step 4's display reset (which also
+        halt/Sim-plant-teleport and step 4's display reset (which also
         re-zeros the host-side ``EncoderDeadReckoner`` via ``TraceModel.
         anchor()``/``clear()``) are unconditional and sufficient for the
         open-loop D/RT tour steps that follow to start from a known state.
         """
         transport = _state.get("transport")
         if transport is not None:
-            # 0. Halt motors and abort any in-flight motion goal (TURN/tour/GOTO)
-            #    BEFORE resetting the pose.  This matters especially in Sim: the
-            #    plant teleport below is overwritten by the next tick if the
-            #    firmware is still driving the motors toward an old goal (the
-            #    heading would drift straight back — the "jumps back to the angle
-            #    it started with" bug).  STOP first so PWM is zero when we
-            #    teleport, and so the reset starts from a truly idle robot.
-            transport.command("STOP", read_timeout=300)
+            # 0. Halt-now (estop) and abort any in-flight motion goal
+            #    (TURN/tour/GOTO) BEFORE resetting the pose.  This matters
+            #    especially in Sim: the plant teleport below is overwritten
+            #    by the next tick if the firmware is still driving the
+            #    motors toward an old goal (the heading would drift straight
+            #    back — the "jumps back to the angle it started with" bug).
+            #    Halt first so PWM is zero when we teleport, and so the
+            #    reset starts from a truly idle robot. Never log success on
+            #    faith — a raised halt failure is loud, not silent.
+            try:
+                transport.halt()
+                _append_log("[INFO] estop sent -- motion halted")
+            except Exception as exc:  # noqa: BLE001
+                _append_log(f"[ERROR] HALT FAILED -- ROBOT MAY STILL BE MOVING: {exc}")
             # 0b. Sim only: teleport the plant ground-truth to (0, 0, 0°).
             #    In Sim mode the avatar follows the plant ground truth, not the
             #    firmware's belief.  On real hardware the operator physically
@@ -2611,7 +2636,7 @@ def _build_main_window():  # type: ignore[return]
             #    this the plant keeps its prior (e.g. turned) pose and the avatar
             #    snaps back to it on the next truth delivery — while OZ/SI below
             #    would re-reference the OTOS at a stale heading.  Teleport AFTER
-            #    STOP (so it sticks) and before OZ so OZ zeroes at heading 0.
+            #    the halt (so it sticks) and before OZ so OZ zeroes at heading 0.
             if is_sim_transport(transport):
                 transport.set_true_pose(0.0, 0.0, 0.0)
             # 1. Zero encoder counters so SI starts from a clean state.

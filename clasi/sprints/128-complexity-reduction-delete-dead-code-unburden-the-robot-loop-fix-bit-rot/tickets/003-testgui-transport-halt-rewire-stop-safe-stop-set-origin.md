@@ -1,8 +1,9 @@
 ---
 id: '003'
 title: testgui Transport.halt() + rewire STOP/_safe_stop/_set_origin
-status: open
-use-cases: [SUC-005]
+status: done
+use-cases:
+- SUC-005
 depends-on: []
 github-issue: ''
 issue: testgui-stop-paths-must-halt-through-the-transport-not-the-dead-bridge.md
@@ -35,35 +36,35 @@ maps to the PLANNED stop, not the halt-now `estop()`.
 
 ## Acceptance Criteria
 
-- [ ] `Transport` ABC (`testgui/transport.py`) gains an abstract
+- [x] `Transport` ABC (`testgui/transport.py`) gains an abstract
       `halt() -> None` method, documented as estop semantics (clears the
       active Move AND the planner queue) and as raising on failure —
       callers must surface a failed halt, never log success on faith.
-- [ ] `_HardwareTransport.halt()` calls `self.protocol.estop()`
+- [x] `_HardwareTransport.halt()` calls `self.protocol.estop()`
       (raising `ConnectionError` if not connected).
-- [ ] `SimTransport.halt()` calls `self.protocol.stop()` (`SimLoop.stop()`
+- [x] `SimTransport.halt()` calls `self.protocol.stop()` (`SimLoop.stop()`
       already sends `ESTOP` on the sim ABI).
-- [ ] `on_stop()` step 2, `_safe_stop()`, and `_set_origin()`'s
+- [x] `on_stop()` step 2, `_safe_stop()`, and `_set_origin()`'s
       pre-teleport halt are rewired onto `transport.halt()`, logging
       `[INFO] estop sent -- motion halted` on success and
       `[ERROR] HALT FAILED -- ROBOT MAY STILL BE MOVING: <exc>` on a
       raise — never logging success on faith.
-- [ ] `on_stop()` step 3 (`STREAM 0`) takes the same direct-call
+- [x] `on_stop()` step 3 (`STREAM 0`) takes the same direct-call
       treatment (`transport.protocol.tlmOff()` on hardware) or logs an
       honest "not available" — full removal of the STREAM verb's
       dead-bridge path is ticket 004's job; this ticket only needs
       `on_stop()` itself not to depend on the dead translation layer for
       its own halt step.
-- [ ] A hardware-transport-shaped test (mocked `NezhaProtocol`) added to
+- [x] A hardware-transport-shaped test (mocked `NezhaProtocol`) added to
       `test_gui_button_acceptance.py`'s harness asserts: the STOP button
       results in exactly one `estop()` call, and a raising `estop()`
       produces an `[ERROR]` log, not `[INFO]`. (The existing suite is
       Sim-only, which is exactly what let this ship undetected — `SimLoop.stop()`
       already halts correctly in Sim, hiding that hardware's STOP does
       nothing.)
-- [ ] `grep -rn "command(\"STOP\"\|send(\"STOP\"" src/host/robot_radio/testgui/`
+- [x] `grep -rn "command(\"STOP\"\|send(\"STOP\"" src/host/robot_radio/testgui/`
       returns nothing.
-- [ ] `grep -rn "estop" src/host/robot_radio/testgui/` shows the ABC,
+- [x] `grep -rn "estop" src/host/robot_radio/testgui/` shows the ABC,
       both backends, and the rewired call sites.
 
 ## Testing

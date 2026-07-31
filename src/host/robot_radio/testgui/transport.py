@@ -578,6 +578,38 @@ class Transport(abc.ABC):
         """
 
     # ------------------------------------------------------------------
+    # Halt-now (128-003, testgui-stop-paths-must-halt-through-the-
+    # transport-not-the-dead-bridge.md)
+    # ------------------------------------------------------------------
+
+    @abc.abstractmethod
+    def halt(self) -> None:
+        """Halt the robot NOW -- estop semantics, never the PLANNED stop.
+
+        Clears the active Move AND the planner's pending queue in the
+        SAME cycle (``NezhaProtocol.estop()``'s own docstring). This is
+        distinct from the wire verb ``STOP`` / ``NezhaProtocol.stop()``,
+        which enqueues behind whatever ``Move`` is already in flight and
+        only takes effect once it is that stop's own turn -- measured on
+        hardware 2026-07-29: a mid-leg planned stop let the robot travel
+        the ENTIRE remaining leg (39.8cm, 5.9s) before taking effect,
+        vs. 2.9cm/0.10s for estop() (see
+        ``.claude/rules/playfield-testing.md``'s Halting section).
+
+        MUST raise on failure -- never return normally having silently
+        failed to halt. Every call site that means "halt the robot right
+        now" (the STOP button, a pre-teleport safety halt) must surface a
+        raised failure loudly (e.g. an ``[ERROR] HALT FAILED`` log line),
+        never swallow it on faith that the call "probably" worked -- a
+        halt that silently failed is indistinguishable from one that
+        succeeded, which is the exact defect this method exists to close
+        (previously ``on_stop()`` sent the string ``"STOP"`` through
+        ``binary_bridge.translate_command()``, an unconditional dead stub
+        that returns an error reply without ever touching the wire, while
+        logging ``"[INFO] STOP sent"`` regardless).
+        """
+
+    # ------------------------------------------------------------------
     # Commands (must be implemented)
     # ------------------------------------------------------------------
 
@@ -817,6 +849,29 @@ class _HardwareTransport(Transport):
         (see ``planner/tour.py``'s own module docstring for that history).
         """
         return self._proto
+
+    # ------------------------------------------------------------------
+    # Halt-now (128-003)
+    # ------------------------------------------------------------------
+
+    def halt(self) -> None:
+        """Halt-now for real hardware: ``NezhaProtocol.estop()`` -- see
+        ``Transport.halt()``'s own docstring for the estop-vs-planned-stop
+        distinction this exists to enforce.
+
+        Raises ``ConnectionError`` if not connected; otherwise propagates
+        whatever ``estop()`` itself raises (a wire timeout, a link drop
+        mid-send). Never logs on its own -- callers (``operations.py``'s
+        ``on_stop()``, ``__main__.py``'s ``_safe_stop()``/``_set_origin()``)
+        own the honest success/failure log line, matching every other
+        halt call site in this tree
+        (``robot_radio.robot.halt.halt_now()``'s own "log, then raise"
+        idiom) without this method retrying or double-logging on top of
+        the caller's own report.
+        """
+        if self._proto is None:
+            raise ConnectionError("Transport is not connected")
+        self._proto.estop()
 
     def suspend_telemetry_reader(self) -> None:
         """Pause ``_reader_loop()``'s drain of the shared binary TLM queue.
@@ -1526,6 +1581,25 @@ class SimTransport(Transport):
         it straight to ``planner.tour.run_tour()``.
         """
         return self._loop
+
+    # ------------------------------------------------------------------
+    # Halt-now (128-003)
+    # ------------------------------------------------------------------
+
+    def halt(self) -> None:
+        """Halt-now for the sim backend: ``SimLoop.stop()`` -- despite its
+        name, already sends ESTOP on the sim ABI, not a planned stop (see
+        ``SimLoop.stop()``'s own docstring: "``sim_inject_stop`` is
+        retargeted at ESTOP ... every existing caller of this entry point
+        means 'halt the drivetrain now'"). This method exists so callers
+        never branch on backend type -- ``transport.halt()`` means the
+        same thing on both Sim and hardware.
+
+        Raises ``ConnectionError`` if not connected.
+        """
+        if self._loop is None:
+            raise ConnectionError("SimTransport is not connected")
+        self._loop.stop()
 
     def firmware_version(self) -> "str | None":
         """Version compiled into the loaded sim library, or None if not

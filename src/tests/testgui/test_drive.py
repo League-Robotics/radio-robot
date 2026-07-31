@@ -106,6 +106,12 @@ class _FakeTransport(Transport):
         self.sent.append(line)
         return ""
 
+    def halt(self) -> None:
+        # 128-003: Transport.halt() is now abstract; this file exercises
+        # DEV DT VW/STOP keyboard-drive wire strings, not the halt-now
+        # rewire, so a no-op satisfies the ABC.
+        pass
+
 
 # ---------------------------------------------------------------------------
 # Pure mapping helpers -- no QApplication used in this section.

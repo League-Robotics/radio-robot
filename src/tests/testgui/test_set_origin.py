@@ -4,16 +4,25 @@ verification (Sync-Pose, Zero-Encoders, Set-Origin, STREAM). Ported from
 
 The pre-rebuild file's inline reimplementation of ``_set_origin`` only
 modelled a 3-step sequence (``ZERO enc``, ``OZ``, ``SI``). Production
-(``src/host/robot_radio/testgui/__main__.py``, ``_set_origin``, ~line 1729) has
-since grown a leading ``STOP`` (halt + cancel any in-flight Planner goal,
+(``src/host/robot_radio/testgui/__main__.py``, ``_set_origin``) has since
+grown a leading halt (cancel any in-flight Planner goal,
 architecture-update.md Decision 1) and a Sim-only plant-teleport step
-between ``STOP`` and ``ZERO enc`` -- a real 5-step sequence. This file's
+between the halt and ``ZERO enc`` -- a real 5-step sequence. This file's
 inline reimplementation below mirrors that CURRENT sequence line-for-line
 (the same "no import seam" answer ``test_goto.py``/``test_tour1_geometry.py``
 use for other callables nested inside ``_build_main_window()``), and adds
 the real-sim confirmation ticket 004 asks for: after actually driving away
 from world origin, clicking "Set Robot @ 0,0" reads the fused pose back at
 (0, 0, 0 deg) against the real compiled sprint-084 firmware/sim.
+
+128-003 (testgui-stop-paths-must-halt-through-the-transport-not-the-dead-
+bridge.md): the leading step used to send the wire string ``"STOP"`` via
+``transport.command()``, which on real hardware was an unconditional dead
+stub (``binary_bridge.translate_command()``, ``legacy_verbs`` deleted
+wholesale 107-003) -- the robot kept driving. Now calls
+``transport.halt()`` directly (estop semantics), logging
+``[INFO] estop sent -- motion halted`` on success and
+``[ERROR] HALT FAILED -- ROBOT MAY STILL BE MOVING: <exc>`` on a raise.
 
 Run with::
 
@@ -61,7 +70,14 @@ def test_build_setpose_command_origin_exact() -> None:
 
 
 class _FakeTransport(Transport):
-    """Records every command()/send() line; no real IO."""
+    """Records every command()/send()/halt() call; no real IO.
+
+    ``halt()`` appends the sentinel ``"ESTOP"`` to the SAME
+    ``commands_sent`` list ``command()``/``send()`` use, so the
+    order-of-operations tests below can assert the full step sequence
+    (halt, then ZERO enc/OZ/SI) with one list, matching how production
+    ``_set_origin()`` sequences them (128-003: step 0 is now
+    ``transport.halt()``, not a ``"STOP"`` wire command)."""
 
     def __init__(self) -> None:
         super().__init__()
@@ -79,6 +95,9 @@ class _FakeTransport(Transport):
     def command(self, line: str, read_timeout: int = 300) -> str:  # [ms]
         self.commands_sent.append(line)
         return ""
+
+    def halt(self) -> None:
+        self.commands_sent.append("ESTOP")
 
 
 class SimTransport(_FakeTransport):  # noqa: N801 -- name is load-bearing: is_sim_transport()
@@ -184,15 +203,22 @@ def _make_controller(
 
 
 # ---------------------------------------------------------------------------
-# _set_origin -- inline reimplementation mirroring __main__.py (~line 1729),
-# the CURRENT 5-step sequence: STOP, sim-teleport, ZERO enc, OZ, SI 0 0 0.
+# _set_origin -- inline reimplementation mirroring __main__.py (~line 2566),
+# the CURRENT 5-step sequence: halt (estop), sim-teleport, ZERO enc, OZ,
+# SI 0 0 0. 128-003: step 0 changed from a wire "STOP" command to
+# transport.halt(), logging [INFO] estop sent -- motion halted on success
+# and [ERROR] HALT FAILED -- ROBOT MAY STILL BE MOVING: <exc> on a raise.
 # ---------------------------------------------------------------------------
 
 
 def _set_origin(transport, trace_model, canvas_ctrl, append_log) -> None:
     """Line-for-line reimplementation of __main__.py's _set_origin()."""
     if transport is not None:
-        transport.command("STOP", read_timeout=300)
+        try:
+            transport.halt()
+            append_log("[INFO] estop sent -- motion halted")
+        except Exception as exc:  # noqa: BLE001
+            append_log(f"[ERROR] HALT FAILED -- ROBOT MAY STILL BE MOVING: {exc}")
         if is_sim_transport(transport):
             transport.set_true_pose(0.0, 0.0, 0.0)
         transport.command("ZERO enc", read_timeout=300)
@@ -208,27 +234,29 @@ def _set_origin(transport, trace_model, canvas_ctrl, append_log) -> None:
 
 
 def test_set_origin_non_sim_sends_stop_zero_oz_si_in_order() -> None:
-    """A non-Sim transport gets exactly 4 wire commands, no plant teleport,
-    in the order STOP, ZERO enc, OZ, SI 0 0 0."""
+    """A non-Sim transport gets exactly one halt() call and 3 wire commands,
+    no plant teleport, in the order halt (ESTOP), ZERO enc, OZ, SI 0 0 0."""
     transport = _FakeTransport()
     log: list[str] = []
 
     _set_origin(transport, _FakeTraceModel(), _FakeCanvasCtrl(), log.append)
 
-    assert transport.commands_sent == ["STOP", "ZERO enc", "OZ", "SI 0 0 0"], (
+    assert transport.commands_sent == ["ESTOP", "ZERO enc", "OZ", "SI 0 0 0"], (
         f"got: {transport.commands_sent}"
     )
+    assert any("estop sent" in line for line in log)
 
 
 def test_set_origin_sim_transport_teleports_plant_between_stop_and_zero_enc() -> None:
-    """Sim mode inserts a plant teleport to (0,0,0) between STOP and ZERO enc."""
+    """Sim mode inserts a plant teleport to (0,0,0) between the halt and
+    ZERO enc."""
     transport = SimTransport()
     log: list[str] = []
 
     _set_origin(transport, _FakeTraceModel(), _FakeCanvasCtrl(), log.append)
 
     assert transport.commands_sent == [
-        "STOP", "TELEPORT 0.0 0.0 0.0", "ZERO enc", "OZ", "SI 0 0 0",
+        "ESTOP", "TELEPORT 0.0 0.0 0.0", "ZERO enc", "OZ", "SI 0 0 0",
     ], f"got: {transport.commands_sent}"
     assert transport.true_pose_calls == [(0.0, 0.0, 0.0)]
 
