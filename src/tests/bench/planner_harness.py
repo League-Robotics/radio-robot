@@ -3,7 +3,7 @@
 TickResult field-for-field, runs the same zero-error perfect plant the C++
 scenario tests use, and asserts the exactness gates from Python. Run:
 
-    python3 src/motion/planner/py/planner_harness.py
+    python3 src/tests/bench/planner_harness.py
 
 Build the library first:
 
@@ -11,6 +11,15 @@ Build the library first:
     cmake --build src/motion/planner/build --target motionplanner
 
 stdlib only -- no numpy, no uv needed.
+
+Relocated (128-010) from src/motion/planner/py/ to src/tests/bench/,
+joining the bench scripts (hil_drive.py, square_tour_sim.py, etc.) that
+import it -- they used to reach across a sibling `py/` directory via a
+sys.path hack; now co-located, no path bootstrap needed for the import
+itself. ``loadLibrary()`` below still resolves the C++ build directory by
+walking up to the repo root, since the CMake build itself still lives at
+src/motion/planner/build (unmoved -- it's real C++ source, not a bench
+artifact).
 """
 
 import ctypes
@@ -196,7 +205,11 @@ class TickResult(ctypes.Structure):
 # ---- library ----
 
 def loadLibrary() -> ctypes.CDLL:
-    build = Path(__file__).resolve().parent.parent / "build"
+    # 128-010: this file now lives at src/tests/bench/planner_harness.py,
+    # four levels below the repo root -- the CMake build directory itself
+    # is unmoved (src/motion/planner/build).
+    repoRoot = Path(__file__).resolve().parents[3]
+    build = repoRoot / "src" / "motion" / "planner" / "build"
     for name in ("libmotionplanner.dylib", "libmotionplanner.so"):
         candidate = build / name
         if candidate.exists():

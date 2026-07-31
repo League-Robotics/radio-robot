@@ -8,7 +8,7 @@ Logs true wheel speeds (telemetry) vs the planner's commanded wheel
 velocities and renders the same dual-trace plot as the simulation tour.
 Robot on the stand, wheels free.
 
-    uv run python src/motion/planner/bench/hil_square_tour.py \
+    uv run python src/tests/bench/hil_square_tour.py \
         --port /dev/cu.usbmodem2121102
 """
 
@@ -19,8 +19,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "py"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # 128-010: planner_harness.py is co-located
 from planner_harness import (  # noqa: E402
     KIND_ANGLE, KIND_DISTANCE, VELOCITY_TWIST, Move, TickResult)
 from hil_drive import PERIOD, BRIDGE_HOLD, BRIDGE_TIMEOUT, HilSession, hilLimits  # noqa: E402

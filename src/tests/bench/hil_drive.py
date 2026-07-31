@@ -16,7 +16,7 @@ targets.
 Scenarios: a distance leg, a rotation, then a distance->rotation->distance
 chain. HITL: robot on the stand, wheels free.
 
-    uv run python src/motion/planner/bench/hil_drive.py \
+    uv run python src/tests/bench/hil_drive.py \
         --port /dev/cu.usbmodem2121102 [--duty]
 
 --duty closes the wheel-velocity loop HOST-SIDE through the planner's M4
@@ -37,7 +37,7 @@ import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "py"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # 128-010: planner_harness.py is co-located
 from planner_harness import (  # noqa: E402  (path bootstrap above)
     KIND_ANGLE, KIND_DISTANCE, VELOCITY_TWIST, Move, PlannerLimits,
     RobotState, TickResult, loadLibrary)

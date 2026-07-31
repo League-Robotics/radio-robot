@@ -1,6 +1,17 @@
-# Motion planner bench measurements
+# Motion planner (host ctypes library) bench measurements
 
 Hardware characterization the host-only planner cannot derive for itself.
+This doc, and the scripts it covers (`encoder_refresh.py`, `hil_drive.py`,
+`hil_square_tour.py`, `plant_id.py`, `square_tour_sim.py`,
+`square_tour_velocity.py`, `planner_harness.py`), relocated here (128-010)
+from `src/motion/planner/bench/` and `src/motion/planner/py/` — bench/
+tooling artifacts inside the C++ library tree, joining the rest of the
+bench-tool catalog. `square_tour_sim.py`'s own committed capture is named
+`motionlib_square_tour_sim.png` (not `square_tour_sim.png`) to avoid
+colliding with the unrelated, pre-existing `square_tour_sim.png` this
+directory already had (127-007's `square_tour.py` goto-mode sim capture) —
+two entirely different scripts that happened to want the same output name
+once co-located.
 
 ## `encoder_refresh.py` — encoder refresh interval (issue §7 item 3)
 
@@ -15,7 +26,7 @@ p50 across speeds as the fixed-timer signature).
 Run it when the robot is back on the stand:
 
 ```bash
-uv run python src/motion/planner/bench/encoder_refresh.py \
+uv run python src/tests/bench/encoder_refresh.py \
     --port /dev/cu.usbmodem2121102
 ```
 
@@ -27,7 +38,7 @@ An existing `tlm_log.py` capture can be analyzed instead of taking a new
 one — the loader accepts either CSV shape:
 
 ```bash
-uv run python src/motion/planner/bench/encoder_refresh.py \
+uv run python src/tests/bench/encoder_refresh.py \
     --analyze src/tests/bench/out/tlm_log.csv
 ```
 

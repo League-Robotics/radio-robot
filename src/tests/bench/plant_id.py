@@ -9,7 +9,7 @@ velocity time series. Fit per step: steady-state gain [mm/s per duty],
 time constant tau [s] (63% rise), and dead time [s] (first motion).
 Gains are restored afterward.
 
-    uv run python src/motion/planner/bench/plant_id.py \
+    uv run python src/tests/bench/plant_id.py \
         --port /dev/cu.usbmodem2121102
 """
 

@@ -6,7 +6,8 @@
 #
 # `planner_tests` builds every test executable and runs them via ctest,
 # exiting nonzero on any failure. The `motionplanner` shared library is the
-# ctypes surface (py/planner_harness.py).
+# ctypes surface (src/tests/bench/planner_harness.py, relocated 128-010
+# from this directory's own py/).
 cmake_minimum_required(VERSION 3.16)
 project(motion_planner CXX)
 

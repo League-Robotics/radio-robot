@@ -27,7 +27,7 @@ corners carry no whiplash and no integral-windup overshoot.
 Produces a dual-axis plot: true wheel speeds vs time (left axis) and
 commanded duty per wheel (right axis).
 
-    uv run python src/motion/planner/bench/square_tour_sim.py
+    uv run python src/tests/bench/square_tour_sim.py
 """
 
 import ctypes
@@ -35,7 +35,7 @@ import math
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "py"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # 128-010: planner_harness.py is co-located
 from planner_harness import (  # noqa: E402
     KIND_ANGLE, KIND_DISTANCE, VELOCITY_TWIST, Move, PlannerLimits,
     RobotState, TickResult, loadLibrary)
@@ -316,7 +316,10 @@ def main() -> None:
                    fontsize=8, framealpha=0.9)
     axSpeed.grid(True, alpha=0.25)
     fig.tight_layout()
-    out = Path(__file__).parent / "square_tour_sim.png"
+    # 128-010: "motionlib_" prefix -- src/tests/bench/ already has an
+    # unrelated square_tour_sim.png (square_tour.py's goto-mode sim
+    # capture, 127-007); this script's own capture must not collide with it.
+    out = Path(__file__).parent / "motionlib_square_tour_sim.png"
     fig.savefig(out, dpi=130)
     print(f"wrote {out}")
 

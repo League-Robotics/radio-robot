@@ -8,7 +8,7 @@ be the only definition, reached by `otos_calibration_bench.py` through a
 grown its own `captureFixWithRetry` wrapper around `Geofence.captureFix`.
 Moved verbatim (behavior unchanged) except one deliberate fix: `captureFix`'s
 yaw averaging used to be a linear median of raw yaw, which is wrap-unsafe
-near +-pi; it now uses the circular mean `testkit/camera.read_camera_pose`
+near +-pi; it now uses the circular mean `testgui/transport.read_camera_pose`
 already implements (`atan2(mean(sin), mean(cos))`). The per-axis median for
 x/y is unchanged.
 
@@ -125,7 +125,7 @@ class Geofence:
 
         x/y use a per-axis median (unchanged). yaw uses the circular mean
         (atan2(mean(sin), mean(cos))), matching
-        `testkit/camera.read_camera_pose` -- a linear median of raw yaw is
+        `testgui/transport.read_camera_pose` -- a linear median of raw yaw is
         wrap-unsafe near +-pi (127-003 fix)."""
         xs: "list[float]" = []
         ys: "list[float]" = []

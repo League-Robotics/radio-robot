@@ -30,9 +30,9 @@ are genuinely read 8 ms apart and each duty write lands when it really
 does. Plant model (stiction, slew, quantum, velocity noise, time constant)
 is shared with square_tour_sim.py.
 
-    uv run python src/motion/planner/bench/square_tour_velocity.py
-    uv run python src/motion/planner/bench/square_tour_velocity.py --no-trim
-    uv run python src/motion/planner/bench/square_tour_velocity.py --symmetric
+    uv run python src/tests/bench/square_tour_velocity.py
+    uv run python src/tests/bench/square_tour_velocity.py --no-trim
+    uv run python src/tests/bench/square_tour_velocity.py --symmetric
 """
 
 import argparse
@@ -42,12 +42,11 @@ import math
 import sys
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "py"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))  # 128-010: planner_harness.py is co-located
 from planner_harness import (  # noqa: E402
     KIND_ANGLE, KIND_DISTANCE, VELOCITY_TWIST, Move, MovePhase, PlannerLimits,
     RobotState, TickResult, loadLibrary)
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
 import square_tour_sim  # noqa: E402
 from square_tour_sim import (  # noqa: E402
     CYCLE, GAIN_LEFT, GAIN_NOMINAL, GAIN_RIGHT, QUANTUM, SUBSTEP,

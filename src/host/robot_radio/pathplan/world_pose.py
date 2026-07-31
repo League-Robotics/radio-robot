@@ -35,7 +35,7 @@ instant: ``recvTime - age / 1000.0``. This module extrapolates a reading
 forward from that instant using the reading's own reported body-frame
 velocity (`TLMFrame.twist` for the encoder pose, `OtosReading.v_x/v_y/omega`
 for OTOS) -- the same `t - age` pattern
-`src/motion/planner/bench/hil_drive.py`'s `ingestTelemetry()` already uses,
+`src/tests/bench/hil_drive.py`'s `ingestTelemetry()` already uses,
 just anchored onto the host's clock instead of staying purely in the
 robot's. `ClockSync` (`robot/clock_sync.py`) is NOT activated here -- it has
 no live caller and is blocked on a separate, pre-existing `serial_conn.py`

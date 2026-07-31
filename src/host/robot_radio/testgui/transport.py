@@ -157,6 +157,7 @@ from robot_radio.testgui import sim_prefs
 
 if TYPE_CHECKING:
     from robot_radio.config.robot_config import RobotConfig
+    from robot_radio.field.playfield import Playfield
 
 _log = logging.getLogger(__name__)
 
@@ -496,6 +497,83 @@ def _relay_probe_banner(port: str, timeout_s: float = 2.0) -> "str | None":
                 ser.close()
             except Exception:
                 pass
+
+
+def read_camera_pose(
+    playfield: "Playfield",
+    tag_id: int = _CAMERA_TAG_ID,
+    n: int = 5,
+    timeout: float = 4.0,
+) -> TruthPose:
+    """Return averaged robot world pose (x_cm, y_cm, yaw_rad) from camera tags.
+
+    Polls the aprilcam daemon for tag readings via the Playfield interface,
+    averaging linearly for x and y and circularly for yaw (to handle angle
+    wrap-around). Relocated here (128-010) from the deleted
+    ``robot_radio.testkit.camera`` module — ``_HardwareTransport._truth_loop``
+    below is this function's only live caller.
+
+    The world heading is the (circular-mean) tag orientation directly — the
+    daemon already reports it in the world frame (0 = east, CCW+), and that
+    orientation IS the robot's forward heading:
+        world_yaw = atan2(mean(sin(tag_yaw)), mean(cos(tag_yaw)))
+
+    Parameters
+    ----------
+    playfield:
+        Open Playfield that provides daemon access via ``get_tag()``.
+    tag_id:
+        AprilTag ID to read.  Default is the robot tag (``_CAMERA_TAG_ID``).
+    n:
+        Number of valid readings to collect before returning.
+    timeout:
+        Maximum seconds to wait for n readings.
+
+    Returns
+    -------
+    tuple[float, float, float]
+        (x_cm, y_cm, yaw_rad) in world (A1-centred, y-up, CCW+) coordinates.
+
+    Raises
+    ------
+    RuntimeError
+        If no tag readings were obtained within the timeout.
+    """
+    xs: list[float] = []
+    ys: list[float] = []
+    sin_yaws: list[float] = []
+    cos_yaws: list[float] = []
+
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline and len(xs) < n:
+        try:
+            tag = playfield.get_tag(tag_id)
+        except Exception:
+            time.sleep(0.05)
+            continue
+
+        if tag is not None:
+            xs.append(tag.x)
+            ys.append(tag.y)
+            sin_yaws.append(math.sin(tag.yaw))
+            cos_yaws.append(math.cos(tag.yaw))
+        else:
+            time.sleep(0.05)
+
+    if not xs:
+        raise RuntimeError(
+            f"read_camera_pose: no readings for tag {tag_id} within {timeout:.1f}s"
+        )
+
+    n_got = len(xs)
+    x_cm = sum(xs) / n_got
+    y_cm = sum(ys) / n_got
+    mean_sin = sum(sin_yaws) / n_got
+    mean_cos = sum(cos_yaws) / n_got
+    yaw_rad = math.atan2(mean_sin, mean_cos)
+
+    return (x_cm, y_cm, yaw_rad)
 
 
 # ---------------------------------------------------------------------------
@@ -1335,7 +1413,6 @@ class _HardwareTransport(Transport):
                     continue
 
             try:
-                from robot_radio.testkit.camera import read_camera_pose
                 pose = read_camera_pose(playfield, tag_id=_CAMERA_TAG_ID, n=3, timeout=1.5)
                 self._deliver_truth(pose)
             except RuntimeError:
