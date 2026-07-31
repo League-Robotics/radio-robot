@@ -525,7 +525,36 @@ TickResult Planner::tick(const Types::RobotState& state) {
   }
 
   bool done = timedOut || stalled;
-  if (!done && active_.settling) {
+  // ARRIVED: a Distance/Angle Move that is inside the robot's own
+  // configured arrival tolerance (settleEpsilonLinear/Angular) AND at rest
+  // is finished. The kDoneEpsilon* tests below are float NOISE FLOORS, not
+  // reachability tolerances -- a real wheel parks a fraction of a mm short
+  // because the profile's terminal step falls under the motor
+  // write-suppression deadband, and with the wheels stopped the in-flight
+  // prediction that would carry the residual negative is also zero, so the
+  // residual is PINNED and the Move waits out the whole kStallWindow
+  // (measured on the robot 2026-07-30: ~0.4-0.5 s of dead time per
+  // boundary, concentrated on turns; measured in the planner harness: the
+  // residual pinned at 0.8764 mm for 11 consecutive ticks == 0.517 s ==
+  // kStallWindow). settleReached() is already computed here and already
+  // reported as TickResult::settled; this lets it END the Move rather than
+  // only describe it.
+  //
+  // Cannot fire early: it requires the body to be AT REST, so it is
+  // unreachable at cruise. Suppressed for a Move handing off at speed
+  // (activeBoundary_ > 0), which is not supposed to stop at all, and gated
+  // on hasMoved so a Move cannot complete on its own activation tick before
+  // breaking away. Residual left on the target is absorbed by the next
+  // chained Move through the cumulative baseline ledger -- exactly the
+  // mechanism src/firm/main.cpp already relies on with requireSettle off.
+  const bool arrived =
+      activeBoundary_ <= 0.0f && active_.hasMoved &&
+      m.velocityKind == Move::VelocityKind::Twist &&
+      (m.kind == Move::Kind::Distance || m.kind == Move::Kind::Angle) &&
+      settleReached(measured, dt);
+  if (!done && arrived) {
+    done = true;
+  } else if (!done && active_.settling) {
     done = true;  // profile-complete already fired; only the gate is pending
   } else if (!done) {
     switch (m.kind) {
