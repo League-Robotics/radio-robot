@@ -1,7 +1,7 @@
 ---
 id: '010'
 title: Relocate testkit/ and src/motion/planner bench artifacts out of product trees
-status: in-progress
+status: done
 use-cases:
 - SUC-008
 depends-on:
