@@ -322,3 +322,140 @@ def solveArcToPoint(currentPose: Pose, targetPoint: Pose, limits: SolverLimits,
 
     omega = _clampOmegaStep(omega, previousOmega, limits.trackWidth, limits.maxWheelStep)
     return ArcSolution(v_x=limits.speed, omega=omega, arcLength=arcLength, stop=False, bearing=0.0)
+
+
+# ---------------------------------------------------------------------------
+# Pure-pursuit waypoint advance rule (out-of-process, 2026-07-30 -- this IS
+# ticket 008's own algorithm, built here so 008 becomes "feed it a
+# different path" rather than a fresh design).
+# ---------------------------------------------------------------------------
+#
+# A caller driving a DENSE waypoint sequence (e.g. square_tour.py's rounded-
+# corner fillets) cannot simply call this solver's own single-target loop
+# (``pathplan.planner.gotoWorld()``) once per waypoint: that loop's arrival
+# tolerance has a physical floor,
+#
+#     floor = speed * (cyclePeriod + actuationDelay)
+#           = 150 * (0.1 + 0.15) = 37.5 mm
+#
+# (the loop cannot detect and act on "arrived" any faster than one solve
+# cycle plus the actuation lag), which sits ABOVE the smallest chord a
+# rounded-corner fillet can produce (~32.4 mm, square_tour.py's own
+# TARGET_CORNER_RADIUS-at-the-leg/4-ceiling case) -- two walls with no gap,
+# at any speed low enough for the floor to matter. Slowing the robot only
+# shrinks the floor, it does not remove the conflict -- and trading speed
+# for it was explicitly rejected (stakeholder, 2026-07-30: "What do you
+# mean 80 mm/s! That is too slow!").
+#
+# The fix is a different control model, not a smaller tolerance: STOP
+# requiring arrival at interior waypoints. ``advanceWaypointIndex()``
+# advances the target the instant the robot has PASSED it (via
+# ``hasPassedWaypoint()``'s own projection test, not proximity) -- overshoot
+# becomes the normal, expected case, so the arrival-tolerance floor above
+# never applies to an interior waypoint at all. Only the LAST waypoint in a
+# sequence still needs a real, tolerance-gated arrival test
+# (``pathplan.planner.followPath()``'s own job) -- a path has to stop
+# somewhere.
+
+
+# `hasPassedWaypoint()`'s dot-product test is a LOCAL linear
+# approximation -- a half-plane through `waypoint`, perpendicular to the
+# path direction there. It is only a trustworthy proxy for "the robot has
+# actually traveled this stretch of path" NEAR the waypoint; far from it,
+# the half-plane extends to infinity and can be satisfied by a robot that
+# is nowhere near this section of the path at all -- measured 2026-07-30
+# on `square_tour.py`'s own rounded square (a CLOSED loop, so its late
+# waypoints sit close to its own early ones in world space): a robot only
+# partway around the first corner satisfied "passed" for a waypoint
+# ~580 mm away, on the FAR side of the square, purely because it happened
+# to be on that waypoint's own forward half-plane -- `advanceWaypointIndex()`
+# then chained straight through six waypoints (half the path) in one call
+# off that single false positive.
+#
+# `_MAX_PASS_CHORDS` bounds how far `advanceWaypointIndex()` will trust a
+# "passed" verdict, scaled to the LOCAL chord length between `waypoint` and
+# `nextWaypoint` (self-describing from the waypoint sequence's own density
+# -- no external, path-specific constant needed): a dense fillet's ~30-47 mm
+# chords get a correspondingly tight trust radius, while a long straight
+# leg's own multi-hundred-mm "chord" (the gap between one corner's last
+# sample and the next corner's first) gets a proportionally wide one. 3.0
+# chords is enough slack for the legitimate multi-waypoint skip
+# `advanceWaypointIndex()`'s own docstring describes ("several closely-
+# spaced waypoints... e.g. a corner fillet's dense samples") without
+# trusting a verdict from an entirely different, unrelated section of a
+# path that loops back near itself.
+_MAX_PASS_CHORDS = 3.0
+
+
+def hasPassedWaypoint(currentPose: Pose, waypoint: Pose, nextWaypoint: Pose) -> bool:
+    """True once the robot has passed ``waypoint``, judged by projecting its
+    displacement FROM the waypoint onto the path's own direction THERE --
+    the chord from ``waypoint`` to ``nextWaypoint`` -- not by proximity to
+    the waypoint itself. A non-negative dot product means the robot sits on
+    or beyond the waypoint's own forward side of the path, regardless of how
+    far off to the side it might be: proximity alone would falsely say "not
+    passed" for a robot that cut a corner wide, and falsely say "passed" for
+    one still approaching from directly beside the waypoint.
+
+    Pure geometry, no I/O -- unit-testable standalone. Works directly in
+    ``Pose``'s own cm units: only the SIGN of the dot product matters, so no
+    mm conversion is needed (the test is scale-invariant).
+
+    Degenerate case: if ``waypoint`` and ``nextWaypoint`` coincide (a
+    zero-length path direction -- should not occur for a real waypoint
+    sequence, where consecutive points are always distinct), the dot
+    product is always exactly 0.0, so this returns True. "Passed" is the
+    safe default when there is no path direction to project onto: it lets
+    ``advanceWaypointIndex()``'s caller move on rather than stall forever
+    pointed at an ill-defined direction.
+    """
+    pathDx = nextWaypoint.x - waypoint.x
+    pathDy = nextWaypoint.y - waypoint.y
+    robotDx = currentPose.x - waypoint.x
+    robotDy = currentPose.y - waypoint.y
+    return (robotDx * pathDx + robotDy * pathDy) >= 0.0
+
+
+def advanceWaypointIndex(currentPose: Pose, waypoints: "list[Pose]", index: int,
+                         lookaheadFloor: float) -> int:
+    """Advance ``index`` through ``waypoints`` while the waypoint currently
+    at ``index`` has either been PASSED (``hasPassedWaypoint()``, projection
+    onto the path) or sits closer than ``lookaheadFloor`` [mm] -- pure
+    pursuit is unstable steering at a target inside the actuation-lag
+    distance (see ``planner._lookaheadFloorFor()``'s own derivation), so a
+    target that ends up too close gets skipped past exactly like a passed
+    one, rather than steered at directly.
+
+    Never advances to or past the LAST index in ``waypoints`` -- the
+    terminal waypoint is always reached by an explicit arrival test
+    (``planner.followPath()``'s own job), never by pass-through, so this
+    function stops one short of it by construction (the ``while index <
+    lastIndex`` bound below).
+
+    May advance by MORE than one index in a single call: at speed, a robot
+    can genuinely pass several closely-spaced waypoints within one solve
+    cycle (e.g. a corner fillet's dense samples,
+    ``square_tour.gotoSquareWaypoints()``'s own ``CORNER_SEGMENTS_PER_CORNER``
+    hops) -- this loops rather than capping at one, so a fast-moving robot
+    never gets stuck re-targeting a waypoint already well behind it. Bounded
+    by ``_MAX_PASS_CHORDS`` (see its own module-level comment): a "passed"
+    verdict is only trusted within a few chord-lengths of the waypoint, so
+    this cannot cascade across an entire unrelated section of a path that
+    loops back near itself.
+
+    Pure, no I/O -- unit-testable standalone."""
+    lastIndex = len(waypoints) - 1
+    while index < lastIndex:
+        waypoint = waypoints[index]
+        nextWaypoint = waypoints[index + 1]
+        chordMm = math.hypot(nextWaypoint.x - waypoint.x,
+                             nextWaypoint.y - waypoint.y) * _POSITION_SCALE
+        distanceMm = math.hypot(currentPose.x - waypoint.x,
+                                currentPose.y - waypoint.y) * _POSITION_SCALE
+        near = distanceMm <= max(chordMm * _MAX_PASS_CHORDS, lookaheadFloor)
+        passed = near and hasPassedWaypoint(currentPose, waypoint, nextWaypoint)
+        tooClose = distanceMm < lookaheadFloor
+        if not (passed or tooClose):
+            break
+        index += 1
+    return index

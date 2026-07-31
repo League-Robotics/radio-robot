@@ -27,10 +27,23 @@ Covers (ticket acceptance criteria):
   5. ``MoveIdAllocator`` is strictly monotonic, never emits 0.
   6. ``_advance()`` checks the geofence INSIDE its own time-advance
      window, not between segments.
+  7. ``followPath()`` (out-of-process, 2026-07-30, this IS ticket 008's own
+     algorithm): a straight multi-waypoint run reaches every waypoint via
+     pass-through and succeeds at the terminal one; a target that is
+     permanently behind and NEVER sent anything still terminates cleanly
+     via ``GiveUpLimits`` (not a bearing-snapshot verdict -- two earlier
+     approaches that used one were tried and rejected, see the module-level
+     comment above ``followPath()``'s own solve call); a target that goes
+     behind AFTER a real send exists gets that same last-known-good arc
+     RESENT while genuinely stalled, rather than leaving the vehicle idle
+     for the rest of the give-up budget (the measured regression that fix
+     addresses). ``_lookaheadFloorFor()``'s own derivation is locked
+     against regression.
 """
 
 from __future__ import annotations
 
+import dataclasses
 import math
 import time
 
@@ -45,6 +58,7 @@ import robot_radio.pathplan.planner as planner_mod
 from robot_radio.pathplan.planner import (
     TERMINATION_TOLERANCE,
     AckRetry,
+    FollowPathResult,
     GiveUpLimits,
     GotoResult,
     MoveIdAllocator,
@@ -54,12 +68,14 @@ from robot_radio.pathplan.planner import (
     _advance,
     _ERR_FULL,
     _giveUpReason,
+    _lookaheadFloorFor,
     _moveTimeoutFor,
     _readFrames,
     _recordAcks,
     _sendVerifiedTwist,
     _shouldReplace,
     _targetBehindReason,
+    followPath,
     gotoRobot,
     gotoWorld,
 )
@@ -610,3 +626,207 @@ def test_progress_check_forces_resend_when_robot_is_stalled():
     # Move.id (never reused across DIFFERENT logical sends; only WITHIN
     # one send's own ack-loss retries, covered separately above).
     assert len(set(proto.moveIds)) == len(proto.moveIds)
+
+
+# ---------------------------------------------------------------------------
+# 11. followPath() -- pure-pursuit multi-waypoint loop (out-of-process,
+#     2026-07-30, this IS ticket 008's own algorithm). The advance rule's
+#     own geometry (hasPassedWaypoint()/advanceWaypointIndex()) is unit-
+#     tested standalone in test_solver.py; these tests exercise followPath()
+#     ITSELF -- the ingest/advance/solve ordering, the terminal-only arrival
+#     test, and what happens when the target-behind guard fires: nothing is
+#     sent while a robot that never sent anything stays stuck (give up via
+#     GiveUpLimits), and the last-known-good arc gets resent once genuinely
+#     stalled if one exists. See the module-level comment above
+#     followPath()'s own solve call (planner.py) for the two REJECTED
+#     approaches (an unbounded then a bounded "treat behind as passed"
+#     skip, and a widened guard angle) this design replaced, and why.
+# ---------------------------------------------------------------------------
+
+
+def _cm(mm: float) -> float:
+    return mm / 10.0
+
+
+def test_lookahead_floor_derivation():
+    # 150 mm/s * 0.15 s actuation delay == 22.5 mm -- see the module-level
+    # comment above _ACTUATION_DELAY for the derivation (matches
+    # hil_drive.py's own actuationDelay = 150.0 ms).
+    assert _lookaheadFloorFor(150.0) == pytest.approx(22.5)
+
+
+def test_follow_path_result_has_waypoints_reached_field():
+    fieldNames = {f.name for f in dataclasses.fields(FollowPathResult)}
+    assert fieldNames == {"success", "reason", "finalPose", "iterations", "sent",
+                          "waypointsReached", "retries", "forcedResends", "unacked"}
+
+
+class _MovingFakeProto:
+    """`NezhaProtocol`-shaped fake for `followPath()` integration tests: the
+    world pose it reports advances in a STRAIGHT LINE (+x) by `stepMm`
+    every `read_pending_binary_tlm_frames()` call, simulating a robot that
+    tracks a commanded on-heading (omega=0) twist perfectly. Enough to
+    exercise `followPath()`'s own ingest/advance/solve loop, ack
+    bookkeeping, and terminal arrival test end to end without real
+    differential-drive kinematics -- the geometry of the advance rule
+    itself is already covered standalone by test_solver.py's own
+    `hasPassedWaypoint()`/`advanceWaypointIndex()` tests."""
+
+    _conn = None
+
+    def __init__(self, stepMm: float = 5.0) -> None:
+        self._x_mm = 0.0
+        self._stepMm = stepMm
+        self._nextCorr = 1
+        self._pendingAck = None
+        self.moveIds: "list[int]" = []
+        self.estopped = False
+
+    def move_twist(self, *, move_id, **kwargs):
+        corr = self._nextCorr
+        self._nextCorr += 1
+        self.moveIds.append(move_id)
+        self._pendingAck = AckEntry(corr_id=corr, ok=True, err_code=0)
+        return corr
+
+    def read_pending_binary_tlm_frames(self):
+        self._x_mm += self._stepMm
+        acks = []
+        if self._pendingAck is not None:
+            acks = [self._pendingAck]
+            self._pendingAck = None
+        return [TLMFrame(
+            t=1000, pose=(self._x_mm, 0.0, 0), twist=(0, 0),
+            recvTime=time.monotonic(),
+            enc_left=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
+            enc_right=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
+            acks=acks)]
+
+    def estop(self):
+        self.estopped = True
+
+
+def test_follow_path_straight_line_reaches_every_waypoint_via_pass_through():
+    worldPose = WorldPose()
+    proto = _MovingFakeProto(stepMm=5.0)
+    limits = SolverLimits(trackWidth=120.0, speed=150.0)
+    waypoints = [Pose(x=_cm(mm), y=0.0, heading=0.0) for mm in (30.0, 60.0, 90.0, 120.0)]
+    crossed: "list[int]" = []
+
+    result = followPath(
+        proto, worldPose, waypoints, limits, geofence=None, tolerance=12.0,
+        giveUp=GiveUpLimits(maxIterations=500, giveUpTimeout=5.0), cyclePeriod=0.01,
+        onWaypoint=lambda index, pose: crossed.append(index))
+
+    assert result.success is True
+    assert result.waypointsReached == len(waypoints)
+    # Every waypoint crossed EXACTLY once, in strictly increasing order --
+    # the pass-through advance rule's own ordering guarantee (ingest pose
+    # -> advance target if passed -> solve, never solve-then-advance).
+    assert crossed == list(range(len(waypoints)))
+    # estop(), never the planned stop() -- this loop's own finally block,
+    # run on every return.
+    assert proto.estopped is True
+
+
+def test_follow_path_gives_up_via_giveup_limits_when_never_sent_anything():
+    """When the target-behind guard fires and NO previous solution exists
+    to fall back on (a robot that never managed a single real send), this
+    loop sends nothing at all, every cycle, forever -- so it must still
+    terminate via `GiveUpLimits`, never via a bearing-snapshot verdict (two
+    earlier approaches used one and were rejected; see the module-level
+    comment above `followPath()`'s own solve call in planner.py). A
+    stationary robot (`_StallFakeProto`, reused from the ProgressCheck
+    tests above) facing WEST (heading 180 deg) with both waypoints due
+    EAST never moves, so `advanceWaypointIndex()` cannot pass-through past
+    waypoint 0 either -- this isolates the "nothing to fall back on" give-up
+    path from the resend path (covered separately below)."""
+    worldPose = WorldPose()
+    proto = _StallFakeProto(x_mm=0.0, y_mm=0.0, heading_cdeg=18000.0)  # facing west
+    limits = SolverLimits(trackWidth=120.0, speed=150.0)
+    waypoints = [Pose(x=_cm(50.0), y=0.0, heading=0.0), Pose(x=_cm(100.0), y=0.0, heading=0.0)]
+    giveUp = GiveUpLimits(maxIterations=20, giveUpTimeout=5.0)
+
+    result = followPath(proto, worldPose, waypoints, limits, geofence=None,
+                        tolerance=12.0, giveUp=giveUp, cyclePeriod=0.01)
+
+    assert result.success is False
+    assert "gave up after" in result.reason
+    assert "no move was ever sent" in result.reason
+    assert result.sent == 0
+    # index never advances (the robot never moves, and hasPassedWaypoint()'s
+    # own projection test never fires) -- reachedIndex stays at its initial
+    # sentinel the whole call.
+    assert result.waypointsReached == 0
+
+
+class _BehindAfterFakeProto:
+    """`NezhaProtocol`-shaped fake for the "resend the last-known-good arc"
+    recovery test: reports heading EAST (0 deg) for the first
+    `switchAfter` telemetry reads -- long enough for `followPath()` to
+    solve and send a real arc toward an east-facing target -- then reports
+    heading WEST (180 deg) forever after, so the SAME target becomes
+    permanently behind. Position is held fixed throughout (this test only
+    cares whether a resend happens, not whether the path is completed)."""
+
+    _conn = None
+
+    def __init__(self, switchAfter: int = 2) -> None:
+        self._reads = 0
+        self._switchAfter = switchAfter
+        self._nextCorr = 1
+        self._pendingAck = None
+        self.moveIds: "list[int]" = []
+
+    def move_twist(self, *, move_id, **kwargs):
+        corr = self._nextCorr
+        self._nextCorr += 1
+        self.moveIds.append(move_id)
+        self._pendingAck = AckEntry(corr_id=corr, ok=True, err_code=0)
+        return corr
+
+    def read_pending_binary_tlm_frames(self):
+        self._reads += 1
+        headingCdeg = 0.0 if self._reads <= self._switchAfter else 18000.0
+        acks = []
+        if self._pendingAck is not None:
+            acks = [self._pendingAck]
+            self._pendingAck = None
+        return [TLMFrame(
+            t=1000, pose=(0.0, 0.0, headingCdeg), twist=(0, 0),
+            recvTime=time.monotonic(),
+            enc_left=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
+            enc_right=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
+            acks=acks)]
+
+    def estop(self):
+        pass
+
+
+def test_follow_path_resends_last_known_good_arc_when_stalled_and_behind():
+    """The recovery path this fix adds (module comment above followPath()'s
+    own solve call): a Distance-stopped Move is bounded and completes on
+    its own, so sending NOTHING while the guard fires would eventually
+    leave the vehicle idle, heading frozen, bearing never improving, for
+    the rest of the give-up budget -- measured 2026-07-30. Once
+    `ProgressCheck` says the robot has genuinely stalled, and a previous
+    solution exists, that EXACT arc must be resent (fresh Move.id, same
+    v_x/omega/arcLength) rather than nothing."""
+    worldPose = WorldPose()
+    proto = _BehindAfterFakeProto(switchAfter=2)
+    limits = SolverLimits(trackWidth=120.0, speed=150.0)
+    waypoints = [Pose(x=_cm(500.0), y=0.0, heading=0.0), Pose(x=_cm(1000.0), y=0.0, heading=0.0)]
+    giveUp = GiveUpLimits(maxIterations=60, giveUpTimeout=3.0)
+    progress = ProgressCheck(window=0.05, threshold=1000.0)  # position never changes -> stalls fast
+
+    result = followPath(proto, worldPose, waypoints, limits, geofence=None,
+                        tolerance=12.0, giveUp=giveUp, progress=progress, cyclePeriod=0.01)
+
+    assert result.success is False
+    # At least one real send (while heading was still east) PLUS at least
+    # one forced resend of that SAME arc once heading flipped and the
+    # guard started firing -- proving the recovery path actually sends
+    # something instead of leaving the vehicle idle.
+    assert result.sent >= 2
+    assert result.forcedResends >= 1
+    assert len(set(proto.moveIds)) == len(proto.moveIds)  # every send still gets a fresh id

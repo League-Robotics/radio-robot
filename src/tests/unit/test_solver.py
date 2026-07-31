@@ -20,6 +20,15 @@ Covers (ticket acceptance criteria):
   7. Purity / no hidden state: same inputs -> same outputs.
   8. The target's final heading is ignored.
   9. ``ArcSolution`` structurally cannot express an Angle-stopped move.
+  10. ``hasPassedWaypoint()``/``advanceWaypointIndex()`` -- the pure-pursuit
+      waypoint advance rule (out-of-process, 2026-07-30): projection-based
+      "has passed", the lookahead-floor skip, multi-waypoint advance
+      within one call, never advancing to/past the terminal index, and the
+      ``_MAX_PASS_CHORDS`` proximity gate that stops a "passed" verdict
+      from being trusted across an unrelated, far-away section of a path
+      that loops back near itself (the measured failure this gate fixes:
+      an un-gated version advanced straight past six waypoints of a
+      12-point closed square off one false positive).
 """
 
 from __future__ import annotations
@@ -34,6 +43,8 @@ from robot_radio.pathplan.solver import (
     MAX_WHEEL_STEP,
     ArcSolution,
     SolverLimits,
+    advanceWaypointIndex,
+    hasPassedWaypoint,
     solveArcToPoint,
 )
 
@@ -267,3 +278,167 @@ def test_arc_solution_has_no_angle_stop_field():
     assert fieldNames == {"v_x", "omega", "arcLength", "stop", "bearing"}
     assert "stop_angle" not in fieldNames
     assert "angle" not in fieldNames
+
+
+# ---------------------------------------------------------------------------
+# 10. hasPassedWaypoint() / advanceWaypointIndex() -- pure-pursuit advance
+#     rule (out-of-process, 2026-07-30).
+# ---------------------------------------------------------------------------
+
+_FLOOR = 22.5  # [mm] matches planner._lookaheadFloorFor(150.0)'s own derivation
+
+
+# --- hasPassedWaypoint(): projection onto the path, not proximity ---------
+
+def test_has_passed_waypoint_true_when_robot_is_ahead_along_the_path():
+    # Path direction is +x (east); robot sits east of the waypoint -> passed.
+    waypoint = Pose(x=0.0, y=0.0, heading=0.0)
+    nextWaypoint = Pose(x=_cm(100.0), y=0.0, heading=0.0)
+    robot = Pose(x=_cm(10.0), y=_cm(500.0), heading=0.0)  # far off to the SIDE, but ahead
+    assert hasPassedWaypoint(robot, waypoint, nextWaypoint) is True
+
+
+def test_has_passed_waypoint_false_when_robot_is_behind_along_the_path():
+    waypoint = Pose(x=0.0, y=0.0, heading=0.0)
+    nextWaypoint = Pose(x=_cm(100.0), y=0.0, heading=0.0)
+    robot = Pose(x=_cm(-10.0), y=_cm(500.0), heading=0.0)  # off to the side, but BEHIND
+    assert hasPassedWaypoint(robot, waypoint, nextWaypoint) is False
+
+
+def test_has_passed_waypoint_exactly_at_the_waypoint_counts_as_passed():
+    # Zero displacement -> dot product exactly 0.0 -> the ">= 0" boundary.
+    waypoint = Pose(x=_cm(50.0), y=_cm(50.0), heading=0.0)
+    nextWaypoint = Pose(x=_cm(150.0), y=_cm(50.0), heading=0.0)
+    assert hasPassedWaypoint(waypoint, waypoint, nextWaypoint) is True
+
+
+def test_has_passed_waypoint_degenerate_coincident_next_defaults_to_passed():
+    # waypoint == nextWaypoint -> zero-length path direction -> dot product
+    # is always exactly 0.0 -> "passed" is the documented safe default.
+    waypoint = Pose(x=_cm(50.0), y=_cm(50.0), heading=0.0)
+    robot = Pose(x=_cm(-500.0), y=_cm(500.0), heading=0.0)
+    assert hasPassedWaypoint(robot, waypoint, waypoint) is True
+
+
+def test_has_passed_waypoint_is_scale_invariant_cm_units_not_converted():
+    # Only the SIGN of the dot product matters -- no mm conversion needed.
+    waypoint = Pose(x=0.0, y=0.0, heading=0.0)
+    nextWaypoint = Pose(x=1.0, y=0.0, heading=0.0)  # 1 cm ahead
+    justPassed = Pose(x=0.001, y=0.0, heading=0.0)
+    justBefore = Pose(x=-0.001, y=0.0, heading=0.0)
+    assert hasPassedWaypoint(justPassed, waypoint, nextWaypoint) is True
+    assert hasPassedWaypoint(justBefore, waypoint, nextWaypoint) is False
+
+
+# --- advanceWaypointIndex(): lookahead floor, multi-step, terminal bound --
+
+def test_advance_stays_put_when_far_ahead_and_not_passed():
+    waypoints = [Pose(x=0.0, y=0.0, heading=0.0), Pose(x=_cm(100.0), y=0.0, heading=0.0)]
+    robot = Pose(x=_cm(-500.0), y=0.0, heading=0.0)  # nowhere near waypoint 0
+    assert advanceWaypointIndex(robot, waypoints, 0, _FLOOR) == 0
+
+
+def test_advance_steps_forward_once_when_genuinely_passed():
+    waypoints = [
+        Pose(x=0.0, y=0.0, heading=0.0),
+        Pose(x=_cm(100.0), y=0.0, heading=0.0),
+        Pose(x=_cm(200.0), y=0.0, heading=0.0),
+    ]
+    robot = Pose(x=_cm(50.0), y=0.0, heading=0.0)  # past waypoint 0, well short of waypoint 1
+    assert advanceWaypointIndex(robot, waypoints, 0, _FLOOR) == 1
+
+
+def test_advance_never_reaches_the_terminal_index_by_pass_through():
+    # A dense run (~30 mm apart, matching square_tour.py's own fillet
+    # chord spacing) with the robot genuinely past waypoints 0-2, close
+    # enough to each for the _MAX_PASS_CHORDS proximity gate to trust the
+    # verdict -- advanceWaypointIndex() must stop AT MOST at lastIndex
+    # (never past it, never treats the terminal waypoint as itself
+    # pass-through-advanceable).
+    waypoints = [
+        Pose(x=0.0, y=0.0, heading=0.0),
+        Pose(x=_cm(30.0), y=0.0, heading=0.0),
+        Pose(x=_cm(60.0), y=0.0, heading=0.0),
+        Pose(x=_cm(90.0), y=0.0, heading=0.0),  # terminal
+    ]
+    robot = Pose(x=_cm(85.0), y=0.0, heading=0.0)  # past 0, 1, and 2
+    result = advanceWaypointIndex(robot, waypoints, 0, _FLOOR)
+    assert result == 3  # == lastIndex, never 4 (out of range) or beyond
+    assert result == len(waypoints) - 1
+
+
+def test_advance_skips_multiple_closely_spaced_waypoints_in_one_call():
+    # A dense run of waypoints ~30 mm apart (matching square_tour.py's own
+    # fillet chord spacing) with the robot already past the first three,
+    # but not yet within range (passed OR too-close) of the fourth.
+    waypoints = [
+        Pose(x=0.0, y=0.0, heading=0.0),
+        Pose(x=_cm(30.0), y=0.0, heading=0.0),
+        Pose(x=_cm(60.0), y=0.0, heading=0.0),
+        Pose(x=_cm(90.0), y=0.0, heading=0.0),
+        Pose(x=_cm(500.0), y=0.0, heading=0.0),  # terminal, far ahead
+    ]
+    robot = Pose(x=_cm(65.0), y=0.0, heading=0.0)  # past waypoints 0,1,2
+    assert advanceWaypointIndex(robot, waypoints, 0, _FLOOR) == 3
+
+
+def test_advance_skips_a_target_inside_the_lookahead_floor():
+    # Waypoint 0 sits directly ahead but INSIDE the lookahead floor -- must
+    # be skipped even though the robot has not, by the projection test,
+    # technically "passed" it yet (it is still short of it).
+    waypoints = [
+        Pose(x=_cm(10.0), y=0.0, heading=0.0),   # 10 mm ahead of the robot
+        Pose(x=_cm(200.0), y=0.0, heading=0.0),
+    ]
+    robot = Pose(x=0.0, y=0.0, heading=0.0)
+    assert 10.0 < _FLOOR  # sanity: this scenario only makes sense if 10mm < floor
+    assert advanceWaypointIndex(robot, waypoints, 0, _FLOOR) == 1
+
+
+def test_advance_does_not_skip_a_target_outside_the_lookahead_floor():
+    waypoints = [
+        Pose(x=_cm(50.0), y=0.0, heading=0.0),  # 50 mm ahead -- outside the floor
+        Pose(x=_cm(200.0), y=0.0, heading=0.0),
+    ]
+    robot = Pose(x=0.0, y=0.0, heading=0.0)
+    assert 50.0 > _FLOOR
+    assert advanceWaypointIndex(robot, waypoints, 0, _FLOOR) == 0
+
+
+# --- _MAX_PASS_CHORDS proximity gate: the measured cascade-bug fix -------
+
+def test_advance_does_not_trust_a_passed_verdict_from_far_across_a_looping_path():
+    # Reproduces the measured 2026-07-30 failure: a closed/looping path (a
+    # rounded square) has LATE waypoints geometrically close to its EARLY
+    # ones. A robot only partway around the first corner can satisfy
+    # hasPassedWaypoint()'s own half-plane test for a waypoint on the far
+    # side of the square PURELY by being on the correct side of that
+    # waypoint's own local chord direction -- despite being ~580 mm away,
+    # nowhere near having actually traveled that section. The proximity
+    # gate (_MAX_PASS_CHORDS) must refuse to trust that verdict.
+    farWaypoint = Pose(x=_cm(45.0), y=_cm(487.9), heading=0.0)
+    farNext = Pose(x=_cm(12.1), y=_cm(455.0), heading=0.0)  # ~46.5 mm chord
+    waypoints = [
+        Pose(x=0.0, y=0.0, heading=0.0),
+        farWaypoint,
+        farNext,
+        Pose(x=_cm(90.0), y=0.0, heading=0.0),  # terminal
+    ]
+    robot = Pose(x=_cm(430.0), y=_cm(53.0), heading=0.0)  # ~580 mm from farWaypoint
+    # Confirm the raw dot-product test WOULD say "passed" here (the
+    # precondition this test is guarding against), then confirm
+    # advanceWaypointIndex() does NOT act on it because the robot is not
+    # plausibly near this section of the path.
+    assert hasPassedWaypoint(robot, farWaypoint, farNext) is True
+    assert advanceWaypointIndex(robot, waypoints, 1, _FLOOR) == 1
+
+
+def test_advance_trusts_a_passed_verdict_within_a_few_chord_lengths():
+    # The same waypoint pair, but with the robot genuinely nearby (within
+    # _MAX_PASS_CHORDS * chordLength) -- the gate must not block a
+    # legitimate, local "passed" verdict.
+    waypoint = Pose(x=_cm(45.0), y=_cm(487.9), heading=0.0)
+    nextWaypoint = Pose(x=_cm(12.1), y=_cm(455.0), heading=0.0)  # ~46.5 mm chord
+    waypoints = [waypoint, nextWaypoint, Pose(x=_cm(0.0), y=_cm(410.0), heading=0.0)]
+    robot = Pose(x=_cm(43.0), y=_cm(487.9) - _cm(23.0), heading=0.0)  # ~23 mm away, on the passed side
+    assert advanceWaypointIndex(robot, waypoints, 0, _FLOOR) == 1

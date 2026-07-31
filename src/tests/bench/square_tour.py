@@ -43,7 +43,6 @@ import math
 import pathlib
 import signal
 import sys
-import threading
 import time
 
 from robot_radio.field import Geofence, GeofenceViolation, checkPlayfieldLights
@@ -1144,9 +1143,112 @@ def reportSegmentFixes(tour: "Tour", log: dict) -> None:
 # instead of open-loop WHEELS / closed-loop MOVE segments.
 # ---------------------------------------------------------------------------
 
-GOTO_OVERSHOOT_BOUND = 60.0  # [mm] stated bound for the sim tier's "bounded overshoot" check
-GOTO_STALL_WINDOW = 2.0      # [s] no-progress window that counts as a stall
-GOTO_STALL_EPS = 5.0         # [mm] progress below this over GOTO_STALL_WINDOW counts as no progress
+# GOTO_OVERSHOOT_BOUND / GOTO_STALL_WINDOW / GOTO_STALL_EPS -- RETIRED
+# (out-of-process, 2026-07-30). Those three gated a PER-CORNER "did this
+# one gotoWorld() call converge cleanly" analysis (`_TruePoseSampler`,
+# removed alongside them) under the OLD call-gotoWorld()-once-per-waypoint
+# model. Under the pass-through pursuit model (see the module-level
+# comment above `pathplan.solver.hasPassedWaypoint()`/
+# `advanceWaypointIndex()`), there is no longer a per-waypoint "arrival"
+# event for an interior waypoint to measure overshoot/stall against at
+# all -- the whole point of pass-through is that the robot never stops
+# converging on any of them. `pathplan.planner.followPath()`'s own
+# `GotoResult`-shaped return (`success`, `reason`, `iterations`, `sent`,
+# `retries`, `forcedResends`, `unacked`) is the replacement diagnostic
+# surface -- see `runGotoTour()` below.
+
+# --- rounded-square geometry (out-of-process, 2026-07-30) -----------------
+#
+# `gotoSquareWaypoints()` used to emit the square's four SHARP vertices.
+# From one vertex, the next is 90 deg off the current heading, so EVERY
+# corner hits `solveArcToPoint()`'s target-behind guard
+# (`SolverLimits.behindAngle`, default 90 deg) -- the guard exists so the
+# solver never emits a near-infinite-curvature arc, and a square's own
+# corners are exactly that degenerate case. The fix is geometric, not a
+# guard change: round each corner into a quarter-circle fillet and sample
+# it finely enough that the bearing to the NEXT waypoint never gets
+# anywhere near 90 deg.
+#
+# CORNER_RADIUS is bounded on both sides -- derived, not guessed:
+#
+#   FLOOR (drivable): entering the fillet from a straight leg means the
+#   commanded omega has to move from 0 toward the fillet's own
+#   steady-state value, omega = CRUISE / r, without the solver's own
+#   curvature slew limit (`solver.MAX_WHEEL_STEP` = 250 mm/s PER SOLVE at
+#   the outer loop's ~10 Hz, converted to an omega-step budget via
+#   `trackWidth == PHYSICAL_TRACK`) itself rounding the fillet's entry off
+#   the intended tangent-circle shape:
+#
+#     omegaStepBudget = 2 * MAX_WHEEL_STEP / PHYSICAL_TRACK   [rad/s per solve]
+#     radiusFloor      = CRUISE / omegaStepBudget
+#                      = CRUISE * PHYSICAL_TRACK / (2 * MAX_WHEEL_STEP)
+#
+#   For this robot (CRUISE=150 mm/s, PHYSICAL_TRACK=128 mm,
+#   MAX_WHEEL_STEP=250 mm/s) that is 150*128/500 ~= 38.4 mm -- the radius
+#   at which the fillet's steady-state omega equals a SINGLE solve's
+#   clamp step. `gotoSquareWaypoints()` recomputes this floor at call time
+#   from the ACTUAL `PHYSICAL_TRACK`/`CRUISE` (set from the active robot
+#   config by `_set_effective_track()`), rather than baking in this one
+#   robot's numbers, and raises rather than silently emitting an
+#   undrivable path if a caller's `legLength` forces the radius below it.
+#
+#   CEILING (recognisably a square): the playfield run this fix targets
+#   used a 250 mm leg (the smallest leg this script drives -- see --leg's
+#   own help text). Capping the radius at `legLength / 4` leaves at least
+#   half of every edge (`leg - 2*r >= leg/2`) genuinely straight, so the
+#   path still reads as a square with rounded corners, not a circle.
+#
+# TARGET_CORNER_RADIUS = 90 mm sits comfortably above the 38.4 mm floor
+# (2.3x margin) for the sim-default 500 mm leg; `gotoSquareWaypoints()`
+# clamps it down to `legLength / 4` whenever that ceiling is tighter (the
+# 250 mm playfield case -> clamped to 62.5 mm, still >= the floor).
+TARGET_CORNER_RADIUS = 90.0  # [mm] preferred corner radius; see derivation above
+
+# Each fillet is sampled into CORNER_SEGMENTS_PER_CORNER equal hops of
+# (90 / CORNER_SEGMENTS_PER_CORNER) deg apiece. For points equally spaced
+# by angle theta around a circle, the direction change between consecutive
+# CHORDS equals theta exactly (the exterior angle of an inscribed regular
+# polygon) -- so this IS the bearing-to-next-waypoint the guard sees, not
+# an approximation of it. 3 segments -> 30 deg per hop, a 3x margin under
+# the 90 deg guard (comfortable headroom for the residual heading error a
+# real "arrived within tolerance" stop leaves versus the idealized tangent
+# chord). The straight run between one corner's last sample and the next
+# corner's first sample needs no further subdivision: the robot's heading
+# is already aligned with that edge when it leaves the fillet, so the
+# bearing to the next corner's first sample is small by construction.
+CORNER_SEGMENTS_PER_CORNER = 3
+
+# Arrival tolerance for THIS dense waypoint sequence's TERMINAL waypoint
+# ONLY (out-of-process, 2026-07-30): every INTERIOR waypoint is now
+# pass-through, never arrival-tested -- see the module-level comment above
+# `pathplan.solver.hasPassedWaypoint()`/`advanceWaypointIndex()` and
+# `pathplan.planner.followPath()` for the advance rule that replaced
+# per-waypoint arrival. The derivation below (why this value, not
+# `TERMINATION_TOLERANCE`) predates that change and was written for a
+# per-waypoint arrival test; it is kept because the NUMBER is still the
+# right one for "how close is close enough to stop" at the end of this
+# path, even though it no longer has to fit under every interior chord.
+#
+# Arrival tolerance for THIS dense waypoint sequence -- deliberately
+# smaller than, and decoupled from, `pathplan.planner.TERMINATION_TOLERANCE`
+# (100 mm, left UNCHANGED -- it is provisional pending ticket 007's own
+# actuation-floor measurement, not this fix's to touch). That default is
+# sized for a single far-off goal (keep a >=100 mm carrot ahead of a
+# ~150 ms-lag outer loop); every waypoint here is already close by design
+# (see CORNER_SEGMENTS_PER_CORNER above), so the risk runs the OTHER way --
+# this ticket's own stated trap: a tolerance at or above spacing makes the
+# loop "arrive" at a waypoint it never actually approached and skip ahead,
+# cutting the path short (measured on this exact script pre-fix: a corner
+# "converged" 96.8 mm from a 250 mm target under the 100 mm default).
+#
+# Must stay comfortably below the SMALLEST chord this module can generate
+# -- the clamped-radius (leg/4) case. Chord length for N equal hops of a
+# radius-r fillet is `2 * r * sin(pi / (2*N))`; for the 250 mm playfield
+# leg (radius clamped to 62.5 mm, N=3) that is 2*62.5*sin(30deg) ~=
+# 62.5 mm... using the exact per-hop angle (30 deg): 2*62.5*sin(15deg) ~=
+# 32.4 mm. GOTO_PATH_TOLERANCE = 12 mm keeps >=2.7x margin under even that
+# worst case (>=3.9x under the 500 mm sim-default leg's 46.6 mm chord).
+GOTO_PATH_TOLERANCE = 12.0  # [mm] see derivation above
 
 
 def _installEstopSignalHandler(backend: "_Backend") -> None:
@@ -1184,111 +1286,83 @@ def _installEstopSignalHandler(backend: "_Backend") -> None:
     signal.signal(signal.SIGINT, _handler)
 
 
-def gotoSquareWaypoints(startPose, legLength: float) -> "list":
-    """Four corners of a `legLength` x `legLength` square in WORLD frame,
-    laid out relative to the robot's OWN heading at `startPose` (forward =
-    +x body, left = +y body) -- the goto-mode equivalent of `segments()`'s
-    fixed leg/turn sequence: a sequence of POSITION waypoints `gotoWorld()`
-    drives to directly (continuously re-solving the arc, including through
-    the corners) rather than a scripted sequence of commanded wheel
-    speeds. `startPose` is a `nav.pose.Pose` (cm, rad); the returned list
-    is world-frame `Pose`s, heading always 0.0 -- `gotoWorld()`/
-    `solveArcToPoint()` both ignore target heading (documented at both
-    signatures, sprint.md's own "Out of Scope: terminal-theta honoring"),
-    so there is no meaningful value to put there."""
+def gotoSquareWaypoints(startPose, legLength: float) -> "list[tuple[object, bool]]":
+    """A `legLength` x `legLength` square, corners ROUNDED into quarter-
+    circle fillets, sampled into dense WORLD-frame waypoints -- the
+    goto-mode equivalent of `segments()`'s fixed leg/turn sequence, and
+    the fix for the ORIGINAL sharp-vertex version of this function (see
+    the module-level comment above `TARGET_CORNER_RADIUS` for why sharp
+    vertices hit `solveArcToPoint()`'s target-behind guard at every
+    corner). `gotoWorld()` drives to each returned waypoint in turn
+    (continuously re-solving the arc, including through the fillets)
+    rather than following a scripted wheel-speed sequence.
+
+    Returns `[(Pose, isVertex), ...]`, laid out relative to the robot's
+    OWN heading at `startPose` (forward = +x body, left = +y body), same
+    CCW winding as the original 4-corner list. `isVertex` is True for
+    exactly the LAST sample of each corner's fillet (4 total, one per
+    corner) -- the geometrically meaningful boundary nearest that corner,
+    and the ONLY points `runGotoTour()` takes a camera fix at (a
+    median-of-7 fix at every one of the ~4*CORNER_SEGMENTS_PER_CORNER
+    dense samples would be absurdly slow, and none of the intermediate
+    fillet samples is a boundary anything downstream cares about).
+    `startPose` is a `nav.pose.Pose` (cm, rad); every returned `Pose` has
+    heading 0.0 -- `gotoWorld()`/`solveArcToPoint()` both ignore target
+    heading (sprint.md's own "Out of Scope: terminal-theta honoring"), so
+    there is no meaningful value to put there.
+    """
     from robot_radio.nav.pose import Pose
+    from robot_radio.pathplan.solver import MAX_WHEEL_STEP
     from robot_radio.pathplan.world_pose import Transform2
 
+    radiusMm = min(TARGET_CORNER_RADIUS, legLength / 4.0)
+    radiusFloorMm = CRUISE * PHYSICAL_TRACK / (2.0 * MAX_WHEEL_STEP)
+    if radiusMm < radiusFloorMm:
+        raise ValueError(
+            f"gotoSquareWaypoints: leg {legLength:.0f} mm forces a corner "
+            f"radius of {radiusMm:.1f} mm (leg/4, the 'recognisable square' "
+            f"ceiling), below the {radiusFloorMm:.1f} mm drivable floor for "
+            f"this robot (CRUISE={CRUISE:.0f} mm/s, "
+            f"PHYSICAL_TRACK={PHYSICAL_TRACK:.0f} mm) -- pick a longer leg")
+    radiusCm = radiusMm / 10.0  # [mm] -> [cm], nav.pose.Pose's own convention
+
     toWorld = Transform2(x=startPose.x, y=startPose.y, rotation=startPose.heading)
-    legCm = legLength / 10.0  # [mm] -> [cm], nav.pose.Pose's own convention
+    legCm = legLength / 10.0
     corners = [(legCm, 0.0), (legCm, legCm), (0.0, legCm), (0.0, 0.0)]
-    return [toWorld.apply(Pose(x=rx, y=ry, heading=0.0)) for rx, ry in corners]
+    # edgeDirs[i] is the unit direction of the edge ARRIVING at corners[i];
+    # edgeDirs[(i+1) % 4] is the unit direction LEAVING it -- both a 90 deg
+    # CCW rotation of the previous edge, matching the square's own winding.
+    edgeDirs = [(1.0, 0.0), (0.0, 1.0), (-1.0, 0.0), (0.0, -1.0)]
 
+    localPoints: "list[tuple[float, float, bool]]" = []
+    for i in range(4):
+        cx, cy = corners[i]
+        dIn = edgeDirs[i]
+        dOut = edgeDirs[(i + 1) % 4]
+        # Fillet centre: offset from the sharp corner by radiusCm along
+        # BOTH the inbound edge's own perpendicular and the outbound
+        # edge's -- for these axis-aligned 90 deg corners that reduces to
+        # centre = cornerPoint - radius*dIn + radius*dOut (verified: this
+        # point is exactly radiusCm from both tangent points, each
+        # perpendicular to its own edge).
+        centreX = cx - dIn[0] * radiusCm + dOut[0] * radiusCm
+        centreY = cy - dIn[1] * radiusCm + dOut[1] * radiusCm
+        # The arc sweeps 90 deg CCW from the tangent point on the inbound
+        # edge (angle = atan2(-dOut.y, -dOut.x) from the centre) to the
+        # tangent point on the outbound edge. k=0 (the inbound tangent
+        # point) is NOT emitted as its own waypoint -- it coincides with
+        # where the preceding straight run was already headed, so the
+        # first NEW waypoint is k=1.
+        startAngle = math.atan2(-dOut[1], -dOut[0])
+        for k in range(1, CORNER_SEGMENTS_PER_CORNER + 1):
+            angle = startAngle + (math.pi / 2.0) * k / CORNER_SEGMENTS_PER_CORNER
+            x = centreX + radiusCm * math.cos(angle)
+            y = centreY + radiusCm * math.sin(angle)
+            isVertex = k == CORNER_SEGMENTS_PER_CORNER
+            localPoints.append((x, y, isVertex))
 
-class _TruePoseSampler:
-    """Background poller of the SIM's own ground truth during ONE
-    `gotoWorld()` call -- SIM ONLY, for --mode goto's "bounded overshoot,
-    no stall" reporting.
-
-    `gotoWorld()` itself (127-006's own file) has no tracing hook, and
-    adding one is out of this ticket's stated file scope (Files: modify
-    `square_tour.py`, and modify `planner.py` for its ONE provisional
-    constant only) -- so this samples ground truth from a SECOND thread
-    while `gotoWorld()` runs synchronously in the caller's thread.
-    `SimLoop.get_true_pose()` is a synchronous ctypes round-trip
-    independent of the telemetry frame QUEUE `gotoWorld()`'s own
-    `_advance()` drains (see that method's own docstring on the sim
-    tick thread being the single writer/reader-safe boundary), so
-    polling it from here never steals a frame from `gotoWorld()`'s
-    single-consumer telemetry queue.
-
-    Hardware/playfield backends have no equivalent ground-truth channel
-    (`_Backend.truePose()` returns `None` there), so this sampler is used
-    only when `backend.label == "sim"`; the hardware/playfield goto tour
-    reports only the coarser per-waypoint `GotoResult` / camera-fix
-    numbers instead."""
-
-    PERIOD = 0.02  # [s] ~50 Hz sampling
-
-    def __init__(self, backend: "_Backend", targetX: float, targetY: float) -> None:
-        # [mm] [mm] -- targetX/targetY in the SAME mm frame backend.truePose() reports
-        self._backend = backend
-        self._targetX = targetX
-        self._targetY = targetY
-        self.samples: "list[tuple[float, float, float, float]]" = []  # (t, x, y, distance)
-        self._stopFlag = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
-
-    def _run(self) -> None:
-        t0 = time.monotonic()
-        while not self._stopFlag.is_set():
-            x, y, _h = self._backend.truePose()
-            distance = math.hypot(self._targetX - x, self._targetY - y)
-            self.samples.append((time.monotonic() - t0, x, y, distance))
-            time.sleep(self.PERIOD)
-
-    def __enter__(self) -> "_TruePoseSampler":
-        self._thread.start()
-        return self
-
-    def __exit__(self, *exc) -> None:
-        self._stopFlag.set()
-        self._thread.join(timeout=1.0)
-
-    def analyze(self, tolerance: float, stallWindow: float = GOTO_STALL_WINDOW,
-                stallEps: float = GOTO_STALL_EPS) -> dict:
-        """(minDistance, endDistance, overshoot, stalled) from the sampled
-        trace, [mm]/[mm]/[mm]/bool.
-
-        `overshoot`: how much farther the robot ended up than the closest
-        it got during the approach -- 0.0 if distance-to-target shrank
-        monotonically, as expected for one constant-speed arc to a single
-        fixed target (this solver never reverses direction).
-
-        `stalled`: True iff any `stallWindow`-second span shows less than
-        `stallEps` mm of net progress while still outside `tolerance` --
-        a coarse but real check for the drivetrain-deadband stall this
-        loop's own module docstring names as the failure mode
-        `TERMINATION_TOLERANCE` exists to stay clear of (project memory
-        `deadband-dead-zone-and-boost-fix.md`)."""
-        if not self.samples:
-            return dict(minDistance=None, endDistance=None, overshoot=None, stalled=None)
-        distances = [d for _, _, _, d in self.samples]
-        minDistance = min(distances)
-        endDistance = distances[-1]
-        overshoot = max(0.0, endDistance - minDistance)
-        stalled = False
-        for i, (t, _, _, d) in enumerate(self.samples):
-            if d <= tolerance:
-                continue
-            for t2, _, _, d2 in self.samples[i:]:
-                if t2 - t < stallWindow:
-                    continue
-                if d - d2 < stallEps:
-                    stalled = True
-                break
-        return dict(minDistance=minDistance, endDistance=endDistance,
-                    overshoot=overshoot, stalled=stalled)
+    return [(toWorld.apply(Pose(x=x, y=y, heading=0.0)), isVertex)
+            for x, y, isVertex in localPoints]
 
 
 def reportGotoBoundaryFixes(fixes: "list[dict]") -> None:
@@ -1314,8 +1388,28 @@ def reportGotoBoundaryFixes(fixes: "list[dict]") -> None:
     print(f"camera closure (first vs last fix): {math.hypot(x1 - x0, y1 - y0) * 10.0:.1f} mm")
 
 
-def writeGotoChart(results: "list[dict]", fixes: "list[dict]",
+def writeGotoChart(results: "list[dict]", fixes: "list[dict]", waypoints: "list[tuple]",
                    closureWorld: "float | None", out: str, label: str) -> None:
+    """Two-panel chart: left is the PATH panel (commanded rounded-square
+    waypoints, the WorldPose trace actually driven, and the camera fixes
+    taken at the four vertices -- all three overlaid in the SAME relative
+    frame so they are comparable at a glance), right is per-corner
+    convergence (or a summary table when no ground-truth sampler ran).
+
+    The path panel previously rendered as a tiny strip with most of the
+    figure blank: `axPath.set_aspect("equal")` alone (no `box_aspect`)
+    only constrains the DATA limits to be square -- with a rectangular
+    subplot box (this figure's own `width_ratios=[1, 1.4]` at
+    `figsize=(14, 6)`), matplotlib's default `adjustable="box"` then
+    SHRINKS the axes' own box to match that data aspect, leaving the
+    unused remainder of the allotted subplot area blank around it. Adding
+    `axPath.set_box_aspect(1)` fixes this the way matplotlib's own docs
+    recommend for "square plot regardless of figure size": it tells the
+    layout engine up front to allocate a square box (using the panel's
+    full height), so there is no oversized rectangle to shrink out of in
+    the first place -- `tight_layout()` sizes the LEFT COLUMN's width to
+    match instead of leaving dead margin.
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
@@ -1325,20 +1419,52 @@ def writeGotoChart(results: "list[dict]", fixes: "list[dict]",
 
     x0 = fixes[0]["pose"].x * 10.0 if fixes and fixes[0]["pose"] is not None else 0.0
     y0 = fixes[0]["pose"].y * 10.0 if fixes and fixes[0]["pose"] is not None else 0.0
-    relXs, relYs, labels = [], [], []
+
+    # Commanded path: every rounded-square waypoint this run ASKED
+    # gotoWorld() to reach, in order -- the ideal/intended shape.
+    wpXs = [x0 - x0] + [w.x * 10.0 - x0 for w, _isVertex in waypoints]
+    wpYs = [y0 - y0] + [w.y * 10.0 - y0 for w, _isVertex in waypoints]
+    axPath.plot(wpXs, wpYs, color="#aaaaaa", lw=1.2, ls=":", marker=".",
+               ms=4, label="commanded waypoints", zorder=1)
+
+    # Driven path: WorldPose after every waypoint call (dense -- every
+    # fillet sample, not just the four vertices) -- what the robot
+    # actually reported doing.
+    relXs, relYs, annotateLbls, annotateXs, annotateYs = [], [], [], [], []
     for f in fixes:
         if f["pose"] is None:
             continue
-        relXs.append(f["pose"].x * 10.0 - x0)
-        relYs.append(f["pose"].y * 10.0 - y0)
-        labels.append(f["label"])
-    axPath.plot(relXs, relYs, marker="o", color="#1f77b4", lw=1.6)
-    for lbl, x, y in zip(labels, relXs, relYs):
+        rx, ry = f["pose"].x * 10.0 - x0, f["pose"].y * 10.0 - y0
+        relXs.append(rx)
+        relYs.append(ry)
+        # Annotate only "start" and the four vertex labels -- annotating
+        # every dense intermediate fillet sample too would be unreadable.
+        if f["camera"] is not None or f["label"] == "start":
+            annotateLbls.append(f["label"])
+            annotateXs.append(rx)
+            annotateYs.append(ry)
+    axPath.plot(relXs, relYs, marker="o", ms=3, color="#1f77b4", lw=1.6,
+               label="driven (WorldPose)", zorder=2)
+    for lbl, x, y in zip(annotateLbls, annotateXs, annotateYs):
         axPath.annotate(lbl, xy=(x, y), fontsize=8, xytext=(4, 4), textcoords="offset points")
-    axPath.set_aspect("equal")
+
+    # Camera fixes: the ground truth taken at the four vertices only (see
+    # gotoSquareWaypoints()'s own docstring for why not every sample) --
+    # plotted alongside the other two so a systematic WorldPose bias shows
+    # up directly as a gap between the blue trace and these markers.
+    camXs = [f["camera"][0] * 10.0 - x0 for f in fixes if f["camera"] is not None]
+    camYs = [f["camera"][1] * 10.0 - y0 for f in fixes if f["camera"] is not None]
+    if camXs:
+        axPath.plot(camXs, camYs, marker="^", ms=8, mfc="none", mec="#d62728",
+                   mew=1.8, ls="none", label="camera fix", zorder=3)
+
+    axPath.set_aspect("equal", adjustable="datalim")
+    axPath.set_box_aspect(1)  # square box regardless of figsize/width_ratios -- see docstring
+    axPath.margins(0.12)
     axPath.set_xlabel("x [mm]")
     axPath.set_ylabel("y [mm]")
-    axPath.set_title("goto-mode waypoint path (WorldPose)")
+    axPath.set_title("goto-mode path: commanded vs. driven vs. camera")
+    axPath.legend(fontsize=7.5, loc="best")
     axPath.grid(True, alpha=0.3)
 
     hasSamples = any(r.get("samples") for r in results)
@@ -1373,21 +1499,28 @@ def writeGotoChart(results: "list[dict]", fixes: "list[dict]",
 
 
 def runGotoTour(backend: "_Backend", args) -> int:
-    """--mode goto: the same square, driven as a sequence of `gotoWorld()`
-    position waypoints (ticket 006's outer position loop) instead of
-    open-loop WHEELS / closed-loop-MOVE segments.
+    """--mode goto: the same square, driven as ONE continuous pure-pursuit
+    run through the rounded-square waypoint sequence
+    (`pathplan.planner.followPath()`, this IS ticket 008's own algorithm,
+    built here per stakeholder directive 2026-07-30 -- see the
+    module-level comment above `pathplan.solver.hasPassedWaypoint()`/
+    `advanceWaypointIndex()` for the arrival-tolerance-floor-vs-chord-
+    ceiling conflict this replaces), instead of calling `gotoWorld()` once
+    per waypoint and requiring a full stop-and-arrive at every one. Full
+    `CRUISE` speed throughout -- no goto-specific speed reduction; slowing
+    down was proposed and explicitly rejected (see the module history).
 
-    One `MoveIdAllocator` is shared across every waypoint in the tour --
-    required by `planner.gotoWorld()`'s own docstring for any caller
-    issuing multiple sequential goto calls in one robot boot session (a
-    fresh per-call allocator risks a later, genuinely new move being
-    misread as a duplicate of an earlier one that reused the same low
-    id) -- seeded from wall-clock time (matching this module's own
-    `_ID_BASE` and 127-002's finding that the robot does not necessarily
-    reboot between separate script invocations)."""
+    One `MoveIdAllocator` is shared across the whole call -- required by
+    `planner.gotoWorld()`'s own docstring (equally true of `followPath()`,
+    which shares its send machinery) for any caller issuing multiple
+    sequential Moves in one robot boot session (a fresh allocator risks a
+    later, genuinely new move being misread as a duplicate of an earlier
+    one that reused the same low id) -- seeded from wall-clock time
+    (matching this module's own `_ID_BASE` and 127-002's finding that the
+    robot does not necessarily reboot between separate script
+    invocations)."""
     from robot_radio.field import captureFixWithRetry
-    from robot_radio.pathplan.planner import (GiveUpLimits, MoveIdAllocator,
-                                              TERMINATION_TOLERANCE, gotoWorld)
+    from robot_radio.pathplan.planner import GiveUpLimits, MoveIdAllocator, followPath
     from robot_radio.pathplan.solver import SolverLimits
     from robot_radio.pathplan.world_pose import WorldPose
 
@@ -1397,7 +1530,13 @@ def runGotoTour(backend: "_Backend", args) -> int:
 
     worldPose = WorldPose()
     geofence = getattr(backend, "geofence", None)
-    tolerance = args.goto_tolerance if args.goto_tolerance is not None else TERMINATION_TOLERANCE
+    # GOTO_PATH_TOLERANCE (not planner.TERMINATION_TOLERANCE) is the
+    # default here -- see that constant's own module-level derivation.
+    # Under pass-through this gates ONLY `followPath()`'s terminal-waypoint
+    # arrival test (every interior waypoint is pass-through, never
+    # arrival-tested). --goto-tolerance still overrides explicitly when
+    # given.
+    tolerance = args.goto_tolerance if args.goto_tolerance is not None else GOTO_PATH_TOLERANCE
 
     # Seed WorldPose from one real telemetry frame, then re-anchor:
     #   SIM       -- from SimLoop.get_true_pose(), the sim-tier stand-in
@@ -1446,74 +1585,90 @@ def runGotoTour(backend: "_Backend", args) -> int:
         print("FAIL: WorldPose has no pose after seeding")
         return 1
 
+    # (Pose, isVertex) pairs -- isVertex marks the LAST sample of each
+    # corner's fillet, the one point per corner a camera fix is taken at
+    # (see gotoSquareWaypoints()'s own docstring).
     waypoints = gotoSquareWaypoints(startPose, args.leg)
+    targetPoses = [w for w, _isVertex in waypoints]
     limits = SolverLimits(trackWidth=PHYSICAL_TRACK, speed=CRUISE)
-    giveUp = GiveUpLimits(maxIterations=400, giveUpTimeout=30.0)
+    # Budget covers the WHOLE path now, not one waypoint -- previously each
+    # of the 4 corners got its own 400-iteration/30s budget under the old
+    # per-corner gotoWorld() loop (summed: ~1600 iterations/120s across the
+    # tour). Sized generously above that sum: the pass-through loop no
+    # longer pays a stop-and-settle cost at every interior waypoint, so it
+    # should finish well under this, but there is no reason to run the
+    # budget tight now that it covers 12 waypoints instead of 1.
+    giveUp = GiveUpLimits(maxIterations=1600, giveUpTimeout=90.0)
     allocator = MoveIdAllocator(start=_ID_BASE + 1)
 
     startCamera = captureFixWithRetry(geofence, "start") if geofence is not None else None
     fixes = [dict(label="start", pose=startPose, camera=startCamera)]
-    results: "list[dict]" = []
 
-    for idx, waypoint in enumerate(waypoints):
-        label = f"corner {idx + 1}"
-        sampler = (_TruePoseSampler(backend, waypoint.x * 10.0, waypoint.y * 10.0)
-                  if args.sim else None)
-        if sampler is not None:
-            sampler.__enter__()
-        result = gotoWorld(proto, worldPose, waypoint.x, waypoint.y,
-                           limits=limits, geofence=geofence, tolerance=tolerance,
-                           giveUp=giveUp, moveIds=allocator)
-        analysis = None
-        if sampler is not None:
-            sampler.__exit__()
-            analysis = sampler.analyze(tolerance)
+    cornerCount = 0
+    waypointLabels: "list[str]" = []
+    for idx, (_waypoint, isVertex) in enumerate(waypoints):
+        subIdx = idx % CORNER_SEGMENTS_PER_CORNER
+        if subIdx == 0:
+            cornerCount += 1
+        waypointLabels.append(
+            f"corner {cornerCount}" if isVertex else
+            f"corner {cornerCount} hop {subIdx + 1}/{CORNER_SEGMENTS_PER_CORNER}")
 
-        line = (f"[{label}] success={result.success} reason={result.reason!r} "
-               f"iterations={result.iterations} sent={result.sent}")
-        if analysis is not None and analysis["minDistance"] is not None:
-            line += (f" minDistance={analysis['minDistance']:.1f}mm "
-                     f"overshoot={analysis['overshoot']:.1f}mm stalled={analysis['stalled']}")
-        print(line)
+    def onWaypoint(index: int, pose) -> None:
+        """`followPath()`'s own per-crossing hook -- records a chart mark
+        (every crossing) and a camera fix (ONLY at the four original
+        vertices, matching the OLD per-corner loop's own camera-fix
+        policy -- a median-of-7 fix at every one of the
+        ~4*CORNER_SEGMENTS_PER_CORNER dense samples would be absurdly slow
+        and no intermediate sample is a boundary anything downstream
+        cares about) the instant the pass-through advance rule crosses
+        each waypoint.
 
-        divergence = worldPose.encoderOtosDivergence()
-        if divergence is not None:
-            print(f"  encoder-vs-OTOS divergence: distance={divergence.distance * 10.0:.1f}mm "
-                  f"heading={math.degrees(divergence.heading):+.2f}deg")
+        NOT at rest: `.claude/rules/playfield-testing.md` mandates a
+        camera pose fix at every segment boundary "at REST, after the
+        settle dwell" -- pass-through, by design, never stops at an
+        INTERIOR waypoint (the terminal one does, via `followPath()`'s
+        own arrival test, but this hook fires for it at the instant
+        arrival is DETECTED, one solve cycle before the `finally`-block
+        `estop()` actually lands). A camera fix taken here is therefore a
+        MOVING fix on every geofence-armed run -- a known, deliberate gap
+        left for whoever runs `--mode goto` on the playfield next (this
+        OOP fix's own stated boundary was "do NOT run against hardware";
+        reconciling moving-fix-vs-at-rest is 127-008's own territory)."""
+        isVertex = waypoints[index][1]
+        camera = (captureFixWithRetry(geofence, waypointLabels[index])
+                  if geofence is not None and isVertex else None)
+        fixes.append(dict(label=waypointLabels[index], pose=pose, camera=camera))
 
-        camera = captureFixWithRetry(geofence, label) if geofence is not None else None
-        fixes.append(dict(label=label, pose=worldPose.worldPose(), camera=camera))
-        results.append(dict(label=label, result=result, analysis=analysis,
-                            samples=(sampler.samples if sampler is not None else None)))
+    pathResult = followPath(proto, worldPose, targetPoses, limits, geofence=geofence,
+                            tolerance=tolerance, giveUp=giveUp, moveIds=allocator,
+                            onWaypoint=onWaypoint)
 
-        if not result.success:
-            print(f"FAIL: {label} did not converge -- stopping the tour here")
-            break
+    print(f"[{backend.label}] goto-mode square (pure-pursuit, full "
+          f"{CRUISE:.0f} mm/s): success={pathResult.success} "
+          f"reason={pathResult.reason!r}")
+    print(f"  waypointsReached={pathResult.waypointsReached}/{len(waypoints)} "
+          f"iterations={pathResult.iterations} sent={pathResult.sent} "
+          f"retries={pathResult.retries} forcedResends={pathResult.forcedResends} "
+          f"unacked={pathResult.unacked}")
 
-    completedAll = len(results) == len(waypoints) and all(r["result"].success for r in results)
+    divergence = worldPose.encoderOtosDivergence()
+    if divergence is not None:
+        print(f"  encoder-vs-OTOS divergence: distance={divergence.distance * 10.0:.1f}mm "
+              f"heading={math.degrees(divergence.heading):+.2f}deg")
+
+    # Success implies every waypoint was reached (arrival at the terminal
+    # waypoint is only possible once every interior one has been passed --
+    # see followPath()'s own docstring); the second clause is a redundant,
+    # cheap sanity check on that invariant, not an independent condition.
+    completedAll = pathResult.success and pathResult.waypointsReached == len(waypoints)
     finalPose = worldPose.worldPose()
     closureWorld = (math.hypot(finalPose.x - startPose.x, finalPose.y - startPose.y) * 10.0
                     if finalPose is not None else None)
-
-    print(f"\n[{backend.label}] goto-mode square: {len(results)}/{len(waypoints)} waypoints "
-          f"attempted, {sum(1 for r in results if r['result'].success)}/{len(waypoints)} converged")
     if closureWorld is not None:
         print(f"  WorldPose closure (start -> end, "
               f"{'plant truth' if args.sim else 'encoder' if geofence is None else 'camera-anchored'}): "
               f"{closureWorld:.1f} mm")
-
-    overshoots = [r["analysis"]["overshoot"] for r in results
-                 if r["analysis"] is not None and r["analysis"]["overshoot"] is not None]
-    stalls = [r["analysis"]["stalled"] for r in results if r["analysis"] is not None]
-    if overshoots:
-        maxOvershoot = max(overshoots)
-        overshootOk = maxOvershoot <= GOTO_OVERSHOOT_BOUND
-        print(f"  {'PASS' if overshootOk else 'FAIL'}: max overshoot {maxOvershoot:.1f} mm "
-              f"(bound {GOTO_OVERSHOOT_BOUND:.0f} mm)")
-    if stalls:
-        anyStalled = any(stalls)
-        print(f"  {'FAIL' if anyStalled else 'PASS'}: stall detected = {anyStalled} "
-              f"(window {GOTO_STALL_WINDOW:.1f}s / eps {GOTO_STALL_EPS:.0f}mm)")
 
     if args.sim and startTrue is not None:
         endTrue = backend.truePose()
@@ -1523,10 +1678,22 @@ def runGotoTour(backend: "_Backend", args) -> int:
     reportGotoBoundaryFixes(fixes)
 
     chartPath = args.chart or f"src/tests/bench/square_tour_goto_{backend.label}.png"
-    writeGotoChart(results, fixes, closureWorld, chartPath, backend.label)
+    # One entry, not one per corner -- followPath() is a single continuous
+    # call now. writeGotoChart()'s summary branch only needs `.success`/
+    # `.iterations`/`.sent`, which FollowPathResult already provides
+    # directly; no `samples` key means the per-corner convergence trace
+    # panel falls back to that summary (see writeGotoChart()'s own
+    # docstring) -- a full-path ground-truth trace is not meaningful here
+    # (a SQUARE's terminal waypoint sits right next to the start, so
+    # "distance to target over time" would spike and fall with no useful
+    # per-corner interpretation; the OLD per-corner `_TruePoseSampler` this
+    # replaced could do it only because it re-anchored a fresh target for
+    # every gotoWorld() call).
+    writeGotoChart([dict(label="full path (pure pursuit)", result=pathResult)],
+                   fixes, waypoints, closureWorld, chartPath, backend.label)
 
     if not completedAll:
-        print("FAIL: goto-mode square tour did not converge at every waypoint")
+        print("FAIL: goto-mode square tour did not reach every waypoint")
         return 1
     print("PASS: goto-mode square tour closed")
     return 0
@@ -1694,14 +1861,18 @@ def main() -> int:
     p.add_argument("--mode", choices=("segments", "goto", "actuation-floor"),
                    default="segments",
                    help="'segments' (default): the original 8-segment WHEELS/MOVE "
-                        "tour, unchanged. 'goto': drive the same square as 4 "
-                        "gotoWorld() position waypoints (127-007). "
+                        "tour, unchanged. 'goto': drive the same square as one "
+                        "continuous pure-pursuit run through a dense rounded-"
+                        "corner waypoint sequence at full CRUISE speed "
+                        "(pathplan.planner.followPath(), 127-007/127-008). "
                         "'actuation-floor': PLAYFIELD-ONLY minimum-reliable-move "
                         "measurement (127-007); refuses to run without the camera "
                         "geofence.")
     p.add_argument("--goto-tolerance", type=float, default=None,
-                   help="[mm] gotoWorld() arrival tolerance for --mode goto "
-                        "(default: pathplan.planner.TERMINATION_TOLERANCE)")
+                   help="[mm] followPath() arrival tolerance for --mode goto's "
+                        "TERMINAL waypoint only -- interior waypoints are "
+                        "pass-through, never tolerance-tested (default: "
+                        "GOTO_PATH_TOLERANCE)")
     p.add_argument("--floor-distances", type=_floatList,
                    default=_floatList("150,100,80,60,50,40,30,20,15,10,5"),
                    help="[mm] comma-separated, descending: commanded distances "
