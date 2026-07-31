@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: Delete StreamingExecutor (zero production callers)
-status: in-progress
+status: done
 use-cases:
 - SUC-006
 depends-on: []
