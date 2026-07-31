@@ -120,7 +120,7 @@ from robot_radio.nav.pose import Pose
 from robot_radio.pathplan.solver import (
     ArcSolution,
     SolverLimits,
-    advanceWaypointIndex,
+    pursuitTarget,
     solveArcToPoint,
 )
 from robot_radio.pathplan.world_pose import Transform2, WorldPose
@@ -177,33 +177,77 @@ _POLL_SLEEP = 0.01       # [s] telemetry poll granularity inside _advance()
 
 _ERR_FULL = 4  # envelope.proto ErrCode.ERR_FULL -- "destination queue full" (retryable; matches square_tour.py's own local ERR_FULL constant)
 
-# --- Actuation-lag lookahead floor (out-of-process, 2026-07-30) -----------
+# --- Pure-pursuit lookahead distance (out-of-process, 2026-07-31) ---------
 #
-# followPath()'s own pure-pursuit advance rule (solver.advanceWaypointIndex())
-# steers at a moving carrot; if that carrot sits closer than the distance
-# the robot travels during one actuation lag, the steering command is
-# chasing a target the robot has effectively already reached by the time it
-# can act on the command at all -- unstable. 150 ms is the same
-# actuation-delay figure TERMINATION_TOLERANCE's own derivation above and
-# hil_drive.py's own `actuationDelay` (`limits.actuationDelay = 150.0`) use.
-_ACTUATION_DELAY = 0.15  # [s]
+# `followPath()` steers at the point on the path one LOOKAHEAD distance
+# ahead of the robot (`solver.pursuitTarget()`). That distance is bounded
+# from both sides, and both bounds are physical:
+#
+# FLOOR -- steering lag, and it is the binding one. Between commanding a
+# curvature and the robot actually holding it there is a dead time
+# (150 ms, the same `actuationDelay` figure TERMINATION_TOLERANCE's own
+# derivation above and hil_drive.py's `limits.actuationDelay = 150.0` use)
+# plus the wheel plant's own first-order time constant (230 ms,
+# `kPlantTau` in src/firm/main.cpp -- the same constant `solver.py`'s slew
+# derivation cites). At CRUISE the robot therefore covers
+#
+#     speed * (_ACTUATION_DELAY + _PLANT_TAU) = 150 * 0.38 = 57 mm
+#
+# before a steering command takes hold. Pure pursuit with a lookahead of
+# that ORDER is the textbook under-damped case: the robot's heading lags
+# the path, the geometry answers a lagging heading with a TIGHTER arc, the
+# lag delivers that tighter arc late, and the result overshoots and rings.
+# MEASURED 2026-07-31 in the sim reproduction with L = 60 mm: entering the
+# first 62.5 mm fillet the commanded omega swung +3.6 -> -2.8 -> +3.4 rad/s
+# and the heading rang +-25 deg about its target -- barely stable in clean
+# sim, and tipped over by any dropped command. `_LOOKAHEAD_GAIN = 2.0`
+# buys the standard factor-of-two margin over that lag distance:
+#
+#     L = 2.0 * 150 * 0.38 = 114 mm
+#
+# CEILING -- corner-cutting. Pure pursuit tracks INSIDE a curve; for a
+# fillet of radius r the steady-state deviation is about L^2 / (8r), and a
+# lookahead approaching the fillet's own arc length cuts the corner off
+# entirely. square_tour.py's tightest fillet is the 250 mm-leg case:
+# r = 62.5 mm, quarter-arc 98.2 mm, so L = 114 mm cuts about
+# 114^2 / (8 * 62.5) = 26 mm off that corner. That is real and visible --
+# the rounded square comes out rounder than commanded -- and it is the
+# price of stability at this speed on this radius. MEASURED 2026-07-31
+# (leg 250, 10% injected command loss, 6 seeds each): L = 60 mm reached
+# the terminal waypoint in 1 run of 6, L = 120 mm in 4 of 6, L = 150 mm in
+# 4 of 6, L = 180 mm in 2 of 6 (the last cutting the corners so hard it
+# starts missing them).
+#
+# THE TWO BOUNDS ARE UNCOMFORTABLY CLOSE, and that is a finding, not a
+# tuning success: a 62.5 mm-radius corner taken at 150 mm/s asks for
+# 2.4 rad/s of sustained yaw from a drivetrain whose steering lag covers
+# 57 mm of travel. There is no lookahead that both tracks that corner
+# tightly and damps the lag. Widening the corner (a longer leg, or
+# relaxing square_tour.py's own `legLength / 4` radius ceiling) or slowing
+# through the fillets are the only ways to open the gap; a curvature
+# FEED-FORWARD term (command the path's own known curvature, correct with
+# pure pursuit rather than deriving all of it from the chase geometry)
+# would remove the dependence on lookahead altogether and is the right
+# next increment.
+_ACTUATION_DELAY = 0.15  # [s] command dead time
+_PLANT_TAU = 0.23        # [s] src/firm/main.cpp kPlantTau -- wheel plant time constant
+_LOOKAHEAD_GAIN = 2.0    # margin over the lag distance; see the derivation above
+_MIN_LOOKAHEAD = 60.0    # [mm] hard floor for a very slow commanded speed
 
 
-def _lookaheadFloorFor(speed: float) -> float:
-    """[mm] minimum distance an INTERIOR pass-through target may sit from
-    the robot before `followPath()` skips ahead to the next waypoint
-    (`solver.advanceWaypointIndex()`) rather than steering at it -- see the
-    module-level comment above `_ACTUATION_DELAY` for the derivation. For
-    this project's CRUISE speed (150 mm/s): 150 * 0.15 = 22.5 mm. Pure, no
+def _lookaheadFor(speed: float) -> float:
+    """[mm] pure-pursuit lookahead distance for a commanded `speed` [mm/s]
+    -- see the module-level comment above `_ACTUATION_DELAY` for the two
+    physical bounds it sits between and why they nearly touch. For this
+    project's CRUISE speed (150 mm/s): 2.0 * 150 * 0.38 = 114 mm. Pure, no
     I/O -- unit-testable standalone."""
-    return speed * _ACTUATION_DELAY
+    return max(speed * _LOOKAHEAD_GAIN * (_ACTUATION_DELAY + _PLANT_TAU), _MIN_LOOKAHEAD)
 
 
 # --- followPath() and the target-behind guard: DO NOT widen it ------------
 #
-# Two rejected approaches, in order, before the one `followPath()` actually
-# uses (below, at its own solve call site) -- kept here as a durable record
-# so this ground is not re-covered:
+# Three rejected approaches, in order, before the one `followPath()` actually
+# uses -- kept here as a durable record so this ground is not re-covered:
 #
 # 1. An UNBOUNDED "if behind, treat like passed and skip ahead" fallback.
 #    Measured 2026-07-30: chained straight through six waypoints (half a
@@ -228,11 +272,30 @@ def _lookaheadFloorFor(speed: float) -> float:
 #    module docstring) exists to stay clear of. Widening the guard was
 #    deliberately courting the same hazard the slew limit was built to
 #    avoid, not sidestepping it.
+# 3. Sending NOTHING while the guard fires, and letting `ProgressCheck`'s
+#    liveness backstop re-send the LAST SENT arc once the robot had
+#    genuinely stalled. This is the one that reached the playfield, and it
+#    is the one that ran away: MEASURED 2026-07-31 (sim reproduction,
+#    `--mode goto --leg 250` with the hardware link's documented ~20%
+#    inbound command loss injected) 743 of 754 solve cycles returned
+#    `stop=True`, and the ONLY thing driving the robot for all of them was
+#    that backstop re-sending an arc solved for a waypoint already far
+#    behind -- i.e. "go straight". Each resend put the robot further off
+#    the path, which kept the guard firing: positive feedback, in a
+#    straight line, until the geofence. On hardware this drove ~920 mm with
+#    the heading unchanged (+20 deg -> +18 deg).
 #
-# The actual fix is at the solve call site in `followPath()` itself: when
-# the guard fires, send NOTHING that cycle rather than asking for a
-# different (and, per the above, possibly worse) arc. See that comment for
-# the full reasoning.
+#    So: a stale resend is not a liveness backstop, it is an open-loop
+#    command issued precisely when the closed loop has said it does not
+#    know where to go. `followPath()` no longer does it -- see
+#    `PathAbandoned` and the solve call site below. `ProgressCheck`-forced
+#    resends survive only on the path where the solver DID return a real
+#    arc for the CURRENT target.
+#
+# The root fix is upstream of all three: `solver.pursuitTarget()` steers at
+# a point one lookahead distance along the path rather than at the next
+# waypoint, which bounds the target's bearing by construction. See that
+# function's own section comment in `solver.py`.
 
 
 def _moveTimeoutFor(arcLength: float, speed: float) -> float:
@@ -271,10 +334,24 @@ class ReplaceThreshold:
         last SENT arc length by more than this to trigger a replacement
         -- absorbs ordinary per-cycle noise in the measured pose without
         replacing on every single cycle.
+    refreshFraction: re-send once the robot has covered this fraction
+        of the arc length it was last COMMANDED, regardless of whether the
+        solution itself has moved. Needed by `followPath()`, whose target
+        is a fixed lookahead distance along the path: on a straight run
+        both the solved `omega` (0) and the solved `arcLength` (the
+        lookahead) are CONSTANT cycle after cycle, so neither threshold
+        above ever fires -- the bounded Move simply runs out and the robot
+        sits still until `ProgressCheck`'s 2 s liveness backstop notices
+        (measured 2026-07-31 in the sim reproduction: repeated ~0.4 s of
+        motion followed by ~2 s stopped, all the way down the first leg).
+        A move must be refreshed BEFORE it expires, not after; 0.5 leaves
+        a full half of the commanded arc as margin for the replacement's
+        own ack round trip.
     """
 
     omegaThreshold: float = 0.05        # [rad/s]
     arcLengthThreshold: float = 15.0    # [mm]
+    refreshFraction: float = 0.5
 
 
 @dataclass(frozen=True)
@@ -881,6 +958,38 @@ class FollowPathResult:
     unacked: int = 0
 
 
+# --- Off-path abandonment (out-of-process, 2026-07-31) --------------------
+#
+# `followPath()` gives up, rather than driving, once it can no longer solve
+# an arc to its own lookahead target for this long. Sized off `ProgressCheck.
+# window`'s own reasoning: long enough that a transient mid-corner guard
+# firing (the legitimate case -- pure pursuit cuts inside a fillet, so the
+# heading can briefly lag the nominal tangent) rides out without aborting a
+# healthy run, short enough that a robot which has genuinely left the path
+# is stopped in about a second rather than driven blind for the rest of the
+# give-up budget. Cycle-count, not seconds, so it scales with `cyclePeriod`.
+_MAX_UNSOLVABLE_CYCLES = 10
+
+# The Move's Distance stop condition is the arc to the lookahead target and
+# NOTHING LONGER -- deliberately, and it is a safety property, not an
+# oversight. Pure pursuit produces a CURVATURE, not a destination, so it is
+# tempting to give the Move a generous distance and let the loop replace it;
+# do not. Whenever the loop cannot get a replacement through (the ack
+# retries on a lossy link cost up to 2 s), the robot runs whatever it was
+# last told, open loop, for exactly that distance. Keeping it at one
+# lookahead means the robot COASTS TO A STOP roughly where the last valid
+# solve expected it to be, instead of continuing to accumulate path error
+# while the host is busy retrying. MEASURED 2026-07-31 (leg 250, 10%
+# injected command loss, 6 seeds): inflating the commanded distance to
+# `max(arcLength, speed * 0.6 s)` -- barely longer than one lookahead --
+# dropped the completion rate from 4/6 to 2/6, because every retry window
+# became 90 mm of un-steered travel instead of a stop.
+#
+# `ReplaceThreshold.refreshFraction` is what keeps this from stalling in
+# NORMAL operation: the move is replaced after half its own arc, so it never
+# expires under a healthy link.
+
+
 def followPath(proto: NezhaProtocol, worldPose: WorldPose, waypoints: "list[Pose]",
                limits: SolverLimits, *, geofence: "Geofence | None" = None,
                tolerance: float = TERMINATION_TOLERANCE,
@@ -891,57 +1000,61 @@ def followPath(proto: NezhaProtocol, worldPose: WorldPose, waypoints: "list[Pose
                moveTimeout: "float | None" = None,
                cyclePeriod: float = CYCLE_PERIOD,
                moveIds: "MoveIdAllocator | None" = None,
-               lookaheadFloor: "float | None" = None,
+               lookahead: "float | None" = None,
                onWaypoint: "Callable[[int, Pose], None] | None" = None) -> FollowPathResult:
     """Drive the robot through a SEQUENCE of world-frame waypoints as ONE
     continuous pure-pursuit run, instead of calling `gotoWorld()` once per
     waypoint and requiring a full stop-and-arrive at every one. See the
-    module-level comment above `solver.hasPassedWaypoint()`/
-    `advanceWaypointIndex()` for why a dense waypoint sequence (e.g. a
-    rounded-corner square) needs this instead of N separate `gotoWorld()`
-    calls -- the arrival-tolerance floor vs. fillet-chord-length ceiling
-    conflict, and the stakeholder's own rejection of trading speed to
-    shrink the floor (2026-07-30).
+    module-level comment above `solver.pursuitTarget()` for why a dense
+    waypoint sequence (e.g. a rounded-corner square) needs this instead of
+    N separate `gotoWorld()` calls -- the arrival-tolerance floor vs.
+    fillet-chord-length ceiling conflict, the stakeholder's own rejection
+    of trading speed to shrink the floor (2026-07-30), and the playfield
+    runaway the first (pass-predicate) answer to it produced.
 
-    Every INTERIOR waypoint (all but the last) is passed through, never
-    arrived at: each cycle, `solver.advanceWaypointIndex()` advances the
-    target the moment the robot has passed it (by path projection) or the
-    current target has fallen inside the actuation-lag lookahead floor
-    (`_lookaheadFloorFor()`, or the caller's own `lookaheadFloor` override)
-    -- overshoot is the normal, expected case, not a failure. Only the LAST
-    waypoint gets a real, tolerance-gated arrival test (`tolerance`, the
-    same `TERMINATION_TOLERANCE`-shaped parameter `gotoWorld()` itself
+    No waypoint is ever a steering target. Each cycle,
+    `solver.pursuitTarget()` projects the robot onto the POLYLINE through
+    `waypoints` and returns the point one `lookahead` (`_lookaheadFor()`,
+    or the caller's own override) farther along it -- the lookahead-circle
+    intersection. Waypoints are therefore only vertices of the path being
+    followed, never things to arrive at, which is what dissolves the
+    arrival-tolerance-floor-vs-chord-spacing conflict outright. Only the
+    LAST waypoint gets a real, tolerance-gated arrival test (`tolerance`,
+    the same `TERMINATION_TOLERANCE`-shaped parameter `gotoWorld()` itself
     uses) -- this loop has to stop somewhere.
 
-    Per-cycle ordering is INGEST POSE -> ADVANCE TARGET -> SOLVE, never
-    solve-then-advance: advancing first means the solver almost never sees
-    a waypoint that is already behind the robot. When `solveArcToPoint()`'s
-    OWN behind-guard (bearing-based -- a different test than the advance
-    rule's own path-projection test) fires ANYWAY -- normal mid-corner,
-    where a robot legitimately cutting a fillet can have its heading
-    transiently lag the nominal tangent direction -- this loop sends
-    NOTHING that cycle rather than reaching for a different target or a
-    wider guard angle (both tried and rejected; see the module-level
-    comment above this function for why, including a measured case where
-    widening the guard made heading tracking worse, not better). The
-    vehicle keeps running whatever arc is already in flight while its
-    heading keeps turning; a robot that never recovers is still caught by
-    `GiveUpLimits`, never this guard.
+    The projection is MONOTONE: the segment it landed on is carried into
+    the next cycle as the search's own starting point, so a closed path (a
+    square, whose terminal waypoints sit right next to its first ones) can
+    never snap the robot back onto a stretch it has already driven.
+
+    Per-cycle ordering is INGEST POSE -> PICK TARGET -> SOLVE. Because the
+    target is a lookahead distance along the path rather than the next
+    waypoint, `solveArcToPoint()`'s own behind-guard firing is no longer a
+    routine mid-corner event -- it now means the robot's heading is more
+    than `SolverLimits.behindAngle` off the direction the path goes, i.e.
+    it has genuinely left the path. This loop therefore sends NOTHING on
+    such a cycle and, if it cannot solve for `_MAX_UNSOLVABLE_CYCLES`
+    consecutive cycles, ABANDONS the path (an unsuccessful
+    `FollowPathResult`, with the `finally` block's `estop()` bringing the
+    robot to rest). It specifically does NOT re-send the last known-good
+    arc: that is an open-loop command issued exactly when the closed loop
+    has said it does not know where to go, and it is what turned a stall
+    into a 920 mm straight-line runaway on the playfield -- see rejected
+    approach 3 in the module-level comment above this function.
 
     `onWaypoint(index, pose)`, if given, is called once for every DISTINCT
-    waypoint index the robot advances onto or past (increasing order,
-    possibly several per cycle -- see `advanceWaypointIndex()`'s own
-    docstring), and once more for the terminal waypoint on a successful
-    arrival. Lets a caller (e.g. `square_tour.runGotoTour()`) hang a camera
-    fix or a chart mark off waypoint crossings without this loop needing to
-    know anything about cameras or charts itself. `pose` is the world pose
-    at the moment the crossing was DETECTED -- for an interior waypoint the
-    robot is still moving at that instant (pass-through never stops), so a
-    camera fix taken from this hook is a MOVING fix, not the "at REST"
-    boundary fix `.claude/rules/playfield-testing.md` mandates for a
-    geofence-armed run; reconciling that is left to whoever runs this on
-    the playfield next (out of this fix's own "do not run against
-    hardware" scope).
+    waypoint index the path projection advances past (increasing order,
+    possibly several per cycle), and once more for the terminal waypoint on
+    a successful arrival. Lets a caller (e.g. `square_tour.runGotoTour()`)
+    hang a camera fix or a chart mark off waypoint crossings without this
+    loop needing to know anything about cameras or charts itself. `pose` is
+    the world pose at the moment the crossing was DETECTED -- the robot is
+    still moving at that instant (path following never stops at an interior
+    vertex), so a camera fix taken from this hook is a MOVING fix, not the
+    "at REST" boundary fix `.claude/rules/playfield-testing.md` mandates
+    for a geofence-armed run; reconciling that is left to whoever runs this
+    on the playfield next.
 
     All other parameters, the `estop()`-on-every-exit contract (this
     function's own `finally` block, run on every return AND on any
@@ -952,7 +1065,7 @@ def followPath(proto: NezhaProtocol, worldPose: WorldPose, waypoints: "list[Pose
     if not waypoints:
         raise ValueError("followPath(): waypoints must be non-empty")
     lastIndex = len(waypoints) - 1
-    floor = lookaheadFloor if lookaheadFloor is not None else _lookaheadFloorFor(limits.speed)
+    carrot = lookahead if lookahead is not None else _lookaheadFor(limits.speed)
     allocator = moveIds if moveIds is not None else MoveIdAllocator()
 
     startTime = time.monotonic()
@@ -963,10 +1076,13 @@ def followPath(proto: NezhaProtocol, worldPose: WorldPose, waypoints: "list[Pose
     unackedCount = 0
     sentSolution: "ArcSolution | None" = None
     sentOmega = 0.0
+    sentPose: "Pose | None" = None   # world pose at the last send (refresh bookkeeping)
+    sentDistance = 0.0               # [mm] Distance stop condition of the last send
     ackSeen: "dict[int, object]" = {}
     progressPose: "Pose | None" = None
     progressCheckTime = time.monotonic()
-    index = 0
+    segment = 0  # monotone path-projection segment, carried across cycles
+    unsolvableCycles = 0
     reachedIndex = -1  # highest waypoint index onWaypoint() has already been told about
 
     def notifyUpTo(uptoIndexInclusive: int, pose: Pose) -> None:
@@ -997,15 +1113,36 @@ def followPath(proto: NezhaProtocol, worldPose: WorldPose, waypoints: "list[Pose
                         forcedResends=forcedResendCount, unacked=unackedCount)
                 continue
 
-            # ADVANCE before SOLVE (ordering guarantee -- see docstring).
-            index = advanceWaypointIndex(currentPose, waypoints, index, floor)
-            if index > 0:
-                notifyUpTo(index - 1, currentPose)
+            # PICK TARGET before SOLVE (ordering guarantee -- see docstring).
+            pursuit = pursuitTarget(currentPose, waypoints, segment, carrot)
+            segment = pursuit.segment
+            # The projection sitting on segment N means waypoints[0..N-1]
+            # are behind it -- notify those, and only those.
+            if segment > 0:
+                notifyUpTo(segment - 1, currentPose)
 
-            target = waypoints[index]
-            distance = math.hypot(target.x - currentPose.x,
-                                  target.y - currentPose.y) * _POSITION_SCALE
-            if index == lastIndex and distance <= tolerance:
+            target = pursuit.point
+            terminal = waypoints[lastIndex]
+            distance = math.hypot(terminal.x - currentPose.x,
+                                  terminal.y - currentPose.y) * _POSITION_SCALE
+            # Gate arrival on being ON the last segment as well as near the
+            # terminal waypoint: a CLOSED path's terminal waypoint sits right
+            # next to its own start, so a distance-only test would "arrive"
+            # before the robot had driven anything at all.
+            #
+            # "Near the terminal waypoint" is EITHER within `tolerance` of it
+            # OR having run the path out (`remaining <= tolerance`) while
+            # still tracking it (`crossTrack` within a lookahead). The second
+            # clause is what makes the endgame robust: a follower steering at
+            # a lookahead point necessarily arrives with some overshoot, and
+            # a proximity-only test that the robot sails past leaves the
+            # terminal waypoint BEHIND it -- which the behind-guard then
+            # reports as "no arc", abandoning a path that was in fact
+            # complete. MEASURED 2026-07-31: that alone accounted for every
+            # "reached 15 of 17" give-up in the 10%-loss sweep.
+            arrived = distance <= tolerance or (
+                pursuit.remaining <= tolerance and pursuit.crossTrack <= max(tolerance, carrot))
+            if segment >= lastIndex - 1 and arrived:
                 notifyUpTo(lastIndex, currentPose)
                 return FollowPathResult(
                     success=True,
@@ -1019,7 +1156,8 @@ def followPath(proto: NezhaProtocol, worldPose: WorldPose, waypoints: "list[Pose
             elapsed = time.monotonic() - startTime
             giveUpReason = _giveUpReason(iterations, elapsed, giveUp)
             if giveUpReason is not None:
-                detail = f"reached waypoint {index}/{lastIndex}; closest distance {distance:.1f} mm"
+                detail = (f"on path segment {segment}/{lastIndex - 1}; cross-track "
+                          f"{pursuit.crossTrack:.1f} mm; {pursuit.remaining:.1f} mm of path left")
                 if unackedCount > 0:
                     detail += (f"; {unackedCount} of {sentCount} move(s) never received a "
                               f"clean ack despite {ackRetry.maxAttempts} attempts each -- "
@@ -1051,94 +1189,74 @@ def followPath(proto: NezhaProtocol, worldPose: WorldPose, waypoints: "list[Pose
                     forceResend = (time.monotonic() - progressCheckTime) >= progress.window
 
             solution = solveArcToPoint(currentPose, target, limits, previousOmega=sentOmega)
-            # The target-behind guard firing here means the robot's CURRENT
-            # HEADING has not yet caught up to this target -- normal and
-            # expected mid-corner (a robot mid-corner legitimately CUTS the
-            # fillet, a well-known pure-pursuit property: it tracks inside
-            # the reference curve, not on it, so heading can transiently lag
-            # the nominal tangent direction). This is NOT "the target is
-            # unreachable" and must not fail the whole path on one bad
-            # bearing reading (measured 2026-07-30, two earlier versions of
-            # this fix both got this wrong in opposite directions: one
-            # cascaded an unbounded "treat behind as passed" skip straight
-            # through six waypoints off a single stop, reporting a false
-            # "12/12 reached" after driving barely one leg; the other
-            # WIDENED the guard angle to let the solver compute an arc
-            # anyway, which asked for increasingly extreme, tightly-curved
-            # commands that measurably made heading tracking WORSE across
-            # later corners rather than better -- position samples jumping
-            # backward between consecutive waypoint crossings, consistent
-            # with `clasi/issues/replace-rescales-carried-profile-velocity-
-            # by-new-shape.md`, the documented firmware hazard the solver's
-            # own curvature slew limit exists to stay clear of; a bigger
-            # bearing means a bigger commanded curvature CHANGE across the
-            # `replace=True` boundary, i.e. deliberately courting that same
-            # hazard).
+            # `target` is a point one lookahead distance ALONG THE PATH from
+            # the robot's own projection, so the behind-guard firing here is
+            # no longer a routine mid-corner event: it means the robot's
+            # heading is more than `limits.behindAngle` off the direction the
+            # path goes -- it has left the path, and no arc from here reaches
+            # the path's own continuation.
             #
-            # The safe response is simpler than either rejected approach:
-            # do NOT ask for a fresh, possibly-worse arc toward `target`.
-            # Do not advance `index` either (the robot has not actually
-            # passed this waypoint -- only `advanceWaypointIndex()`, at the
-            # TOP of the next cycle, gets to decide that, from real
-            # position). Ordinarily that alone is enough: the vehicle keeps
-            # running whatever arc is already in flight while its heading
-            # continues to turn under it, and either the advance rule moves
-            # the target on its own or this same target solves cleanly on a
-            # later cycle.
-            #
-            # BUT a Distance-stopped Move is bounded -- it completes and
-            # the vehicle comes to rest once its own `arcLength` is
-            # covered, however this cycle's solve came out. Measured
-            # 2026-07-30: sending nothing at all while the guard keeps
-            # firing let the in-flight move run out and the vehicle sit
-            # motionless (heading frozen, bearing to the unmoved target
-            # never improving) for the REST of the give-up budget -- a real
-            # stall, not merely a symptom this guard should ignore. So when
-            # `ProgressCheck` says the robot has genuinely stopped making
-            # progress (`forceResend`), and a previous solution exists to
-            # fall back on, RESEND that exact same arc (identical
-            # `v_x`/`omega`/`arcLength`, just a fresh `Move.id` and a fresh
-            # distance budget) rather than a new one -- an unchanged
-            # curvature across the `replace=True` boundary cannot trigger
-            # the `axisPerLambda`-reinterpretation hazard cited above (old
-            # and new axis are the same), so this keeps the vehicle turning
-            # under a command already known to be safe, without asking the
-            # solver for anything it has not already vetted.
+            # The response is to send NOTHING and, if that persists, to stop
+            # following. It is emphatically NOT to re-send the last
+            # known-good arc: that arc was solved for a target the robot has
+            # since left behind, so re-sending it is an open-loop command
+            # issued exactly when the closed loop has said it does not know
+            # where to go. MEASURED 2026-07-31 (sim reproduction of the
+            # playfield runaway): with the old stale-resend backstop, 743 of
+            # 754 solve cycles hit this branch and every one of them drove
+            # the robot further off the path in a straight line -- positive
+            # feedback until the geofence. See rejected approach 3 in the
+            # module-level comment above this function.
             if solution.stop:
-                if forceResend and sentSolution is not None:
-                    moveId = allocator.next()
-                    effectiveTimeout = (moveTimeout if moveTimeout is not None
-                                        else _moveTimeoutFor(sentSolution.arcLength, limits.speed))
-                    acked, attempts = _sendVerifiedTwist(
-                        proto, worldPose, geofence, ackSeen,
-                        moveId=moveId,
-                        kwargs=dict(v_x=sentSolution.v_x, v_y=0.0, omega=sentSolution.omega,
-                                   stop_distance=sentSolution.arcLength, timeout=effectiveTimeout,
-                                   replace=True),
-                        cyclePeriod=cyclePeriod, ackRetry=ackRetry)
-                    sentCount += 1
-                    retryCount += attempts - 1
-                    forcedResendCount += 1
-                    if not acked:
-                        unackedCount += 1
-                    progressPose = currentPose
-                    progressCheckTime = time.monotonic()
+                unsolvableCycles += 1
+                if unsolvableCycles >= _MAX_UNSOLVABLE_CYCLES:
+                    return FollowPathResult(
+                        success=False,
+                        reason=(f"abandoned the path: no arc to the lookahead target for "
+                                f"{unsolvableCycles} consecutive cycles -- the robot's heading "
+                                f"is {math.degrees(solution.bearing):+.1f} deg off the path "
+                                f"direction and it is {pursuit.crossTrack:.1f} mm off the path "
+                                f"(segment {segment}/{lastIndex - 1}). Halting rather than "
+                                f"driving on a stale command"),
+                        finalPose=currentPose, iterations=iterations, sent=sentCount,
+                        waypointsReached=reachedIndex + 1, retries=retryCount,
+                        forcedResends=forcedResendCount, unacked=unackedCount)
                 continue
+            unsolvableCycles = 0
 
-            if _shouldReplace(sentSolution, solution, throttle.omegaThreshold,
-                              throttle.arcLengthThreshold) or forceResend:
+            # The Move's own Distance stop condition -- see the block comment
+            # above `_MAX_UNSOLVABLE_CYCLES`/the command-distance note for why
+            # this is exactly one lookahead arc and never more. Never longer
+            # than the path that is actually left, either.
+            commandDistance = min(pursuit.remaining, solution.arcLength)
+
+            # Refresh before the in-flight Move expires: on a straight run
+            # both `omega` and `arcLength` are constant, so neither
+            # `_shouldReplace()` threshold ever fires and the Move would
+            # simply run out under the robot. See `ReplaceThreshold.
+            # refreshFraction`.
+            expiring = False
+            if sentPose is not None and sentDistance > 0.0:
+                covered = math.hypot(currentPose.x - sentPose.x,
+                                     currentPose.y - sentPose.y) * _POSITION_SCALE
+                expiring = covered >= sentDistance * throttle.refreshFraction
+
+            if (_shouldReplace(sentSolution, solution, throttle.omegaThreshold,
+                               throttle.arcLengthThreshold) or expiring or forceResend):
                 moveId = allocator.next()
                 effectiveTimeout = (moveTimeout if moveTimeout is not None
-                                    else _moveTimeoutFor(solution.arcLength, limits.speed))
+                                    else _moveTimeoutFor(commandDistance, limits.speed))
                 acked, attempts = _sendVerifiedTwist(
                     proto, worldPose, geofence, ackSeen,
                     moveId=moveId,
                     kwargs=dict(v_x=solution.v_x, v_y=0.0, omega=solution.omega,
-                               stop_distance=solution.arcLength, timeout=effectiveTimeout,
+                               stop_distance=commandDistance, timeout=effectiveTimeout,
                                replace=True),
                     cyclePeriod=cyclePeriod, ackRetry=ackRetry)
                 sentSolution = solution
                 sentOmega = solution.omega
+                sentPose = currentPose
+                sentDistance = commandDistance
                 sentCount += 1
                 retryCount += attempts - 1
                 if forceResend:

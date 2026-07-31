@@ -1310,6 +1310,30 @@ def gotoSquareWaypoints(startPose, legLength: float) -> "list[tuple[object, bool
     heading 0.0 -- `gotoWorld()`/`solveArcToPoint()` both ignore target
     heading (sprint.md's own "Out of Scope: terminal-theta honoring"), so
     there is no meaningful value to put there.
+
+    THE RETURNED LIST IS A POLYLINE, NOT A BAG OF TARGETS (2026-07-31).
+    `pathplan.planner.followPath()` follows the polyline THROUGH these
+    points -- it projects the robot onto it and steers at a point one
+    lookahead distance along it -- so every vertex's own local DIRECTION
+    matters, not just its position. Two consequences this function now
+    honours, and which the earlier "each point is somewhere to drive to"
+    reading let it get wrong:
+
+    * `startPose` is the FIRST element. The robot has to travel ~190 mm
+      from where it is to the first fillet, and that stretch is part of
+      the intended trajectory; leaving it out started the polyline 190 mm
+      away from the robot with nothing describing how to get there.
+    * Each fillet emits its INBOUND tangent point (`k = 0`) as its own
+      vertex. That point coincides with where the preceding straight run
+      was already headed -- which is exactly why it is needed: without it
+      the fillet's first chord runs at 45 deg (the mean of the k=1 and k=2
+      tangents) straight out of a vertex the robot reaches heading 0 deg,
+      a 45 deg kink in a path that is supposed to be smooth. MEASURED
+      2026-07-31: that kink alone made `followPath()` command omega
+      = +4.9 rad/s (a ~30 mm turn radius at CRUISE) on entry to the first
+      corner. With `k = 0` emitted, consecutive chords differ by the
+      fillet's own per-hop angle (30 deg at `CORNER_SEGMENTS_PER_CORNER`
+      = 3) and the first one is only half that off the inbound straight.
     """
     from robot_radio.nav.pose import Pose
     from robot_radio.pathplan.solver import MAX_WHEEL_STEP
@@ -1350,17 +1374,20 @@ def gotoSquareWaypoints(startPose, legLength: float) -> "list[tuple[object, bool
         # The arc sweeps 90 deg CCW from the tangent point on the inbound
         # edge (angle = atan2(-dOut.y, -dOut.x) from the centre) to the
         # tangent point on the outbound edge. k=0 (the inbound tangent
-        # point) is NOT emitted as its own waypoint -- it coincides with
-        # where the preceding straight run was already headed, so the
-        # first NEW waypoint is k=1.
+        # point) IS emitted -- see this function's own docstring for why
+        # skipping it put a 45 deg kink in the polyline.
         startAngle = math.atan2(-dOut[1], -dOut[0])
-        for k in range(1, CORNER_SEGMENTS_PER_CORNER + 1):
+        for k in range(0, CORNER_SEGMENTS_PER_CORNER + 1):
             angle = startAngle + (math.pi / 2.0) * k / CORNER_SEGMENTS_PER_CORNER
             x = centreX + radiusCm * math.cos(angle)
             y = centreY + radiusCm * math.sin(angle)
             isVertex = k == CORNER_SEGMENTS_PER_CORNER
             localPoints.append((x, y, isVertex))
 
+    # The robot's own start is the polyline's first vertex -- see the
+    # docstring. isVertex False: it is not a corner, and runGotoTour()
+    # already takes its own separate "start" camera fix.
+    localPoints.insert(0, (0.0, 0.0, False))
     return [(toWorld.apply(Pose(x=x, y=y, heading=0.0)), isVertex)
             for x, y, isVertex in localPoints]
 
@@ -1422,8 +1449,10 @@ def writeGotoChart(results: "list[dict]", fixes: "list[dict]", waypoints: "list[
 
     # Commanded path: every rounded-square waypoint this run ASKED
     # gotoWorld() to reach, in order -- the ideal/intended shape.
-    wpXs = [x0 - x0] + [w.x * 10.0 - x0 for w, _isVertex in waypoints]
-    wpYs = [y0 - y0] + [w.y * 10.0 - y0 for w, _isVertex in waypoints]
+    # gotoSquareWaypoints() emits the robot's own start as waypoint 0, so
+    # the polyline is already complete -- do not prepend it a second time.
+    wpXs = [w.x * 10.0 - x0 for w, _isVertex in waypoints]
+    wpYs = [w.y * 10.0 - y0 for w, _isVertex in waypoints]
     axPath.plot(wpXs, wpYs, color="#aaaaaa", lw=1.2, ls=":", marker=".",
                ms=4, label="commanded waypoints", zorder=1)
 
@@ -1604,15 +1633,21 @@ def runGotoTour(backend: "_Backend", args) -> int:
     startCamera = captureFixWithRetry(geofence, "start") if geofence is not None else None
     fixes = [dict(label="start", pose=startPose, camera=startCamera)]
 
-    cornerCount = 0
-    waypointLabels: "list[str]" = []
-    for idx, (_waypoint, isVertex) in enumerate(waypoints):
-        subIdx = idx % CORNER_SEGMENTS_PER_CORNER
-        if subIdx == 0:
+    # Labels are derived from the isVertex flags, not from index
+    # arithmetic: gotoSquareWaypoints() now emits a leading start vertex
+    # and each fillet's own inbound tangent point, so a waypoint's position
+    # in the list no longer maps to `idx % CORNER_SEGMENTS_PER_CORNER`.
+    cornerCount = 1
+    hop = 0
+    waypointLabels: "list[str]" = ["path start"]
+    for _waypoint, isVertex in waypoints[1:]:
+        if isVertex:
+            waypointLabels.append(f"corner {cornerCount}")
             cornerCount += 1
-        waypointLabels.append(
-            f"corner {cornerCount}" if isVertex else
-            f"corner {cornerCount} hop {subIdx + 1}/{CORNER_SEGMENTS_PER_CORNER}")
+            hop = 0
+        else:
+            hop += 1
+            waypointLabels.append(f"corner {cornerCount} hop {hop}")
 
     def onWaypoint(index: int, pose) -> None:
         """`followPath()`'s own per-crossing hook -- records a chart mark

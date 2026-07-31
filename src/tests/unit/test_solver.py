@@ -20,15 +20,16 @@ Covers (ticket acceptance criteria):
   7. Purity / no hidden state: same inputs -> same outputs.
   8. The target's final heading is ignored.
   9. ``ArcSolution`` structurally cannot express an Angle-stopped move.
-  10. ``hasPassedWaypoint()``/``advanceWaypointIndex()`` -- the pure-pursuit
-      waypoint advance rule (out-of-process, 2026-07-30): projection-based
-      "has passed", the lookahead-floor skip, multi-waypoint advance
-      within one call, never advancing to/past the terminal index, and the
-      ``_MAX_PASS_CHORDS`` proximity gate that stops a "passed" verdict
-      from being trusted across an unrelated, far-away section of a path
-      that loops back near itself (the measured failure this gate fixes:
-      an un-gated version advanced straight past six waypoints of a
-      12-point closed square off one false positive).
+  10. ``pursuitTarget()`` -- lookahead-circle pure pursuit against a
+      waypoint POLYLINE (out-of-process, 2026-07-31, replacing the
+      ``hasPassedWaypoint()``/``advanceWaypointIndex()`` pass-predicate
+      that caused the playfield runaway; see ``solver.py``'s own
+      "RETIRED" section comment): monotone forward projection, the
+      lookahead-circle intersection, both fallbacks (robot off the path,
+      path run out), the forward search window that keeps a CLOSED path
+      from snapping onto its own far side, and -- the regression test that
+      matters -- that a robot which has genuinely OVERSHOT a dense
+      waypoint still gets a target ahead of it rather than one behind.
 """
 
 from __future__ import annotations
@@ -43,8 +44,8 @@ from robot_radio.pathplan.solver import (
     MAX_WHEEL_STEP,
     ArcSolution,
     SolverLimits,
-    advanceWaypointIndex,
-    hasPassedWaypoint,
+    PursuitTarget,
+    pursuitTarget,
     solveArcToPoint,
 )
 
@@ -281,164 +282,148 @@ def test_arc_solution_has_no_angle_stop_field():
 
 
 # ---------------------------------------------------------------------------
-# 10. hasPassedWaypoint() / advanceWaypointIndex() -- pure-pursuit advance
-#     rule (out-of-process, 2026-07-30).
+# 10. pursuitTarget() -- lookahead-circle pure pursuit (out-of-process,
+#     2026-07-31). Replaces the retired hasPassedWaypoint()/
+#     advanceWaypointIndex() pass-predicate; see solver.py's own "RETIRED"
+#     section comment for the playfield runaway that motivated the change.
 # ---------------------------------------------------------------------------
 
-_FLOOR = 22.5  # [mm] matches planner._lookaheadFloorFor(150.0)'s own derivation
+_LOOKAHEAD = 114.0  # [mm] matches planner._lookaheadFor(150.0)'s own derivation
 
 
-# --- hasPassedWaypoint(): projection onto the path, not proximity ---------
-
-def test_has_passed_waypoint_true_when_robot_is_ahead_along_the_path():
-    # Path direction is +x (east); robot sits east of the waypoint -> passed.
-    waypoint = Pose(x=0.0, y=0.0, heading=0.0)
-    nextWaypoint = Pose(x=_cm(100.0), y=0.0, heading=0.0)
-    robot = Pose(x=_cm(10.0), y=_cm(500.0), heading=0.0)  # far off to the SIDE, but ahead
-    assert hasPassedWaypoint(robot, waypoint, nextWaypoint) is True
+def _straightPath(lengths):
+    """A straight east-running polyline whose vertices sit at the given
+    cumulative distances [mm] from the origin."""
+    return [Pose(x=_cm(d), y=0.0, heading=0.0) for d in lengths]
 
 
-def test_has_passed_waypoint_false_when_robot_is_behind_along_the_path():
-    waypoint = Pose(x=0.0, y=0.0, heading=0.0)
-    nextWaypoint = Pose(x=_cm(100.0), y=0.0, heading=0.0)
-    robot = Pose(x=_cm(-10.0), y=_cm(500.0), heading=0.0)  # off to the side, but BEHIND
-    assert hasPassedWaypoint(robot, waypoint, nextWaypoint) is False
+# --- the ordinary case: a point one lookahead along the path -------------
+
+def test_pursuit_target_is_one_lookahead_along_a_straight_path():
+    waypoints = _straightPath([0.0, 100.0, 200.0, 300.0, 400.0])
+    robot = Pose(x=_cm(50.0), y=0.0, heading=0.0)
+    target = pursuitTarget(robot, waypoints, 0, _LOOKAHEAD)
+    assert target.onCircle is True
+    assert target.crossTrack == pytest.approx(0.0, abs=1e-9)
+    # Exactly `_LOOKAHEAD` from the robot, straight ahead.
+    assert target.point.x * 10.0 == pytest.approx(50.0 + _LOOKAHEAD, abs=1e-6)
+    assert target.point.y == pytest.approx(0.0, abs=1e-9)
 
 
-def test_has_passed_waypoint_exactly_at_the_waypoint_counts_as_passed():
-    # Zero displacement -> dot product exactly 0.0 -> the ">= 0" boundary.
-    waypoint = Pose(x=_cm(50.0), y=_cm(50.0), heading=0.0)
-    nextWaypoint = Pose(x=_cm(150.0), y=_cm(50.0), heading=0.0)
-    assert hasPassedWaypoint(waypoint, waypoint, nextWaypoint) is True
+def test_pursuit_target_reports_cross_track_and_remaining():
+    waypoints = _straightPath([0.0, 200.0, 400.0])
+    robot = Pose(x=_cm(100.0), y=_cm(30.0), heading=0.0)  # 30 mm north of the path
+    target = pursuitTarget(robot, waypoints, 0, _LOOKAHEAD)
+    assert target.crossTrack == pytest.approx(30.0, abs=1e-6)
+    assert target.remaining == pytest.approx(300.0, abs=1e-6)  # 400 - 100
 
 
-def test_has_passed_waypoint_degenerate_coincident_next_defaults_to_passed():
-    # waypoint == nextWaypoint -> zero-length path direction -> dot product
-    # is always exactly 0.0 -> "passed" is the documented safe default.
-    waypoint = Pose(x=_cm(50.0), y=_cm(50.0), heading=0.0)
-    robot = Pose(x=_cm(-500.0), y=_cm(500.0), heading=0.0)
-    assert hasPassedWaypoint(robot, waypoint, waypoint) is True
+# --- THE REGRESSION: an overshooting robot still gets a target AHEAD -----
+
+def test_overshooting_a_dense_waypoint_still_yields_a_forward_target():
+    """The playfield runaway in one assertion.
+
+    Dense waypoints (~32 mm apart, square_tour.py's own 250 mm-leg fillet
+    chord spacing) with the robot 120 mm PAST the second one -- far more
+    overshoot than the retired pass-predicate's proximity gate would trust,
+    which is exactly what latched it: it refused to advance, the next
+    target stayed behind the robot, the solver's behind-guard fired every
+    cycle, and the only thing left driving was a stale re-send.
+
+    `pursuitTarget()` cannot express that state: the projection is the
+    CLOSEST point on the remaining path, so a target ahead of the robot
+    always exists.
+    """
+    waypoints = _straightPath([0.0, 32.0, 64.0, 96.0, 400.0])
+    robot = Pose(x=_cm(184.0), y=0.0, heading=0.0)  # 120 mm past waypoint 3
+    target = pursuitTarget(robot, waypoints, 1, _LOOKAHEAD)
+    assert target.point.x > robot.x, "target must be ahead of an overshooting robot"
+    solution = solveArcToPoint(robot, target.point, _UNCLAMPED)
+    assert solution.stop is False, "the behind-guard must not fire on an overshoot"
 
 
-def test_has_passed_waypoint_is_scale_invariant_cm_units_not_converted():
-    # Only the SIGN of the dot product matters -- no mm conversion needed.
-    waypoint = Pose(x=0.0, y=0.0, heading=0.0)
-    nextWaypoint = Pose(x=1.0, y=0.0, heading=0.0)  # 1 cm ahead
-    justPassed = Pose(x=0.001, y=0.0, heading=0.0)
-    justBefore = Pose(x=-0.001, y=0.0, heading=0.0)
-    assert hasPassedWaypoint(justPassed, waypoint, nextWaypoint) is True
-    assert hasPassedWaypoint(justBefore, waypoint, nextWaypoint) is False
+# --- monotone projection: never slides back onto driven path -------------
+
+def test_projection_never_moves_backward_along_the_path():
+    waypoints = _straightPath([0.0, 100.0, 200.0, 300.0, 400.0])
+    # Robot physically nearest segment 0, but told it is already on segment 2.
+    robot = Pose(x=_cm(10.0), y=0.0, heading=0.0)
+    target = pursuitTarget(robot, waypoints, 2, _LOOKAHEAD)
+    assert target.segment >= 2
 
 
-# --- advanceWaypointIndex(): lookahead floor, multi-step, terminal bound --
+def test_projection_advances_as_the_robot_advances():
+    waypoints = _straightPath([0.0, 100.0, 200.0, 300.0, 400.0])
+    segment = 0
+    seen = []
+    for travelled in range(0, 400, 25):
+        robot = Pose(x=_cm(float(travelled)), y=0.0, heading=0.0)
+        target = pursuitTarget(robot, waypoints, segment, _LOOKAHEAD)
+        segment = target.segment
+        seen.append(segment)
+    assert seen == sorted(seen), "the projection segment must be monotone"
+    assert seen[-1] > seen[0], "and it must actually advance"
 
-def test_advance_stays_put_when_far_ahead_and_not_passed():
-    waypoints = [Pose(x=0.0, y=0.0, heading=0.0), Pose(x=_cm(100.0), y=0.0, heading=0.0)]
-    robot = Pose(x=_cm(-500.0), y=0.0, heading=0.0)  # nowhere near waypoint 0
-    assert advanceWaypointIndex(robot, waypoints, 0, _FLOOR) == 0
 
+# --- the forward search window: a CLOSED path's far side is off limits ---
 
-def test_advance_steps_forward_once_when_genuinely_passed():
+def test_a_closed_path_does_not_steer_at_its_own_far_side():
+    """A square's LAST leg passes right back next to its first. Measured
+    2026-07-31 with the lookahead-circle search left unwindowed: the very
+    first solve, with the robot still short of waypoint 0, found an
+    intersection on the RETURN leg ~10 mm away and commanded +3.9 rad/s
+    into it -- the robot spun on the spot."""
     waypoints = [
         Pose(x=0.0, y=0.0, heading=0.0),
-        Pose(x=_cm(100.0), y=0.0, heading=0.0),
-        Pose(x=_cm(200.0), y=0.0, heading=0.0),
-    ]
-    robot = Pose(x=_cm(50.0), y=0.0, heading=0.0)  # past waypoint 0, well short of waypoint 1
-    assert advanceWaypointIndex(robot, waypoints, 0, _FLOOR) == 1
-
-
-def test_advance_never_reaches_the_terminal_index_by_pass_through():
-    # A dense run (~30 mm apart, matching square_tour.py's own fillet
-    # chord spacing) with the robot genuinely past waypoints 0-2, close
-    # enough to each for the _MAX_PASS_CHORDS proximity gate to trust the
-    # verdict -- advanceWaypointIndex() must stop AT MOST at lastIndex
-    # (never past it, never treats the terminal waypoint as itself
-    # pass-through-advanceable).
-    waypoints = [
-        Pose(x=0.0, y=0.0, heading=0.0),
-        Pose(x=_cm(30.0), y=0.0, heading=0.0),
-        Pose(x=_cm(60.0), y=0.0, heading=0.0),
-        Pose(x=_cm(90.0), y=0.0, heading=0.0),  # terminal
-    ]
-    robot = Pose(x=_cm(85.0), y=0.0, heading=0.0)  # past 0, 1, and 2
-    result = advanceWaypointIndex(robot, waypoints, 0, _FLOOR)
-    assert result == 3  # == lastIndex, never 4 (out of range) or beyond
-    assert result == len(waypoints) - 1
-
-
-def test_advance_skips_multiple_closely_spaced_waypoints_in_one_call():
-    # A dense run of waypoints ~30 mm apart (matching square_tour.py's own
-    # fillet chord spacing) with the robot already past the first three,
-    # but not yet within range (passed OR too-close) of the fourth.
-    waypoints = [
-        Pose(x=0.0, y=0.0, heading=0.0),
-        Pose(x=_cm(30.0), y=0.0, heading=0.0),
-        Pose(x=_cm(60.0), y=0.0, heading=0.0),
-        Pose(x=_cm(90.0), y=0.0, heading=0.0),
-        Pose(x=_cm(500.0), y=0.0, heading=0.0),  # terminal, far ahead
-    ]
-    robot = Pose(x=_cm(65.0), y=0.0, heading=0.0)  # past waypoints 0,1,2
-    assert advanceWaypointIndex(robot, waypoints, 0, _FLOOR) == 3
-
-
-def test_advance_skips_a_target_inside_the_lookahead_floor():
-    # Waypoint 0 sits directly ahead but INSIDE the lookahead floor -- must
-    # be skipped even though the robot has not, by the projection test,
-    # technically "passed" it yet (it is still short of it).
-    waypoints = [
-        Pose(x=_cm(10.0), y=0.0, heading=0.0),   # 10 mm ahead of the robot
-        Pose(x=_cm(200.0), y=0.0, heading=0.0),
+        Pose(x=_cm(400.0), y=0.0, heading=0.0),
+        Pose(x=_cm(400.0), y=_cm(400.0), heading=0.0),
+        Pose(x=0.0, y=_cm(400.0), heading=0.0),
+        Pose(x=_cm(1.0), y=_cm(10.0), heading=0.0),  # returns beside the start
     ]
     robot = Pose(x=0.0, y=0.0, heading=0.0)
-    assert 10.0 < _FLOOR  # sanity: this scenario only makes sense if 10mm < floor
-    assert advanceWaypointIndex(robot, waypoints, 0, _FLOOR) == 1
+    target = pursuitTarget(robot, waypoints, 0, _LOOKAHEAD)
+    # The target must be on the OUTBOUND leg (+x), not the return leg.
+    assert target.point.x > 0.0
+    assert target.point.y == pytest.approx(0.0, abs=1e-9)
+    assert target.segment == 0
 
 
-def test_advance_does_not_skip_a_target_outside_the_lookahead_floor():
-    waypoints = [
-        Pose(x=_cm(50.0), y=0.0, heading=0.0),  # 50 mm ahead -- outside the floor
-        Pose(x=_cm(200.0), y=0.0, heading=0.0),
-    ]
+# --- fallbacks -----------------------------------------------------------
+
+def test_robot_farther_off_the_path_than_the_lookahead_steers_at_the_path():
+    waypoints = _straightPath([0.0, 400.0])
+    robot = Pose(x=_cm(100.0), y=_cm(500.0), heading=0.0)  # 500 mm off to the side
+    target = pursuitTarget(robot, waypoints, 0, _LOOKAHEAD)
+    assert target.onCircle is False
+    assert target.crossTrack == pytest.approx(500.0, abs=1e-6)
+    # Steer at the closest point on the path, i.e. straight at it.
+    assert target.point.x * 10.0 == pytest.approx(100.0, abs=1e-6)
+    assert target.point.y == pytest.approx(0.0, abs=1e-9)
+
+
+def test_less_than_a_lookahead_of_path_left_steers_at_the_terminal_waypoint():
+    waypoints = _straightPath([0.0, 100.0])
+    robot = Pose(x=_cm(80.0), y=0.0, heading=0.0)  # 20 mm of path left
+    target = pursuitTarget(robot, waypoints, 0, _LOOKAHEAD)
+    assert target.onCircle is False
+    assert target.point.x == pytest.approx(waypoints[-1].x)
+    assert target.remaining == pytest.approx(20.0, abs=1e-6)
+
+
+def test_a_single_waypoint_path_is_its_own_target():
+    only = Pose(x=_cm(250.0), y=0.0, heading=0.0)
     robot = Pose(x=0.0, y=0.0, heading=0.0)
-    assert 50.0 > _FLOOR
-    assert advanceWaypointIndex(robot, waypoints, 0, _FLOOR) == 0
+    target = pursuitTarget(robot, [only], 0, _LOOKAHEAD)
+    assert target.point.x == pytest.approx(only.x)
+    assert target.crossTrack == pytest.approx(250.0, abs=1e-6)
 
 
-# --- _MAX_PASS_CHORDS proximity gate: the measured cascade-bug fix -------
+# --- purity --------------------------------------------------------------
 
-def test_advance_does_not_trust_a_passed_verdict_from_far_across_a_looping_path():
-    # Reproduces the measured 2026-07-30 failure: a closed/looping path (a
-    # rounded square) has LATE waypoints geometrically close to its EARLY
-    # ones. A robot only partway around the first corner can satisfy
-    # hasPassedWaypoint()'s own half-plane test for a waypoint on the far
-    # side of the square PURELY by being on the correct side of that
-    # waypoint's own local chord direction -- despite being ~580 mm away,
-    # nowhere near having actually traveled that section. The proximity
-    # gate (_MAX_PASS_CHORDS) must refuse to trust that verdict.
-    farWaypoint = Pose(x=_cm(45.0), y=_cm(487.9), heading=0.0)
-    farNext = Pose(x=_cm(12.1), y=_cm(455.0), heading=0.0)  # ~46.5 mm chord
-    waypoints = [
-        Pose(x=0.0, y=0.0, heading=0.0),
-        farWaypoint,
-        farNext,
-        Pose(x=_cm(90.0), y=0.0, heading=0.0),  # terminal
-    ]
-    robot = Pose(x=_cm(430.0), y=_cm(53.0), heading=0.0)  # ~580 mm from farWaypoint
-    # Confirm the raw dot-product test WOULD say "passed" here (the
-    # precondition this test is guarding against), then confirm
-    # advanceWaypointIndex() does NOT act on it because the robot is not
-    # plausibly near this section of the path.
-    assert hasPassedWaypoint(robot, farWaypoint, farNext) is True
-    assert advanceWaypointIndex(robot, waypoints, 1, _FLOOR) == 1
-
-
-def test_advance_trusts_a_passed_verdict_within_a_few_chord_lengths():
-    # The same waypoint pair, but with the robot genuinely nearby (within
-    # _MAX_PASS_CHORDS * chordLength) -- the gate must not block a
-    # legitimate, local "passed" verdict.
-    waypoint = Pose(x=_cm(45.0), y=_cm(487.9), heading=0.0)
-    nextWaypoint = Pose(x=_cm(12.1), y=_cm(455.0), heading=0.0)  # ~46.5 mm chord
-    waypoints = [waypoint, nextWaypoint, Pose(x=_cm(0.0), y=_cm(410.0), heading=0.0)]
-    robot = Pose(x=_cm(43.0), y=_cm(487.9) - _cm(23.0), heading=0.0)  # ~23 mm away, on the passed side
-    assert advanceWaypointIndex(robot, waypoints, 0, _FLOOR) == 1
+def test_pursuit_target_is_pure():
+    waypoints = _straightPath([0.0, 100.0, 200.0, 300.0])
+    robot = Pose(x=_cm(50.0), y=_cm(5.0), heading=0.3)
+    first = pursuitTarget(robot, waypoints, 0, _LOOKAHEAD)
+    second = pursuitTarget(robot, waypoints, 0, _LOOKAHEAD)
+    assert first == second
+    assert isinstance(first, PursuitTarget)

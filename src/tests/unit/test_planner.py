@@ -68,7 +68,7 @@ from robot_radio.pathplan.planner import (
     _advance,
     _ERR_FULL,
     _giveUpReason,
-    _lookaheadFloorFor,
+    _lookaheadFor,
     _moveTimeoutFor,
     _readFrames,
     _recordAcks,
@@ -629,18 +629,16 @@ def test_progress_check_forces_resend_when_robot_is_stalled():
 
 
 # ---------------------------------------------------------------------------
-# 11. followPath() -- pure-pursuit multi-waypoint loop (out-of-process,
-#     2026-07-30, this IS ticket 008's own algorithm). The advance rule's
-#     own geometry (hasPassedWaypoint()/advanceWaypointIndex()) is unit-
+# 11. followPath() -- lookahead-circle path follower (out-of-process,
+#     2026-07-31). The target geometry (solver.pursuitTarget()) is unit-
 #     tested standalone in test_solver.py; these tests exercise followPath()
-#     ITSELF -- the ingest/advance/solve ordering, the terminal-only arrival
+#     ITSELF -- the ingest/target/solve ordering, the end-of-path arrival
 #     test, and what happens when the target-behind guard fires: nothing is
-#     sent while a robot that never sent anything stays stuck (give up via
-#     GiveUpLimits), and the last-known-good arc gets resent once genuinely
-#     stalled if one exists. See the module-level comment above
-#     followPath()'s own solve call (planner.py) for the two REJECTED
-#     approaches (an unbounded then a bounded "treat behind as passed"
-#     skip, and a widened guard angle) this design replaced, and why.
+#     sent, and if that persists the path is ABANDONED rather than driven on
+#     a stale command. See the module-level comment above followPath()'s own
+#     solve call (planner.py) for the three REJECTED approaches this design
+#     replaced -- including the stale re-send that produced the 2026-07-30
+#     playfield runaway.
 # ---------------------------------------------------------------------------
 
 
@@ -648,11 +646,13 @@ def _cm(mm: float) -> float:
     return mm / 10.0
 
 
-def test_lookahead_floor_derivation():
-    # 150 mm/s * 0.15 s actuation delay == 22.5 mm -- see the module-level
-    # comment above _ACTUATION_DELAY for the derivation (matches
-    # hil_drive.py's own actuationDelay = 150.0 ms).
-    assert _lookaheadFloorFor(150.0) == pytest.approx(22.5)
+def test_lookahead_derivation():
+    # 2.0 * 150 mm/s * (0.15 s dead time + 0.23 s plant tau) == 114 mm --
+    # see the module-level comment above _ACTUATION_DELAY for both bounds
+    # (steering-lag floor, corner-cutting ceiling) and why they nearly meet.
+    assert _lookaheadFor(150.0) == pytest.approx(114.0)
+    # The floor still binds for a very slow commanded speed.
+    assert _lookaheadFor(10.0) == pytest.approx(60.0)
 
 
 def test_follow_path_result_has_waypoints_reached_field():
@@ -666,11 +666,10 @@ class _MovingFakeProto:
     world pose it reports advances in a STRAIGHT LINE (+x) by `stepMm`
     every `read_pending_binary_tlm_frames()` call, simulating a robot that
     tracks a commanded on-heading (omega=0) twist perfectly. Enough to
-    exercise `followPath()`'s own ingest/advance/solve loop, ack
-    bookkeeping, and terminal arrival test end to end without real
-    differential-drive kinematics -- the geometry of the advance rule
-    itself is already covered standalone by test_solver.py's own
-    `hasPassedWaypoint()`/`advanceWaypointIndex()` tests."""
+    exercise `followPath()`'s own ingest/target/solve loop, ack
+    bookkeeping, and end-of-path arrival test end to end without real
+    differential-drive kinematics -- the target geometry itself is already
+    covered standalone by test_solver.py's own `pursuitTarget()` tests."""
 
     _conn = None
 
@@ -706,7 +705,7 @@ class _MovingFakeProto:
         self.estopped = True
 
 
-def test_follow_path_straight_line_reaches_every_waypoint_via_pass_through():
+def test_follow_path_straight_line_reaches_every_waypoint():
     worldPose = WorldPose()
     proto = _MovingFakeProto(stepMm=5.0)
     limits = SolverLimits(trackWidth=120.0, speed=150.0)
@@ -721,8 +720,8 @@ def test_follow_path_straight_line_reaches_every_waypoint_via_pass_through():
     assert result.success is True
     assert result.waypointsReached == len(waypoints)
     # Every waypoint crossed EXACTLY once, in strictly increasing order --
-    # the pass-through advance rule's own ordering guarantee (ingest pose
-    # -> advance target if passed -> solve, never solve-then-advance).
+    # the follower's own ordering guarantee (ingest pose -> pick a target
+    # from the monotone path projection -> solve, never solve-then-project).
     assert crossed == list(range(len(waypoints)))
     # estop(), never the planned stop() -- this loop's own finally block,
     # run on every return.
@@ -738,25 +737,29 @@ def test_follow_path_gives_up_via_giveup_limits_when_never_sent_anything():
     comment above `followPath()`'s own solve call in planner.py). A
     stationary robot (`_StallFakeProto`, reused from the ProgressCheck
     tests above) facing WEST (heading 180 deg) with both waypoints due
-    EAST never moves, so `advanceWaypointIndex()` cannot pass-through past
-    waypoint 0 either -- this isolates the "nothing to fall back on" give-up
-    path from the resend path (covered separately below)."""
+    EAST never moves, so the path projection never advances either. With
+    `_MAX_UNSOLVABLE_CYCLES` raised above the iteration budget, this
+    isolates the GiveUpLimits path from the abandon path (below)."""
     worldPose = WorldPose()
     proto = _StallFakeProto(x_mm=0.0, y_mm=0.0, heading_cdeg=18000.0)  # facing west
     limits = SolverLimits(trackWidth=120.0, speed=150.0)
     waypoints = [Pose(x=_cm(50.0), y=0.0, heading=0.0), Pose(x=_cm(100.0), y=0.0, heading=0.0)]
     giveUp = GiveUpLimits(maxIterations=20, giveUpTimeout=5.0)
 
-    result = followPath(proto, worldPose, waypoints, limits, geofence=None,
-                        tolerance=12.0, giveUp=giveUp, cyclePeriod=0.01)
+    monkeypatched = planner_mod._MAX_UNSOLVABLE_CYCLES
+    planner_mod._MAX_UNSOLVABLE_CYCLES = 10_000
+    try:
+        result = followPath(proto, worldPose, waypoints, limits, geofence=None,
+                            tolerance=12.0, giveUp=giveUp, cyclePeriod=0.01)
+    finally:
+        planner_mod._MAX_UNSOLVABLE_CYCLES = monkeypatched
 
     assert result.success is False
     assert "gave up after" in result.reason
     assert "no move was ever sent" in result.reason
     assert result.sent == 0
-    # index never advances (the robot never moves, and hasPassedWaypoint()'s
-    # own projection test never fires) -- reachedIndex stays at its initial
-    # sentinel the whole call.
+    # The projection never advances (the robot never moves) -- reachedIndex
+    # stays at its initial sentinel the whole call.
     assert result.waypointsReached == 0
 
 
@@ -803,30 +806,33 @@ class _BehindAfterFakeProto:
         pass
 
 
-def test_follow_path_resends_last_known_good_arc_when_stalled_and_behind():
-    """The recovery path this fix adds (module comment above followPath()'s
-    own solve call): a Distance-stopped Move is bounded and completes on
-    its own, so sending NOTHING while the guard fires would eventually
-    leave the vehicle idle, heading frozen, bearing never improving, for
-    the rest of the give-up budget -- measured 2026-07-30. Once
-    `ProgressCheck` says the robot has genuinely stalled, and a previous
-    solution exists, that EXACT arc must be resent (fresh Move.id, same
-    v_x/omega/arcLength) rather than nothing."""
+def test_follow_path_abandons_rather_than_driving_on_a_stale_command():
+    """The 2026-07-30 playfield runaway, as a unit test.
+
+    `_BehindAfterFakeProto` lets `followPath()` solve and send one real arc
+    while the robot still faces EAST, then flips the reported heading WEST
+    forever, so the target is permanently behind. The OLD behaviour was to
+    let `ProgressCheck` re-send that first, now-stale arc every time the
+    robot stalled -- which on hardware drove it ~920 mm in a straight line
+    into the geofence, and in the sim reproduction accounted for 743 of 754
+    solve cycles. The loop must now ABANDON instead: no forced resend, and
+    an explicit reason saying so."""
     worldPose = WorldPose()
     proto = _BehindAfterFakeProto(switchAfter=2)
     limits = SolverLimits(trackWidth=120.0, speed=150.0)
     waypoints = [Pose(x=_cm(500.0), y=0.0, heading=0.0), Pose(x=_cm(1000.0), y=0.0, heading=0.0)]
-    giveUp = GiveUpLimits(maxIterations=60, giveUpTimeout=3.0)
+    giveUp = GiveUpLimits(maxIterations=600, giveUpTimeout=3.0)
     progress = ProgressCheck(window=0.05, threshold=1000.0)  # position never changes -> stalls fast
 
     result = followPath(proto, worldPose, waypoints, limits, geofence=None,
-                        tolerance=12.0, giveUp=giveUp, progress=progress, cyclePeriod=0.01)
+                        tolerance=12.0, giveUp=giveUp, progress=progress, cyclePeriod=0.001)
 
     assert result.success is False
-    # At least one real send (while heading was still east) PLUS at least
-    # one forced resend of that SAME arc once heading flipped and the
-    # guard started firing -- proving the recovery path actually sends
-    # something instead of leaving the vehicle idle.
-    assert result.sent >= 2
-    assert result.forcedResends >= 1
+    assert "abandoned the path" in result.reason
+    assert "stale command" in result.reason
+    # It gave up well inside the iteration budget -- i.e. it stopped as soon
+    # as it could not solve, rather than riding out the whole budget.
+    assert result.iterations < giveUp.maxIterations
+    # And it never re-sent the stale arc.
+    assert result.forcedResends == 0
     assert len(set(proto.moveIds)) == len(proto.moveIds)  # every send still gets a fresh id
