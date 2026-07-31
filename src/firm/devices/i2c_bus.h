@@ -5,8 +5,10 @@
 // Surface: exactly the 3 methods any command handler or device leaf calls
 // — write(), read(), and clearanceSafetyNetCount(). The diagnostic/stats
 // surface (txnCount/errCount/lastErr/clear/reentryViolations/resetStats/
-// dumpRecent/setLogging/setIrqGuard/irqGuard) stays on the concrete
-// Devices::MicroBitI2CBus class, not this interface.
+// dumpRecent/setLogging) stays on the concrete Devices::MicroBitI2CBus
+// class, not this interface. (The full-transaction IRQ guard that used to
+// live here too — setIrqGuard()/irqGuard() — was removed, 128-013; see
+// microbit_i2c_bus.h's removal note.)
 //
 // Design/rationale: DESIGN.md.
 #pragma once

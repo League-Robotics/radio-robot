@@ -220,6 +220,20 @@ counted and cooperatively waited out rather than allowed to proceed
 early, but a nonzero count means the loop's own schedule, not this class,
 has a timing defect.
 
+**(Removed, 128-013) The full-transaction IRQ guard.** A separate, now-
+deleted mechanism used to mask IRQs for the duration of an entire
+`write()`/`read()` transaction (not just the `inUse_` flag
+check-and-set) as a second line of defense against the same TWIM
+errata — `MicroBitI2CBus::setIrqGuard()`/`irqGuard()`. It cost ~7-8%
+inbound serial command loss (DMA RX drops bytes inside the masked
+window) to reduce the odds of a fault that is now bounded a different
+way: the mandatory `MOVE` timeout backstop and explicit wedge detection
+(neither existed when the guard was made "non-negotiable"). Guard-off
+measured ~0% inbound command loss (stakeholder decision 2026-07-30).
+The per-device clearance wait described above and the `inUse_`
+re-entrancy flag are unrelated mechanisms and were not touched by this
+removal.
+
 **`present()`/`connected()` and detection as a state machine.** Detection
 for the color and line sensors is not a fire-once `begin()` the way
 `NezhaMotor`'s and `Otos`'s is — the color sensor in particular needs its

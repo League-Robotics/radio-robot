@@ -1,8 +1,9 @@
 ---
 id: '013'
 title: 'Firmware: delete the full-transaction I2C IRQ guard'
-status: open
-use-cases: [SUC-003]
+status: done
+use-cases:
+- SUC-003
 depends-on: []
 github-issue: ''
 issue: make-irq-guard-off-permanent-and-reconcile-the-docs.md
@@ -37,30 +38,36 @@ the guard was made "non-negotiable"; they do now).
 
 ## Acceptance Criteria
 
-- [ ] `src/firm/devices/microbit_i2c_bus.h`: `setIrqGuard()`, `irqGuard()`,
+- [x] `src/firm/devices/microbit_i2c_bus.h`: `setIrqGuard()`, `irqGuard()`,
       and the `irqGuard_` member are removed. The "defaults ON --
       non-negotiable" language is removed. A short note is kept recording
       that the TWIM errata exists and that the guard was removed
       deliberately (with the reasoning above), so a future reader who
       finds the old runaway report does not reinstate it by reflex.
-- [ ] `src/firm/devices/microbit_i2c_bus.cpp`: `irqGuard_(true)` is
+- [x] `src/firm/devices/microbit_i2c_bus.cpp`: `irqGuard_(true)` is
       dropped from the constructor; the `const bool guard = irqGuard_`
       branches in `write()`/`read()` are removed. The
       `target_disable_irq()`/`target_enable_irq()` pair around the
       `inUse_` check-and-set STAYS — that is the re-entrancy flag, a
       separate mechanism.
-- [ ] `src/firm/main.cpp:213`'s `bus.setIrqGuard(false)` line and its
+- [x] `src/firm/main.cpp:213`'s `bus.setIrqGuard(false)` line and its
       `TEMPORARY` comment are deleted.
-- [ ] `src/firm/devices/i2c_bus.h` and `src/firm/devices/DESIGN.md` drop
+- [x] `src/firm/devices/i2c_bus.h` and `src/firm/devices/DESIGN.md` drop
       `setIrqGuard`/`irqGuard` from the documented concrete-class
       surface.
-- [ ] `grep -rn "irqGuard\|setIrqGuard" src/` returns nothing outside
+- [x] `grep -rn "irqGuard\|setIrqGuard" src/` returns nothing outside
       history/comments explaining the removal.
-- [ ] Cheap incidental check while in here (not a gating requirement):
+- [x] Cheap incidental check while in here (not a gating requirement):
       note whether `reentryViolations_` has ever been observed nonzero
       on the bench — if re-entrancy is structurally impossible in the
       single-loop design, that's a data point for a FUTURE issue about
       removing mechanism #2 too, not something to act on in this ticket.
+      (No bench instrumentation was run as part of this ticket — no
+      existing telemetry/log surface currently reports
+      `reentryViolations()` for a passive bench observation without
+      writing new diagnostic code, which is out of scope for a pure
+      deletion ticket. Left as an open data point for the future
+      mechanism-#2-removal issue rather than actioned here.)
 
 ## Testing
 

@@ -198,9 +198,6 @@ int main() {
 
   static Devices::MicroBitI2CBus bus(uBit.i2c);
 
-
-  bus.setIrqGuard(false); // We dont need the irq guard any more. 
-
   msg::MotorConfig motorConfigs[Config::kMotorConfigCount];
   Config::defaultMotorConfigs(motorConfigs);
   msg::DrivetrainConfig drivetrainConfig = Config::defaultDrivetrainConfig();
