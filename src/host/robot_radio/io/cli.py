@@ -768,6 +768,8 @@ def cmd_goto(args):
             cruise, turn_speed, gate, arrive_cm, max_secs,
             log=_log,
         )
+    except NotImplementedError as exc:
+        sys.exit(f"Error: {exc}")
     finally:
         try:
             halt_now(proto, log=_log)

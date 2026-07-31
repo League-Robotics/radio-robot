@@ -1,8 +1,9 @@
 ---
 id: '002'
 title: 'nav/ goto stack: loud front-door gate (Step 1 only)'
-status: open
-use-cases: [SUC-007]
+status: in-progress
+use-cases:
+- SUC-007
 depends-on: []
 github-issue: ''
 issue: nav-goto-stack-is-dead-gate-it-loudly-then-rebuild-or-delete.md
@@ -34,7 +35,7 @@ makes the dead surface fail at the front door instead.
 
 ## Acceptance Criteria
 
-- [ ] `go_to_world_camera`, `Navigator.navigate`, `Navigator.follow_path`,
+- [x] `go_to_world_camera`, `Navigator.navigate`, `Navigator.follow_path`,
       and `visit_tags` each raise a `NotImplementedError` at the top of
       the function, naming the replacement
       (`pathplan.gotoWorld` / `pathplan.followPath`, sprint 127) and this
@@ -46,14 +47,14 @@ makes the dead surface fail at the front door instead.
           "followPath (sprint 127). Tracked: clasi/issues/"
           "nav-goto-stack-is-dead-gate-it-loudly-then-rebuild-or-delete.md")
       ```
-- [ ] The MCP tools (`navigate`, `follow_path`, `visit_tags` in
+- [x] The MCP tools (`navigate`, `follow_path`, `visit_tags` in
       `io/robot_mcp.py`) catch the `NotImplementedError` and return an
       honest "not available" result rather than propagating a stack
       trace to the LLM operator.
-- [ ] `rogo goto 30 10` prints the message immediately with no traceback
+- [x] `rogo goto 30 10` prints the message immediately with no traceback
       mid-drive.
-- [ ] A unit test asserts both the CLI-path and the MCP-path behavior.
-- [ ] Nothing about the rebuild-or-delete decision for `nav/` is resolved
+- [x] A unit test asserts both the CLI-path and the MCP-path behavior.
+- [x] Nothing about the rebuild-or-delete decision for `nav/` is resolved
       by this ticket — `nav/pose.py` (live, imported by several genuinely
       live modules) is untouched; `nav/camera_goto.py`/`navigator.py`
       themselves are NOT deleted this ticket, only gated.

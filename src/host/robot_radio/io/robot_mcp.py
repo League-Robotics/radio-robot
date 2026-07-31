@@ -602,13 +602,16 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
         if err:
             result = err
         else:
-            result = await asyncio.to_thread(
-                _navigator.navigate,
-                (float(arguments["x"]), float(arguments["y"])),
-                camera_index=int(arguments.get("camera", 3)),
-                robot_tag=int(arguments.get("robot_tag", _default_robot_tag())),
-                timeout=float(arguments.get("timeout", 30)),
-                speed=int(arguments.get("speed", 200)))
+            try:
+                result = await asyncio.to_thread(
+                    _navigator.navigate,
+                    (float(arguments["x"]), float(arguments["y"])),
+                    camera_index=int(arguments.get("camera", 3)),
+                    robot_tag=int(arguments.get("robot_tag", _default_robot_tag())),
+                    timeout=float(arguments.get("timeout", 30)),
+                    speed=int(arguments.get("speed", 200)))
+            except NotImplementedError as exc:
+                result = {"error": "not_available", "detail": str(exc)}
 
     elif name == "follow_path":
         err = _require_navigator()
@@ -616,24 +619,30 @@ async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.TextCont
             result = err
         else:
             path = [(float(p[0]), float(p[1])) for p in arguments["path"]]
-            result = await asyncio.to_thread(
-                _navigator.follow_path,
-                path,
-                camera_index=int(arguments.get("camera_index", 3)),
-                robot_tag=int(arguments.get("robot_tag", _default_robot_tag())),
-                timeout=float(arguments.get("timeout", 30.0)),
-                speed=int(arguments.get("speed", 200)))
+            try:
+                result = await asyncio.to_thread(
+                    _navigator.follow_path,
+                    path,
+                    camera_index=int(arguments.get("camera_index", 3)),
+                    robot_tag=int(arguments.get("robot_tag", _default_robot_tag())),
+                    timeout=float(arguments.get("timeout", 30.0)),
+                    speed=int(arguments.get("speed", 200)))
+            except NotImplementedError as exc:
+                result = {"error": "not_available", "detail": str(exc)}
 
     elif name == "visit_tags":
         err = _require_navigator()
         if err:
             result = err
         else:
-            result = await asyncio.to_thread(
-                _navigator.visit_tags, arguments["tags"],
-                camera_index=int(arguments.get("camera", 3)),
-                robot_tag=int(arguments.get("robot_tag", _default_robot_tag())),
-                per_tag_timeout=float(arguments.get("timeout", 15)))
+            try:
+                result = await asyncio.to_thread(
+                    _navigator.visit_tags, arguments["tags"],
+                    camera_index=int(arguments.get("camera", 3)),
+                    robot_tag=int(arguments.get("robot_tag", _default_robot_tag())),
+                    per_tag_timeout=float(arguments.get("timeout", 15)))
+            except NotImplementedError as exc:
+                result = {"error": "not_available", "detail": str(exc)}
 
     elif name == "read_pose":
         err = _require_navigator()
