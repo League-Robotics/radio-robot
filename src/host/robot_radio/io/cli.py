@@ -126,8 +126,9 @@ def _make_robot(args) -> tuple[QBotPro, SerialConnection, dict]:
 #
 # NOTE: `robot_radio.calibration.push.calibration_commands()` builds the
 # same dead v2 `SET`/`OI`/`OL`/`OA` sequence and has additional live
-# callers this ticket did NOT audit (`turn_shape.py`, `__main__.py`'s
-# manual robot-select, the TestGUI's reconnect-push path) -- a wider,
+# callers this ticket did NOT audit (the sim turn-shape capture tool now
+# living under `src/tests/sim/` -- 128-011 -- `__main__.py`'s manual
+# robot-select, the TestGUI's reconnect-push path) -- a wider,
 # pre-existing defect than this one function, out of this documentation
 # ticket's scope; flagged for a follow-up `clasi/issues/` entry rather
 # than fixed here.

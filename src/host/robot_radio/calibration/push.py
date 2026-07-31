@@ -264,9 +264,10 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
     matching the pre-113-003 text implementation's own per-key formatting
     exactly), then appends the OTOS ``OI``/``OL``/``OA`` sequence, which
     ``calibration_kwargs()`` deliberately does not cover. Behavior-preserving
-    for every existing caller (``cli.py``, ``turn_shape.py``, ``__main__.py``'s
-    manual robot-select): byte-identical output to the pre-113-003
-    implementation for every existing config shape.
+    for every existing caller (``cli.py``, the sim turn-shape capture tool
+    relocated to ``src/tests/sim/`` by 128-011, ``__main__.py``'s manual
+    robot-select): byte-identical output to the pre-113-003 implementation
+    for every existing config shape.
 
     The sequence:
       1. ``SET ml=<float>``  — mm_per_wheel_deg_left

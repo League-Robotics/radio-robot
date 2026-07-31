@@ -1,4 +1,5 @@
-"""turn_shape.py -- diagnose and validate the wheel-speed SHAPE of a single turn.
+"""src/tests/sim/turn_shape.py -- diagnose and validate the wheel-speed SHAPE
+of a single turn.
 
 The stakeholder's spec for a good turn (2026-07-17): a pivot's wheel-speed
 trace must look like a single trapezoid per wheel -- ramp up to a cruise
@@ -16,9 +17,21 @@ It captures BOTH the commanded body twist (what the firmware asked for) and
 the actual wheel speeds (what the plant did), so a diagnosis can say whether
 the churn is commanded by the control law or produced by the plant.
 
+Relocated out of the shipped `robot_radio.testgui` GUI package into test
+tooling (128-011, `relocate-turn-shape-and-collapse-to-one-capture-path.md`)
+-- test tooling belongs in `src/tests/`, never the importable host package.
+The same move collapsed what used to be THREE sim-capture paths at three
+different fidelity levels down to ONE: `capture_turn_gui()` is now the only
+capture function -- the only path that pushes the active robot's calibration
+and enables OTOS, which flips the firmware's heading-source policy exactly as
+a real GUI session does. The deterministic-stepping `capture_turn()` and
+real-tick-thread `capture_turn_live()` variants are deleted outright (neither
+had any caller outside this module, so there was nothing to demote them
+for); "what does a turn look like in sim" now has exactly one answer.
+
 Usage:
-    uv run python -m robot_radio.testgui.turn_shape --angle 360
-    uv run python -m robot_radio.testgui.turn_shape --angle 360 --rate 3.0 --csv /tmp/turn.csv
+    uv run python src/tests/sim/turn_shape.py --angle 360
+    uv run python src/tests/sim/turn_shape.py --angle 360 --csv /tmp/turn.csv
 """
 from __future__ import annotations
 
@@ -26,10 +39,12 @@ import argparse
 import math
 from dataclasses import dataclass, field
 
-from robot_radio.io.sim_loop import SimLoop
 from robot_radio.testgui.transport import _sim_lib_path
 
-TRACK_WIDTH = 128.0  # [mm] tovez trackwidth
+TRACK_WIDTH = 128.0  # [mm] robot trackwidth
+TURN_OMEGA = 2.0  # [rad/s] commanded turn rate; matches PlannerParams.omega_max's
+                   # own default (planner/model.py) -- same value turn_prediction_capture.py
+                   # (src/tests/bench/) uses for its own Move-protocol turn captures
 
 
 @dataclass
@@ -61,76 +76,15 @@ def _frame_to_sample(f, true_h: float) -> Sample:
     return Sample(f.t, vL, vR, omega, pose_h, otos_h, true_h)
 
 
-def capture_turn_live(angle_deg: float, *,
-                      realistic: bool = False, speed_factor: int = 4,
-                      timeout_s: float = 30.0) -> TurnCapture:
-    """GUI-FAITHFUL capture: real tick thread (like TestGUI Sim mode), frames
-    collected via the on_telemetry callback exactly as the GUI receives them.
-    This exercises the real-time scheduling the deterministic harness removes."""
-    import threading
-    import time
-
-    loop = SimLoop(track_width=TRACK_WIDTH, lib_path=_sim_lib_path())
-    cap = TurnCapture(angle_deg=angle_deg)
-    lock = threading.Lock()
-
-    def on_tlm(f):
-        # tick-thread callback -- we are already ON the tick thread, so read
-        # ground truth DIRECTLY (loop._read_true_pose, no re-scheduling round
-        # trip -- get_true_pose() would deadlock by re-scheduling onto us).
-        try:
-            th = math.degrees(loop._read_true_pose()["h"])  # noqa: SLF001
-        except Exception:
-            th = float("nan")
-        with lock:
-            cap.samples.append(_frame_to_sample(f, th))
-
-    loop.on_telemetry = on_tlm
-    loop.connect(start_tick_thread=True)
-    try:
-        if not realistic:
-            loop.set_otos_raw_scale_err(0.0, 0.0)
-            loop.set_enc_scale_err(1, 0.0)
-            loop.set_enc_scale_err(2, 0.0)
-            loop.set_enc_tick_quant(1, 0.0)
-            loop.set_enc_tick_quant(2, 0.0)
-            loop.set_enc_slip(1, 0.0, 0.0)
-            loop.set_enc_slip(2, 0.0, 0.0)
-        loop.set_speed_factor(speed_factor)
-        loop.set_true_pose(0.0, 0.0, 0.0)
-        time.sleep(0.2)
-        with lock:
-            cap.samples.clear()
-        loop.move(delta_heading=math.radians(angle_deg))
-
-        deadline = time.monotonic() + timeout_s
-        idle = 0
-        while time.monotonic() < deadline:
-            time.sleep(0.1)
-            with lock:
-                if not cap.samples:
-                    continue
-                last = cap.samples[-1]
-                moving = abs(last.vL) > 15.0 or abs(last.vR) > 15.0
-                if moving:
-                    cap.started = True
-                    idle = 0
-                elif cap.started:
-                    idle += 1
-                    if idle > 8:
-                        cap.settled = True
-                        break
-        return cap
-    finally:
-        loop.disconnect()
-
-
 def capture_turn_gui(angle_deg: float, *,
                      timeout_s: float = 30.0) -> TurnCapture:
-    """MOST GUI-FAITHFUL capture: drives through the real ``SimTransport`` and
-    pushes the active robot's calibration on connect exactly as TestGUI's
+    """The ONLY capture path -- the sole source of truth for "what does a turn
+    look like in sim." Drives through the real ``SimTransport`` and pushes the
+    active robot's calibration on connect exactly as TestGUI's
     ``_push_robot_calibration()`` does -- crucially the ``OI`` OTOS-init that
-    ACTIVATES the OTOS, flipping the firmware's AUTO heading policy onto it."""
+    ACTIVATES the OTOS, flipping the firmware's AUTO heading policy onto it.
+    Any number compared against hardware or quoted in a ticket must come from
+    here, not from a hand-rolled deterministic-stepping harness."""
     import threading
     import time
 
@@ -167,7 +121,9 @@ def capture_turn_gui(angle_deg: float, *,
         time.sleep(0.3)
         with lock:
             cap.samples.clear()
-        loop.move(delta_heading=math.radians(angle_deg))
+        angle_rad = math.radians(angle_deg)
+        omega = math.copysign(TURN_OMEGA, angle_rad) if angle_rad else TURN_OMEGA
+        loop.move(omega=omega, stop_angle=abs(angle_rad), timeout=timeout_s * 1000.0)
 
         deadline = time.monotonic() + timeout_s
         idle = 0
@@ -189,62 +145,6 @@ def capture_turn_gui(angle_deg: float, *,
         return cap
     finally:
         t.disconnect()
-
-
-def capture_turn(angle_deg: float, *,
-                 realistic: bool = False, max_cycles: int = 1000) -> TurnCapture:
-    """Command ONE in-place turn of `angle_deg` and record the full per-cycle
-    trace, deterministically stepped (no tick thread -> no scheduling jitter).
-    Ideal chip by default (every error knob explicitly zeroed)."""
-    loop = SimLoop(track_width=TRACK_WIDTH, lib_path=_sim_lib_path())
-    loop.connect(start_tick_thread=False)
-    try:
-        if not realistic:
-            loop.set_otos_raw_scale_err(0.0, 0.0)
-            loop.set_enc_scale_err(1, 0.0)
-            loop.set_enc_scale_err(2, 0.0)
-            loop.set_enc_tick_quant(1, 0.0)
-            loop.set_enc_tick_quant(2, 0.0)
-            loop.set_enc_slip(1, 0.0, 0.0)
-            loop.set_enc_slip(2, 0.0, 0.0)
-
-        loop.set_true_pose(0.0, 0.0, 0.0)
-        # flush boot frames
-        loop.step(1)
-        loop._drain_tlm_into_queue()  # noqa: SLF001 -- deterministic-mode drain contract
-        loop.read_pending_binary_tlm_frames()
-
-        loop.move(delta_heading=math.radians(angle_deg))
-
-        cap = TurnCapture(angle_deg=angle_deg)
-        idle_after_motion = 0
-        for _ in range(max_cycles):
-            loop.step(1)
-            loop._drain_tlm_into_queue()  # noqa: SLF001
-            frames = loop.read_pending_binary_tlm_frames()
-            if not frames:
-                continue
-            f = frames[-1]
-            vL = f.vel[0] if f.vel else 0.0
-            vR = f.vel[1] if f.vel else 0.0
-            omega = (f.twist[1] / 1000.0) if f.twist else 0.0  # mrad/s -> rad/s
-            pose_h = (f.pose[2] / 100.0) if f.pose else float("nan")
-            otos_h = (f.otos[2] / 100.0) if f.otos else float("nan")
-            true_h = math.degrees(loop.get_true_pose()["h"])
-            cap.samples.append(Sample(f.t, vL, vR, omega, pose_h, otos_h, true_h))
-
-            moving = abs(vL) > 15.0 or abs(vR) > 15.0
-            if moving:
-                cap.started = True
-                idle_after_motion = 0
-            elif cap.started:
-                idle_after_motion += 1
-                if idle_after_motion > 25:
-                    cap.settled = True
-                    break
-        return cap
-    finally:
-        loop.disconnect()
 
 
 def zero_crossings(series: list[float], *, deadband: float = 5.0) -> list[int]:
@@ -331,22 +231,14 @@ def print_report(cap: TurnCapture, a: Analysis) -> None:
 
 
 def main() -> None:
-    p = argparse.ArgumentParser(description="Diagnose/validate a single turn's wheel-speed shape.")
+    p = argparse.ArgumentParser(
+        description="Diagnose/validate a single turn's wheel-speed shape "
+                     "(GUI-faithful sim capture: SimTransport + robot calibration push).")
     p.add_argument("--angle", type=float, default=360.0, help="turn angle [deg]")
-    p.add_argument("--realistic", action="store_true", help="use realistic error profile")
     p.add_argument("--csv", type=str, default=None, help="write full per-cycle trace to CSV")
-    p.add_argument("--live", action="store_true",
-                   help="real tick thread (vs deterministic stepping)")
-    p.add_argument("--gui", action="store_true",
-                   help="MOST faithful: SimTransport + robot calibration push (OI activates OTOS)")
     args = p.parse_args()
 
-    if args.gui:
-        cap = capture_turn_gui(args.angle)
-    elif args.live:
-        cap = capture_turn_live(args.angle, realistic=args.realistic)
-    else:
-        cap = capture_turn(args.angle, realistic=args.realistic)
+    cap = capture_turn_gui(args.angle)
     if cap.notes:
         print(f"\n[setup] {cap.notes}")
     a = analyze(cap)
