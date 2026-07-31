@@ -138,6 +138,130 @@ INTER_SEGMENT_DWELL = 0.1  # [s] short inter-segment gap, no camera fix follows
 # camera fix taken while the chassis is still rocking is worse than no fix.
 CAMERA_FIX_DWELL = 0.9  # [s] dwell before a camera fix capture, at rest
 
+# Segment CHAINING (out-of-process, 2026-07-30, stakeholder-directed): the
+# third and structural latency fix, after the dead-wait fix and the dwell
+# split above. Measured remaining per-boundary cost, ~0.8s x 8 segments:
+# planner settle 0.52s + command latency 0.21s (send -> `active` rises) +
+# 0.1s dwell. Motion::Planner already has the machinery for this (a 5-deep
+# queue, boundaryLambda()/shapesCompatible() hand-off, carryPath_/
+# carryHeading_ zero-leak ledger, activateNext() same-tick pop) -- it was
+# simply unused by this script, which sent one segment, waited for FULL
+# completion (drain to idle), dwelled, then sent the next.
+#
+# _runChained() (Tour) keeps CHAIN_DEPTH MOVEs enqueued in the firmware's
+# own queue at once so the queued successor activates on the very next
+# firmware tick after the active move's stop condition fires, instead of
+# waiting for a host round trip. THREE constraints make this correct
+# rather than silently wrong:
+#
+#   1. `replace` must be passed EXPLICITLY as False on every chained
+#      enqueue. move_twist()/move_wheels()/move() all default
+#      `replace=True`; the default would flush the queue and preempt the
+#      move already running -- the opposite of chaining.
+#   2. Completion must be detected from the ACK RING (a completion ack
+#      keyed by Move.id, err always 0), not the telemetry `active` flag's
+#      rise-then-fall edge `_awaitMove()` uses for the sequential path.
+#      Under chaining `active` stays asserted continuously across the
+#      whole chain, so that edge never fires and a wait keyed on it would
+#      burn its full timeout every time -- reintroducing the exact
+#      dead-wait bug the first out-of-process fix on this file already
+#      killed once.
+#   3. Move ids must be unique and monotonic for the whole run (already
+#      true here -- segments()'s own _ID_BASE scheme). The firmware dedups
+#      an enqueue on Move.id in a 16-slot ring BEFORE honoring `replace`;
+#      reusing an id silently vanishes a move while still acking `err=0`.
+#
+# Chaining does NOT make the square flow through corners at speed: a
+# square alternates Linear legs with Angular turns, and shapesCompatible()
+# (planner.cpp) refuses an at-speed hand-off across that axis change -- the
+# robot still comes to rest at every corner. What chaining removes is the
+# host round trip, the INTER_SEGMENT_DWELL, and most of the planner-settle
+# drain between segments, not the stop itself.
+#
+# Chaining requires a camera fix is NEVER due mid-chain: `.claude/rules/
+# playfield-testing.md` mandates a camera pose fix at every segment
+# boundary AT REST, and captureFix()'s own docstring already assumes the
+# caller has settled first -- a queued successor activating the instant
+# the prior move completes gives the chassis no such rest. So chaining
+# applies ONLY to the no-camera path (sim, bench, --no-geofence); a
+# geofence-armed tour always runs _runSequential() regardless of the
+# --sequential-segments flag below. See Tour._canChain().
+#
+# CHAIN_DEPTH is 1, NOT the 2-3 this rewrite set out to use -- a measured
+# planner surprise, not a design choice. At CHAIN_DEPTH=2 (the next
+# segment enqueued WHILE the current one is still active, so it sits in
+# Motion::Planner's pending queue for the current move's whole remaining
+# run) the sim tour's heading landed at 322 deg / closure 246 mm --
+# WORSE than sequential's 361/6 -- and it compounded: turn 1 measured
+# ~79 deg of its own 90 deg target (already short, but matching an
+# isolated turn's own shortfall -- see below), turns 2-4 each measured
+# only ~69 deg, a deficit that GREW turn over turn rather than the
+# carry ledger's own documented intent ("per-landing residuals cancel
+# instead of accumulating"). At CHAIN_DEPTH=1 (the next segment is only
+# enqueued once the CURRENT one's own completion ack has already been
+# observed -- so nothing ever sits pending while an INCOMPATIBLE-shape
+# move is still active) heading/closure came back to 361/5.8, matching
+# sequential almost exactly, and the SAME isolated-turn shortfall
+# pattern reappeared WITHOUT compounding (~79 deg per turn, corrected
+# back by ~8 deg of heading-hold during the following leg, stable
+# across all four corners) -- strong evidence the compounding at depth 2
+# was specifically carryValid_ persisting continuously across MULTIPLE
+# hops (never invalidated, since Planner::activateNext() only drops it
+# when the pending queue is briefly empty), not a bug in this script's
+# own enqueue/ack bookkeeping. Diagnosing further would mean reading
+# (or instrumenting) planner.cpp's own carry-adoption arithmetic across
+# a live chain, which is firmware work -- out of this OOP fix's own
+# host-Python-only scope. CHAIN_DEPTH stays a named, easily-bumped
+# constant so a future ticket that actually chases this down can raise
+# it once the planner side is understood; shipping depth 2-3 today would
+# violate this rewrite's own acceptance bar ("a chained tour that closes
+# worse than sequential is a failure, not a tradeoff").
+#
+# Depth 1 still buys real time: it removes the 0.1s INTER_SEGMENT_DWELL
+# at every boundary (a script-level constant, so this part transfers
+# 1:1 to hardware -- 8 segments x 0.1s = 0.8s) and detects completion
+# from the ack ring instead of `_awaitMove()`'s `active`-edge wait, which
+# should also shrink whatever share of the hardware-measured 0.52s
+# planner-settle lag was `active`-flag-observation latency rather than
+# real plant coast. It does NOT hide the ~0.21s command round trip (the
+# next move is still sent only after this one's completion is observed).
+#
+# MEASURED, sim, true firmware time (not `Tour.elapsed` -- see below):
+# sequential 21.16s vs chained(depth=1) 20.04s, a 1.12s reduction (~5%)
+# for this 8-segment/~2m square -- consistent with the 0.8s of dwell
+# removal plus a small (~0.3s) completion-detection-latency saving, NOT
+# with the full ~5-6s a naive hardware extrapolation would suggest. Sim
+# is not a reliable stand-in for the hardware number: the sim plant has
+# far less coast/settle lag than the hardware-measured 0.52s figure this
+# module's own history cites, and an in-process sim command has no real
+# serial/radio round trip to hide at all (the ~0.21s figure is a
+# measured HARDWARE latency with no sim analogue). The 0.8s of dwell
+# removal is the one component sim and hardware should agree on; the
+# rest genuinely needs the stakeholder's own bench comparison (this
+# ticket's own "Do NOT run against hardware" boundary) to know for real.
+#
+# `Tour.elapsed` itself is NOT a reliable timing metric to compare
+# across paths: `_awaitMove()`'s 0.1s poll slices into three
+# SimBackend.advance() calls (0.04+0.04+0.02s) whose last slice rounds
+# under Python's round-half-to-even to 0 steps, floored back up to 1 by
+# `max(1, ...)` -- so every `_awaitMove()` poll silently steps 0.12s of
+# REAL sim firmware time while crediting only 0.1s to `self.elapsed`,
+# a small drift that adds up over a full tour (measured: sequential's
+# own `self.elapsed` undercounts its OWN true firmware time by ~3.4s
+# over this same tour). `_awaitAck()`'s CYCLE_S-granularity poll has no
+# such rounding error. Comparing `tour.elapsed` between the two paths
+# directly would have UNDERSTATED sequential's real duration and made
+# chaining look better than it measured -- true firmware time (counting
+# actual SimBackend.advance() calls) is the only apples-to-apples sim
+# metric, which is what the 21.16s/20.04s figures above use.
+CHAIN_DEPTH = 1  # [in-flight MOVEs] this active + this many queued ahead of
+                 # it. See the comment above for why this is 1, not the
+                 # 2-3 originally intended -- Motion::Planner's 5-deep
+                 # queue (1 active + 4 pending, kQueueDepth) has ample
+                 # headroom; the limit here is measured accuracy, not
+                 # queue capacity.
+ERR_FULL = 4     # envelope.proto ErrCode.ERR_FULL -- "destination queue full"
+
 DEFAULT_PORT = "/dev/cu.usbmodem2121102"
 DEFAULT_ROBOT_JSON = _REPO_ROOT / "data" / "robots" / "tovez_nocal.json"
 
@@ -385,7 +509,15 @@ class Tour:
         self.cmdL = 0.0
         self.cmdR = 0.0
         self.elapsed = 0.0  # [s] script-local clock, so both backends chart alike
-        self._seenAcks: "set[int]" = set()
+        # corr_id/Move.id -> AckEntry, populated by record() from every
+        # frame advance() drains. One dict serves BOTH ack kinds an id
+        # here can key: an ENQUEUE ack (keyed by the envelope's own
+        # corr_id, returned by move_twist()/wheels()) and a COMPLETION ack
+        # (keyed by Move.id, this script's own segment moveId) -- the two
+        # id spaces never collide (moveId starts at _ID_BASE >= 10000;
+        # corr_id is a small per-connection counter), same assumption
+        # sendVerified() already relied on before chaining existed.
+        self._seenAcks: "dict[int, object]" = {}
         # Camera pose fix at every segment boundary (stakeholder mandate,
         # 2026-07-29, `.claude/rules/playfield-testing.md`) -- one dict per
         # boundary: {"label", "logIndex" (index into self.log at capture
@@ -422,7 +554,7 @@ class Tour:
         truth = self.backend.truePose()
         for f in frames:
             for ack in f.acks:
-                self._seenAcks.add(ack.corr_id)
+                self._seenAcks[ack.corr_id] = ack
             if f.enc_left is None:
                 continue
             self.log["t"].append(self.elapsed)
@@ -490,6 +622,27 @@ class Tour:
     legMode  = "move"       # closed-loop legs;    see runLegMove()
     movingPrelude = False   # stationary prelude is the DEFAULT: it must
                             # not move the robot on the playfield.
+    chainSegments = True    # segment chaining is the DEFAULT when eligible
+                            # (see _canChain()); --sequential-segments in
+                            # main() forces this False for A/B comparison.
+
+    def _legMoveArgs(self) -> "tuple[dict, float]":
+        """(move_twist kwargs, timeout [ms]) for a 500 mm DISTANCE-stopped
+        leg -- the exact args runLegMove() sends, factored out so the
+        chained path (_buildMoveJobs()) builds the identical command."""
+        timeout = LEG / CRUISE * 1000.0 * 3.0 + 3000.0
+        return dict(v_x=CRUISE, v_y=0.0, omega=0.0, stop_distance=LEG), timeout
+
+    def _turnMoveArgs(self) -> "tuple[dict, float]":
+        """(move_twist kwargs, timeout [ms]) for a 90 deg ANGLE-stopped
+        corner -- the exact args runTurnMove() sends, factored out so the
+        chained path (_buildMoveJobs()) builds the identical command."""
+        # vLeft<0 / vRight>0 in the WHEELS form is positive omega; keep the
+        # same rotation sense so the square runs the same way round.
+        omega = 2.0  # [rad/s]
+        rad = math.pi / 2.0
+        timeout = rad / omega * 1000.0 * 3.0 + 3000.0
+        return dict(v_x=0.0, v_y=0.0, omega=omega, stop_angle=rad), timeout
 
     def runLegMove(self, label: str, moveId: int) -> bool:
         """A 500 mm leg as a DISTANCE-stopped MOVE, not a timed WHEELS run.
@@ -500,11 +653,9 @@ class Tour:
         distance driven as a MOVE held ~1 cm of cross-track over 40 cm
         earlier today, and 99-100% of commanded distance over five legs.
         """
-        import math as _m
         self.marks.append((self.elapsed, label))
-        timeout = LEG / CRUISE * 1000.0 * 3.0 + 3000.0
-        self.backend.proto.move_twist(CRUISE, 0.0, 0.0, stop_distance=LEG,
-                                      timeout=timeout, move_id=moveId)
+        kwargs, timeout = self._legMoveArgs()
+        self.backend.proto.move_twist(timeout=timeout, move_id=moveId, **kwargs)
         self._awaitMove(timeout, label, moveId)
         return True
 
@@ -559,15 +710,9 @@ class Tour:
         held to mean +0.64 deg. No duration to guess and nothing to
         pre-measure, so the prelude does not have to move.
         """
-        import math as _m
         self.marks.append((self.elapsed, label))
-        # vLeft<0 / vRight>0 in the WHEELS form is positive omega; keep the
-        # same rotation sense so the square runs the same way round.
-        omega = 2.0                     # [rad/s]
-        rad = _m.pi / 2.0
-        timeout = rad / omega * 1000.0 * 3.0 + 3000.0
-        self.backend.proto.move_twist(0.0, 0.0, omega, stop_angle=rad,
-                                      timeout=timeout, move_id=moveId)
+        kwargs, timeout = self._turnMoveArgs()
+        self.backend.proto.move_twist(timeout=timeout, move_id=moveId, **kwargs)
         self._awaitMove(timeout, label, moveId)
         return True
 
@@ -584,6 +729,174 @@ class Tour:
         self.advance(durationMs / 1000.0)
         self.cmdL = self.cmdR = 0.0
         self.advance(self.restDwell())
+        return True
+
+    # --- segment chaining (out-of-process, 2026-07-30) -- see the module-
+    # level CHAIN_DEPTH comment for the design and its three constraints ---
+
+    def _buildMoveJobs(self, segs) -> "list[tuple[str, dict, float, int]]":
+        """One (label, move_twist kwargs, timeout [ms], moveId) job per
+        segment in `segs` (run()'s own scaled segment list) -- built from
+        _legMoveArgs()/_turnMoveArgs(), the SAME args runLegMove()/
+        runTurnMove() send, so a chained tour drives identical commands to
+        the sequential one. `segs`' own vL/vR/durationMs fields are the
+        WHEELS-shaped values runSegment() needs and go unread here; only
+        its (index, moveId) pairing is used, so label numbering matches
+        _runSequential()'s exactly."""
+        jobs = []
+        for idx, (_vL, _vR, _durMs, moveId) in enumerate(segs):
+            label = f"leg {idx // 2 + 1}" if idx % 2 == 0 else f"turn {idx // 2 + 1}"
+            kwargs, timeout = (self._turnMoveArgs() if idx % 2 == 1
+                              else self._legMoveArgs())
+            jobs.append((label, kwargs, timeout, moveId))
+        return jobs
+
+    def _awaitAck(self, corrId: int, budget: float, label: str, kind: str) -> bool:
+        """Wait up to `budget` [s] for `corrId`'s ack to land in
+        `self._seenAcks` (populated by record() from every frame
+        advance() drains -- see sendVerified()'s own docstring for why
+        this is the ONLY telemetry consumer this script ever runs).
+        `kind` ("enqueue" or "completion") only labels the timeout
+        message, so a chained wait that times out says which ack it was
+        waiting on, not just that it timed out."""
+        start = time.monotonic()
+        while time.monotonic() - start < budget:
+            self.advance(CYCLE_S)
+            if corrId in self._seenAcks:
+                return True
+        waited = time.monotonic() - start
+        print(f"TIMEOUT (hey jackass, it timed out): {label} {kind} ack for "
+              f"id {corrId} never arrived; waited {waited:.1f}s of a "
+              f"{budget:.1f}s budget")
+        return False
+
+    def _enqueueMove(self, kwargs: dict, timeout: float, moveId: int,
+                     replace: bool, label: str) -> bool:
+        """Send one planner MOVE (move_twist) with `replace` passed
+        EXPLICITLY (constraint 1, module docstring: the wire default
+        `True` would flush the queue and preempt whatever chained move is
+        already running), confirming the ENQUEUE ack and retrying on a
+        lost ack or an error response -- ERR_FULL in particular is handled
+        by retrying, never by aborting (this method's own contract; see
+        the module docstring's CHAIN_DEPTH comment). `moveId` is the SAME
+        id across every retry of this one segment -- safe, since the
+        firmware's 16-slot accepted-id ring dedups a retried enqueue whose
+        ack was lost (constraint 3) -- but every segment across the whole
+        tour still gets its own unique id (segments()'s own _ID_BASE
+        scheme)."""
+        for attempt in range(6):
+            corr = self.backend.proto.move_twist(
+                timeout=timeout, replace=replace, move_id=moveId, **kwargs)
+            if self._awaitAck(corr, 0.5, label, "enqueue"):
+                ack = self._seenAcks.get(corr)
+                if ack is not None and ack.ok:
+                    return True
+                errCode = getattr(ack, "err_code", None)
+                full = " (ERR_FULL -- queue full)" if errCode == ERR_FULL else ""
+                print(f"{label}: enqueue for move {moveId} err={errCode}{full} "
+                      f"(attempt {attempt + 1}/6) -- retrying")
+            self.advance(0.1)
+        print(f"WARNING: segment {moveId} ({label}) never enqueued after 6 attempts")
+        return False
+
+    def _awaitCompletion(self, moveId: int, timeout: float, label: str) -> None:
+        """Wait for `moveId`'s COMPLETION ack -- keyed by Move.id, NOT the
+        enqueue corr_id (constraint 2, module docstring): under chaining
+        the telemetry `active` flag stays asserted continuously across
+        the whole chain, so `_awaitMove()`'s active-rise-then-fall edge
+        (the sequential path's own completion signal) never fires here.
+        `timeout` [ms] is the Move's own safety-backstop timeout; the
+        wait budget adds the same 2s margin `_awaitMove()` uses.
+        Non-fatal on timeout, matching `_awaitMove()`'s own contract (a
+        logged warning, not a tour abort) -- only a failed ENQUEUE
+        (`_enqueueMove()`) aborts the tour."""
+        budget = timeout / 1000.0 + 2.0
+        self._awaitAck(moveId, budget, label, "completion")
+
+    def _canChain(self) -> bool:
+        """Eligibility for the chained path (_runChained()): both legs and
+        turns must go through the planner (turnMode == legMode == "move"
+        -- WHEELS bypasses Motion::Planner entirely, per wheels()'s own
+        docstring, so there is no queue to chain through), chaining must
+        not be explicitly disabled (self.chainSegments, the A/B flag), and
+        no camera fix may be due at any boundary. That third condition is
+        equivalent to "no geofence armed": captureFix() no-ops exactly
+        when self.backend.geofence is None (its own docstring), and a
+        queued successor activates the instant the active move completes
+        -- before any dwell could settle the chassis for a fix."""
+        return (self.turnMode == "move" and self.legMode == "move"
+                and self.chainSegments
+                and getattr(self.backend, "geofence", None) is None)
+
+    def _runSequential(self, segs) -> bool:
+        """The original send-one -> await-completion -> dwell -> send-next
+        per-segment loop (unchanged), kept as the explicit A/B baseline
+        against _runChained() and as the REQUIRED path whenever a camera
+        fix is due at a boundary -- see _canChain()."""
+        for idx, (vL, vR, durMs, moveId) in enumerate(segs):
+            label = f"leg {idx // 2 + 1}" if idx % 2 == 0 else f"turn {idx // 2 + 1}"
+            isTurn = idx % 2 == 1
+            if isTurn and self.turnMode == "move":
+                ok = self.runTurnMove(label, moveId)
+            elif not isTurn and self.legMode == "move":
+                ok = self.runLegMove(label, moveId)
+            else:
+                ok = self.runSegment(label, vL, vR, durMs, moveId)
+            if not ok:
+                return False
+            self.captureFix(label)
+        return True
+
+    def _runChained(self, segs) -> bool:
+        """Drive every segment by keeping CHAIN_DEPTH MOVEs enqueued in
+        Motion::Planner's own queue at once, instead of
+        _runSequential()'s send -> await-completion -> dwell -> send-next
+        loop. Only called when _canChain() is true.
+
+        Marks are appended to line up with when each segment actually
+        starts, not when it was enqueued: job 0 is marked at send time (it
+        starts immediately, replace=True), and job i+1 -- already sitting
+        in the queue, one command ahead the whole time -- is marked the
+        instant job i's completion ack arrives, since activateNext() pops
+        it on the very next firmware tick.
+
+        Chaining does NOT make the square flow through corners at speed:
+        shapesCompatible() (planner.cpp) refuses an at-speed hand-off
+        across a Linear/Angular axis change, so the robot still comes to
+        rest at every corner (see the CHAIN_DEPTH comment above the
+        module's constants). What this removes is the INTER_SEGMENT_DWELL
+        and completion-detection lag between segments, not the stop
+        itself -- and at CHAIN_DEPTH=1 specifically, not the enqueue
+        round trip either; see that same comment.
+        """
+        jobs = self._buildMoveJobs(segs)
+        n = len(jobs)
+        if n == 0:
+            return True
+
+        label0, kwargs0, timeout0, moveId0 = jobs[0]
+        self.marks.append((self.elapsed, label0))
+        if not self._enqueueMove(kwargs0, timeout0, moveId0, replace=True, label=label0):
+            return False
+        enqueued = 1
+        while enqueued < min(CHAIN_DEPTH, n):
+            label, kwargs, timeout, moveId = jobs[enqueued]
+            if not self._enqueueMove(kwargs, timeout, moveId, replace=False, label=label):
+                return False
+            enqueued += 1
+
+        for i in range(n):
+            label, _kwargs, timeout, moveId = jobs[i]
+            self._awaitCompletion(moveId, timeout, label)
+            if i + 1 < n:
+                self.marks.append((self.elapsed, jobs[i + 1][0]))
+            self.captureFix(label)  # no-op: _canChain() requires no geofence
+            if enqueued < n:
+                nLabel, nKwargs, nTimeout, nMoveId = jobs[enqueued]
+                if not self._enqueueMove(nKwargs, nTimeout, nMoveId, replace=False,
+                                         label=nLabel):
+                    return False
+                enqueued += 1
         return True
 
     # --- calibration prelude (unchanged in intent from wheel-layer-v1) ---
@@ -687,23 +1000,12 @@ class Tour:
                 for idx, (vL, vR, dur, mid) in enumerate(segments())]
         self._tourStartIndex = len(self.log["t"])
         self.captureFix("start")
-        for idx, (vL, vR, durMs, moveId) in enumerate(segs):
-            label = f"leg {idx // 2 + 1}" if idx % 2 == 0 else f"turn {idx // 2 + 1}"
-            isTurn = idx % 2 == 1
-            if isTurn and self.turnMode == "move":
-                ok = self.runTurnMove(label, moveId)
-            elif not isTurn and self.legMode == "move":
-                ok = self.runLegMove(label, moveId)
-            else:
-                ok = self.runSegment(label, vL, vR, durMs, moveId)
-            if not ok:
-                return False
-            # Each run*() above already ends with a settle dwell
-            # (runSegment()/_awaitMove()'s own advance(self.restDwell())) --
-            # REST, per the stakeholder mandate's own requirement. restDwell()
-            # picks CAMERA_FIX_DWELL exactly when a geofence is armed, i.e.
-            # exactly when the captureFix() below is not a no-op.
-            self.captureFix(label)
+        chained = self._canChain()
+        print(f"segment chaining: {'ON' if chained else 'off'} "
+              f"({'no camera-fix boundaries' if chained else 'sequential -- see Tour._canChain()'})")
+        ok = self._runChained(segs) if chained else self._runSequential(segs)
+        if not ok:
+            return False
         self.advance(1.0)  # final coast-down
         return True
 
@@ -1309,6 +1611,16 @@ def main() -> int:
                    help="use the ORIGINAL prelude, which drives ~39cm and pivots "
                         "to self-calibrate. Bench only -- it does not fit on the "
                         "playfield and skews the tour's start heading.")
+    p.add_argument("--sequential-segments", action="store_true",
+                   help="disable segment chaining (out-of-process, 2026-07-30) "
+                        "and use the original send-one -> await-completion -> "
+                        "dwell -> send-next loop, for A/B comparison against "
+                        "the chained default. Chaining only ever applies when "
+                        "--leg-mode/--turn-mode are both 'move' (the default) "
+                        "and no camera geofence is armed -- a geofence-armed "
+                        "tour is ALWAYS sequential regardless of this flag, "
+                        "since a camera fix needs the chassis at rest; see "
+                        "Tour._canChain().")
     p.add_argument("--chart", default=None,
                    help="output PNG path (default: src/tests/bench/square_tour_<backend>.png)")
     p.add_argument("--mode", choices=("segments", "goto", "actuation-floor"),
@@ -1371,6 +1683,7 @@ def main() -> int:
     tour.movingPrelude = args.moving_prelude
     tour.turnMode = args.turn_mode
     tour.legMode = args.leg_mode
+    tour.chainSegments = not args.sequential_segments
     try:
         completed = tour.run()
     except GeofenceViolation as exc:
