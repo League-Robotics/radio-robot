@@ -1,7 +1,7 @@
 ---
-id: '008'
+id: 008
 title: Path following via lookahead target-picker
-status: open
+status: done
 use-cases:
 - SUC-008
 depends-on:
@@ -10,6 +10,33 @@ depends-on:
 github-issue: ''
 issue: sprint-127-host-side-path-planner-goto-path-following.md
 completes_issue: true
+exception:
+  thrown_by: programmer
+  thrown_at: '2026-07-31T14:51:01.736839+00:00'
+  attempted: 'The algorithm this ticket specifies was built and committed out-of-process
+    rather than under the ticket, because it became the fix for a playfield runaway
+    rather than a planned increment. solver.pursuitTarget() is a real lookahead-circle
+    pure pursuit against the waypoint polyline (monotone forward projection, then
+    the point one lookahead along the path), and planner.followPath() is the multi-waypoint
+    control loop that drives it, reusing gotoWorld''s ack-retry and estop machinery.
+    Committed in 8e38b2b6 with 64 unit tests. Validated in sim by an interleaved A/B
+    over 8 seeds at two command-loss levels: at 20 percent loss the prior pass-predicate
+    produced a worst excursion of 1425 mm against the lookahead version''s 255 mm,
+    with individual baseline runaways of 955 mm and 3167 mm. Also built on top of
+    it: gotoSquareWaypoints now emits rounded-corner fillets, and curve_stream.py
+    streams a 4-petal cloverleaf through the planner queue.'
+  conflict: 'Never validated on the playfield, which is this ticket''s actual acceptance.
+    The path-following gate needs the robot on the camera-covered table, and the field
+    session ended with the runaway diagnosis rather than a passing run. Two known
+    limits are documented and unresolved: the leg-250 corner is physically marginal
+    because steering lag of about 57 mm of travel wants a lookahead near 114 mm while
+    a 62.5 mm fillet is only 98 mm of arc, so the bounds nearly touch and measured
+    completion peaks at only 4 of 6 runs; and the hardware streaming demo does not
+    work, with the robot completing 19 of 71 segments and standing still for 45 of
+    60 seconds despite the same code passing in sim. The identified next increment
+    is a curvature feed-forward term that commands the path''s own known curvature
+    and uses pursuit only as correction, removing the lookahead dependence entirely.'
+  surface: user-visible
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: 'square_tour.py goto-mode: sim/bench/playfield convergence gate'
-status: in-progress
+status: done
 use-cases:
 - SUC-007
 depends-on:
@@ -10,6 +10,25 @@ depends-on:
 github-issue: ''
 issue: sprint-127-host-side-path-planner-goto-path-following.md
 completes_issue: false
+exception:
+  thrown_by: programmer
+  thrown_at: '2026-07-31T14:50:47.351631+00:00'
+  attempted: 'Sim and bench tiers complete. Playfield tier partial: the camera-verified
+    square PASSED in segments mode with 16.3 mm camera closure over a 1000 mm perimeter,
+    nine boundary fixes captured at rest, and per-segment camera-vs-encoder truth
+    showing legs agree within 0.5 mm while turns disagree by about 4 degrees. That
+    locates all residual tour error in rotation, and in the odometry rather than the
+    robot. 4 of 10 acceptance criteria checked.'
+  conflict: 'The actuation-floor measurement was never taken, so planner.py TERMINATION_TOLERANCE
+    stays provisional at 100 mm and sprint.md Decision 4''s feedback loop is unclosed.
+    It cannot be taken on a stand, since unloaded wheels give a falsely low floor.
+    Available playfield time went to diagnosing a 920 mm goto-mode runaway and two
+    aprilcam daemon failures. Evidence the provisional value is genuinely wrong: a
+    corner reported arrival at 96.8 mm from a 250 mm target, a 39 percent shortfall
+    counted as success. Remaining work is a fenced playfield sweep of decreasing commanded
+    distances and angles, writing the measured value into planner.py, then re-running
+    the goto-mode gate.'
+  surface: user-visible
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
