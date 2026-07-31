@@ -154,7 +154,25 @@ class SimHarness {
         robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,
                    drive_, configurator_, odom_, planner_, preamble_,
                    stateEstimator_, clock_, sleeper_) {
-    // No self-configuration -- motorL_/motorR_ stay at their default
+    // App::Drive is the ONE exception to the "no self-configuration" rule
+    // below, and it is not a robot's calibration: it is THIS SIM'S OWN plant
+    // gain. TestSim::WheelPlant is a fixed synthetic plant (velocity
+    // kDefaultDutyVelMax at |duty| == 1), so its exact inverse is a fact
+    // about the sim, not a per-robot measurement -- there is no robot JSON
+    // to fail closed against, and Drive's fail-closed gate (drive.h) would
+    // otherwise leave every caller that does not push a config with a Drive
+    // that silently refuses to write a duty. Callers that DO have a robot
+    // config still override this: SimLoop.configure_from_robot() pushes the
+    // JSON's own control.duty_per_speed_left/right through
+    // sim_configure_drive(), the same values main.cpp installs on hardware.
+    //
+    // setWheelCorrection() is deliberately NOT called, here or from that
+    // push: it linearizes a real gearbox (measured = gain*commanded +
+    // intercept) and this plant is already linear -- see
+    // sim_boot_config.py's drive_boot_config_for() docstring.
+    drive_.setDutyPerSpeed(1.0f / kDefaultDutyVelMax, 1.0f / kDefaultDutyVelMax);
+
+    // No further self-configuration -- motorL_/motorR_ stay at their default
     // Devices::MotorConfig{} (all-zero), matching a real, not-yet-booted
     // composition root. A caller MUST call configureMotor() for BOTH ports
     // (or TestSupport::configureSimForBenchTest()) before commanding a

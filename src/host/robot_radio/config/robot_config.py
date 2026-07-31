@@ -253,6 +253,25 @@ class ControlConfig(BaseModel):
     duty_per_speed_right: Optional[float] = None  # [duty/(mm/s)] 1 / measured plant gain, right
     crawl_pulse:          Optional[float] = None  # [-1,1] sub-breakaway pulse amplitude; 0 = off
 
+    # App::Drive's commanded->actual wheel correction (measured = gain *
+    # commanded + intercept, per wheel per direction of approach --
+    # docs/design/wheel-speed-command-mapping.md), REQUIRED by
+    # gen_boot_config.py's wheel_correction_for_config(). Same reason as the
+    # block above: without a declared field here pydantic drops the key at
+    # parse time, so anything reading the JSON through RobotConfig sees an
+    # incomplete config even when the file is complete. That is exactly what
+    # happened to the sim's Tier-2 drive-calibration push (sim_boot_config.py's
+    # drive_boot_config_for()), which raised MissingRobotConfigKeyError on a
+    # robot JSON that had every one of these eight values.
+    wheel_gain_left_accel:       Optional[float] = None
+    wheel_intercept_left_accel:  Optional[float] = None  # [mm/s]
+    wheel_gain_left_decel:       Optional[float] = None
+    wheel_intercept_left_decel:  Optional[float] = None  # [mm/s]
+    wheel_gain_right_accel:      Optional[float] = None
+    wheel_intercept_right_accel: Optional[float] = None  # [mm/s]
+    wheel_gain_right_decel:      Optional[float] = None
+    wheel_intercept_right_decel: Optional[float] = None  # [mm/s]
+
 
 class EstimatorConfig(BaseModel):
     """``App::StateEstimator``'s fusion weights -- mirrors the robot JSON's

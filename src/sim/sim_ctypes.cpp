@@ -531,6 +531,26 @@ void sim_configure_drivetrain(SimHandle h, float gainPos, float offsetPos,  // [
   asHarness(h)->robotLoop().setRotationCalibration(gainPos, offsetPos, gainNeg, offsetNeg);
 }
 
+// App::Drive's own boot calibration -- the sim-side counterpart of main.cpp's
+// setDutyPerSpeed()/setCrawlPulse() seam, which reads the same values out of
+// Config::defaultDriveConfig(). That generated config is deliberately absent
+// from the sim CMake target (src/sim/CMakeLists.txt bakes the active robot
+// JSON at ARM build time only), so the values arrive over ctypes instead,
+// host-side, from sim_boot_config.py's own drive_boot_config_for() -- see that
+// function's docstring for why the sim went without a drive calibration
+// entirely until this export existed, what the `pid.kff` accident it replaces
+// cost, and why main.cpp's third install (setWheelCorrection(), a
+// hardware-gearbox linearization) is deliberately NOT mirrored here.
+//
+// Pure passthrough: no unit conversion, no defaulting. `drive()` is already a
+// public accessor (sim_harness.h) -- no new SimHarness method needed.
+void sim_configure_drive(SimHandle h, float dutyPerSpeedLeft, float dutyPerSpeedRight,
+                         float crawlPulse) {
+  App::Drive& drive = asHarness(h)->drive();
+  drive.setDutyPerSpeed(dutyPerSpeedLeft, dutyPerSpeedRight);
+  drive.setCrawlPulse(crawlPulse);
+}
+
 // ---- Hook surface ----
 
 void sim_set_read_hook(SimHandle h, SimHookFn cb, void* ctx) {

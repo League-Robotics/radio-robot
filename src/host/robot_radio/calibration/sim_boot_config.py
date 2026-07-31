@@ -128,6 +128,58 @@ def motor_boot_config_for(config: Any, port: int) -> "dict[str, float | int]":
     }
 
 
+def drive_boot_config_for(config: Any) -> "dict[str, float]":
+    """Return ``App::Drive``'s own boot calibration -- the duty-per-speed
+    pair, the eight commanded->actual wheel-correction values, and the crawl
+    amplitude -- for ``sim_configure_drive()``, the sim-side counterpart of
+    ``main.cpp``'s own ``setDutyPerSpeed()``/``setWheelCorrection()``/
+    ``setCrawlPulse()`` boot seam (which reads the identical
+    ``control.duty_per_speed_*``/``wheel_gain_*``/``wheel_intercept_*``/
+    ``crawl_pulse`` JSON keys via ``Config::defaultDriveConfig()``).
+
+    Before this function (and its ctypes call site,
+    ``SimLoop.configure_from_robot()``) existed, NOTHING in the sim path ever
+    installed a drive calibration: ``TestSim::SimHarness``'s composition root
+    constructs ``App::Drive`` and never calls any of the three setters, so
+    the sim's own Drive sat permanently uncalibrated (``calibrated_ ==
+    false``, ``tick()`` returns without writing a duty). What made it move
+    anyway was an accident: ``App::Configurator::applyMotorConfigPatch()``
+    used to route the ``pid.kff`` wire key into ``setDutyPerSpeed()``, so the
+    connect-time calibration push doubled as the sim's only calibration
+    install -- with the WRONG quantity (``control.vel_kff``, the velocity
+    PID's feedforward gain, 0.0008 for tovez, against a real duty scale of
+    0.00187325) and with the wheel correction never applied at all. Wheels
+    ran at ~43% of the commanded speed and every tour turn leg timed out.
+    That routing is gone (configurator.cpp); this is its honest replacement.
+
+    Returns the duty-per-speed pair and the crawl amplitude ONLY. The eighth
+    boot value main.cpp also installs -- ``setWheelCorrection()``'s measured
+    commanded->actual line (``control.wheel_gain_*``/``wheel_intercept_*``) --
+    is deliberately NOT installed in the sim: it is a LINEARIZATION of one
+    physical drivetrain's gearbox (``measured = gain*commanded + intercept``,
+    gain ~1.47 for tovez, docs/design/wheel-speed-command-mapping.md), and
+    ``TestSim::WheelPlant`` is a plain first-order linear plant with none of
+    the nonlinearity it corrects for. Installing it against that plant does
+    not cancel anything -- it just divides every commanded speed by its own
+    gain (measured: 200 mm/s commanded, 124 mm/s actual) and bends a straight
+    leg, since the left and right gains deliberately differ. An identity
+    correction (``Drive``'s own default, gain 1 / intercept 0) is the
+    faithful choice for a plant that needs no linearization.
+
+    Both remaining values are REQUIRED -- ``gen_boot_config.py``'s own
+    fail-closed posture for the same keys, reached by calling ITS mapping
+    function (``drive_config_for_config()``) rather than re-expressing the
+    JSON->value decision here.
+    """
+    cfg = _as_cfg_dict(config)
+    duty_left, duty_right, crawl = gbc.drive_config_for_config(cfg)
+    return {
+        "duty_per_speed_left": duty_left,
+        "duty_per_speed_right": duty_right,
+        "crawl_pulse": crawl,
+    }
+
+
 def drivetrain_boot_config_for(config: Any) -> "dict[str, float]":
     """Return ``{"rot_gain_pos", "rot_offset_pos", "rot_gain_neg",
     "rot_offset_neg"}`` (offsets in RADIANS) for

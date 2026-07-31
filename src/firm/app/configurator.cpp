@@ -117,10 +117,19 @@ uint32_t Configurator::apply(const msg::CommandEnvelope& env) {
 }
 
 void Configurator::applyMotorConfigPatch(const msg::MotorConfigPatch& patch) {
-  // kff is the open-loop duty-per-speed scale (the same wire key the old
-  // velocity PID's feedforward used, so sim/bench configs keep working);
-  // the wire patch sets both wheels (per-wheel split is boot calibration).
-  if (patch.kff.has) drive_.setDutyPerSpeed(patch.kff.val, patch.kff.val);
+  // `kff` does NOT retarget App::Drive's duty-per-speed calibration. It used
+  // to (`drive_.setDutyPerSpeed(patch.kff.val, patch.kff.val)`), and that was
+  // a destructive overload of one wire key onto two unrelated quantities: the
+  // host pushes `pid.kff` from the robot JSON's `control.vel_kff` (the
+  // velocity PID's feedforward gain, 0.0008 for tovez -- calibration/push.py),
+  // while App::Drive's scale is `control.duty_per_speed_left/right`
+  // (0.00187325, boot-baked by Config::defaultDriveConfig()). Every
+  // connect-time calibration push therefore replaced a calibrated 0.00187325
+  // with 0.0008, and the wheels ran at 43% of the commanded speed -- measured
+  // 80 mm/s against a commanded 200 mm/s, which also timed out every turn leg
+  // of a tour. The per-wheel duty scale is boot calibration and has no live
+  // wire arm (boot_config.h's own DriveBootConfig comment says exactly that);
+  // it stays boot-baked.
 
   // pid.* wire keys retarget the planner's own duty-stage gains.
   float kff = planner_.limits().velKff;

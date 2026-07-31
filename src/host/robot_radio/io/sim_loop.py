@@ -361,6 +361,14 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
         ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float]
     lib.sim_configure_drivetrain.restype = None
 
+    # Tier-2 boot-only App::Drive calibration -- setDutyPerSpeed()/
+    # setCrawlPulse() passthrough (see sim_ctypes.cpp's own doc comment on
+    # sim_configure_drive(), and drive_boot_config_for() for why the wheel
+    # correction main.cpp also installs is not mirrored into the sim).
+    lib.sim_configure_drive.argtypes = [
+        ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float]
+    lib.sim_configure_drive.restype = None
+
     lib.sim_set_read_hook.argtypes = [ctypes.c_void_p, _SimHookFn, ctypes.c_void_p]
     lib.sim_set_read_hook.restype = None
     lib.sim_set_write_hook.argtypes = [ctypes.c_void_p, _SimHookFn, ctypes.c_void_p]
@@ -626,7 +634,7 @@ class SimLoop:
         # rotation calibration -- the planner half was DELETED, 115-003, gut
         # S1 motion-stack excision) ------------------------------------------
         from robot_radio.calibration.sim_boot_config import (
-            drivetrain_boot_config_for, motor_boot_config_for)
+            drive_boot_config_for, drivetrain_boot_config_for, motor_boot_config_for)
 
         for port in (1, 2):  # 1=left, 2=right -- same convention as every other port-keyed call
             motor_cfg = motor_boot_config_for(config, port)
@@ -647,6 +655,19 @@ class SimLoop:
             ctypes.c_float(drivetrain_cfg["rot_offset_pos"]),
             ctypes.c_float(drivetrain_cfg["rot_gain_neg"]),
             ctypes.c_float(drivetrain_cfg["rot_offset_neg"]))
+
+        # App::Drive's own boot calibration -- the sim's Drive is constructed
+        # uncalibrated by TestSim::SimHarness and, without this call, refuses
+        # to write a duty at all (drive.h's fail-closed gate). See
+        # drive_boot_config_for()'s own docstring for what used to stand in
+        # for it (the `pid.kff` wire key, carrying the wrong quantity) and
+        # why that made every sim run drive at ~43% of the commanded speed.
+        drive_cfg = drive_boot_config_for(config)
+        self._lib.sim_configure_drive(
+            self._handle,
+            ctypes.c_float(drive_cfg["duty_per_speed_left"]),
+            ctypes.c_float(drive_cfg["duty_per_speed_right"]),
+            ctypes.c_float(drive_cfg["crawl_pulse"]))
 
         # ---- Tier 3: live EstimatorConfigPatch wire arm (119 ticket 001) ---
         est_kwargs = estimator_kwargs(config)
