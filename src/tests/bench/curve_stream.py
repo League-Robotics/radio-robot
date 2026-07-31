@@ -29,15 +29,21 @@ unique monotonic ids) keeping ``--depth`` Moves in flight in the
 firmware's own 5-deep queue (1 active + 4 pending) at once -- default 4,
 inside the stakeholder's requested 3-5 range.
 
-Sim only today. This is a bench/HITL-tool convention module
-(``src/tests/CLAUDE.md``: bench/ scripts are plain CLI tools, never
-pytest-collected) -- a hardware run needs the robot moved to the stand
-first (it is on the playfield as of this writing) and stakeholder sign-off,
-per ``.claude/rules/hardware-bench-testing.md``/``playfield-testing.md``.
+    uv run python src/tests/bench/curve_stream.py --port /dev/cu.usbmodem2121102
 
-Produces a two-panel PNG (left/right commanded wheel speed vs time, with
-segment-boundary markers) and prints the per-boundary MINIMUM wheel speed
--- the number that shows whether a hand-off ever actually touched rest.
+Two backends, same split ``square_tour.py`` uses (not imported: that file
+is a standalone script) -- ``--sim`` (SimLoop, no hardware) or ``--port``
+(a real robot, direct USB on the bench/stand, wheels off the ground; see
+``.claude/rules/hardware-bench-testing.md``). Bench only: no camera, no
+geofence. This is a bench/HITL-tool convention module
+(``src/tests/CLAUDE.md``: bench/ scripts are plain CLI tools, never
+pytest-collected).
+
+Produces a two-panel PNG (left/right per-wheel speed vs time, measured off
+real telemetry -- ``TLMFrame.vel``, encoder-derived -- on both backends,
+with segment-boundary markers) and prints the per-boundary MINIMUM wheel
+speed -- the number that shows whether a hand-off ever actually touched
+rest.
 """
 from __future__ import annotations
 
@@ -72,6 +78,10 @@ SEGMENT_CM = 6.0      # [cm] arc-length spacing between path samples --
 MOVE_TIMEOUT_MS = 4000.0   # [ms] per-segment safety backstop
 POLL_SLICE = 0.04     # [s] one SimLoop cycle (App::RobotLoop::kCycle)
 _ID_BASE = 9000        # segment Move ids: _ID_BASE + index, never reused
+BOOT_WAIT = 6.0        # [s] hardware only -- the sim boots synchronously,
+                       # matches square_tour.py's own BOOT_WAIT
+DEFAULT_PORT = "/dev/cu.usbmodem2121102"  # NEZHA2, direct USB -- the
+                       # relay (zavaz, ...2121302) is a different device
 
 
 class MoveSpec:
@@ -139,11 +149,45 @@ def segments_from_path(path: SampledPath, *, cruise: float, track_mm: float,
     return out
 
 
-class SimBackend:
+class _Backend:
+    """A connected robot, real or simulated -- same split square_tour.py
+    uses (not imported: that file is a standalone script, not a
+    library). ``proto`` is a plain ``NezhaProtocol`` on both, so
+    ``stream_segments()`` is backend-agnostic; only "let ``seconds`` of
+    robot time pass" needs a backend-specific answer."""
+
+    label = "?"
+    track_mm = 128.0  # [mm] overridden by each backend's __init__
+
+    def advance(self, seconds: float) -> list:
+        """Let ``seconds`` of ROBOT time pass, draining and returning
+        every telemetry frame that arrived during it."""
+        raise NotImplementedError
+
+    def enableTelemetry(self) -> None:
+        """No-op by default: only HardwareBackend needs this -- kAuto
+        (the default emit policy) keeps a parked REAL robot silent until
+        something moves it or asks explicitly. SimLoop always emits, so
+        SimBackend inherits this no-op rather than calling
+        ``proto.tlmOn()`` itself (``SimConfigConn`` has no
+        ``send_fast()``, only ``send_envelope``/``send_envelope_fast`` --
+        calling ``tlmOn()`` against it would raise AttributeError)."""
+        return
+
+    def disableTelemetry(self) -> None:
+        """Undo enableTelemetry() on the way out. No-op by default."""
+        return
+
+    def close(self) -> None:
+        raise NotImplementedError
+
+
+class SimBackend(_Backend):
     """Minimal sim harness -- same shape as square_tour.py's own
-    SimBackend (not imported: that file is a standalone script, not a
-    library), reduced to what this script needs: manual, deterministic
+    SimBackend, reduced to what this script needs: manual, deterministic
     stepping, no tick thread."""
+
+    label = "sim"
 
     def __init__(self, robot_json: "str | pathlib.Path") -> None:
         from robot_radio.config.robot_config import load_robot_config
@@ -175,16 +219,81 @@ class SimBackend:
         self._sim.disconnect()
 
 
-def _installEstopSignalHandler(backend: "SimBackend") -> None:
+class HardwareBackend(_Backend):
+    """A real robot on direct USB -- same shape as square_tour.py's own
+    HardwareBackend, reduced to what this script needs."""
+
+    label = "hardware"
+
+    def __init__(self, port: str, robot_json: "str | pathlib.Path") -> None:
+        from robot_radio.config.robot_config import load_robot_config
+        from robot_radio.io.serial_conn import SerialConnection
+        from robot_radio.robot.protocol import NezhaProtocol
+
+        robot_config = load_robot_config(robot_json)
+        self.track_mm = (robot_config.trackwidth
+                        if robot_config.trackwidth is not None else 128.0)
+        print(f"hardware robot config: {robot_config.robot_name} "
+              f"({pathlib.Path(robot_json).name})")
+
+        self._conn = SerialConnection(port=port)
+        self._conn.connect()
+        self.proto = NezhaProtocol(self._conn)
+        print(f"connected; waiting {BOOT_WAIT:.0f}s for boot")
+        time.sleep(BOOT_WAIT)
+        self.proto.read_pending_binary_tlm_frames()  # discard the boot burst
+
+        # kAuto (the default emit policy) keeps a parked real robot
+        # SILENT until something moves it or asks explicitly -- this
+        # script reads telemetry to build its trace, so force streaming-
+        # always now, before the first Move goes out. Same defect, same
+        # fix as square_tour.py's HardwareBackend.__init__().
+        self.enableTelemetry()
+
+    def enableTelemetry(self) -> None:
+        self.proto.tlmOn()
+
+    def disableTelemetry(self) -> None:
+        try:
+            self.proto.tlmOff()
+        except Exception:
+            pass
+
+    def advance(self, seconds: float) -> list:
+        frames = []
+        deadline = time.monotonic() + seconds
+        while time.monotonic() < deadline:
+            frames.extend(self.proto.read_pending_binary_tlm_frames())
+            time.sleep(0.005)
+        return frames
+
+    def close(self) -> None:
+        # estop(), never stop(): "halt now" is ESTOP -- stop() is a
+        # QUEUED stop and would sit behind anything still pending
+        # instead of killing the drivetrain (.claude/rules/
+        # playfield-testing.md / hardware-bench-testing.md).
+        try:
+            self.proto.estop()
+        finally:
+            self.disableTelemetry()
+            self._conn.disconnect()
+
+
+def _installEstopSignalHandler(backend: "_Backend") -> None:
     """estop() on SIGTERM/SIGINT before the process exits -- a bare
     SIGTERM bypasses every Python `finally` block (127-002 lesson,
     hardware incident 2026-07-30), so this is defense in depth alongside
     the try/finally in main(), mirroring square_tour.py's own
-    ``_installEstopSignalHandler()``."""
+    ``_installEstopSignalHandler()``. Installed for both backends --
+    ``disableTelemetry()`` is a no-op on sim."""
 
     def _handler(signum: int, _frame) -> None:
         try:
             backend.proto.estop()
+        except Exception:
+            pass
+        try:
+            backend.disableTelemetry()
         except Exception:
             pass
         sys.exit(1)
@@ -193,7 +302,7 @@ def _installEstopSignalHandler(backend: "SimBackend") -> None:
     signal.signal(signal.SIGINT, _handler)
 
 
-def stream_segments(backend: SimBackend, segments: list[MoveSpec], *,
+def stream_segments(backend: _Backend, segments: list[MoveSpec], *,
                     depth: int, timeout_ms: float) -> dict:
     """Keep ``depth`` Moves enqueued in Motion::Planner's own queue at
     once (1 active + up to depth-1 pending): the FIRST segment preempts
@@ -306,7 +415,7 @@ def report_and_plot(trace: dict, *, out_path: pathlib.Path) -> None:
     for bt in boundaries:
         ax.axvline(bt, color="0.8", linewidth=0.6, zorder=0)
     ax.set_xlabel("time [s]")
-    ax.set_ylabel("commanded wheel speed [mm/s]")
+    ax.set_ylabel("measured wheel speed [mm/s]")
     ax.set_title("curve_stream: wheel speed across a streamed 4-petal cloverleaf\n"
                 "(grey lines = segment boundaries -- relaxed at-speed hand-off)")
     ax.legend(loc="upper right")
@@ -318,31 +427,42 @@ def report_and_plot(trace: dict, *, out_path: pathlib.Path) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--sim", action="store_true", default=True,
-                        help="run against SimLoop (the only backend today)")
+    backend_group = parser.add_mutually_exclusive_group(required=True)
+    backend_group.add_argument("--sim", action="store_true",
+                               help="run against SimLoop (no hardware needed)")
+    backend_group.add_argument("--port", nargs="?", const=DEFAULT_PORT,
+                               help="run against a real robot on this serial "
+                                    f"port (bare '--port' defaults to {DEFAULT_PORT}, "
+                                    "the direct-USB NEZHA2 port -- NOT the "
+                                    "zavaz relay)")
     parser.add_argument("--robot", default=str(_REPO_ROOT / "data" / "robots" / "tovez.json"))
     parser.add_argument("--cruise", type=float, default=CRUISE)
     parser.add_argument("--depth", type=int, default=DEPTH)
     parser.add_argument("--segment-cm", type=float, default=SEGMENT_CM)
     parser.add_argument("--tip-cm", type=float, default=30.0)
-    parser.add_argument("--out", default=str(pathlib.Path(__file__).parent / "curve_stream_sim.png"))
+    parser.add_argument("--out", default=None,
+                        help="output PNG path (default: "
+                             "src/tests/bench/curve_stream_<backend>.png)")
     args = parser.parse_args()
 
     path = build_cloverleaf(tip_cm=args.tip_cm, spacing_cm=args.segment_cm)
     print(f"path: {len(path.points)} points, {path.total_length_cm:.1f} cm total "
           f"({path.builder_name})")
 
-    backend = SimBackend(args.robot)
+    backend: _Backend = (SimBackend(args.robot) if args.sim
+                         else HardwareBackend(args.port, args.robot))
     _installEstopSignalHandler(backend)
     try:
         omega_max = 8.0  # [rad/s] matches benchLimits()/robot config's own omegaMax ballpark
         segments = segments_from_path(path, cruise=args.cruise,
                                       track_mm=backend.track_mm, omega_max=omega_max)
         print(f"{len(segments)} arc segments, cruise={args.cruise:.0f} mm/s, "
-              f"depth={args.depth}")
+              f"depth={args.depth}, backend={backend.label}")
         trace = stream_segments(backend, segments, depth=args.depth,
                                 timeout_ms=MOVE_TIMEOUT_MS)
-        report_and_plot(trace, out_path=pathlib.Path(args.out))
+        outPath = pathlib.Path(args.out) if args.out is not None else (
+            pathlib.Path(__file__).parent / f"curve_stream_{backend.label}.png")
+        report_and_plot(trace, out_path=outPath)
     finally:
         backend.close()
     return 0
