@@ -593,6 +593,39 @@ issue §B2/SUC-006) are computed inside `Telemetry::update()` as
 (`Devices::Motor::sampleTime()`/`Devices::Otos::sampleTime()`, ticket
 002) — not the shared, always-zero stand-in ticket 008 left in place.
 
+**TLM action application + STATUS projection now live in `Telemetry`/
+`Comms`, not the loop (128-012, `tlm-mode-switch-belongs-in-telemetry-
+not-the-loop.md` / `status-projection-belongs-in-comms-not-the-loop.md`).**
+Two adjacent blocks that used to be inlined in `RobotLoop::cycle()`
+right after `tlm_.update(state_)` moved out to the modules whose policy
+they actually are — the same "the loop says WHEN, the modules say WHAT"
+split every other section of this design doc already follows.
+`Telemetry::applyAction(Comms::TlmAction)` absorbs the mode-change switch
+(`kSetOff`/`kSetAuto`/`kSetOn` → `setMode()`) AND the "is this a
+force-a-frame request" answer (`kFrame` → returns `true`); `RobotLoop`
+passes its return value straight into `tlm_.emit(now, forceFrame)` — 
+`emit()`'s own `force` parameter is unchanged, only WHERE the decision is
+computed moved (telemetry.h's own doc comment on `applyAction()` records
+the dependency-direction choice: `Telemetry` takes `Comms::TlmAction` by
+value, since `comms.h` was already an unconditional dependency of
+`telemetry.h`). `Comms::updateStatus(state, tlm)` absorbs the 8-field
+`Comms::Status` projection RobotLoop used to hand-assemble field by
+field — the same "one struct, filled once" idiom `Telemetry::update()`
+already uses for its own wire frame, with the two Telemetry-sourced
+fields (`flags`/`tlmMode`) read straight off an explicit `const
+Telemetry&` parameter rather than a stored member (`comms.h` forward-
+declares `Telemetry` to avoid the include cycle `telemetry.h`'s own
+`#include "app/comms.h"` would otherwise create). `status.ready` — the
+one genuinely loop-owned fact ("past `boot()`") — moved onto
+`state_.health.ready`, set exactly once at the tail of `RobotLoop::
+boot()`, rather than hard-coded `true` at the old projection call site.
+Two orderings stay load-bearing and are still `RobotLoop::cycle()`'s own
+job to preserve (not something either new method can enforce on its
+own): `applyAction()` before `updateStatus()` (a same-cycle mode change
+must already be reflected in `tlm_.mode()` when STATUS is assembled),
+and `updateStatus()` before `comms_.sendTlmReply()` (the STATUS/HELP
+reply must report the mode just applied, not last cycle's).
+
 **Line/color polling (a plain inline block in `RobotLoop::cycle()`'s own
 trailing `kPace` block, 115-005; 124-009 folded the former
 `updateLineColor()` method into that block directly — no separate method
@@ -1110,6 +1143,14 @@ called with real elapsed time between calls).
   no "at most one of two frame types" choice left to make), bounded work,
   never sleeps, never touches the I2C bus. See §4's own "RobotState
   assembly + `Telemetry::update()`/`emit()`" paragraph above.
+- **`Telemetry::applyAction(Comms::TlmAction)`** (128-012): returns
+  whether the caller's next `emit()` call should force a frame; also the
+  ONE place `mode_` changes in response to a wire `TLM:` command. See
+  §4's own "TLM action application + STATUS projection" paragraph above.
+- **`Comms::updateStatus(state, tlm)`** (128-012): refreshes the snapshot
+  `sendStatus()` formats from, in one call — replaces the loop's own
+  former field-by-field `Comms::Status` assembly. See the same §4
+  paragraph.
 - **`Drive::setDuty(left, right)`/`stop()`/`tick()`:** (122-002,
   NARROWED — `setTwist()` is GONE, moved to `Motion::MoveQueue`, which now
   calls `BodyKinematics::inverse()` itself and hands `Drive` an

@@ -384,6 +384,43 @@ class Telemetry {
   void setMode(TlmMode mode) { mode_ = mode; }
   TlmMode mode() const { return mode_; }
 
+  // applyAction -- absorbs the TLM command-surface's mode-change switch
+  // (128-012: previously RobotLoop::cycle()'s own inline switch over
+  // Comms::TlmAction) AND the "should THIS cycle's emit() be forced"
+  // answer (issue Part 3, reason 1: a bare TLM/TLM:NOW line -- action ==
+  // kFrame -- forces one frame NOW, past the mode-gated unsolicited check,
+  // since "nothing is happening" is exactly the state someone asking is
+  // trying to observe). kSetOff/kSetAuto/kSetOn call setMode(); every
+  // other action (kNone/kFrame/kUnrecognized) leaves mode_ untouched.
+  //
+  // Dependency-direction choice (this ticket's own acceptance criteria
+  // call this out explicitly, not left ambiguous): Telemetry takes
+  // Comms::TlmAction BY VALUE here rather than (a) the enum moving to a
+  // shared/telemetry-owned header, or (b) Telemetry exposing three mode
+  // setters + requestFrame() for Comms/RobotLoop to call individually.
+  // comms.h is already an unconditional #include of this header (see the
+  // file header's own "Send path" note -- Telemetry holds a Comms&), so
+  // accepting Comms::TlmAction as a parameter type adds no NEW edge to the
+  // dependency graph, only a second use of the edge that already exists;
+  // option (b) was rejected because it would re-scatter the switch's arms
+  // across two call sites (RobotLoop choosing which setter to call is the
+  // same "another module's policy job in the loop" defect this ticket
+  // exists to remove) for no offsetting benefit.
+  //
+  // Returns the force-frame answer rather than latching a pending request
+  // internally and dropping emit()'s own `force` parameter (the OTHER
+  // option this ticket's acceptance criteria explicitly allow): emit()'s
+  // existing force semantics -- still gated behind primaryDue(), covered
+  // by this file's own extensive, pre-existing unit coverage exercising
+  // emit(now, force) directly -- stay exactly as they are. Only WHERE the
+  // "should this cycle be forced" decision gets COMPUTED moves, from
+  // RobotLoop's own inline ternary to here; emit()'s external contract is
+  // unchanged.
+  //
+  // Call once per cycle, immediately after comms_.takeTlmAction() -- the
+  // returned bool is the very next emit() call's own `force` argument.
+  bool applyAction(Comms::TlmAction action);
+
   // ack -- pushes to the bounded ack ring (120, ADDITIVE -- see
   // kAckRingDepth's own comment below and telemetry.proto's Telemetry.acks
   // doc comment for the rationale). errCode == 0 means OK; nonzero is the

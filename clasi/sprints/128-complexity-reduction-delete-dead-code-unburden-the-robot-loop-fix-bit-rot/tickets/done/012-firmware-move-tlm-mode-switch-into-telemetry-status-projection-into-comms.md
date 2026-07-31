@@ -1,8 +1,9 @@
 ---
 id: '012'
 title: 'Firmware: move TLM mode switch into Telemetry, STATUS projection into Comms'
-status: open
-use-cases: [SUC-001]
+status: done
+use-cases:
+- SUC-001
 depends-on: []
 github-issue: ''
 issue:
@@ -39,44 +40,76 @@ cheaper than doing either alone.
 
 ## Acceptance Criteria
 
-- [ ] `Telemetry::applyAction(Comms::TlmAction)` (or equivalent) added,
+- [x] `Telemetry::applyAction(Comms::TlmAction)` (or equivalent) added,
       absorbing the mode-change switch AND the "is this a force-a-frame
       request" answer — `emit()` may lose its `force` parameter if
       `Telemetry` latches a pending one-shot request internally.
-- [ ] The `TlmAction`/dependency-direction question is settled explicitly
+      (Implemented: `applyAction()` returns the force-frame bool rather
+      than latching it internally — `emit()`'s existing, separately
+      tested `force` parameter is unchanged; only where the decision is
+      computed moved. Choice documented in `telemetry.h`'s own doc
+      comment on `applyAction()`.)
+- [x] The `TlmAction`/dependency-direction question is settled explicitly
       in code (either `Telemetry` takes `Comms::TlmAction` as a parameter,
       accepting the dependency, or the enum moves to a shared/telemetry-owned
       header, or `Telemetry` exposes three mode setters + `requestFrame()`
       for `Comms` to call) — pick one, document the choice in the function's
       own header comment, don't leave it ambiguous.
-- [ ] `Comms::updateStatus(state_, tlm_)` (or equivalent) added, absorbing
+      (`Telemetry` takes `Comms::TlmAction` by value — `comms.h` was
+      already an unconditional dependency of `telemetry.h`, so this adds
+      no new edge. Documented in `applyAction()`'s own doc comment,
+      telemetry.h.)
+- [x] `Comms::updateStatus(state_, tlm_)` (or equivalent) added, absorbing
       the 8-field STATUS projection. The two telemetry-sourced fields
       (`flags`, `tlmMode`) are either passed in explicitly, or published
       into `RobotState` during `Telemetry::update()` so the projection
       reads one source (prefer the latter if it doesn't cost meaningful
       state footprint — matches the "one blackboard" pattern the rest of
       the loop already uses).
-- [ ] `status.ready = true` (the one genuinely loop-owned fact — "we are
+      (Implemented: `flags`/`tlmMode` passed explicitly via a `const
+      Telemetry&` parameter — `comms.h` forward-declares `Telemetry` to
+      avoid the include cycle `telemetry.h`'s own `#include "app/comms.h"`
+      would otherwise create; publishing onto `RobotState` was rejected as
+      blurring that struct's dependency-free/cross-tree-shared boundary
+      for a one-caller convenience — see `updateStatus()`'s own doc
+      comment, comms.h.)
+- [x] `status.ready = true` (the one genuinely loop-owned fact — "we are
       past `boot()`") moves into `state_` (e.g. a lifecycle/health flag
       set once at the end of `boot()`), not hard-coded at the projection
       site.
-- [ ] `RobotLoop::tick()` shrinks to calling both new entry points, in
+      (`Types::RobotState::Health::ready`, set once at the tail of
+      `RobotLoop::boot()`, right after `comms_.sendReady()`.)
+- [x] `RobotLoop::tick()` shrinks to calling both new entry points, in
       the same relative order as today: TLM-action application, THEN
       STATUS refresh (so a same-cycle mode change is already visible in
       STATUS), THEN `comms_.sendTlmReply(tlmAction)` (which reports the
       mode just applied) — this ordering constraint is preserved exactly,
       not just approximately.
-- [ ] STATUS projection stays unconditional — it must run even when the
+- [x] STATUS projection stays unconditional — it must run even when the
       idle gate suppressed the telemetry frame, since answering STATUS on
       a parked robot is the case STATUS exists for.
-- [ ] `grep -n "TlmAction\|status\." src/firm/app/robot_loop.cpp` no
+      (`comms_.updateStatus(state_, tlm_)` runs unconditionally every
+      cycle, same as the code it replaced.)
+- [x] `grep -n "TlmAction\|status\." src/firm/app/robot_loop.cpp` no
       longer shows a switch statement or an 8-line field-by-field STATUS
       assembly.
-- [ ] `app_comms_harness.cpp` and `app_telemetry_harness.cpp` assertions
+      (Verified: the only match is the `const Comms::TlmAction tlmAction =
+      comms_.takeTlmAction();` declaration.)
+- [x] `app_comms_harness.cpp` and `app_telemetry_harness.cpp` assertions
       that exercised the mode-application/STATUS-projection logic via a
       full loop tick are moved to drive the new `Telemetry`/`Comms` entry
       points directly with a synthesized `RobotState` — the parsing
       assertions (wire text → `TlmAction`) stay where they are.
+      (Neither unit harness ever drove this logic via a full `RobotLoop`
+      tick — both already exercised `Comms`/`Telemetry` directly; the
+      only full-loop-tick TLM coverage,
+      `src/tests/sim/system/robot_loop_tlm_harness.cpp`, is a genuine
+      black-box wire-level acceptance test, unaffected by this internal
+      refactor, and stays as-is. New direct-entry-point tests added per
+      the Testing section below: `scenarioApplyActionCoversEveryTlmActionArm`
+      in app_telemetry_harness.cpp,
+      `scenarioUpdateStatusProjectsAllEightFieldsFromSynthesizedState` +
+      `scenarioUpdateStatusReadyFalseBeforeBoot` in app_comms_harness.cpp.)
 
 ## Testing
 

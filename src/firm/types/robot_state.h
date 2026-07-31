@@ -288,6 +288,17 @@ struct RobotState {
     // (RobotLoop::clampToPositionWireBound(), Decision 6) -- see
     // telemetry.h's own kFlagFaultPositionClamped doc comment.
     bool positionClamped = false;
+    // ready (128-012, App::Comms::updateStatus()'s own doc comment): the
+    // one genuinely loop-owned fact STATUS answers that isn't a projection
+    // of some other subsystem's own sensed/derived state -- "we are past
+    // App::RobotLoop::boot()," i.e. the loop is now dispatching commands
+    // instead of NACKing them via rejectDuringBoot(). Writer: RobotLoop::
+    // boot(), set exactly once, at its own end (right after
+    // comms_.sendReady()) -- never true before that point, never false
+    // again after. Previously hard-coded `true` at the STATUS projection
+    // site itself (a fact the projection could not actually get wrong, but
+    // one it had no business asserting on the loop's behalf either).
+    bool ready = false;
   } health;
 };
 

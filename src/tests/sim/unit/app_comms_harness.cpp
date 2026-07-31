@@ -31,6 +31,8 @@
 #include <string>
 
 #include "app/comms.h"
+#include "app/telemetry.h"
+#include "firm/types/robot_state.h"
 #include "messages/envelope.h"
 #include "messages/wire.h"
 #include "messages/wire_runtime.h"
@@ -1076,6 +1078,97 @@ void scenarioHelpLineListsTlmArgumentGrammar() {
   }
 }
 
+// ===========================================================================
+// 13. updateStatus() (128-012: absorbs RobotLoop::cycle()'s previous inline
+//     field-by-field STATUS assembly). Drives it directly with a
+//     synthesized Types::RobotState + a real App::Telemetry (for the two
+//     Telemetry-sourced fields, flags/tlmMode) -- no RobotLoop, no full
+//     loop tick -- then reads the projection back off the wire via a
+//     "STATUS" query, the same black-box observable every other STATUS
+//     scenario in this file already uses (Comms exposes no direct status_
+//     accessor -- sendStatus()'s own formatted line IS the public contract).
+// ===========================================================================
+
+void scenarioUpdateStatusProjectsAllEightFieldsFromSynthesizedState() {
+  beginScenario("updateStatus(): all 8 STATUS fields -- including ready and the two Telemetry-sourced fields "
+                "(flags/tlmMode) -- reflect a synthesized RobotState + Telemetry, not stale/default values");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  FakeTransport tlmSerialFake;
+  FakeTransport tlmRadioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  // Telemetry's own Comms& is a SEPARATE instance from `comms` above --
+  // updateStatus() only ever reads tlm.flags()/tlm.mode(), never anything
+  // that would route a frame through this second Comms, so the two are
+  // deliberately decoupled here (this scenario tests updateStatus()'s own
+  // projection, not Telemetry's send path).
+  App::Comms tlmComms(tlmSerialFake, tlmRadioFake, banner);
+  App::Telemetry tlm(tlmComms);
+  tlm.setMode(App::TlmMode::kOn);
+
+  Types::RobotState state;
+  state.health.ready = true;
+  state.command.moveActive = true;
+  state.wheelLeft.connected = true;
+  state.wheelRight.connected = false;  // deliberately the ONE false boolean --
+                                        // proves the projection isn't just
+                                        // echoing a single shared value
+  state.otos.present = true;
+  state.otos.connected = true;
+  state.health.wedgeLatch = true;
+  tlm.update(state);  // derives flags_ from `state` -- kFlagActive | kFlagConnLeft |
+                       // kFlagOtosPresent | kFlagOtosConnected | kFlagFaultWedgeLatch
+                       // == 0x8f, given the fields set above and every other
+                       // RobotState field left at its default
+
+  comms.updateStatus(state, tlm);
+
+  serialFake.enqueueInbound("STATUS");
+  App::Cmd cmd = pumpOne(comms, /*now=*/0);
+  checkTrue(cmd.status == App::CmdStatus::kNone, "STATUS never decodes a Cmd");
+  checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one STATUS reply");
+  if (!serialFake.sentReliable().empty()) {
+    const std::string& line = serialFake.sentReliable()[0];
+    checkTrue(line.find("ready=1") != std::string::npos, "ready=1 -- state.health.ready");
+    checkTrue(line.find("active=1") != std::string::npos, "active=1 -- state.command.moveActive");
+    checkTrue(line.find("connL=1") != std::string::npos, "connL=1 -- state.wheelLeft.connected");
+    checkTrue(line.find("connR=0") != std::string::npos, "connR=0 -- state.wheelRight.connected");
+    checkTrue(line.find("otos=1") != std::string::npos, "otos=1 -- state.otos.present");
+    checkTrue(line.find("wedge=1") != std::string::npos, "wedge=1 -- state.health.wedgeLatch");
+    checkTrue(line.find("flags=0x8f") != std::string::npos,
+              "flags=0x8f -- tlm.flags(), derived by Telemetry::update() from the same state");
+    checkTrue(line.find("tlm=on") != std::string::npos, "tlm=on -- tlm.mode(), kOn set above");
+  }
+}
+
+void scenarioUpdateStatusReadyFalseBeforeBoot() {
+  beginScenario("updateStatus(): ready=0 when state.health.ready is still its boot-time default -- STATUS "
+                "never hard-codes ready=1 itself");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  FakeTransport tlmSerialFake;
+  FakeTransport tlmRadioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Comms tlmComms(tlmSerialFake, tlmRadioFake, banner);
+  App::Telemetry tlm(tlmComms);
+
+  Types::RobotState state;  // health.ready defaults to false (robot_state.h)
+  tlm.update(state);
+  comms.updateStatus(state, tlm);
+
+  serialFake.enqueueInbound("STATUS");
+  App::Cmd cmd = pumpOne(comms, /*now=*/0);
+  checkTrue(cmd.status == App::CmdStatus::kNone, "STATUS never decodes a Cmd");
+  if (!serialFake.sentReliable().empty()) {
+    checkTrue(serialFake.sentReliable()[0].find("ready=0") != std::string::npos,
+               "ready=0 -- a default-constructed RobotState (pre-boot()) reports not-ready");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -1107,6 +1200,8 @@ int main() {
   scenarioStatusLineCarriesTlmFieldForEveryMode();
   scenarioStatusDefaultsTlmAutoBeforeAnySetStatusCall();
   scenarioHelpLineListsTlmArgumentGrammar();
+  scenarioUpdateStatusProjectsAllEightFieldsFromSynthesizedState();
+  scenarioUpdateStatusReadyFalseBeforeBoot();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Comms scenarios passed\n");

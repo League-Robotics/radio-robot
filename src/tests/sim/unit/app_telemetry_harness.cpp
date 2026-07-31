@@ -1348,6 +1348,71 @@ void scenarioModeNotPersistedAcrossFreshConstruction() {
   checkTrue(telemetry3.mode() == App::TlmMode::kAuto, "same for kOff: a fresh boot forgets it too");
 }
 
+// ===========================================================================
+// 21. applyAction() (128-012: absorbs RobotLoop::cycle()'s previous inline
+//     TlmAction switch AND the force-frame decision). Every arm of
+//     Comms::TlmAction, driven directly against a fresh Telemetry -- no
+//     Comms::takeTlmAction()/RobotLoop involved, matching this ticket's own
+//     "synthesized action, no full loop tick needed" testing note.
+// ===========================================================================
+
+void scenarioApplyActionCoversEveryTlmActionArm() {
+  beginScenario("applyAction(): every Comms::TlmAction arm sets the right mode (or none) and returns the "
+                "correct force-frame answer");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms);
+
+  checkTrue(telemetry.mode() == App::TlmMode::kAuto, "setup: fresh Telemetry defaults to kAuto");
+
+  checkTrue(!telemetry.applyAction(App::Comms::TlmAction::kSetOff), "kSetOff: not a force-frame request");
+  checkTrue(telemetry.mode() == App::TlmMode::kOff, "kSetOff -> mode() == kOff");
+
+  checkTrue(!telemetry.applyAction(App::Comms::TlmAction::kSetOn), "kSetOn: not a force-frame request");
+  checkTrue(telemetry.mode() == App::TlmMode::kOn, "kSetOn -> mode() == kOn");
+
+  checkTrue(!telemetry.applyAction(App::Comms::TlmAction::kSetAuto), "kSetAuto: not a force-frame request");
+  checkTrue(telemetry.mode() == App::TlmMode::kAuto, "kSetAuto -> mode() == kAuto");
+
+  // kNone/kFrame/kUnrecognized never change mode -- set kOn first so a
+  // spurious mode change would be visible, not masked by an already-matching
+  // default.
+  telemetry.setMode(App::TlmMode::kOn);
+  checkTrue(!telemetry.applyAction(App::Comms::TlmAction::kNone), "kNone: not a force-frame request");
+  checkTrue(telemetry.mode() == App::TlmMode::kOn, "kNone: mode unchanged");
+
+  checkTrue(!telemetry.applyAction(App::Comms::TlmAction::kUnrecognized),
+            "kUnrecognized: not a force-frame request");
+  checkTrue(telemetry.mode() == App::TlmMode::kOn, "kUnrecognized: mode unchanged");
+
+  // kFrame is the ONE arm that answers true -- a bare TLM/TLM:NOW line --
+  // and it too leaves mode_ untouched (issue Part 3: the force decision and
+  // the mode-change decision are orthogonal).
+  checkTrue(telemetry.applyAction(App::Comms::TlmAction::kFrame), "kFrame: IS a force-frame request");
+  checkTrue(telemetry.mode() == App::TlmMode::kOn, "kFrame: mode unchanged");
+
+  // The returned bool is exactly what the next emit() call needs to force a
+  // frame past the mode gate -- proven end to end here rather than just
+  // asserting the bool in isolation, since that IS the contract RobotLoop
+  // depends on (telemetry.h's own doc comment: "the returned bool is the
+  // very next emit() call's own `force` argument").
+  FakeTransport serialFake2;
+  FakeTransport radioFake2;
+  App::Comms comms2(serialFake2, radioFake2, banner);
+  App::Telemetry telemetry2(comms2);
+  telemetry2.setMode(App::TlmMode::kOff);
+  Types::RobotState parked;
+  parked.time.cycleStart = 0;
+  telemetry2.update(parked);
+  const bool force = telemetry2.applyAction(App::Comms::TlmAction::kFrame);
+  telemetry2.emit(0, force);
+  checkU64Eq(telemetry2.primaryEmitCount(), 1,
+             "end-to-end: applyAction(kFrame)'s returned bool forces exactly one frame even in kOff");
+}
+
 }  // namespace
 
 int main() {
@@ -1371,6 +1436,7 @@ int main() {
   scenarioTlmOffThenMoveOnlyAckFramesNoStream();
   scenarioTlmOnThenOffStopsWithinOnePeriodThenAutoRestoresModeTwoBehavior();
   scenarioModeNotPersistedAcrossFreshConstruction();
+  scenarioApplyActionCoversEveryTlmActionArm();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Telemetry scenarios passed\n");
