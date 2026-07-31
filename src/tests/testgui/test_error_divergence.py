@@ -58,6 +58,17 @@ TLM/truth sampling-time misalignment, not a real pose difference). The
 no-error noise floor and comfortably below the ~1.5s-in signal, so this
 assertion is not on a knife's edge in either direction.
 
+128-003 baseline fix (re-measured): the original fixed-sleep-then-assert
+(sleep exactly ``_DRIVE_SETTLE_S`` == 1.5s, then compare once) turned out to
+be flaky against the ticket description's own re-measurement -- at ~1.5s
+elapsed drive time divergence is only ~2.2-2.8cm, comfortably UNDER the 5cm
+threshold rather than over it; reliably crossing 5cm needs 4-6s, with real
+run-to-run variance in exactly when. A single fixed sleep can land on either
+side of that crossing depending on scheduler/CI-box noise. Converted to a
+poll (``_wait_until``) with a generous timeout (``_DIVERGENCE_WAIT_TIMEOUT_S``,
+8s) instead of hard-coding a new magic sleep constant -- the test now waits
+for the crossing itself rather than guessing how long it takes.
+
 Run with::
 
     QT_QPA_PLATFORM=offscreen uv run pytest src/tests/testgui/test_error_divergence.py -q
@@ -96,16 +107,20 @@ _MIN_CAMERA_POINTS = 3
 # miscalibration -- 0.25 is a moderate, plausible real-world encoder fault).
 _ENC_SCALE_ERR_L = 0.25
 
-# How long to let the sim run (wall-clock, after both traces have reached
-# their minimum point counts) before comparing endpoints -- the divergence
-# grows with distance/time, so a fixed settle window makes the final
-# comparison deterministic rather than racing the tick-thread.
-_DRIVE_SETTLE_S = 1.5
-
 # See "Threshold calibration" in the module docstring: no-error divergence
-# measured under ~1.5cm; injected-error divergence measured ~9cm at the same
-# elapsed drive time. 5cm sits well clear of both.
+# measured under ~1.5cm; injected-error divergence measured ~9cm by ~1.5s
+# elapsed drive time in the original (2026-07-05) measurement, but only
+# ~2.2-2.8cm at that same elapsed time in the 128-003 re-measurement --
+# reliably crossing 5cm needs 4-6s. 5cm still sits well clear of the
+# no-error noise floor; only the wait strategy (poll, not a fixed sleep)
+# changed.
 _DIVERGENCE_THRESHOLD_CM = 5.0
+
+# Generous poll budget for the divergence to cross _DIVERGENCE_THRESHOLD_CM
+# (128-003 baseline fix -- replaces a fixed 1.5s sleep-then-assert; see
+# "Threshold calibration" in the module docstring for the re-measurement
+# that made the fixed sleep flaky).
+_DIVERGENCE_WAIT_TIMEOUT_S = 8.0
 
 
 def _wait_until(predicate, timeout_s: float = _WAIT_TIMEOUT_S) -> bool:
@@ -183,20 +198,29 @@ def test_enc_scale_err_separates_encoder_trace_from_camera_truth(
         f"{_WAIT_TIMEOUT_S}s"
     )
 
-    # Let the divergence accumulate for a bit longer -- the effect grows
-    # with distance travelled / time, not instantaneously (see "Threshold
-    # calibration" above).
-    time.sleep(_DRIVE_SETTLE_S)
+    # Poll for the divergence to cross the threshold, rather than a fixed
+    # sleep-then-assert -- the effect grows with distance travelled / time,
+    # not instantaneously, and the crossing time itself varies run to run
+    # (see "Threshold calibration"/128-003 baseline fix above).
+    def _divergence_cm() -> float:
+        enc_x, enc_y = model.encoder[-1]
+        cam_x, cam_y = model.camera[-1]
+        return math.hypot(enc_x - cam_x, enc_y - cam_y)
+
+    crossed = _wait_until(
+        lambda: _divergence_cm() > _DIVERGENCE_THRESHOLD_CM,
+        timeout_s=_DIVERGENCE_WAIT_TIMEOUT_S,
+    )
 
     enc_x, enc_y = model.encoder[-1]
     cam_x, cam_y = model.camera[-1]
     divergence_cm = math.hypot(enc_x - cam_x, enc_y - cam_y)
 
-    assert divergence_cm > _DIVERGENCE_THRESHOLD_CM, (
+    assert crossed, (
         f"encoder trace ({enc_x:.1f}, {enc_y:.1f}) cm did not measurably "
         f"diverge from camera ground truth ({cam_x:.1f}, {cam_y:.1f}) cm "
-        f"beyond the {_DIVERGENCE_THRESHOLD_CM}cm threshold; "
-        f"divergence={divergence_cm:.2f}cm "
+        f"beyond the {_DIVERGENCE_THRESHOLD_CM}cm threshold within "
+        f"{_DIVERGENCE_WAIT_TIMEOUT_S}s; divergence={divergence_cm:.2f}cm "
         f"(encoder points={len(model.encoder)}, camera points={len(model.camera)})"
     )
 

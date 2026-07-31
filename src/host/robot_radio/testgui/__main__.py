@@ -1233,8 +1233,15 @@ def _build_main_window():  # type: ignore[return]
     )
     sim_err_slip_turn.setToolTip(_SIM_ERR_NOT_SUPPORTED_TOOLTIP)
     sim_err_body_rot_scrub = _make_sim_err_spin(
+        # 128-003 baseline fix: this field's window-build default is
+        # resolve_calibration_defaults()'s reconciled value from the active
+        # robot's calibration.rotational_slip -- data/robots/tovez.json now
+        # carries 4 decimal digits (0.9117); 3 decimals rounded that to
+        # 0.912 on setValue(), a silent precision loss that broke every
+        # test asserting the spin box round-trips the resolved default
+        # exactly. 4 decimals matches the measured calibration precision.
         col_right_layout, "sim_err_body_rot_scrub", "body rot scrub:",
-        _sim_error_profile["body_rot_scrub"], 0.0, 1.0, 3,
+        _sim_error_profile["body_rot_scrub"], 0.0, 1.0, 4,
     )
     sim_err_body_lin_scrub = _make_sim_err_spin(
         col_right_layout, "sim_err_body_lin_scrub", "body lin scrub:",
