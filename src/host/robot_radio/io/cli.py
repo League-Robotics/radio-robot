@@ -676,6 +676,8 @@ def cmd_turnto(args):
         if err is None:
             sys.exit(f"Error: daemon could not see robot tag {tag_id}.")
         print(f"final error={err:+.1f}°  (target={target:+.1f}°)")
+    except NotImplementedError as exc:
+        sys.exit(f"Error: {exc}")
     finally:
         try:
             halt_now(proto, log=_log)

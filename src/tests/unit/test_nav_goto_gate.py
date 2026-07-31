@@ -19,6 +19,15 @@ The MCP tools that wrap ``Navigator.navigate``/``follow_path``/
 and return an honest error dict rather than letting it propagate as an
 unhandled exception to the LLM operator.
 
+A team-lead follow-up accepted ``spin_to_yaw_camera`` (``rogo turnto``'s
+control logic, ``camera_goto.py``) as the identical failure mode --
+also a dead ``proto.drive()`` call, also a raw ``AttributeError`` mid-loop
+-- and asked for the same loud-gate treatment even though it wasn't one
+of the four AC-listed names. No MCP tool routes to
+``spin_to_yaw_camera`` (grep-confirmed), so there is no MCP-side catch
+to add for it -- only the front-door raise and ``cli.py``'s
+``cmd_turnto`` catch (mirroring ``cmd_goto``'s).
+
 Step 2 (rebuild-or-delete `nav/camera_goto.py`/`navigator.py` outright)
 is explicitly out of scope -- see the ticket's "Worktree note" /
 "Scope note". This test file covers ONLY the loud-gate behavior.
@@ -30,9 +39,12 @@ Covers:
   2. ``Navigator.navigate`` raises ``NotImplementedError`` immediately.
   3. ``Navigator.follow_path`` raises ``NotImplementedError`` immediately.
   4. ``Navigator.visit_tags`` raises ``NotImplementedError`` immediately.
-  5. Each message names the replacement (``pathplan.gotoWorld`` /
+  5. ``spin_to_yaw_camera`` raises ``NotImplementedError`` immediately,
+     before ever calling ``read_pose`` or ``proto`` (same front-door
+     pattern as #1).
+  6. Each message names the replacement (``pathplan.gotoWorld`` /
      ``pathplan.followPath``) and the tracking issue filename.
-  6. The MCP tools ``navigate_to``, ``follow_path``, and ``visit_tags``
+  7. The MCP tools ``navigate_to``, ``follow_path``, and ``visit_tags``
      catch the ``NotImplementedError`` and return an honest
      ``{"error": "not_available", ...}`` result -- no unhandled
      exception reaches the caller.
@@ -43,7 +55,7 @@ import asyncio
 
 import pytest
 
-from robot_radio.nav.camera_goto import go_to_world_camera
+from robot_radio.nav.camera_goto import go_to_world_camera, spin_to_yaw_camera
 from robot_radio.nav.navigator import Navigator
 import robot_radio.io.robot_mcp as robot_mcp
 
@@ -80,6 +92,17 @@ def test_go_to_world_camera_raises_not_implemented_before_touching_proto():
             target_x=30.0, target_y=10.0,
             cruise=150, turn_speed=80, gate=25.0,
             arrive_cm=3.0, max_secs=10.0,
+        )
+    msg = str(excinfo.value)
+    assert "pathplan.gotoWorld" in msg
+    assert _TRACKING_ISSUE in msg
+
+
+def test_spin_to_yaw_camera_raises_not_implemented_before_touching_proto():
+    with pytest.raises(NotImplementedError) as excinfo:
+        spin_to_yaw_camera(
+            _BoomIfCalled(), _boom_read_pose,
+            target=90.0, speed=80, tol=4.0,
         )
     msg = str(excinfo.value)
     assert "pathplan.gotoWorld" in msg

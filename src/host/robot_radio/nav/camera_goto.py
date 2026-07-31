@@ -107,6 +107,12 @@ def spin_to_yaw_camera(
 
     Extracted from cli.py ``_daemon_spin_to_yaw`` (ticket 035-001).
     """
+    raise NotImplementedError(
+        "dead since the v5 wire cutover: NezhaProtocol.drive()/go_to() "
+        "were deleted (104-002). The replacement is pathplan.gotoWorld/"
+        "followPath (sprint 127). Tracked: clasi/issues/"
+        "nav-goto-stack-is-dead-gate-it-loudly-then-rebuild-or-delete.md")
+
     COAST_S = 0.10
     p = read_pose(3.0)
     if p is None:
