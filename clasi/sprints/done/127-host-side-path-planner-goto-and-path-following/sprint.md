@@ -1,7 +1,7 @@
 ---
 id: '127'
-title: "Host-side path planner — goto and path following"
-status: planning-docs
+title: "Host-side path planner \u2014 goto and path following"
+status: closed
 branch: sprint/127-host-side-path-planner-goto-and-path-following
 worktree: false
 use-cases:
