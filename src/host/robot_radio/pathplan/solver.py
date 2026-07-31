@@ -1,6 +1,15 @@
 """robot_radio.pathplan.solver -- solveArcToPoint, the goto solver
 (127-005, design issue T4).
 
+History note (128-008): ``path/arc.py`` used to carry a per-wheel
+left/right-distance tangent-arc formulation, and ``path/catmull_rom.py``
+used to carry a spline lookahead-target picker with its own
+circle/segment-intersection helper. Both solved the same two problems this
+module solves independently -- ``solveArcToPoint()`` and
+``pursuitTarget()`` respectively -- and were deleted as dead duplicates
+(zero callers) once sprint 127 shipped this module. Recorded here, not
+silently erased.
+
 Pure math, no I/O: given a current pose and a target point, there is
 exactly one circular arc through the target that is tangent to the
 current heading. This module computes that arc's curvature and length and

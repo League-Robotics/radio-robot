@@ -1,8 +1,10 @@
 ---
-id: '008'
-title: Delete duplicate path geometry (path/arc.py, dead catmull_rom.py lookahead functions)
-status: open
-use-cases: [SUC-006]
+id: 008
+title: Delete duplicate path geometry (path/arc.py, dead catmull_rom.py lookahead
+  functions)
+status: done
+use-cases:
+- SUC-006
 depends-on: []
 github-issue: ''
 issue: path-geometry-is-already-solved-reuse-it-for-ticket-008.md
@@ -41,19 +43,19 @@ the tree.
 
 ## Acceptance Criteria
 
-- [ ] `path/arc.py` is deleted outright.
-- [ ] `path/catmull_rom.py`'s `find_lookahead_target` and
+- [x] `path/arc.py` is deleted outright.
+- [x] `path/catmull_rom.py`'s `find_lookahead_target` and
       `circle_intersections` functions are deleted (the rest of
       `catmull_rom.py` — spline construction/sampling — is unaffected
       and stays).
-- [ ] `pathplan/solver.py`'s module header gains a one-line note that
+- [x] `pathplan/solver.py`'s module header gains a one-line note that
       `path/arc.py`'s per-wheel formulation and `path/catmull_rom.py`'s
       lookahead functions existed and were superseded by
       `solveArcToPoint()`/`pursuitTarget()` respectively — acknowledging
       the duplication as recorded history, not silently erasing it.
-- [ ] `grep -rn "circle_intersections\|find_lookahead_target\|compute_arc" src/host`
+- [x] `grep -rn "circle_intersections\|find_lookahead_target\|compute_arc" src/host`
       returns nothing.
-- [ ] Exactly one circle-intersection/tangent-arc implementation remains
+- [x] Exactly one circle-intersection/tangent-arc implementation remains
       in the tree (`pathplan/solver.py`), with live callers and tests
       (including the `da == db` degenerate-case guard, already covered
       by ticket 008's own 64 unit tests from sprint 127 — confirm they
