@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-004
 ---
 
 # Delete binary_bridge.py's dead half; direct-call the surviving verbs; delete the dead COMMANDS rows

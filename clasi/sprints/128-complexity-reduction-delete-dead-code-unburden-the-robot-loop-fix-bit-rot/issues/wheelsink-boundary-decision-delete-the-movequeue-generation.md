@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-014
 ---
 
 # Decide the firm↔motion boundary: promote RobotState wheel targets, delete the MoveQueue generation, fix the docs

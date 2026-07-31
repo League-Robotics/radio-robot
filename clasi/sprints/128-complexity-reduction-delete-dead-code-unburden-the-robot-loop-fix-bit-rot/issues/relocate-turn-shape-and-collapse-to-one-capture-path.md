@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-011
 ---
 
 # Move turn_shape.py out of testgui and collapse its three sim-capture paths to one

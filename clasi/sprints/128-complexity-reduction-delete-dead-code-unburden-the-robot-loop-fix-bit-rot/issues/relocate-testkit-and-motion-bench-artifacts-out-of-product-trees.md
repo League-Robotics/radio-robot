@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-010
 ---
 
 # Relocate testkit/ and src/motion/planner's bench scripts + measurement captures out of the product trees

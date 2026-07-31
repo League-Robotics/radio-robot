@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-007
 ---
 
 # StreamingExecutor: delete it, or formally adopt it as pathplan's transport loop — not both, not neither

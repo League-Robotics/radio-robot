@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-006
 ---
 
 # Delete sensors/ dead modules: the retired K-command calibration.py and the unreferenced trackers

@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-005
 ---
 
 # testgui arrow-key drive is fully dead in both modes — port to the Move surface or delete it

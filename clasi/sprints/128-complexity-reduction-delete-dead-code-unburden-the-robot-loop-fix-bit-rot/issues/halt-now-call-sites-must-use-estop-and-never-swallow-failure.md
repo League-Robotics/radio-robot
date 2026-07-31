@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-001
 ---
 
 # Every "halt now" call site must use estop(), and a failed halt must be loud

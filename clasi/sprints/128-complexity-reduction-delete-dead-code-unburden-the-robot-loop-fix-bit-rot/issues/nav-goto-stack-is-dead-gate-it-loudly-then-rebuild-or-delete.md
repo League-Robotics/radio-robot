@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-002
 ---
 
 # nav/ goto stack is dead code wired to live CLI/MCP surfaces — gate it loudly now, then rebuild on pathplan or delete

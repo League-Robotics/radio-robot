@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-012
 ---
 
 # STATUS projection belongs with Comms (or a projector), not the main loop

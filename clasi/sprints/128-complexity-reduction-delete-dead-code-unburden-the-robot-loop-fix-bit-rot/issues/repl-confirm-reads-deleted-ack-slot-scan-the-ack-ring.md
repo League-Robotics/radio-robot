@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-001
 ---
 
 # repl.py confirm() reads the deleted `TLMFrame.ack` slot — scan the ack ring

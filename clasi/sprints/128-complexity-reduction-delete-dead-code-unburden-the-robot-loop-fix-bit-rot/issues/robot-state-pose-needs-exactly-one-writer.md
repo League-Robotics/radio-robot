@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-016
 ---
 
 # RobotState::pose needs exactly one writer; retire the unconsumed estimators

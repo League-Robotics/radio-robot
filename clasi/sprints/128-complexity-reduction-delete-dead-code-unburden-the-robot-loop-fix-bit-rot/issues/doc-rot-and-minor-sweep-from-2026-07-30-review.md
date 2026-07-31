@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-009
 ---
 
 # Doc-rot and minor sweep from the 2026-07-30 craftsmanship review

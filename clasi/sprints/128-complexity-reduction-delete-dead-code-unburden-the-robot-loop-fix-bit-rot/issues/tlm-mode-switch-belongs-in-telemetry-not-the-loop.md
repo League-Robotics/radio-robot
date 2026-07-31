@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-012
 ---
 
 # TLM mode-action dispatch belongs in Telemetry, not the main loop

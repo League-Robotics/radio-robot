@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-013
 ---
 
 # Delete the full-transaction I2C IRQ guard

@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-008
 ---
 
 # The lookahead/arc geometry sprint 127 needs already exists in path/ — reuse it, then delete the leftovers

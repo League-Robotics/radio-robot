@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '128'
+tickets:
+- 128-003
 ---
 
 # testgui STOP button/halt paths: add Transport.halt() calling estop(); stop routing through the dead bridge
