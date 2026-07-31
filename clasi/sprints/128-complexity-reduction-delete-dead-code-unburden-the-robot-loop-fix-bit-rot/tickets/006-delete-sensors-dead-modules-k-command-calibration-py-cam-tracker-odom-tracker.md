@@ -1,8 +1,9 @@
 ---
 id: '006'
 title: 'Delete sensors/ dead modules: K-command calibration.py, cam_tracker, odom_tracker'
-status: open
-use-cases: [SUC-006]
+status: in-progress
+use-cases:
+- SUC-006
 depends-on: []
 github-issue: ''
 issue: delete-dead-sensors-modules-k-command-calibration-and-trackers.md
@@ -31,17 +32,18 @@ reproduces the frozen-anchor hazard: on a miss it keeps last-good
 
 ## Acceptance Criteria
 
-- [ ] `sensors/calibration.py`, `sensors/cam_tracker.py`,
+- [x] `sensors/calibration.py`, `sensors/cam_tracker.py`,
       `sensors/odom_tracker.py` are deleted.
-- [ ] Their `sensors/__init__.py` exports are removed, including the
+- [x] Their `sensors/__init__.py` exports are removed, including the
       `CamTracker` lazy-load slot.
-- [ ] `Odometry` (with its `STALE_AGE`/`is_valid`/`source` contract)
+- [x] `Odometry` (with its `STALE_AGE`/`is_valid`/`source` contract)
       remains as the one pose-tracking module `sensors/` keeps.
-- [ ] `grep -rn "cam_tracker\|odom_tracker\|from .calibration import\|sensors.calibration" src/ --include=*.py`
+- [x] `grep -rn "cam_tracker\|odom_tracker\|from .calibration import\|sensors.calibration" src/ --include=*.py`
       returns nothing outside `src/archive`.
-- [ ] `python -c "import robot_radio.sensors"` works; full pytest suite
-      passes.
-- [ ] `src/host/robot_radio/DESIGN.md`'s `sensors/` row is updated in the
+- [x] `python -c "import robot_radio.sensors"` works; targeted tests pass
+      (see Testing note below — no full-suite run per stakeholder
+      directive for this sprint).
+- [x] `src/host/robot_radio/DESIGN.md`'s `sensors/` row is updated in the
       same commit to drop the three deleted modules.
 
 ## Testing
