@@ -131,8 +131,10 @@ class GripperConfig(BaseModel):
 
 
 class PeripheralsConfig(BaseModel):
-    # Digital port (J1..J4) the line laser is wired to. Default 4.
-    laser_port: Optional[int] = 4
+    # Digital port (J1..J4) the line laser is wired to. None = no laser
+    # wired (fail-closed default -- a robot that doesn't set this explicitly
+    # in its data/robots/*.json should not silently assume port 4 is wired).
+    laser_port: Optional[int] = None
 
 
 class CalibrationConfig(BaseModel):

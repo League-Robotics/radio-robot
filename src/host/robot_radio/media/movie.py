@@ -206,7 +206,7 @@ def _difference_score(current_small: np.ndarray, previous_small: np.ndarray | No
     return float(diff.mean())
 
 
-def _deskew_frame(frame_bgr: np.ndarray, calibration: PlayfieldCalibration,
+def deskew_frame(frame_bgr: np.ndarray, calibration: PlayfieldCalibration,
                   pixels_per_cm: float) -> np.ndarray:
     if calibration.camera_matrix is not None and calibration.dist_coeffs is not None:
         frame_bgr = cv2.undistort(frame_bgr, calibration.camera_matrix, calibration.dist_coeffs)
@@ -346,7 +346,7 @@ def save_movie_frames(
             if duration_s > 0 and elapsed >= duration_s:
                 break
 
-            deskewed = _deskew_frame(frame, calibration, pixels_per_cm)
+            deskewed = deskew_frame(frame, calibration, pixels_per_cm)
             current_small = _preprocess_diff(deskewed)
             diff_score = _difference_score(current_small, previous_saved_small)
             now = time.monotonic()

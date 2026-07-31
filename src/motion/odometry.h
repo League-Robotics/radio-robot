@@ -96,7 +96,13 @@ class Odometry {
 
   float x_ = 0.0f;      // [mm]
   float y_ = 0.0f;      // [mm]
-  float theta_ = 0.0f;  // [rad]
+  // [rad] unwrapped, monotonically accumulated -- never modulo-wrapped to
+  // [-pi, pi]. float32 has ~7 significant decimal digits; once theta_
+  // accumulates to roughly 10,000 rad (achievable over a long-running
+  // session of continuous turning), the per-cycle headingDelta increment
+  // approaches float32's representable epsilon at that magnitude and
+  // further small deltas start silently rounding away.
+  float theta_ = 0.0f;
 
   float pathLength_ = 0.0f;  // [mm] cumulative |distance| -- see pathLength()
 };

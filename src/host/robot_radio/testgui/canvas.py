@@ -211,7 +211,7 @@ def _deskew_to_bgr(calib: "object", ppc: float) -> "object | None":
     """
     try:
         import cv2
-        from robot_radio.media.movie import _deskew_frame
+        from robot_radio.media.movie import deskew_frame
     except ImportError as exc:
         _log.debug("cv2/movie import failed (%s); deskew unavailable", exc)
         return None
@@ -226,9 +226,9 @@ def _deskew_to_bgr(calib: "object", ppc: float) -> "object | None":
         return None
 
     try:
-        return _deskew_frame(frame, calib, ppc)
+        return deskew_frame(frame, calib, ppc)
     except Exception as exc:
-        _log.debug("_deskew_frame failed (%s)", exc)
+        _log.debug("deskew_frame failed (%s)", exc)
         return None
 
 

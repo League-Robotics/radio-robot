@@ -499,8 +499,8 @@ void RobotLoop::cycle() {
   drive_.tick(state_.wheelLeft.cmdVelocity, state_.wheelRight.cmdVelocity);
 
   motorL_.requestSample();  // brick latches ONE pending read per select
-  runAndWait(kSettle, [&] { 
-    comms_.pump(state_.time.cycleStart); 
+  runAndWait(kSettle, [&] {
+    comms_.pump(state_.time.cycleStart);
   });
   motorL_.tick(clock_.nowMicros());  // collect L
 

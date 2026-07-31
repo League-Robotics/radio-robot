@@ -18,6 +18,18 @@ Wire protocol: one JSON object per line (UTF-8, ``\\n`` terminated). Requests:
 All GUI-touching work is marshalled onto the Qt main thread via a QObject
 bridge (blocking-queued for the ones that return a value); the socket thread
 never touches Qt or the transport directly.
+
+128-009 decision: KEPT, not removed, despite zero in-tree caller ever
+connecting to this socket. Unlike the rest of this sprint's dead-code
+sweep, this is a deliberately exposed external automation entry point (an
+agent/script driving the running GUI from outside the process) rather than
+orphaned application logic -- the same reason an MCP server or API is not
+"dead" just because no committed client calls it in-repo.
+``test_gui_button_acceptance.py`` already exercises the same underlying
+wire primitive this socket's ``"turn"`` command forwards (the ``SEG 0
+<cdeg>`` form, via ``transport.command()`` directly) at the entry-point
+level, so the risk this class silently bit-rots onto a dead wire form is
+already covered even without a dedicated socket-level bench script.
 """
 from __future__ import annotations
 

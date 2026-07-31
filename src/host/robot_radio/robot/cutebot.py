@@ -111,16 +111,16 @@ class Cutebot(Robot):
             time.sleep(0.1)
         return self.read_encoders()
 
-    def speed_for_time(self, left: int, right: int, ms: int) -> tuple[int, int]:  # [mm/s]
-        """Blocking: drive at speed for ms milliseconds. Returns final encoder (mm)."""
-        cmd = f"T{_sign(left)}{_sign(right)}{_sign(ms)}"
-        return self._send_and_wait_enc(cmd, ms + 2000)
+    def speed_for_time(self, left: int, right: int, duration: int) -> tuple[int, int]:  # [mm/s] [mm/s] [ms]
+        """Blocking: drive at speed for duration milliseconds. Returns final encoder (mm)."""
+        cmd = f"T{_sign(left)}{_sign(right)}{_sign(duration)}"
+        return self._send_and_wait_enc(cmd, duration + 2000)
 
-    def speed_for_distance(self, left: int, right: int, mm: int) -> tuple[int, int]:  # [mm/s]
+    def speed_for_distance(self, left: int, right: int, distance: int) -> tuple[int, int]:  # [mm/s] [mm/s] [mm]
         """Blocking: drive at speed until distance. Returns final encoder (mm)."""
-        cmd = f"D{_sign(left)}{_sign(right)}{_sign(mm)}"
+        cmd = f"D{_sign(left)}{_sign(right)}{_sign(distance)}"
         min_speed = max(abs(left), abs(right), 1)
-        timeout = int(mm / min_speed * 1000) + 3000
+        timeout = int(distance / min_speed * 1000) + 3000
         return self._send_and_wait_enc(cmd, min(timeout, 8000))
 
     def go_to(self, x: int, y: int,  # [mm]

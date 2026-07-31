@@ -380,8 +380,8 @@ def calibrate_turns(
             ser.write_line("STOP")
             ser.write_line("STREAM 0")
             time.sleep(0.2)
-        except Exception:
-            pass
+        except Exception as exc:  # legacy text-plane handshake, no estop() equivalent here
+            print(f"  WARNING: failed to send STOP/STREAM 0 on exit: {exc!r}")
 
     # Statistics
     print("\n" + "=" * 60)

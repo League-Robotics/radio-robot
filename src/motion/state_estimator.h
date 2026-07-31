@@ -85,7 +85,11 @@ struct WheelPeer {
 struct BodyPeer {
   float x = 0.0f;          // [mm]
   float y = 0.0f;          // [mm]
-  float heading = 0.0f;    // [rad]
+  // [rad] unwrapped, inherited each cycle from Motion::Odometry's own
+  // monotonically-accumulated theta_ (never modulo-wrapped) -- see that
+  // field's own doc comment (odometry.h) for the float32 precision bound
+  // (~10,000 rad accumulated) this basis reading is subject to as well.
+  float heading = 0.0f;
   float v_x = 0.0f;        // [mm/s] body-frame, signed
   float v_y = 0.0f;        // [mm/s] body-frame, signed
   float omega = 0.0f;      // [rad/s] signed

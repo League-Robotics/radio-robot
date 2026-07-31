@@ -158,6 +158,23 @@ class Geofence:
             pass
 
 
+def _fetchPlayfieldLightsStatus() -> "tuple[dict | None, Exception | None]":
+    """Shared Shelly status fetch for `checkPlayfieldLights()`/
+    `_playfieldLightsOn()` (previously duplicated in both). Returns
+    `(status, None)` on success, or `(None, exc)` if the relay could not be
+    reached (a different network problem, not this module's to diagnose) --
+    callers decide how loudly to warn."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(PLAYFIELD_LIGHTS_URL, timeout=2.0) as resp:
+            return json.loads(resp.read()), None
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return None, exc
+
+
 def checkPlayfieldLights() -> None:
     """Preflight: FAIL loudly if the playfield room lights (Shelly Plus 1,
     192.168.1.122 -- same relay as the bench room, `.claude/rules/
@@ -170,14 +187,8 @@ def checkPlayfieldLights() -> None:
     Non-fatal if the relay itself is unreachable (a different network
     problem, not this script's to diagnose) -- warns and continues.
     """
-    import json
-    import urllib.error
-    import urllib.request
-
-    try:
-        with urllib.request.urlopen(PLAYFIELD_LIGHTS_URL, timeout=2.0) as resp:
-            status = json.loads(resp.read())
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    status, exc = _fetchPlayfieldLightsStatus()
+    if status is None:
         print(f"WARNING: could not reach the playfield lights relay "
               f"({PLAYFIELD_LIGHTS_URL}): {exc!r} -- continuing without "
               f"checking. If tags vanish, suspect the lights first.")
@@ -196,17 +207,11 @@ def _playfieldLightsOn() -> "bool | None":  # None if the relay could not be rea
     (`checkPlayfieldLights()`'s own URL) -- returns True/False, or None if
     the relay is unreachable (a different network problem, not this
     module's to diagnose)."""
-    import json
-    import urllib.error
-    import urllib.request
-
-    try:
-        with urllib.request.urlopen(PLAYFIELD_LIGHTS_URL, timeout=2.0) as resp:
-            status = json.loads(resp.read())
-        return bool(status.get("output"))
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    status, exc = _fetchPlayfieldLightsStatus()
+    if status is None:
         print(f"  WARNING: could not reach the playfield lights relay: {exc!r}")
         return None
+    return bool(status.get("output"))
 
 
 def _turnPlayfieldLightsOn() -> None:

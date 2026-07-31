@@ -17,11 +17,11 @@ class Robot(ABC):
         the robot moving — the firmware stops if commands aren't re-sent."""
 
     @abstractmethod
-    def speed_for_time(self, left: int, right: int, ms: int) -> tuple[int, int]:  # [mm/s]
+    def speed_for_time(self, left: int, right: int, duration: int) -> tuple[int, int]:  # [mm/s] [mm/s] [ms]
         """Blocking: drive at speed for a duration. Returns (left, right)."""
 
     @abstractmethod
-    def speed_for_distance(self, left: int, right: int, mm: int) -> tuple[int, int]:  # [mm/s]
+    def speed_for_distance(self, left: int, right: int, distance: int) -> tuple[int, int]:  # [mm/s] [mm/s] [mm]
         """Blocking: drive at speed until distance. Returns (left, right)."""
 
     @abstractmethod
