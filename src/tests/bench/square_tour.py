@@ -361,6 +361,25 @@ class _Backend:
         backend has none and the caller must integrate odometry itself."""
         return None
 
+    def enableTelemetry(self) -> None:
+        """Ensure unsolicited telemetry is flowing before any mode's FIRST
+        telemetry read. No-op by default: only HardwareBackend needs this
+        -- kAuto (the default emit policy) keeps a parked REAL robot
+        silent until something moves it or asks explicitly (see that
+        override's own docstring for the measured finding). SimBackend
+        inherits this no-op rather than calling ``proto.tlmOn()`` itself:
+        the sim has no emit-policy state machine to switch (it always
+        emits), and ``SimConfigConn`` does not implement ``send_fast()``
+        (only ``send_envelope``/``send_envelope_fast``, for CONFIG
+        traffic) -- calling ``tlmOn()`` against it would raise
+        AttributeError, not silently no-op."""
+        return
+
+    def disableTelemetry(self) -> None:
+        """Undo enableTelemetry() on the way out. No-op by default; see
+        that method's docstring."""
+        return
+
     def close(self) -> None:
         raise NotImplementedError
 
@@ -469,7 +488,33 @@ class HardwareBackend(_Backend):
         time.sleep(BOOT_WAIT)
         self.proto.read_pending_binary_tlm_frames()  # discard the boot burst
 
+        # kAuto (the default emit policy) keeps a parked real robot SILENT
+        # until something moves it or asks explicitly -- force streaming-
+        # always now, before ANY mode's first telemetry read, rather than
+        # per-mode in main(). 'segments' mode never hit this (it sends a
+        # Move first, so the robot is already emitting -- moving --  by
+        # the time it reads telemetry); '--mode goto' reads telemetry
+        # FIRST to seed WorldPose and hit it hard: MEASURED 2026-07-30
+        # over the relay, 0 frames in 2s before this call, 67 frames in 3s
+        # (~22 Hz) after. Same defect, same fix as
+        # move_protocol_bench.py's own proto.tlmOn() call.
+        self.enableTelemetry()
+
     geofence = None
+
+    def enableTelemetry(self) -> None:
+        """See `_Backend.enableTelemetry()`'s own docstring for why this
+        override exists at all (SimBackend does not need one)."""
+        self.proto.tlmOn()
+
+    def disableTelemetry(self) -> None:
+        """Undo enableTelemetry() on the way out. Best-effort, like
+        estop() in close() below: a broken link on exit must not raise
+        on top of -- or mask -- whatever real failure sent us here."""
+        try:
+            self.proto.tlmOff()
+        except Exception:
+            pass
 
     def advance(self, seconds: float) -> "list":
         frames = []
@@ -491,6 +536,7 @@ class HardwareBackend(_Backend):
         try:
             self.proto.estop()
         finally:
+            self.disableTelemetry()
             self._conn.disconnect()
 
 
@@ -1103,7 +1149,7 @@ GOTO_STALL_WINDOW = 2.0      # [s] no-progress window that counts as a stall
 GOTO_STALL_EPS = 5.0         # [mm] progress below this over GOTO_STALL_WINDOW counts as no progress
 
 
-def _installEstopSignalHandler(proto) -> None:
+def _installEstopSignalHandler(backend: "_Backend") -> None:
     """estop() on SIGTERM/SIGINT before the process exits -- mirrors
     `planner_square_tour.py`'s own `_install_estop_signal_handler()`
     (127-002 lesson, hardware incident 2026-07-30: a bare SIGTERM bypasses
@@ -1114,11 +1160,22 @@ def _installEstopSignalHandler(proto) -> None:
     a SIGKILL cannot be caught by any process-level handler; the remaining
     gap is closed procedurally (run goto-mode hardware/playfield tours in
     the foreground, one at a time, never as an unsupervised background
-    batch)."""
+    batch).
+
+    Also calls `backend.disableTelemetry()` right after the estop (out-of-
+    process, 2026-07-30): telemetry-off rides the SAME path as the estop
+    here rather than fighting it -- both are best-effort (each wrapped in
+    its own `try/except`) so a failure in one never suppresses the other,
+    and disableTelemetry() is a no-op on sim (this handler is only
+    installed for a real backend; see the call site)."""
 
     def _handler(signum: int, _frame) -> None:
         try:
-            proto.estop()
+            backend.proto.estop()
+        except Exception:
+            pass
+        try:
+            backend.disableTelemetry()
         except Exception:
             pass
         sys.exit(1)
@@ -1336,7 +1393,7 @@ def runGotoTour(backend: "_Backend", args) -> int:
 
     proto = backend.proto
     if not args.sim:
-        _installEstopSignalHandler(proto)
+        _installEstopSignalHandler(backend)
 
     worldPose = WorldPose()
     geofence = getattr(backend, "geofence", None)
@@ -1357,7 +1414,18 @@ def runGotoTour(backend: "_Backend", args) -> int:
     while not frames and time.monotonic() < deadline:
         frames = backend.advance(CYCLE_S)
     if not frames:
-        print("FAIL: no telemetry received -- cannot seed WorldPose")
+        # HardwareBackend already called enableTelemetry() (TLM:ON) at
+        # connect time (see that class's __init__), so a real robot
+        # answering at all should be emitting by now -- say so distinctly
+        # from the sim message below, which points at a different failure
+        # (2026-07-30: the original generic message here sent the
+        # stakeholder hunting the wrong cause -- it read like the robot
+        # was never asked, not that it was asked and stayed silent).
+        if backend.label == "hardware":
+            print("FAIL: no telemetry after tlmOn (robot may be off or "
+                  "the link is down)")
+        else:
+            print("FAIL: no telemetry received -- cannot seed WorldPose")
         return 1
     for frame in frames:
         worldPose.ingest(frame)
