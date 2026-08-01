@@ -353,6 +353,7 @@ def _build_main_window():  # type: ignore[return]
     )
     from PySide6.QtCore import Qt, QMetaObject, Q_ARG  # type: ignore[import-untyped]
 
+    from robot_radio.testgui.worker_session import WorkerSession
     from robot_radio.testgui.transport import (
         Transport,
         SerialTransport,
@@ -402,12 +403,6 @@ def _build_main_window():  # type: ignore[return]
         "live_worker": None,
         "live_thread": None,
         "live_bridge": None,
-        "tour_worker": None,
-        "tour_thread": None,
-        "tour_bridge": None,
-        "goto_worker": None,
-        "goto_thread": None,
-        "goto_bridge": None,
         # Latest camera ground-truth pose (x_cm, y_cm, yaw_rad, monotonic_ts)
         # cached from the transport on_truth callback for the GOTO loop.
         "last_truth": None,
@@ -2547,6 +2542,33 @@ def _build_main_window():  # type: ignore[return]
         """Main-thread slot for tour log/step lines (marshalled from worker)."""
         _append_log(text, direction=direction or None)
 
+    def _settle_tour_ui() -> None:
+        """Return the tour UI to idle. Called by WorkerSession on BOTH the
+        explicit-stop and natural-completion paths, exactly once per run.
+
+        097: tour buttons are re-enabled unconditionally -- tours are un-gated.
+        Safe even when this runs via _on_disconnect(), which disables every
+        send button later in that same function; the disconnect flow's own
+        disable always wins the race, it just happens after this.
+        """
+        for _tb, _ in _tour_buttons:
+            _tb.setEnabled(True)
+        stop_tour_btn.setEnabled(False)
+        # OOP sim-motor-state fix: un-ghost "Set Robot @ 0,0".
+        ops_ctrl.set_tour_running(False)
+
+    def _settle_goto_ui() -> None:
+        """Return the GOTO UI to idle.
+
+        097: goto_btn is deliberately NOT re-enabled -- it stays disabled
+        pending the pursuit loop needing SI/G. Re-enabling it here would
+        wrongly un-gate it on every disconnect, since this also runs from
+        _on_disconnect().
+        """
+
+    _tour_session = WorkerSession("tour", on_settled=_settle_tour_ui)
+    _goto_session = WorkerSession("goto", on_settled=_settle_goto_ui)
+
     def _stop_tour() -> None:
         """Stop a running tour worker and join its thread (safe if idle).
 
@@ -2561,36 +2583,7 @@ def _build_main_window():  # type: ignore[return]
         would never re-enable. See ``testgui-tour-stop-reactivation.md`` for
         the full root-cause analysis.
         """
-        worker = _state.get("tour_worker")
-        thread = _state.get("tour_thread")
-        if worker is not None:
-            try:
-                worker.stop()
-            except Exception:
-                pass
-        if thread is not None:
-            try:
-                thread.quit()
-                thread.wait(3000)
-            except Exception:
-                pass
-        _state["tour_worker"] = None
-        _state["tour_thread"] = None
-        _state["tour_bridge"] = None
-        # 097: tour buttons ARE re-enabled here, unconditionally -- tours
-        # are un-gated now (see the tour-button-creation comment above).
-        # Safe to do even when this runs from _on_disconnect() (which calls
-        # _stop_tour() BEFORE its own unconditional "disable every
-        # _send_buttons entry" pass runs later in that same function) -- the
-        # disconnect flow's own disable always wins the race, it just
-        # happens after this one.
-        for _tb, _ in _tour_buttons:
-            _tb.setEnabled(True)
-        stop_tour_btn.setEnabled(False)
-        # OOP sim-motor-state fix: re-gate "Set Robot @ 0,0" now that no
-        # tour is running (enabled iff also still connected -- see
-        # OpsController.set_tour_running()).
-        ops_ctrl.set_tour_running(False)
+        _tour_session.stop()
 
     def _on_tour_finished() -> None:
         """Main-thread slot: tour ended — join the thread, re-enable buttons.
@@ -2599,23 +2592,7 @@ def _build_main_window():  # type: ignore[return]
         its own); the explicit-stop path is handled synchronously inside
         ``_stop_tour`` itself and does not depend on this slot running.
         """
-        thread = _state.get("tour_thread")
-        if thread is not None:
-            try:
-                thread.quit()
-                thread.wait(3000)
-            except Exception:
-                pass
-        _state["tour_worker"] = None
-        _state["tour_thread"] = None
-        _state["tour_bridge"] = None
-        # 097: see _stop_tour()'s identical comment -- tour buttons are
-        # un-gated now and re-enable unconditionally.
-        for _tb, _ in _tour_buttons:
-            _tb.setEnabled(True)
-        stop_tour_btn.setEnabled(False)
-        # OOP sim-motor-state fix: see _stop_tour()'s identical call.
-        ops_ctrl.set_tour_running(False)
+        _tour_session.finished()
 
     def _make_tour_handler(name: str, steps: list[str]):
         def _on_tour_clicked() -> None:
@@ -2623,7 +2600,7 @@ def _build_main_window():  # type: ignore[return]
             if transport is None:
                 _append_log("[WARN] Not connected")
                 return
-            if _state.get("tour_thread") is not None:
+            if _tour_session.running:
                 _append_log("[WARN] A tour is already running")
                 return
             from robot_radio.testgui.operations import is_sim_transport
@@ -2657,10 +2634,7 @@ def _build_main_window():  # type: ignore[return]
                 bridge.on_finished, Qt.ConnectionType.QueuedConnection
             )
             thread.started.connect(worker.run)
-            thread.start()
-            _state["tour_worker"] = worker
-            _state["tour_thread"] = thread
-            _state["tour_bridge"] = bridge
+            _tour_session.start(worker, thread, bridge)
 
         return _on_tour_clicked
 
@@ -2686,22 +2660,7 @@ def _build_main_window():  # type: ignore[return]
         returns this function has already dropped the only reference to the
         ``_WorkerBridge``.
         """
-        worker = _state.get("goto_worker")
-        thread = _state.get("goto_thread")
-        if worker is not None:
-            try:
-                worker.stop()
-            except Exception:
-                pass
-        if thread is not None:
-            try:
-                thread.quit()
-                thread.wait(3000)
-            except Exception:
-                pass
-        _state["goto_worker"] = None
-        _state["goto_thread"] = None
-        _state["goto_bridge"] = None
+        _goto_session.stop()
         # 097: goto_btn is NOT re-enabled here -- it is permanently disabled
         # pending sprint 098 (the pursuit loop needs SI/G). Pre-097 this
         # re-enabled it unconditionally whenever connected, which would have
@@ -2725,16 +2684,7 @@ def _build_main_window():  # type: ignore[return]
         its own); the explicit-stop path is handled synchronously inside
         ``_stop_goto`` itself and does not depend on this slot running.
         """
-        thread = _state.get("goto_thread")
-        if thread is not None:
-            try:
-                thread.quit()
-                thread.wait(3000)
-            except Exception:
-                pass
-        _state["goto_worker"] = None
-        _state["goto_thread"] = None
-        _state["goto_bridge"] = None
+        _goto_session.finished()
         # 097: goto_btn is NOT re-enabled here -- it is permanently disabled
         # pending sprint 098 (the pursuit loop needs SI/G). Pre-097 this
         # re-enabled it unconditionally whenever connected, which would have
@@ -2746,7 +2696,7 @@ def _build_main_window():  # type: ignore[return]
         if transport is None:
             _append_log("[WARN] Not connected")
             return
-        if _state.get("goto_thread") is not None:
+        if _goto_session.running:
             _append_log("[WARN] GOTO already running")
             return
         goto_btn.setEnabled(False)
@@ -2768,10 +2718,7 @@ def _build_main_window():  # type: ignore[return]
         worker.log_line.connect(bridge.on_log, Qt.ConnectionType.QueuedConnection)
         worker.finished.connect(bridge.on_finished, Qt.ConnectionType.QueuedConnection)
         thread.started.connect(worker.run)
-        thread.start()
-        _state["goto_worker"] = worker
-        _state["goto_thread"] = thread
-        _state["goto_bridge"] = bridge
+        _goto_session.start(worker, thread, bridge)
 
     goto_btn.clicked.connect(_on_goto_clicked)
 
