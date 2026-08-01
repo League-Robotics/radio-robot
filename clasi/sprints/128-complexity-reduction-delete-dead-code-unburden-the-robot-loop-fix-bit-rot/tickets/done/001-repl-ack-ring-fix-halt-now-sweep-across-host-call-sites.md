@@ -1,8 +1,9 @@
 ---
 id: '001'
 title: REPL ack-ring fix + halt_now() sweep across host call sites
-status: open
-use-cases: [SUC-004]
+status: done
+use-cases:
+- SUC-004
 depends-on: []
 github-issue: ''
 issue:

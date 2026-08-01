@@ -1,7 +1,7 @@
 ---
 id: '006'
 title: 'Delete sensors/ dead modules: K-command calibration.py, cam_tracker, odom_tracker'
-status: in-progress
+status: done
 use-cases:
 - SUC-006
 depends-on: []

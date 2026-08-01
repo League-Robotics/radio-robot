@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: 'nav/ goto stack: loud front-door gate (Step 1 only)'
-status: in-progress
+status: done
 use-cases:
 - SUC-007
 depends-on: []
