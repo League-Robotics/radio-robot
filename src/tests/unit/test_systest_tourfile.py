@@ -130,7 +130,8 @@ def test_empty_tour_rejected():
         parse_tour_text("# only a comment\n", name="t")
 
 
-@pytest.mark.parametrize("name", ["square", "circle", "fault_wedge"])
+@pytest.mark.parametrize("name", ["square", "square_cw", "circle",
+                                  "fault_wedge"])
 def test_shipped_tours_parse(name):
     tour = parse_tour_file(_TOURS_DIR / f"{name}.tour")
     assert isinstance(tour, Tour)
