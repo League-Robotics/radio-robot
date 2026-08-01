@@ -1,7 +1,7 @@
 ---
 id: '128'
 title: 'Complexity reduction: delete dead code, unburden the robot loop, fix bit rot'
-status: planning-docs
+status: closed
 branch: sprint/128-complexity-reduction-delete-dead-code-unburden-the-robot-loop-fix-bit-rot
 worktree: false
 use-cases: []
