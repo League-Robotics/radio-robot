@@ -854,29 +854,50 @@ class CanvasController:
                     # redraw racing teardown must not raise.
                     pass
 
-    def _update_marker(self, fused_yaw_rad: float | None) -> None:
-        """Position and rotate the robot marker at the latest known pose.
+    def _update_marker(self, fallback_yaw_rad: float | None) -> None:
+        """Position and rotate the robot marker at the best available pose.
 
-        097: position prefers the ``encoder`` trace (host-side dead
-        reckoning from ``enc``, or firmware ``encpose`` if a future build
-        ever adds it back — see ``traces.py``'s ``TraceModel.feed()``
-        docstring) over ``fused`` (pinned at the anchor until sprint 098
-        wires ``PoseEstimator::tick()`` — a fused-only avatar would never
-        move today). Falls back to ``fused``, then world (0, 0), exactly
-        as before whenever the encoder trace has no points yet (avatar is
-        always visible).
+        SOURCE PRIORITY: camera -> pose -> encoder (stakeholder, 2026-07-31:
+        "the avatar should be attached to the Camera/Truth line, not the encoder
+        line, if the truth is really the truth").
+
+        The avatar is the thing a person looks at to answer "where is the
+        robot". Drawing it from dead reckoning while a camera fix sits unused in
+        the same model makes the display agree with the least trustworthy
+        estimate available, and -- worse -- makes odometry error invisible,
+        because the avatar and the encoder trace drift together in lockstep. The
+        camera is the only source that can contradict them, which is exactly why
+        it should drive the avatar.
+
+        The 097 comment this replaces chose `encoder` over `fused` for a real
+        reason at the time: `fused` was pinned at the anchor until a pose
+        estimator existed, so a fused-only avatar would never have moved. That
+        is no longer true -- `frame.pose` is always present -- and it was never
+        an argument against the camera.
+
+        Falls back through pose then encoder then world (0, 0), so the avatar is
+        always visible, on the bench and in Sim where no camera exists.
 
         Parameters
         ----------
-        fused_yaw_rad:
-            Heading in radians — despite the name, as of 097 the caller
-            (``__main__.py``'s ``on_frame_ready``) passes the SAME
-            encoder-dead-reckoning heading (``TraceModel.encoder_yaw``)
-            that now drives the position above, falling back to the fused
-            heading only once the encoder trace has one too. ``None`` = no
-            update.
+        fallback_yaw_rad:
+            Heading to use only when no source in the model carries one.
+            ``None`` = leave the current rotation alone.
         """
-        pts = self._trace_model.encoder or self._trace_model.fused
+        model = self._trace_model
+        yaw = None
+        if model.camera:
+            pts = model.camera
+            yaw = getattr(model, "camera_yaw", None)
+        elif model.fused:
+            pts = model.fused
+        else:
+            pts = model.encoder
+        if yaw is None:
+            yaw = getattr(model, "encoder_yaw", None)
+        if yaw is None:
+            yaw = fallback_yaw_rad
+
         if pts:
             x_cm, y_cm = pts[-1]
             px, py = self._world_to_px(x_cm, y_cm)
@@ -888,7 +909,7 @@ class CanvasController:
             self._marker_group.setPos(cx, cy)  # type: ignore[attr-defined]
             self._marker_group.setVisible(True)  # type: ignore[attr-defined]
 
-        if fused_yaw_rad is not None:
+        if yaw is not None:
             # Qt rotation is clockwise degrees.  In world space, yaw=0 is east
             # (+x direction), which in pixel space is also rightward (+x).
             # Qt's default "up" in item space is -y (towards top of screen).
@@ -897,7 +918,7 @@ class CanvasController:
             #   -yaw in degrees (CCW world → CW Qt)
             #   + 90° to align item-north with screen-right (east)
             # Net: rotation = 90 - degrees(yaw_rad)
-            rotation = 90.0 - math.degrees(fused_yaw_rad)  # [deg]
+            rotation = 90.0 - math.degrees(yaw)  # [deg]
             self._marker_group.setRotation(rotation)  # type: ignore[attr-defined]
 
 

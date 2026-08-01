@@ -283,6 +283,9 @@ class TraceModel:
         # --- host-side encoder dead reckoning (097) -- see feed()'s docstring ---
         self._dead_reckoner = EncoderDeadReckoner(trackwidth)
         self.encoder_yaw: float | None = None  # [rad] display-frame heading
+        #: Heading from the most recent camera fix [rad], or None if the camera
+        #: has never reported. Ground truth -- preferred by the avatar.
+        self.camera_yaw: float | None = None
         # Last dead-reckoned (or firmware, when present) encpose in the raw
         # firmware shape (mm, mm, cdeg) -- consumers that used to read the
         # wire's encpose= (the telemetry breakout panel) read this instead,
@@ -431,6 +434,11 @@ class TraceModel:
         yaw_rad:
             Robot heading in radians.
         """
+        # Retained, not discarded: the camera IS the ground truth, so the
+        # avatar's heading should come from it when it is available. This value
+        # was previously accepted and thrown away, which left the avatar with no
+        # truth heading to use even when a camera fix was in hand.
+        self.camera_yaw = yaw_rad
         self._append_if_moved(self.camera, (x_cm, y_cm))
 
     def clear(self) -> None:
@@ -444,6 +452,7 @@ class TraceModel:
         self.encoder.clear()
         self.otos.clear()
         self.fused.clear()
+        self.camera_yaw = None
         self.last_encpose = None
         self._reset_baselines()
 
