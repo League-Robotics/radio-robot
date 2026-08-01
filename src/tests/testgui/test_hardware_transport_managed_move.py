@@ -392,18 +392,34 @@ def test_second_dispatch_while_poll_in_flight_skips_new_poller(transport):
     assert "INFO" in skip_line
 
 
-def test_run_unmanaged_starts_completion_poll(transport):
-    transport._last_tlm = TLMFrame(enc=(0, 0))
+def test_run_unmanaged_distance_sends_wheels_not_a_move(transport):
+    """UNMANAGED distance is the WHEELS teleop primitive, NOT a Move.
 
+    It used to send `move_twist(stop_distance=...)`, which runs the planner and
+    its closed loop -- so the button labelled unmanaged was managed. WHEELS is
+    routed firmware-side straight to App::Drive after planner_.estop().
+    """
     transport.run_unmanaged(distance_mm=200.0)
 
-    move_id = transport._conn.sent[0].move.id
-    transport._conn.tlm_script.append(
-        [_FakeTlmReply(_completion_tlm(move_id, left=200.0, right=199.0))])
+    deadline = time.monotonic() + 3.0
+    while not transport._conn.sent and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert transport._conn.sent, "no command sent"
+    sent = transport._conn.sent[0]
+    assert sent.WhichOneof("cmd") == "wheels"
+    assert sent.wheels.v_left > 0.0 and sent.wheels.v_right > 0.0
+    assert sent.wheels.duration > 0.0, "the lease must be bounded"
 
-    done_line = _wait_for_log(transport, "[DONE]")
-    assert "unmanaged drive" in done_line
-    assert "completed" in done_line
+
+def test_run_unmanaged_negative_distance_drives_both_wheels_backwards(transport):
+    transport.run_unmanaged(distance_mm=-200.0)
+
+    deadline = time.monotonic() + 3.0
+    while not transport._conn.sent and time.monotonic() < deadline:
+        time.sleep(0.02)
+    sent = transport._conn.sent[0]
+    assert sent.WhichOneof("cmd") == "wheels"
+    assert sent.wheels.v_left < 0.0 and sent.wheels.v_right < 0.0
 
 
 def test_send_starts_completion_poll_without_waiting_for_enqueue_ack(transport):
@@ -442,26 +458,6 @@ def test_unrecognized_verb_falls_through_to_unsupported_reply(transport):
 # ---------------------------------------------------------------------------
 
 
-def test_run_unmanaged_distance_sends_move_twist_with_distance_stop(transport):
-    transport.run_unmanaged(distance_mm=200.0)
-
-    assert len(transport._conn.sent) == 1
-    sent = transport._conn.sent[0]
-    assert sent.move.WhichOneof("velocity") == "twist"
-    assert sent.move.twist.v_x > 0.0
-    assert sent.move.WhichOneof("stop") == "distance"
-    assert sent.move.distance == pytest.approx(200.0)
-    assert sent.move.timeout > 0.0
-
-
-def test_run_unmanaged_negative_distance_flips_v_x_sign(transport):
-    transport.run_unmanaged(distance_mm=-200.0)
-
-    sent = transport._conn.sent[0]
-    assert sent.move.twist.v_x < 0.0
-    assert sent.move.distance == pytest.approx(200.0)
-
-
 def test_run_unmanaged_angle_sends_move_twist_with_angle_stop(transport):
     transport.run_unmanaged(angle_deg=360.0)
 
@@ -479,10 +475,14 @@ def test_run_unmanaged_zero_zero_is_a_noop(transport):
 
 
 def test_run_unmanaged_distance_wins_when_both_given(transport):
+    """Distance still wins -- and now proves it by taking the WHEELS path
+    rather than the angle branch's move_twist."""
     transport.run_unmanaged(distance_mm=100.0, angle_deg=90.0)
 
-    sent = transport._conn.sent[0]
-    assert sent.move.WhichOneof("stop") == "distance"
+    deadline = time.monotonic() + 3.0
+    while not transport._conn.sent and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert transport._conn.sent[0].WhichOneof("cmd") == "wheels"
 
 
 def test_run_unmanaged_not_connected_logs_warning_does_not_raise():

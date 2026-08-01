@@ -192,6 +192,127 @@ _CAMERA_TAG_ID = 100
 _UNMANAGED_SPEED = 150.0      # [mm/s]
 _UNMANAGED_YAW_RATE = 2.0     # [rad/s]
 
+# Host-side unmanaged-drive tuning.
+#
+# _BURST/_REFRESH: each WHEELS lease is bounded -- App::Drive arms it until
+#   `commandDeadline_ = now + duration` (drive.cpp:16) -- so losing the host
+#   mid-drive stops the robot within one burst. The host MUST re-arm well
+#   inside that window: refresh at <= _BURST/4, leaving four missed sends of
+#   margin. A refresh interval close to the lease is not merely tight, it
+#   visibly HALTS the robot: at burst 150 / refresh 120 the send plus frame
+#   handling overran 150ms several times per drive and both wheels dropped to
+#   zero mid-leg (bench 2026-07-31, dropouts at t = 0.7, 2.8, 3.8 and 5.5s of a
+#   700mm drive).
+_UNMANAGED_BURST = 300.0    # [ms] lease length; also the host-loss coast window
+_UNMANAGED_REFRESH = 60.0   # [ms] re-arm interval -- keep at <= _BURST/4
+#
+# _EASE/_FLOOR: full speed until the last _EASE mm, then taper to _FLOOR, which
+#   must stay clear of breakaway or the wheel stalls short of the target.
+_UNMANAGED_EASE = 60.0      # [mm]
+_UNMANAGED_FLOOR = 90.0     # [mm/s]
+#
+# _TRIM_GAIN/_TRIM_LIMIT: the left/right travel split is nulled by a BOUNDED
+#   DIFFERENTIAL correction about a COMMON speed -- never by giving each wheel
+#   its own independent distance profile. Both wheels always run, always at
+#   comparable speed.
+#
+#   The independent-profile version this replaces let the wheel that got ahead
+#   ease to 0 while the other still ran at 90mm/s -- a pivot. It matched the
+#   encoder counts (714 vs 713 over 700mm) by STEERING: measured 2026-07-31, a
+#   27deg veer during the leg then a 24deg terminal pivot, cancelling in heading
+#   and adding in displacement, for a final pose of theta -0.6deg with y +149mm.
+#   The 1mm encoder split was the symptom, not evidence of a straight line.
+#
+#   Correcting continuously from the first frame is the whole point: the same
+#   authority applied early keeps heading error small instead of dumping it into
+#   one pivot at the end. The limit keeps `speed - trim/2` above breakaway.
+_UNMANAGED_TRIM_GAIN = 2.0    # [mm/s per mm of split]
+_UNMANAGED_TRIM_LIMIT = 40.0  # [mm/s] peak-to-peak differential
+
+
+def run_unmanaged_distance_drive(transport: Any, driver: Any, distance: float,
+                                 direction: float, label: str,
+                                 log: Callable[[str], None]) -> None:
+    """Drive `distance` [mm] on the encoders via repeated bounded WHEELS leases
+    at a common speed, with a bounded differential trim holding the wheels
+    together.
+
+    ONE implementation, called by BOTH transports, because a button's message
+    must not depend on which transport is underneath it (stakeholder,
+    2026-07-31: "the button on SIM sends the same message as the button").
+    `driver` is anything exposing the two primitives both ``NezhaProtocol`` and
+    ``SimLoop`` provide -- ``wheels(l, r, ms)`` and ``estop()``.
+
+    UNMANAGED MEANS UNMANAGED. WHEELS is routed firmware-side straight to
+    ``App::Drive`` after ``planner_.estop()``: no profile, no shaping, no
+    firmware stop condition. This replaces a `move_twist()` implementation on
+    BOTH backends that ran the planner and its closed loop -- so the button
+    labelled unmanaged was managed, on hardware and in Sim alike.
+
+    Blocks until the drive finishes; callers that must not block run it on their
+    own worker thread. Always estops on the way out, including on exception.
+    """
+    def observe(ms: float):
+        """Wait `ms`, then return the freshest frame WITHOUT consuming any.
+
+        Deliberately not a drain -- see ``Transport._deliver_tlm()``'s docstring
+        for why draining here blanks the GUI's traces and graphs for the whole
+        move.
+        """
+        time.sleep(ms / 1000.0)
+        return getattr(transport, "latest_frame", None)
+
+    def speed_for(remaining: float) -> float:  # [mm] -> [mm/s]
+        if remaining <= 2.0:
+            return 0.0
+        if remaining > _UNMANAGED_EASE:
+            return _UNMANAGED_SPEED
+        return max(_UNMANAGED_FLOOR,
+                   _UNMANAGED_SPEED * remaining / _UNMANAGED_EASE)
+
+    try:
+        # Baseline from the frame already in hand -- telemetry streams
+        # continuously, so there is nothing to wait for. An earlier version
+        # slept 300ms here first, which was pure dead time before the wheels
+        # ever moved AND long enough to look like "motion settled" to anything
+        # watching for a quiet window (it tripped the GUI button-acceptance
+        # settle detector, whose quiet threshold is 250ms).
+        pre = getattr(transport, "latest_frame", None)
+        base = pre.enc if (pre is not None and pre.enc) else (0.0, 0.0)
+        deadline = time.monotonic() + (distance / _UNMANAGED_SPEED) * 5.0 + 6.0
+        dl = dr = 0.0
+        while (dl + dr) / 2.0 < distance and time.monotonic() < deadline:
+            speed = speed_for(distance - (dl + dr) / 2.0)
+            # If the right wheel has run further, the LEFT is the one that
+            # speeds up. Bounded so neither wheel is ever stopped or reversed
+            # while the other drives -- that is a pivot, not a straight leg.
+            split = _UNMANAGED_TRIM_GAIN * (dr - dl)
+            trim = max(-_UNMANAGED_TRIM_LIMIT,
+                       min(_UNMANAGED_TRIM_LIMIT, split))
+            if speed == 0.0:
+                trim = 0.0  # never trim about a stopped common speed
+            driver.wheels(direction * (speed + trim / 2.0),
+                          direction * (speed - trim / 2.0),
+                          _UNMANAGED_BURST)
+            frame = observe(_UNMANAGED_REFRESH)
+            if frame is not None:
+                if frame.enc:
+                    dl = direction * (frame.enc[0] - base[0])
+                    dr = direction * (frame.enc[1] - base[1])
+                if getattr(frame, "fault_wheel_frozen", False):
+                    log(f"[ERROR] {label}: WHEEL FROZEN -- commanded but not "
+                        f"turning; aborting")
+                    return
+        log(f"[INFO] {label} done: L={dl:+.0f}mm R={dr:+.0f}mm "
+            f"(target {distance:.0f}mm)")
+    except Exception as exc:  # noqa: BLE001 -- a drive worker must never raise
+        log(f"[ERROR] {label} failed: {exc}")
+    finally:
+        try:
+            driver.estop()
+        except Exception:
+            pass
+
 # Move.timeout safety-backstop sizing for every Move/move_twist()/
 # move_wheels() built from an expected duration (the managed D/RT/SEG
 # dispatch on both backends, and _HardwareTransport.run_unmanaged()):
@@ -609,6 +730,10 @@ class Transport(abc.ABC):
         self.on_telemetry: TelemetryCB | None = None
         self.on_truth: TruthCB | None = None
         self.on_log: LogCB | None = None
+        # Freshest delivered frame, for observers that must NOT consume the
+        # telemetry stream -- see _deliver_tlm()'s own docstring for why
+        # draining it instead starves the GUI's traces and graphs.
+        self.latest_frame: TLMFrame | None = None
 
     @property
     def turn_scrub_factor(self) -> float:
@@ -746,7 +871,23 @@ class Transport(abc.ABC):
                 pass
 
     def _deliver_tlm(self, frame: TLMFrame) -> None:
-        """Invoke on_telemetry safely."""
+        """Invoke on_telemetry safely, and cache the frame for observers.
+
+        ``latest_frame`` exists so a background worker can watch telemetry
+        WITHOUT consuming it. The read APIs (``read_binary_tlm_frames()`` /
+        ``read_pending_binary_tlm_frames()``) DRAIN the same queue this method
+        is fed from, so any worker that calls them competes with the GUI and
+        wins -- the traces and graphs then show nothing until the worker stops.
+
+        That is not hypothetical: the unmanaged-drive loop polled for encoder
+        feedback that way and the whole display stayed dead for the duration of
+        every move (bench 2026-07-31, "I'm not getting my traces until the move
+        is finished"). Nothing errors when it happens; the graphs just go blank,
+        which reads as a telemetry fault rather than as contention.
+
+        Workers poll this attribute instead. See ``run_unmanaged_distance_drive``.
+        """
+        self.latest_frame = frame
         if self.on_telemetry:
             try:
                 self.on_telemetry(frame)
@@ -1311,11 +1452,17 @@ class _HardwareTransport(Transport):
             self._log("[WARN] run_unmanaged: not connected")
             return
         if distance_mm != 0.0:
-            v_x = math.copysign(_UNMANAGED_SPEED, distance_mm)
-            timeout = _move_timeout_for(abs(distance_mm) / _UNMANAGED_SPEED)
+            # Genuinely unmanaged: the shared WHEELS loop, identical to the one
+            # SimTransport runs. The move_twist() path this replaced went
+            # through the planner and its closed loop -- see
+            # run_unmanaged_distance_drive()'s own docstring.
             label = f"unmanaged drive {distance_mm:+.0f}mm @ {_UNMANAGED_SPEED:.0f}mm/s"
-            kwargs: dict[str, Any] = dict(stop_distance=abs(distance_mm))
-            v_y, omega = 0.0, 0.0
+            threading.Thread(
+                target=run_unmanaged_distance_drive,
+                args=(self, self._proto, abs(distance_mm),
+                      math.copysign(1.0, distance_mm), label, self._log),
+                daemon=True).start()
+            return
         elif angle_deg != 0.0:
             v_x, v_y = 0.0, 0.0
             omega = math.copysign(_UNMANAGED_YAW_RATE, angle_deg)
@@ -2126,11 +2273,16 @@ class SimTransport(Transport):
         if self._loop is None:
             return
         if distance_mm != 0.0:
-            v_x = math.copysign(_UNMANAGED_SPEED, distance_mm)
-            omega = 0.0
-            timeout = _move_timeout_for(abs(distance_mm) / _UNMANAGED_SPEED)
-            kwargs: dict[str, Any] = dict(stop_distance=abs(distance_mm))
+            # The SAME shared routine the hardware transport runs, sending the
+            # SAME WHEELS command -- see run_unmanaged_distance_drive().
             label = f"unmanaged drive {distance_mm:+.0f}mm @ {_UNMANAGED_SPEED:.0f}mm/s"
+            self._motion_stop_event.clear()
+            threading.Thread(
+                target=run_unmanaged_distance_drive,
+                args=(self, self._loop, abs(distance_mm),
+                      math.copysign(1.0, distance_mm), label, self._log),
+                daemon=True).start()
+            return
         elif angle_deg != 0.0:
             v_x = 0.0
             omega = math.copysign(_UNMANAGED_YAW_RATE, angle_deg)
