@@ -236,9 +236,12 @@ void Planner::stageTrim(float dt) {
 }
 
 // M4 duty output stage: this tick's staged velocity targets vs the
-// filtered measured wheel velocities -> per-wheel duty. Runs on every
-// tick() exit path so the duty outputs always mirror the velocity
-// outputs; inert (0) at the default all-zero gains.
+// filtered measured wheel velocities -> per-wheel duty. PARKED from the
+// live tick as of 128-015 (sprint 128 Decision 2) -- tick() no longer
+// calls this automatically; it runs only when a caller invokes it
+// explicitly (planner.h's own doc comment on the public declaration has
+// the full rationale and the ctest call sites that keep it exercised).
+// Inert (0, and never written) unless called.
 //
 // Rest damping: an exactly-zero target with the wheel already near rest
 // is a hard stop, not a trim problem -- the integral is reset (and held
@@ -477,7 +480,6 @@ TickResult Planner::tick(const Types::RobotState& state) {
   if (!active_.occupied) activateNext(now);
   if (!active_.occupied) {
     drainToZero(dt);
-    stageDuty(dt);
     stageTrim(dt);
     return result;
   }
@@ -676,7 +678,6 @@ TickResult Planner::tick(const Types::RobotState& state) {
     activateNext(now);
     if (!active_.occupied) {
       drainToZero(dt);
-      stageDuty(dt);
       stageTrim(dt);
       return result;
     }
@@ -685,7 +686,6 @@ TickResult Planner::tick(const Types::RobotState& state) {
   // Re-measure: a same-tick hand-off above swapped the active Move, and
   // `remaining` is measured against ITS baseline and axis.
   planActive(now, dt, done ? measure(now) : measured);
-  stageDuty(dt);
   stageTrim(dt);
   return result;
 }

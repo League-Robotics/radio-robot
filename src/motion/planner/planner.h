@@ -70,10 +70,32 @@ class Planner {
   float commandedRight() const { return cmdRight_; }  // [mm/s]
 
   // M4 duty-plane outputs (planner_types.h velK* gains; 0 while the duty
-  // stage is unconfigured). Computed every tick from this tick's staged
-  // velocity targets vs the filtered measured wheel velocities.
+  // stage is unconfigured). PARKED (128-015): stageDuty() below no longer
+  // runs automatically from tick(), so these reflect only the last
+  // EXPLICIT stageDuty() call (or 0.0f if none has ever run, or after
+  // estop()) -- not "this tick's" targets unless the caller just drove
+  // stageDuty() itself. See stageDuty()'s own doc comment.
   float commandedDutyLeft() const { return dutyLeft_; }    // [-1, 1]
   float commandedDutyRight() const { return dutyRight_; }  // [-1, 1]
+
+  // M4 duty output stage -- PARKED from the live tick (128-015, sprint 128
+  // Decision 2: the class and this method stay; only the automatic
+  // per-cycle call from tick() is removed). Its output was computed every
+  // cycle and DISCARDED either way -- App::Drive actuates from
+  // Types::RobotState::Wheel::cmdVelocity (WheelTrim's velocity-domain
+  // output, staged by stageTrim()/update()), never from commandedDutyLeft/
+  // Right() -- so parking it is a ~21-evaluation/s timing improvement, not
+  // a behavior change. Kept PUBLIC and callable on demand (rather than
+  // deleted) for two reasons: WheelPid's own ctest tiers
+  // (wheel_pid_test.cpp's testPlannerDutyStage(),
+  // planner_duty_scenarios_test.cpp) drive it directly to keep the class's
+  // coverage warm without paying its cost in the live loop, and a future
+  // duty-sink cutover ticket (owner: whoever picks it up -- see
+  // src/motion/DESIGN.md's "wheel control generations" note) can call it
+  // from tick() again once that decision is made, with zero interface
+  // change. See planner.cpp's own doc comment on the definition for the
+  // control-law details.
+  void stageDuty(float dt);  // [s]
 
   // Velocity-trim observability: the correction added to the profiled
   // command this tick, and the integrator behind it. commandedLeft() +
@@ -169,12 +191,11 @@ class Planner {
   enum class Axis : uint8_t { None, Linear, Angular, Wheels };
   static Axis axisOf(const Move& m);
 
-  // M4 duty output stage -- runs on every tick() exit path (planner.cpp).
-  void stageDuty(float dt);  // [s]
-
   // The velocity-domain trim: this tick's closed-loop correction, added to
   // the profiled command only at update() time. Runs on every tick() exit
-  // path alongside stageDuty(); inert (0) at the default all-zero gains.
+  // path; inert (0) at the default all-zero gains. stageDuty() (public,
+  // above) used to run alongside it here -- PARKED as of 128-015, see that
+  // method's own doc comment.
   void stageTrim(float dt);  // [s]
 
   // The measured state the completion tests and the settle gate read,

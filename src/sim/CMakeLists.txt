@@ -45,10 +45,6 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 #   devices/line_sensor.cpp
 #                              -- the device leaves SimPlant answers wire
 #                                 transactions for
-#   src/motion/wheel_velocity_pid.cpp -- Motion::WheelVelocityPid (125-003:
-#                                 relocated from devices/velocity_pid.cpp --
-#                                 App::Drive's interim closed loop this
-#                                 sprint). Under MOTION_DIR now.
 #   messages/wire.cpp, messages/wire_runtime.cpp
 #                              -- the generated + hand-written codec
 #                                 primitives
@@ -110,10 +106,6 @@ set(APP_SOURCES
 set(MOTION_SOURCES
     "${MOTION_DIR}/odometry.cpp"
     "${MOTION_DIR}/state_estimator.cpp"
-    # 125-003: relocated from devices/velocity_pid.cpp
-    # (Devices::MotorVelocityPid -> Motion::WheelVelocityPid) -- App::Drive
-    # (APP_SOURCES, above) holds the interim instances this sprint.
-    "${MOTION_DIR}/wheel_velocity_pid.cpp"
     # Planner integration (2026-07-26): the planner library core drives the
     # loop now -- the same files the firmware image links.
     "${MOTION_DIR}/planner/profile.cpp"

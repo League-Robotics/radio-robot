@@ -14,9 +14,11 @@
 // exercised the embedded MotorVelocityPid, the freshness gate, source-side
 // glitch rejection, or the EMA/least-squares velocity-estimator pair is
 // DELETED, not adapted — those mechanisms are gone from NezhaMotor
-// (relocated to Motion::WheelVelocityPid / pending ticket 004's
-// App::WheelObserver, see nezha_motor.cpp's own file header). What
-// survives: protocol/bus-hygiene/dwell/deadband/clamp scenarios (unchanged
+// (relocated to a motion-local wheel-velocity PID class -- itself deleted
+// outright by 128-015, see src/motion/DESIGN.md's "wheel control
+// generations" note -- / pending ticket 004's App::WheelObserver, see
+// nezha_motor.cpp's own file header). What survives: protocol/bus-hygiene/
+// dwell/deadband/clamp scenarios (unchanged
 // behavior) plus a NEW duty-passthrough scenario (scenario 5 below)
 // replacing the deleted PID-chase coverage.
 //

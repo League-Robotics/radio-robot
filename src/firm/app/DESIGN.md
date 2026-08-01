@@ -523,10 +523,14 @@ size, `kMaxCommandPrefixBytes` itself derived at compile time from
 `messages/commands.h`'s own longest verb name rather than hand-picked.
 
 **125–127 (velocity-PID relocation + `Motion::Planner` integration) —
-landed.** `Motion::WheelVelocityPid` (125-003) relocates the closed-loop
-velocity control law out of `Devices::NezhaMotor` into `src/motion` —
-`App::Drive` holds the interim instances for its own WHEELS-teleop path;
-`velocity_pid.{h,cpp}` (`src/firm/devices/`) is deleted. Separately,
+landed.** 125-003 relocates the closed-loop velocity control law out of
+`Devices::NezhaMotor` into `src/motion` as a standalone class — `App::Drive`
+held interim instances for its own WHEELS-teleop path for one sprint, until
+122-002/125-002 reshaped `Drive` into a bare duty sink with no controller of
+its own; the relocated class was left with zero instantiations and 128-015
+deleted it outright (see `src/motion/DESIGN.md`'s "wheel control
+generations" note). `velocity_pid.{h,cpp}` (`src/firm/devices/`) is
+deleted. Separately,
 `Motion::Planner` (`src/motion/planner/`) becomes the on-robot motion
 decider for `Move` dispatch, replacing `Motion::MoveQueue`:
 `RobotLoop` holds a `Motion::Planner&` in place of the `Motion::

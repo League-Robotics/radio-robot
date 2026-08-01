@@ -306,9 +306,10 @@ safe to run while the wheel is actually moving.
 
 **(Historical, pre-125-003) The velocity control law — a reduced PI with
 back-calculation anti-windup.** This subsection describes the control law
-that used to be embedded here, before 125-003 relocated it wholesale to
-the motion library (`Motion::WheelVelocityPid`, `src/motion/
-wheel_velocity_pid.h`) — kept for history, not current architecture.
+that used to be embedded here, before 125-003 relocated it wholesale to a
+standalone class in the motion library — itself later deleted outright
+(128-015, zero instantiations; see `src/motion/DESIGN.md`'s "wheel control
+generations" note) — kept for history, not current architecture.
 The control law is a discrete PI (+ feedforward, `Gains::kff`) with
 back-calculation anti-windup against `Gains::iMax`, plus one integrator
 behavior worth calling out: the integrator is *frozen* (left unchanged)

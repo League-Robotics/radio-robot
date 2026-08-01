@@ -17,9 +17,11 @@
 // VELOCITY DECISION or MEASUREMENT-CONDITIONING mechanism is gone:
 //   - The staged-velocity setter, the embedded per-channel velocity
 //     control law, and the kff mapping -- DELETED. The closed-loop
-//     velocity control law relocated to the motion library
-//     (src/motion/wheel_velocity_pid.{h,cpp}) -- App::Drive holds the
-//     interim instances this sprint (see drive.h's own header). [The
+//     velocity control law relocated to the motion library, which App::
+//     Drive held an interim instance of for one sprint -- that class is
+//     since deleted outright (128-015, zero instantiations; App::Drive
+//     holds no controller of its own, see drive.h's own header and
+//     src/motion/DESIGN.md's "wheel control generations" note). [The
 //     original rate argument -- "~80ms encoder freshness bounds the loop"
 //     -- was measured FALSE 2026-07-26 (docs/design/
 //     encoder-refresh-characterization.md); the relocation stands on

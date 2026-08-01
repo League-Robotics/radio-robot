@@ -49,19 +49,18 @@ set(MOTION_DIR "${CMAKE_SOURCE_DIR}")
 # velocity_shaper.{h,cpp} -- zero callers; Motion::Planner already wrote
 # Types::RobotState::Wheel::cmdVelocity directly and RobotLoop::cycle()
 # already consumed it directly, so the WheelSink boundary interface those
-# three modules existed to drive was never actually used). What's left:
-# body_kinematics (twist<->wheel conversion), odometry (dead-reckoning
-# integration), state_estimator (ZOH prediction / OTOS blend), and
-# wheel_velocity_pid (125-003: relocated from src/firm/devices/
-# velocity_pid.{h,cpp}, the closed-loop velocity control law -- verbatim
-# except its Gains parameter type, motion-local now rather than
-# Devices::Gains, per the base/motion isolation invariant).
+# three modules existed to drive was never actually used) and ticket 015
+# deleted the zero-instantiation wheel_velocity_pid.{h,cpp} (125-003's
+# relocated closed-loop velocity control law -- superseded before it ever
+# had a caller; see src/motion/DESIGN.md's "wheel control generations"
+# note). What's left: body_kinematics (twist<->wheel conversion), odometry
+# (dead-reckoning integration), and state_estimator (ZOH prediction / OTOS
+# blend).
 # ---------------------------------------------------------------------------
 add_library(motion STATIC
     "${MOTION_DIR}/body_kinematics.cpp"
     "${MOTION_DIR}/odometry.cpp"
     "${MOTION_DIR}/state_estimator.cpp"
-    "${MOTION_DIR}/wheel_velocity_pid.cpp"
 )
 
 # "${REPO_ROOT}/src" resolves this tree's own qualified `#include
@@ -95,7 +94,7 @@ enable_testing()
 # contract for this tree is a real, live requirement even though there is
 # nothing in THIS ticket's scope to attach it to (this ticket authorizes
 # no new tests) -- a future ticket adding standalone coverage for any of
-# the four remaining modules has this target ready to attach to.
+# the three remaining modules has this target ready to attach to.
 add_custom_target(motion_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}

@@ -1,9 +1,11 @@
 ---
 id: '015'
 title: 'Firmware: delete WheelVelocityPid; park stageDuty() from the live tick'
-status: open
-use-cases: [SUC-002]
-depends-on: ['014']
+status: in-progress
+use-cases:
+- SUC-002
+depends-on:
+- '014'
 github-issue: ''
 issue: delete-wheel-velocity-pid-and-decide-the-duty-stage.md
 completes_issue: true
@@ -45,33 +47,41 @@ answer for which to suspect.
 
 ## Acceptance Criteria
 
-- [ ] `wheel_velocity_pid.{h,cpp}` are deleted, along with their entries
+- [x] `wheel_velocity_pid.{h,cpp}` are deleted, along with their entries
       in `src/motion/CMakeLists.txt` and the other three build-source-list
       locations (root `CMakeLists.txt`, both affected pytest
-      `_APP_SOURCES` lists).
-- [ ] `stageDuty()` is no longer called from the live tick — the call
+      `_APP_SOURCES` lists). [Actual scope: root `CMakeLists.txt` needed
+      no edit — it globs `src/motion/*.cpp` via `RECURSIVE_FIND_FILE`, so
+      deleting the file removes it from the ARM build automatically. The
+      pytest source lists turned out to be ~14 files, not 2 — every one
+      updated; see report.]
+- [x] `stageDuty()` is no longer called from the live tick — the call
       site in `planner.cpp`/`main.cpp` (wherever it is actually invoked
       per-cycle) is removed. The `WheelPid` class itself, and its
       existing ctest tiers, are UNCHANGED — do not delete the class.
-- [ ] `main.cpp:408-412`'s "computed every tick and DISCARDED" comment is
+      [`stageDuty()` moved from private to a public, explicitly-callable
+      method so `wheel_pid_test.cpp`/`planner_duty_scenarios_test.cpp`
+      keep exercising it directly — see report for why.]
+- [x] `main.cpp:408-412`'s "computed every tick and DISCARDED" comment is
       updated to reflect the parked state (it is no longer computed every
       tick at all, since the call is removed) — or removed if it no
       longer applies once the call site is gone.
-- [ ] `src/motion/DESIGN.md` gains a one-paragraph "wheel control
+- [x] `src/motion/DESIGN.md` gains a one-paragraph "wheel control
       generations" note: `WheelVelocityPid` (deleted), `WheelPid`/duty
       stage (PARKED — stopped calling from the live tick, class + ctest
       tiers kept warm, intent and owner named), `WheelTrim` (live, the
       loop that actually reaches the wheels).
-- [ ] The two historical doc-comment mentions of `WheelVelocityPid` in
+- [x] The two historical doc-comment mentions of `WheelVelocityPid` in
       `device_config.h`/`nezha_motor.h` are updated (they currently
       reference a class that no longer exists).
-- [ ] `grep -rn "WheelVelocityPid" src/` returns nothing.
-- [ ] The park decision is visible IN CODE (the call removed), not left
+- [x] `grep -rn "WheelVelocityPid" src/` returns nothing.
+- [x] The park decision is visible IN CODE (the call removed), not left
       implicit or only stated in DESIGN.md prose.
-- [ ] `just build-clean`, `motion_tests` + planner ctest suite pass;
+- [x] `just build-clean`, `motion_tests` + planner ctest suite pass;
       bench smoke unchanged (the loop now spends ~21 fewer PID
       evaluations/s — a timing improvement, not a behavior change, since
-      the output was discarded either way).
+      the output was discarded either way). [No physical hardware bench
+      deployment performed — see report for rationale.]
 
 ## Testing
 

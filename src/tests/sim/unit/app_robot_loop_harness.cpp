@@ -2329,11 +2329,10 @@ void scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch() {
 // REACHED by accumulation, not merely when handed a pre-cooked value.
 //
 // A pure feedforward gain (kff only, kp/ki left at App::Drive's own
-// zero default) is configured via CONFIG first: Motion::WheelVelocityPid's
-// own compute() (125-003: relocated from Devices::MotorVelocityPid,
-// invoked from App::Drive's interim closed loop, drive.h) computes
-// `ff = gains.kff * spAbs` with NO measured-velocity term, so duty tracks
-// the commanded 500mm/s target directly regardless of
+// zero default) is configured via CONFIG first: the (125-003, since
+// 128-015 deleted outright) motion-local wheel-velocity PID's own
+// compute() computed `ff = gains.kff * spAbs` with NO measured-velocity
+// term, so duty tracked the commanded 500mm/s target directly regardless of
 // the plant's own response -- WheelPlant's dutyVelMax=500mm/s
 // (wheel_plant.h) then puts this wheel's cruise velocity at ~500mm/s once
 // its own tau=0.13s duty->velocity lag settles (project memory:

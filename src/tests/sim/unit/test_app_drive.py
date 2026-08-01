@@ -5,11 +5,13 @@ Compiles ``app_drive_harness.cpp`` together with the HOST_BUILD
 implementations it needs (``src/firm/app/drive.cpp``,
 ``src/sim/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
-physics dependencies, ``src/motion/wheel_velocity_pid.cpp`` (125-003:
-relocated from ``src/firm/devices/velocity_pid.cpp`` -- App::Drive's own
-interim closed-loop instances this sprint, drive.h's own header),
-``src/firm/devices/nezha_motor.cpp``, ``src/motion/body_kinematics.cpp``)
-with ``-DHOST_BUILD``, against the SAME headers every ARM build compiles.
+physics dependencies, ``src/firm/devices/nezha_motor.cpp``,
+``src/motion/body_kinematics.cpp``) with ``-DHOST_BUILD``, against the SAME
+headers every ARM build compiles. App::Drive holds no controller of its own
+(open-loop duty from calibrated speed, drive.h's own header) -- 128-015
+deleted the zero-instantiation motion-local wheel-velocity PID class
+(``src/motion/wheel_velocity_pid.cpp``) this harness used to (needlessly)
+link in.
 Mirrors ``test_devices_motor.py``/``test_app_telemetry.py``'s exact shape:
 compile with the system C++ compiler, run the resulting binary, assert it
 exits 0.
@@ -39,7 +41,6 @@ _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
-_VELOCITY_PID_SRC = _REPO_ROOT / "src" / "motion" / "wheel_velocity_pid.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
 _BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
 
@@ -68,7 +69,6 @@ def test_app_drive_harness_compiles_and_passes(tmp_path):
         _SIM_PLANT_SRC,
         _WHEEL_PLANT_SRC,
         _OTOS_PLANT_SRC,
-        _VELOCITY_PID_SRC,
         _NEZHA_MOTOR_SRC,
         _BODY_KINEMATICS_SRC,
     ]

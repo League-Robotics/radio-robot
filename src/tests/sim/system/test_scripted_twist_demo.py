@@ -41,7 +41,6 @@ e.g.:
         src/firm/devices/nezha_motor.cpp src/firm/devices/otos.cpp \\
         src/firm/devices/color_sensor.cpp src/firm/devices/line_sensor.cpp \\
         src/firm/messages/wire.cpp src/firm/messages/wire_runtime.cpp src/motion/body_kinematics.cpp \\
-        src/motion/wheel_velocity_pid.cpp \\
     && /tmp/scripted_twist_demo
 """
 
@@ -97,11 +96,11 @@ _APP_SOURCES = [
     # SimHarness's own constructors alongside moveQueue/preamble.
     _REPO_ROOT / "src" / "motion" / "state_estimator.cpp",
 ]
-_MOTION_SOURCES = [
-    # 125-003: relocated from devices/velocity_pid.cpp -- App::Drive's
-    # interim Motion::WheelVelocityPid instances this sprint.
-    _REPO_ROOT / "src" / "motion" / "wheel_velocity_pid.cpp",
-]
+# 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
+# entry here) is gone outright -- zero instantiations; App::Drive holds no
+# controller of its own (open-loop duty from calibrated speed, drive.h's
+# own header). See src/motion/DESIGN.md's "wheel control generations" note.
+_MOTION_SOURCES = []
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
     _SOURCE_DIR / "devices" / "nezha_motor.cpp",

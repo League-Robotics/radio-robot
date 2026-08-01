@@ -284,9 +284,11 @@ int main() {
     checkTrue(findAck(lines, 504, &errCode), "an ack for corrId=504 was seen");
     checkTrue(errCode == 0,
               "CONFIG{motor} still acks ack_err==0/OK even though the harness is unconfigured");
-    // 125-003: kp routes to App::Drive's own interim Motion::WheelVelocityPid
-    // gains now, not Devices::Motor::gains() (deleted -- the velocity PID
-    // moved off the motor entirely, sprint.md Decision 2/7).
+    // 125-003: kp used to route to App::Drive's own interim motion-local
+    // wheel-velocity PID gains, not Devices::Motor::gains() (deleted -- the
+    // velocity PID moved off the motor entirely, sprint.md Decision 2/7).
+    // 128-015: that interim PID class is deleted outright (zero
+    // instantiations; App::Drive holds no controller of its own).
     // Planner integration (2026-07-26): pid.* wire keys now retarget the
     // on-robot planner's own duty-stage gains.
     checkFloatEq(sim.planner().limits().velKp, 0.05f,

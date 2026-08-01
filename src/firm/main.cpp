@@ -67,8 +67,10 @@ Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
 }
 
 // toMotionGains -- DELETED (command-ingestion-...-two-stops.md §4). It fed
-// App::Drive's interim Motion::WheelVelocityPid pair, which is gone: Drive
-// is open-loop duty from calibrated speed and holds no controller at all
+// App::Drive's interim per-wheel closed-loop velocity-PID pair, which is
+// gone (128-015 deleted that class outright, zero instantiations -- see
+// src/motion/DESIGN.md's "wheel control generations" note): Drive is
+// open-loop duty from calibrated speed and holds no controller at all
 // (drive.h's own file header). The boot JSON's vel_gains reach the one
 // controller that still exists -- Motion::Planner's duty stage -- through
 // App::Configurator's pid.* wire keys, not through this seeding path.
@@ -383,8 +385,12 @@ int main() {
     // VELOCITY-DOMAIN TRIM (wheel_trim.h) -- the closed loop that actually
     // reaches the wheels. The loop's one actuation contract is a wheel
     // VELOCITY (RobotState::Wheel::cmdVelocity), which App::Drive converts
-    // through its measured per-wheel per-direction map; the duty-stage
-    // gains above are computed every tick and DISCARDED.
+    // through its measured per-wheel per-direction map. The duty-stage
+    // gains above configure Planner::stageDuty() -- PARKED as of 128-015:
+    // Planner::tick() no longer calls it at all (it used to run every
+    // cycle and its output was DISCARDED here regardless, since nothing on
+    // this robot ever read commandedDutyLeft/Right()) -- see
+    // src/motion/DESIGN.md's "wheel control generations" note.
     //
     // COMMISSIONING VALUES, to be raised on the stand rather than trusted:
     //   trimKp is DIMENSIONLESS (mm/s of trim per mm/s of error). The sim
