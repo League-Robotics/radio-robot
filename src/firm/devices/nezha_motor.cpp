@@ -312,11 +312,11 @@ void NezhaMotor::writeShapedDuty(float duty, uint32_t now)
 }
 
 // ---------------------------------------------------------------------------
-// Write path — write-on-change guard, write-rate limit, slew cap, and
-// coast-at-zero exemption, including the -128 sentinel's interaction with
-// the slew clamp on the very first write. lastWrittenPct_/lastWriteTimeUs_
-// commit ONLY when the bus write actually succeeds (status == kOk) -- see
-// the bottom of this function for why.
+// Write path — write-on-change guard (stopNotTaken-exempt, 129-001), write-
+// rate limit, slew cap, and coast-at-zero exemption, including the -128
+// sentinel's interaction with the slew clamp on the very first write.
+// lastWrittenPct_/lastWriteTimeUs_ commit ONLY when the bus write actually
+// succeeds (status == kOk) -- see the bottom of this function for why.
 //
 // Time source: `now` below reads lastTickUs_, which tick() step 1 already
 // set to THIS tick's nowUs before step 2's dispatch calls down into here
@@ -331,8 +331,16 @@ void NezhaMotor::writeRawDuty(float duty)
     if (pct > 100) pct = 100;
     if (pct < -100) pct = -100;
 
-    // Write-on-change: skip the I2C write if the command is unchanged.
-    if (pct == lastWrittenPct_) {
+    // Write-on-change: skip the I2C write if the command is unchanged --
+    // EXCEPT a commanded stop the wheel has not actually confirmed
+    // (kStopConfirmVelocity, nezha_motor.h). lastWrittenPct_ records the
+    // write ATTEMPT, not the physically landed brick state, and the brick
+    // latches its last commanded speed with no reset-recovery -- see this
+    // file's own header and nezha_motor.h's LOAD-BEARING note for the
+    // runaway this prevents. A stop is re-issued every tick until the
+    // wheel is actually observed at rest.
+    const bool stopNotTaken = pct == 0 && fabsf(velocity_) > kStopConfirmVelocity;
+    if (pct == lastWrittenPct_ && !stopNotTaken) {
         return;
     }
 

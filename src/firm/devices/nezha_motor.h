@@ -48,6 +48,19 @@
 // write hygiene (fwdSign, clamp ±100%, integer-% quantization,
 // write-on-change, NAK retry, write-rate throttle), the slew cap
 // (UNMODIFIED -- ticket 010 owns its disposition, not this ticket),
+//
+// LOAD-BEARING (129-001, issue 07): write-on-change (writeRawDuty(), above)
+// is NOT a pure "skip if unchanged" -- it is stopNotTaken-exempt. The Nezha
+// brick physically latches its last commanded speed and does not reset on
+// an nRF52 reset, only on power loss. lastWrittenPct_ records what this
+// leaf last ATTEMPTED to write, not what actually landed on the brick, so a
+// single lost zero write used to be permanent: the host believed the stop
+// was sent, the wheel kept its prior nonzero speed forever, and every
+// subsequent stop (including ESTOP) was suppressed as a no-op because
+// lastWrittenPct_ already said 0. writeRawDuty() now re-issues a commanded
+// zero whenever the wheel is still measurably moving above
+// kStopConfirmVelocity, regardless of what lastWrittenPct_ claims. Do not
+// simplify this back to a bare `pct == lastWrittenPct_` guard.
 // reversal dwell + output deadband (writeShapedDuty()), wheelTravelCalib,
 // and the software-offset rebaseline mechanism (rebaseline()/
 // softRebaseline() -- the stakeholder ruling that encoders are NEVER reset
@@ -167,7 +180,7 @@ class NezhaMotor : public Motor {
   // --- Device write path + resets (leaf internals — no longer virtuals;
   // the old MotorArmor base-class seam is gone) ---
   void writeShapedDuty(float duty, uint32_t now);   // [-1,1] [ms] output-deadband boost (sub-deadband nonzero -> deadband floor; exact zero stays zero), then reversal dwell, then writeRawDuty() -- see nezha_motor.cpp's own doc comment (114-005)
-  void writeRawDuty(float duty);    // clamp + write-on-change + throttle + slew + fwdSign + bus write
+  void writeRawDuty(float duty);    // clamp + write-on-change (stopNotTaken-exempt, 129-001) + throttle + slew + fwdSign + bus write
   void hardReset();                 // median-of-3 + readback-verify + retry
   void softRebaseline();            // software-only rebaseline
 
@@ -227,6 +240,19 @@ class NezhaMotor : public Motor {
   // conceptually, but is NOT shared across the class boundary: this is a
   // leaf-local constant for a leaf-local guard.
   static constexpr float kReconfigureRestVelocity = 5.0f;  // [mm/s] mirrors MotorArmor's own kRestVelocity at-rest threshold
+
+  // writeRawDuty()'s stopNotTaken threshold (129-001, issue 07 -- see that
+  // file's own doc comment below). lastWrittenPct_ records the WRITE
+  // ATTEMPT, not the physically landed brick state -- the Nezha brick
+  // latches its last commanded speed and does not reset on an nRF52 reset,
+  // only on power loss, so one lost zero write is otherwise permanent and
+  // every later ESTOP is suppressed as a no-op. A commanded zero whose
+  // wheel is still measurably turning above this threshold is NOT
+  // write-on-change-suppressed, regardless of what lastWrittenPct_ already
+  // claims was sent. NOT shared with kReconfigureRestVelocity above or
+  // MotorArmor's own kRestVelocity -- same "leaf-local constant for a
+  // leaf-local guard" reasoning.
+  static constexpr float kStopConfirmVelocity = 8.0f;  // [mm/s]
 
   // ---- Private helpers: write path ----
   // Returns the CODAL status from bus_.write() (0/kOk == success):

@@ -14,6 +14,15 @@
 // There is no controller here -- duty is open loop from calibrated speed.
 // Closed-loop wheel control lives in Motion::Planner's own duty stage.
 //
+// LOAD-BEARING (129-001, issue 07 -- the 2026-07-31 runaway): estop() re-
+// asserts its commanded zero for kStopEnforceTicks cycles, and
+// unconditionally for as long as either wheel still measures above
+// kRestVelocity, rather than trusting a single write. This is Drive's own
+// mirror of NezhaMotor's stopNotTaken write-on-change exemption
+// (nezha_motor.h/.cpp) -- a stop is asserted until it is OBSERVED (the
+// encoder actually reads at rest), not until it is merely sent once. Do
+// not fold this back into a single unconditional write.
+//
 // Two-method contract, adopted from Motion::Planner (planner.h) so the two
 // motion deciders read the same way at their call sites:
 //   tick(speedLeft, speedRight)      -- DO THE WORK: shape and write duty.
@@ -93,7 +102,10 @@ class Drive {
   // Halt now: zero the targets, disarm, and emit NO completion ack for the
   // discarded command (the ESTOP path -- the host asked for a stop, not for
   // a report that the thing it cancelled finished). Also the takeover path
-  // RobotLoop uses when a MOVE hands motion to the planner.
+  // RobotLoop uses when a MOVE hands motion to the planner. Arms the stop-
+  // re-assertion window (see this file's own header) so the NEXT
+  // kStopEnforceTicks calls to tick() re-issue the zero duty write instead
+  // of taking the quiet-at-zero shortcut.
   void estop();
 
   // True while an armed command is running -- i.e. while Drive, not the
@@ -177,6 +189,30 @@ class Drive {
   // Last duty pair actually written (quiet-at-zero baseline).
   float writtenLeft_ = 0.0f;   // [-1, 1]
   float writtenRight_ = 0.0f;  // [-1, 1]
+
+  // Stop re-assertion (129-001, see this file's own header) -- counts down
+  // once per tick() call from kStopEnforceTicks after estop() arms it;
+  // tick() bypasses the quiet-at-zero shortcut while this is nonzero OR
+  // either wheel still measures above kRestVelocity, so a commanded stop
+  // keeps being handed to the leaves instead of being trusted after one
+  // write.
+  uint8_t stopEnforceCountdown_ = 0;
+
+  // 30 cycles at RobotLoop::kCycle(40ms) == 1.2s -- comfortably past the
+  // <=0.15s stop-observed bound this ticket's own bench acceptance
+  // requires, without holding the re-assertion open indefinitely (App
+  // cannot reference App::RobotLoop::kCycle directly here without a layer
+  // cycle, so this is a plain literal, same as NezhaMotor's own
+  // kMinWriteIntervalUs comment coupling).
+  static constexpr uint8_t kStopEnforceTicks = 30;
+
+  // Wheel-at-rest threshold for the unconditional half of the re-assertion
+  // window. NOT shared with MotorArmor's own kRestVelocity (motor_armor.h)
+  // or NezhaMotor's kStopConfirmVelocity (nezha_motor.h) -- each is a
+  // leaf/subsystem-local constant for its own guard, per this project's
+  // established pattern (see nezha_motor.h's kReconfigureRestVelocity
+  // comment).
+  static constexpr float kRestVelocity = 8.0f;  // [mm/s]
 };
 
 }  // namespace App

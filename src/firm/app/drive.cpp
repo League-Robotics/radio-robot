@@ -26,6 +26,11 @@ void Drive::estop() {
   // not complete (drive.h's own estop() doc comment). An ALREADY-latched
   // completion from a command that expired normally this cycle is left
   // alone -- it describes something that really happened.
+
+  // Arm the stop re-assertion window (129-001, see drive.h's own header):
+  // the next kStopEnforceTicks tick() calls re-issue the zero duty write
+  // instead of taking the quiet-at-zero shortcut below.
+  stopEnforceCountdown_ = kStopEnforceTicks;
 }
 
 bool Drive::takeCompletion(uint32_t* moveId) {
@@ -108,7 +113,10 @@ float Drive::crawlDuty(float duty, float& carry) const {
 // zero: while both the commanded and last-written pairs are exactly zero
 // there is nothing to say to the hardware -- writing anyway would flip
 // the motors out of Mode::None from the first idle boot cycle and make
-// boot-time config pushes race the at-rest reconfigure gate.
+// boot-time config pushes race the at-rest reconfigure gate. EXCEPT during
+// the post-estop() stop re-assertion window (129-001, see below and
+// drive.h's own header) -- neither condition applies there (mode_ is
+// already Active, past boot), and the write is worth repeating.
 void Drive::tick(float speedLeft, float speedRight) {
   // Fail closed (command-ingestion-...-two-stops.md §6): with no calibration
   // installed there is no honest speed->duty conversion to make, so write
@@ -128,9 +136,25 @@ void Drive::tick(float speedLeft, float speedRight) {
       crawlDuty(commandLeft * dutyPerSpeedLeft_, crawlCarryLeft_);
   const float dutyRight =
       crawlDuty(commandRight * dutyPerSpeedRight_, crawlCarryRight_);
-  const bool quiet = dutyLeft == 0.0f && dutyRight == 0.0f &&
-                     writtenLeft_ == 0.0f && writtenRight_ == 0.0f;
-  if (quiet) return;
+
+  // Stop re-assertion (129-001, see drive.h's own header): for
+  // kStopEnforceTicks cycles after estop(), and unconditionally for as long
+  // as either wheel still measures above kRestVelocity, a commanded zero
+  // duty pair bypasses the quiet-at-zero shortcut below -- the leaves keep
+  // being explicitly told to stop rather than Drive trusting a write it
+  // already believes landed. This can only ever ADD a write: the condition
+  // it overrides (alreadyQuiet, below) never holds unless dutyLeft/Right
+  // are already both zero, so a genuinely nonzero command is never
+  // touched.
+  const bool wheelsMoving = std::fabs(left_.velocity()) > kRestVelocity ||
+                            std::fabs(right_.velocity()) > kRestVelocity;
+  const bool enforceStop = stopEnforceCountdown_ > 0 || wheelsMoving;
+  if (stopEnforceCountdown_ > 0) --stopEnforceCountdown_;
+
+  const bool commandedStop = dutyLeft == 0.0f && dutyRight == 0.0f;
+  const bool alreadyQuiet =
+      commandedStop && writtenLeft_ == 0.0f && writtenRight_ == 0.0f;
+  if (alreadyQuiet && !enforceStop) return;
   left_.setDuty(dutyLeft);
   right_.setDuty(dutyRight);
   writtenLeft_ = dutyLeft;

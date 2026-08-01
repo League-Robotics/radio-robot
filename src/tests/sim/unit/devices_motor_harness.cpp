@@ -672,6 +672,129 @@ void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
               "no new error -- the retry succeeded; errCount stays at the one earlier NAK");
 }
 
+// 7b. 129-001 (issue 07, the 2026-07-31 runaway): a stop write that
+//     SUCCEEDS at the bus/status level (unlike scenario 7's NAK) but never
+//     actually took physical effect -- the Nezha brick's latching behavior
+//     the issue describes -- must still be RE-ISSUED on the next tick while
+//     the wheel is measurably still moving, not permanently suppressed by
+//     write-on-change just because lastWrittenPct_ already claims 0 was
+//     sent. lastWrittenPct_ records the ATTEMPT, not the landing.
+//
+//     Modeled here as a scripted encoder that keeps reporting genuine
+//     motion (velocity() well above kStopConfirmVelocity, mirrored below as
+//     a plain literal -- see nezha_motor.h's own doc comment) across BOTH
+//     the tick where the stop write lands successfully AND the following
+//     tick, standing in for "the write was attempted and acked, but the
+//     brick kept its prior nonzero speed." The oracle is bus.errCount():
+//     the follow-up tick's 0x60 slot is deliberately left UNSCRIPTED, so a
+//     write-on-change bypass that actually re-attempts the bus write (the
+//     fixed behavior) trips a script-mismatch error; the pre-129-001 bug
+//     (an unconditional `pct == lastWrittenPct_` suppression) would instead
+//     skip the attempt entirely and leave errCount unchanged -- this test
+//     fails under that old behavior, which is the point.
+//
+//     Deliberately does NOT use scriptEncoderRequestCollect()'s own
+//     speculative "slack" 0x60 entry (unlike most other scenarios in this
+//     file): an unconsumed slack write silently carries forward into the
+//     NEXT tick's queue (ScriptedI2CHook's FIFOs don't expire unused
+//     entries), which would hand the critical final write below a stray
+//     already-queued success entry instead of the empty queue the oracle
+//     depends on. Every write this scenario expects is queued exactly once,
+//     by hand.
+void scenarioDroppedStopWriteReassertsZeroWhileVelocityNonzero() {
+  beginScenario("a stop write that lands successfully but doesn't physically take still "
+                "re-asserts zero next tick while velocity() is nonzero");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();
+  cfg.slewRate = 100.0f;   // no slew clamping -- isolates the write-on-change behavior
+  Devices::NezhaMotor motor(plant, cfg);
+
+  // kStopConfirmVelocity (nezha_motor.h) == 8.0 mm/s -- 500 mm/s (25mm every
+  // 50ms tick) is comfortably above it, with margin for any measurement
+  // slop.
+  const float kStepPosition = 25.0f;  // [mm] per 50ms tick == 500 mm/s
+  uint64_t nowUs = 0;
+  float pos = 0.0f;
+
+  // Queues exactly one requestEncoder()/collectEncoder() pair (0x46 write +
+  // 4-byte read), no speculative slack -- see this scenario's own header for
+  // why. `expectDutyWrite` additionally queues exactly one MORE write slot
+  // for a duty write this tick is expected to actually attempt.
+  auto scriptCycle = [&](float positionMm, bool expectDutyWrite) {
+    bus.queueWrite(wireAddr, /*status=*/0);   // requestEncoder()'s 0x46 write
+    int32_t raw = static_cast<int32_t>(std::lround(positionMm * 10.0f));
+    uint8_t data[4] = {
+        static_cast<uint8_t>(raw & 0xFF),
+        static_cast<uint8_t>((raw >> 8) & 0xFF),
+        static_cast<uint8_t>((raw >> 16) & 0xFF),
+        static_cast<uint8_t>((raw >> 24) & 0xFF),
+    };
+    bus.queueRead(wireAddr, data, 4, /*status=*/0);   // collectEncoder()'s 4-byte read
+    if (expectDutyWrite) {
+      bus.queueWrite(wireAddr, /*status=*/0);   // the expected 0x60 duty write
+    }
+  };
+
+  // Prime: baseline anchor sample, motor never yet commanded (mode_ ==
+  // None) -- no write attempted this tick.
+  scriptCycle(pos, /*expectDutyWrite=*/false);
+  motor.requestSample();
+  motor.tick(nowUs);
+
+  // Establish a genuine nonzero applied duty (the motor's very first-ever
+  // commanded write -- always attempted, slew-exempt) -- the wheel starts
+  // moving.
+  nowUs += 50000;
+  pos += kStepPosition;
+  motor.setDuty(0.5f);
+  scriptCycle(pos, /*expectDutyWrite=*/true);
+  motor.requestSample();
+  motor.tick(nowUs);
+  checkFloatEq(motor.appliedDuty(), 0.5f, "nonzero duty established by a successful write");
+  checkFloatEq(motor.velocity(), 500.0f, "setup: the wheel is genuinely moving");
+
+  // Command a stop. pct changes (50 -> 0), a genuine value change, so this
+  // write is attempted and SUCCEEDS regardless of the fix under test --
+  // lastWrittenPct_ commits to 0 -- but the scripted encoder keeps
+  // advancing, standing in for a write that was acked yet never physically
+  // landed.
+  nowUs += 50000;
+  pos += kStepPosition;
+  motor.setDuty(0.0f);
+  scriptCycle(pos, /*expectDutyWrite=*/true);
+  motor.requestSample();
+  motor.tick(nowUs);
+  checkFloatEq(motor.appliedDuty(), 0.0f,
+               "the stop write itself succeeds -- lastWrittenPct_ now claims 0 was sent");
+  checkFloatEq(motor.velocity(), 500.0f,
+               "the wheel is STILL measurably moving despite the committed zero write -- "
+               "the exact 2026-07-31 defect scenario");
+  const uint32_t errsBeforeReassert = bus.errCount(Devices::kNezhaDeviceAddr);
+
+  // Next tick: the SAME target (0.0f) is commanded again while velocity()
+  // is still nonzero. pct == lastWrittenPct_ (0 == 0) this time -- the
+  // write-on-change guard would normally skip it. No duty write is queued
+  // for this cycle, so a re-attempted write has nothing scripted to consume
+  // and trips a script-mismatch error -- the oracle: a suppressed write
+  // leaves errCount unchanged; a re-issued one increments it.
+  nowUs += 50000;
+  pos += kStepPosition;
+  motor.setDuty(0.0f);
+  scriptCycle(pos, /*expectDutyWrite=*/false);
+  motor.requestSample();
+  motor.tick(nowUs);
+
+  checkFloatEq(motor.velocity(), 500.0f,
+               "setup check: velocity() was still nonzero at the moment of this tick's write");
+  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), errsBeforeReassert + 1,
+              "the re-asserted stop write was actually attempted on the bus (stopNotTaken "
+              "bypassed write-on-change) -- NOT silently suppressed because lastWrittenPct_ "
+              "already claimed 0 was sent");
+}
+
 // 8. applyTravelCalib() (125-003: narrowed from the pre-125-003
 //    applyGains(Gains, Opt<float>) -- see motor.h's own header) takes
 //    effect on the SAME instance, same boot, no reflash: a raw step
@@ -860,6 +983,7 @@ int main() {
   scenarioVelocityReadsZeroUntilTwoValidSamplesCollected();
   scenarioSetDutyTickWritesExactlyTheGivenDutyThroughShaping();
   scenarioNakedStopWriteIsRetriedNextTickNotLatched();
+  scenarioDroppedStopWriteReassertsZeroWhileVelocityNonzero();
   scenarioApplyTravelCalibTakesEffectSameBootNoReflash();
   scenarioReconfigureGuardedWholeConfigReplacement();
   scenarioExplicitZeroWriteShapingIsPassThrough();
