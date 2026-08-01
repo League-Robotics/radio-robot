@@ -1,0 +1,19 @@
+# Fault tour: wedge the left wheel via the DBG injection arm and prove the
+# latch reaches the wire, then clears. The injected fault spans a
+# time-stopped move (completion must not depend on distance).
+
+MARK baseline
+TWIST vx=150 dist=300 timeout=9
+STOP dwell=0.5
+
+MARK inject
+DBG wedge left 1500
+TWIST vx=150 time=2.0 timeout=8
+EXPECT '.type=="tlm" and (.payload.flags | index("FAULT_WEDGE_LATCH"))' timeout=3.0
+DBG clear
+EXPECT '.type=="tlm" and ((.payload.flags | index("FAULT_WEDGE_LATCH")) | not)' timeout=3.0
+STOP dwell=0.5
+
+MARK recovery
+TWIST vx=150 dist=300 timeout=9
+STOP

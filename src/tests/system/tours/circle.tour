@@ -1,0 +1,9 @@
+# The circle tour: one full CCW circle of radius ~250 mm, driven as an arc
+# twist (v = omega * r). Gated behind the square's closure by the runner.
+# 150 mm/s at 0.6 rad/s -> r = 250 mm; a full turn is 2*pi rad = 360 deg.
+
+MARK circle
+TWIST vx=150 omega=34.4 angle=360 timeout=30
+STOP dwell=0.5
+
+CAMFIX x=0 y=0 radius=100

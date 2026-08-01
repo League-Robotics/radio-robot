@@ -1,0 +1,28 @@
+# The square tour: 700 mm sides, CCW, planned stops mid-leg on legs 1 and 3
+# (the umbrella issue's two stops on opposite legs). Ends with a health
+# check and an independent position fix at the origin.
+
+MARK leg1a
+TWIST vx=150 dist=350 timeout=9
+STOP dwell=1.0
+MARK leg1b
+TWIST vx=150 dist=350 timeout=9
+TWIST omega=45 angle=90 timeout=8
+
+MARK leg2
+TWIST vx=150 dist=700 timeout=15
+TWIST omega=45 angle=90 timeout=8
+
+MARK leg3a
+TWIST vx=150 dist=350 timeout=9
+STOP dwell=1.0
+MARK leg3b
+TWIST vx=150 dist=350 timeout=9
+TWIST omega=45 angle=90 timeout=8
+
+MARK leg4
+TWIST vx=150 dist=700 timeout=15
+TWIST omega=45 angle=90 timeout=8
+STOP dwell=0.5
+
+CAMFIX x=0 y=0 radius=80
