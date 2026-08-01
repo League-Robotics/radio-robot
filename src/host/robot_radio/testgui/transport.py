@@ -230,6 +230,46 @@ _UNMANAGED_TRIM_GAIN = 2.0    # [mm/s per mm of split]
 _UNMANAGED_TRIM_LIMIT = 40.0  # [mm/s] peak-to-peak differential
 
 
+def effective_track_width(config: Any) -> "float | None":  # [mm]
+    """The robot's EFFECTIVE track width -- the caliper-measured wheel
+    separation corrected for scrub -- the identical quantity, from the identical
+    formula, the firmware computes at boot (``App::effectiveTrackWidth()``):
+
+        effective = trackwidth / rotational_slip   (slip > 0, else trackwidth)
+
+    Ideal differential kinematics say ``omega = (vR - vL) / b``, but a skid-steer
+    robot drags its wheels sideways through a turn and rotates LESS than that, so
+    every kinematic use of the track wants ``b / slip``.
+
+    ANY host-side integration of encoder counts into a pose MUST use this, not
+    the raw ``cfg.trackwidth``. Feeding the raw value made the host dead-reckoner
+    turn 1.097x more per unit of encoder split than the firmware did (tovez: raw
+    128.0 vs effective 140.4), so the Encoder trace and the firmware's own pose
+    diverged in proportion to ACCUMULATED ROTATION -- identical on a straight leg
+    (theta -0.6 vs -0.5), then 15 deg and 710mm apart after a session of turning
+    (bench 2026-07-31, ratio 1.084 observed against 1.097 predicted).
+
+    That bug LOOKS like a broken estimator or a dead sensor, which is what makes
+    it expensive: it sent a debugging session hunting the OTOS and the fusion
+    weights. It is only ever a geometry mismatch between two integrators.
+
+    Returns None when there is no usable geometry, so callers can decline to
+    integrate rather than silently produce a plausible-but-wrong pose.
+    """
+    if config is None:
+        return None
+    geom = getattr(config, "geometry", None)
+    trackwidth = getattr(geom, "trackwidth", None) if geom is not None else None
+    if not trackwidth:
+        return None
+    cal = getattr(config, "calibration", None)
+    slip = getattr(cal, "rotational_slip", None) if cal is not None else None
+    # slip == 0 is the documented "uncalibrated" sentinel: apply no correction.
+    if slip is None or slip <= 0.0:
+        return float(trackwidth)
+    return float(trackwidth) / float(slip)
+
+
 def run_unmanaged_distance_drive(transport: Any, driver: Any, distance: float,
                                  direction: float, label: str,
                                  log: Callable[[str], None]) -> None:
@@ -1897,7 +1937,28 @@ class SimTransport(Transport):
             profile = sim_prefs.load_sim_error_profile()
         except Exception:
             profile = dict(sim_prefs.DEFAULT_PROFILE)
-        track_width = profile.get("trackwidth", sim_prefs.DEFAULT_PROFILE["trackwidth"])
+
+        # Geometry comes from the ROBOT, never from the error profile
+        # (stakeholder, 2026-07-31: "always use the robot's configured values").
+        # The Sim Errors panel used to own a `trackwidth` spin box that fed this
+        # straight from a prefs file and defaulted to the RAW 128.0mm -- so every
+        # Sim session ran ~10% different geometry from the robot it was
+        # simulating (tovez: raw 128.0 vs effective 140.4). The discrepancy was
+        # editable in a dialog, which is how it survived unnoticed. A simulator
+        # whose geometry can silently disagree with the robot cannot falsify
+        # anything about it.
+        cfg = robot_config
+        if cfg is None:
+            from robot_radio.config.robot_config import get_robot_config
+            cfg = get_robot_config()
+
+        track_width = effective_track_width(cfg)
+        if track_width is None:
+            track_width = float(profile.get(
+                "trackwidth", sim_prefs.DEFAULT_PROFILE["trackwidth"]))
+            self._log(f"[WARN] SimTransport: no robot geometry available -- "
+                      f"falling back to {track_width:.1f}mm. The sim's geometry "
+                      f"will NOT match any robot.")
 
         loop = SimLoop(track_width=float(track_width), lib_path=lib_path)
         loop.on_telemetry = self._deliver_tlm
@@ -1919,10 +1980,9 @@ class SimTransport(Transport):
         self._config_echo = {}
         self._apply_profile_to_sim(loop, profile)
 
-        cfg = robot_config
-        if cfg is None:
-            from robot_radio.config.robot_config import get_robot_config
-            cfg = get_robot_config()
+        # `cfg` was resolved above, before SimLoop construction -- SimLoop's
+        # track_width is fixed at construction (sim_create()), so the geometry
+        # has to be known by then.
         if cfg is not None:
             try:
                 self.configure_from_robot(cfg)

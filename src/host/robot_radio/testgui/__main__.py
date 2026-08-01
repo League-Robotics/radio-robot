@@ -360,6 +360,7 @@ def _build_main_window():  # type: ignore[return]
         SimTransport,
         find_robot_serial_port,
         list_ports,
+        effective_track_width as _effective_track_width,
     )
     from robot_radio.testgui.commands import (
         TOURS,
@@ -2383,10 +2384,21 @@ def _build_main_window():  # type: ignore[return]
             f"({cfg.hardware_model}, trackwidth={cfg.trackwidth}mm)"
         )
         # 097: keep the host-side encoder dead-reckoning trackwidth (the
-        # avatar's own pose-integration geometry) in sync with the
-        # selected robot's config.
-        if cfg.trackwidth:
-            trace_model.set_trackwidth(cfg.trackwidth)
+        # avatar's own pose-integration geometry) in sync with the selected
+        # robot's config.
+        #
+        # It must be the EFFECTIVE width -- what the firmware integrates its own
+        # pose with -- NOT the raw caliper value `cfg.trackwidth` returns. See
+        # effective_track_width()'s own docstring for the measured consequence.
+        effective_track = _effective_track_width(cfg)
+        if effective_track:
+            trace_model.set_trackwidth(effective_track)
+            # The graph panel keeps its OWN EncoderDeadReckoner for the
+            # Heading/Distance strip charts, constructed with a hard-coded
+            # 128.0 that nothing ever updated -- so those graphs carried the
+            # same rotation-proportional error, for every robot, always. Same
+            # geometry, same source, set together.
+            graph_panel.recorder.set_trackwidth(effective_track)
         if _state.get("transport") is not None:
             _push_robot_calibration()
 
