@@ -2,7 +2,7 @@
 id: '129'
 title: 'Actuation correctness and safety: fix the 35% speed deficit, make ESTOP unlosable,
   and consolidate configuration'
-status: planning-docs
+status: closed
 branch: sprint/129-actuation-correctness-and-safety-fix-the-35-speed-deficit-make-estop-unlosable-and-consolidate-configuration
 worktree: false
 use-cases: []
