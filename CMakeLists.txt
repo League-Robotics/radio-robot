@@ -165,6 +165,26 @@ if(FAKE_OTOS)
     message("${BoldMagenta}FAKE_OTOS bench variant ENABLED -- frame.otos will be synthesized from encoder kinematics, not read from the real chip.${ColourReset}")
 endif()
 
+# ROBOT_DEBUG (129-003; issue 05-dbg-debug-message-channel-for-bench-and-
+# sim.md): opt-in, compile-time-only bench build variant, same shape as
+# FAKE_OTOS immediately above. When ON, App::debugf()/DBG_EVERY()/
+# DBG_MILLI() (src/firm/app/debug.h) and App::Comms::sendDebug()
+# (app/comms.h/.cpp) become real, and main.cpp wires the channel to its own
+# Comms via App::setDebugSink(). OFF (default) is the shipped build: those
+# same call sites compile to inline no-ops, so DBG costs zero flash and
+# emits zero wire traffic -- see debug.h's own header for the full
+# compile-gate contract (this option OR HOST_BUILD, which src/sim/
+# CMakeLists.txt always defines, so Sim/host tests always have DBG
+# regardless of this flag). Select via `cmake .. -DROBOT_DEBUG=ON`, or
+# build.py's own --robot-debug flag (which, like --fake-otos, always
+# passes an explicit ON/OFF so a stale CMakeCache.txt can never leave this
+# flag silently stuck) -- never a runtime/wire toggle.
+option(ROBOT_DEBUG "Bench variant: compile in the DBG debug message channel (App::debugf())" OFF)
+if(ROBOT_DEBUG)
+    add_definitions(-DROBOT_DEBUG)
+    message("${BoldMagenta}ROBOT_DEBUG bench variant ENABLED -- App::debugf() DBG: lines will be compiled in and sent over the wire.${ColourReset}")
+endif()
+
 ####################
 # optional JSON flags for compilation + assembly
 ###################

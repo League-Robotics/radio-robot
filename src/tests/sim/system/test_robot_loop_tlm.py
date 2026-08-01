@@ -48,6 +48,13 @@ _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _APP_SOURCES = [
     _SOURCE_DIR / "app" / "robot_loop.cpp",
     _SOURCE_DIR / "app" / "comms.cpp",
+    # debug.cpp (129-003): App::debugf()'s only implementation --
+    # TestSim::SimHarness's constructor always calls
+    # App::setDebugSink(&comms_) now (HOST_BUILD is defined below,
+    # so the real, non-stub setDebugSink()/debugf() are what this
+    # graph links), mirroring src/sim/CMakeLists.txt's own
+    # APP_SOURCES entry.
+    _SOURCE_DIR / "app" / "debug.cpp",
     _SOURCE_DIR / "app" / "configurator.cpp",
     _SOURCE_DIR / "app" / "telemetry.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "profile.cpp",

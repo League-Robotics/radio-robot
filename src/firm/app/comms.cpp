@@ -569,6 +569,18 @@ void Comms::sendReady() {
   radioLink_.sendReliable("READY");
 }
 
+#if defined(ROBOT_DEBUG) || defined(HOST_BUILD)
+void Comms::sendDebug(const char* line) {
+  // "DBG:" (4 bytes) + app/debug.cpp's own kDebugMsgMaxBytes (200) message
+  // body + NUL -- snprintf() truncates rather than overflows if that
+  // bound is ever loosened without updating this one too.
+  char buf[210];
+  std::snprintf(buf, sizeof(buf), "DBG:%s", line);
+  serialLink_.sendReliable(buf);
+  radioLink_.sendReliable(buf);
+}
+#endif  // ROBOT_DEBUG || HOST_BUILD
+
 // updateStatus -- see comms.h's own doc comment for the full contract
 // (dependency direction, call-order constraints). A plain field-by-field
 // projection, same idiom as Telemetry::update()'s own frame assembly --

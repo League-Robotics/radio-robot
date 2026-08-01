@@ -85,6 +85,11 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 set(APP_SOURCES
     "${SOURCE_DIR}/app/comms.cpp"
     "${SOURCE_DIR}/app/configurator.cpp"
+    # debug.cpp (129-003): App::debugf()'s only implementation -- ALWAYS
+    # live here (HOST_BUILD is unconditionally defined for this whole
+    # library, above), so SimHarness::App::setDebugSink(&comms_) needs a
+    # real definition, not the ARM-release inline no-op stub.
+    "${SOURCE_DIR}/app/debug.cpp"
     "${SOURCE_DIR}/app/drive.cpp"
     "${SOURCE_DIR}/app/preamble.cpp"
     "${SOURCE_DIR}/app/robot_loop.cpp"

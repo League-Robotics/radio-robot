@@ -29,6 +29,7 @@ VERBS: tuple[VerbEntry, ...] = (
     VerbEntry("READY", False),
     VerbEntry("STATUS", False),
     VerbEntry("HELP", False),
+    VerbEntry("DBG", False),
     VerbEntry("MOVE", True),
     VerbEntry("CONFIG", True),
     VerbEntry("STOP", True),

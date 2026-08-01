@@ -206,6 +206,20 @@ _IDLE_GRACE_S = 1.5  # [s]
 # a single drain call ever needs more.
 _TLM_DRAIN_BUFFER = 16384
 
+# Same idea as _TLM_DRAIN_BUFFER, sized down: DBG lines (129-003) are rare
+# (one App::debugf() call per diagnostic, not a per-cycle telemetry push)
+# and individually short (app/debug.cpp's own kDebugMsgMaxBytes=200 bound),
+# so a much smaller scratch buffer comfortably covers a burst. Retried once,
+# sized exactly, if a single drain call ever needs more (same convention as
+# _TLM_DRAIN_BUFFER above).
+_DEBUG_DRAIN_BUFFER = 4096
+
+# Bounded debug-line queue: drop-oldest on overflow, mirroring
+# SerialConnection's own _text_queue policy for the same reason -- a DBG
+# line is a diagnostic, not a value a caller can afford to block forever
+# waiting to read.
+_DEBUG_QUEUE_MAXSIZE = 256
+
 _SimHookFn = ctypes.CFUNCTYPE(
     ctypes.c_int, ctypes.c_void_p, ctypes.c_uint16,
     ctypes.POINTER(ctypes.c_uint8), ctypes.c_int)
@@ -305,6 +319,20 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     # legitimately contain one).
     lib.sim_drain_tlm.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
     lib.sim_drain_tlm.restype = ctypes.c_int
+
+    # sim_drain_debug/sim_test_emit_debug (129-003, bench/Sim-only DBG
+    # channel): sim_drain_debug() shares sim_drain_tlm()'s exact
+    # snprintf()-style return-value/truncation contract (sim_ctypes.cpp's
+    # own doc comment) but the captured bytes are already plain cleartext
+    # "DBG:<message>\n" lines, never COBS/CRC-framed -- read via `.raw`
+    # nonetheless (not `.value`) purely for symmetry with the tlm drain
+    # above; a DBG line built from debugf()'s own kDebugMsgMaxBytes-bounded
+    # vsnprintf() output cannot itself contain an embedded NUL, but there
+    # is no reason to rely on that when `.raw[:n]` is exactly as cheap.
+    lib.sim_drain_debug.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
+    lib.sim_drain_debug.restype = ctypes.c_int
+    lib.sim_test_emit_debug.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+    lib.sim_test_emit_debug.restype = None
 
     lib.sim_true_x.argtypes = [ctypes.c_void_p]
     lib.sim_true_x.restype = ctypes.c_float
@@ -433,6 +461,14 @@ class SimLoop:
 
         self.on_telemetry: "Callable[[TLMFrame], None] | None" = None
         self.on_truth: "Callable[[tuple[float, float, float]], None] | None" = None
+        # 129-003: optional immediate-delivery callback for DBG: lines,
+        # mirroring on_telemetry's own shape -- called from the tick
+        # thread, wrapped in try/except so a raising callback can never
+        # kill it (SerialConnection.on_debug's own exception-proof
+        # contract, io/serial_conn.py). Most callers instead poll
+        # drain_debug_lines(); this exists for a caller that wants
+        # immediate delivery the way on_telemetry already offers for TLM.
+        self.on_debug: "Callable[[str], None] | None" = None
 
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -442,6 +478,9 @@ class SimLoop:
         # convention (see that module's _drain_cmd_queue docstring).
         self._cmd_queue: "queue.Queue[Callable[[], None]]" = queue.Queue()
         self._tlm_queue: "queue.Queue[TLMFrame]" = queue.Queue(maxsize=_TLM_QUEUE_MAXSIZE)
+        # 129-003 (bench/Sim-only DBG channel): bounded, drop-oldest,
+        # mirroring _tlm_queue's own policy -- see drain_debug_lines().
+        self._debug_queue: "queue.Queue[str]" = queue.Queue(maxsize=_DEBUG_QUEUE_MAXSIZE)
 
         self._corr_lock = threading.Lock()
         self._corr_id = 0
@@ -912,6 +951,34 @@ class SimLoop:
             pass
         return frames
 
+    def drain_debug_lines(self) -> "list[str]":
+        """Non-blocking drain of every currently-queued ``DBG:`` line
+        (129-003, bench/Sim-only debug channel -- ``App::debugf()``,
+        ``app/debug.h``). Same shape as ``read_pending_binary_tlm_frames()``:
+        a pure queue read, populated by the tick thread's own per-iteration
+        ``sim_drain_debug()`` drain (or, with no tick thread running, by
+        ``drain_pending_debug()``, this method's manual-mode counterpart --
+        matching ``drain_pending_tlm()``'s own relationship to
+        ``read_pending_binary_tlm_frames()``). Each returned string is the
+        FULL decoded line, verb included (e.g. ``"DBG:v=1234"``), matching
+        ``SerialConnection``'s own ``on_debug`` callback convention
+        (``io/serial_conn.py``)."""
+        lines: "list[str]" = []
+        try:
+            while True:
+                lines.append(self._debug_queue.get_nowait())
+        except queue.Empty:
+            pass
+        return lines
+
+    def drain_pending_debug(self) -> "list[str]":
+        """Manual-mode counterpart of the tick thread's own per-iteration
+        debug drain -- see ``drain_pending_tlm()``'s own docstring; same
+        shape, ``DBG:`` lines instead of ``TLMFrame`` objects."""
+        self._require_connected()
+        self._drain_debug_into_queue()
+        return self.drain_debug_lines()
+
     # ------------------------------------------------------------------
     # Telemetry-reader suspend/resume (mirrors _HardwareTransport)
     # ------------------------------------------------------------------
@@ -1359,6 +1426,7 @@ class SimLoop:
                 break
 
             self._drain_tlm_into_queue()
+            self._drain_debug_into_queue()
             # Keep the grace window fresh while the plant reports motion, so a
             # sustained drive/turn stays at full rate for its whole duration.
             if self._active is True:
@@ -1494,5 +1562,49 @@ class SimLoop:
             if not suspended and self.on_telemetry is not None:
                 try:
                     self.on_telemetry(frame)
+                except Exception:
+                    pass
+
+    def _drain_debug_into_queue(self) -> None:
+        """One ``sim_drain_debug()`` call (129-003, bench/Sim-only DBG
+        channel), pushing each captured ``DBG:<message>`` line onto the
+        bounded internal queue (drop-oldest on overflow, same policy as
+        ``_drain_tlm_into_queue()``'s own ``_tlm_queue``) and, unless no
+        callback is installed, delivering it to ``on_debug`` -- wrapped in
+        its own try/except so a raising callback can never propagate out
+        of the tick thread (the exact historical defect
+        ``SerialConnection``'s own ``on_debug`` dispatch guards against,
+        ``io/serial_conn.py``'s module docstring: "a `_log` NameError
+        inside the host DBG handler killed the reader thread mid-
+        session")."""
+        buf = ctypes.create_string_buffer(_DEBUG_DRAIN_BUFFER)
+        needed = self._lib.sim_drain_debug(self._handle, buf, _DEBUG_DRAIN_BUFFER)
+        if needed > _DEBUG_DRAIN_BUFFER:
+            # Truncated -- retry once with an exactly-sized buffer, same
+            # convention as _drain_tlm_into_queue()'s own retry.
+            buf = ctypes.create_string_buffer(needed)
+            needed = self._lib.sim_drain_debug(self._handle, buf, needed)
+        raw = buf.raw[:needed]
+        if not raw:
+            return
+
+        for line_bytes in raw.split(b"\n"):
+            if not line_bytes:
+                continue
+            text = line_bytes.decode("utf-8", "ignore")
+
+            if self._debug_queue.full():
+                try:
+                    self._debug_queue.get_nowait()
+                except queue.Empty:
+                    pass
+            try:
+                self._debug_queue.put_nowait(text)
+            except queue.Full:
+                pass
+
+            if self.on_debug is not None:
+                try:
+                    self.on_debug(text)
                 except Exception:
                     pass

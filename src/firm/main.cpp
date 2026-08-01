@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "app/comms.h"
+#include "app/debug.h"
 #include "app/drive.h"
 #include "app/fake_otos.h"
 #include "app/preamble.h"
@@ -243,6 +244,10 @@ int main() {
   static App::SerialTransport serialLink(serial);
   static App::RadioTransport radioLink(radio);
   static App::Comms comms(serialLink, radioLink, banner, idLine);
+  // 129-003: wires the bench/Sim-only DBG debug channel to this robot's own
+  // Comms -- a no-op call unless ROBOT_DEBUG is defined (app/debug.h's own
+  // compile gate), so a shipped ARM release build never even calls this.
+  App::setDebugSink(&comms);
   // 124-009: Telemetry no longer holds direct Transport& references (those
   // existed only for TelemetrySecondary's own independently-armored line,
   // now deleted) -- comms already owns both transports internally.

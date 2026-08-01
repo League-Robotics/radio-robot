@@ -438,6 +438,21 @@ class Comms {
   // this; see commands.proto's READY row and comms.cpp's own definition.
   void sendReady();
 
+#if defined(ROBOT_DEBUG) || defined(HOST_BUILD)
+  // sendDebug -- emit ONE "DBG:<line>" cleartext line on BOTH transports,
+  // the same one-off sendReliable() broadcast sendReady()/sendBanner() use
+  // (never the async, drop-on-full send() path -- a debug line is rare and
+  // must not race telemetry's own high-cadence traffic for buffer room).
+  // Guarded out entirely unless ROBOT_DEBUG (or HOST_BUILD, which implies
+  // it) -- app/debug.h's App::debugf() is this method's ONLY caller; see
+  // that file's own header for the bench/Sim-only compile contract this
+  // exists to support (129-003, issue 05-dbg-debug-message-channel-for-
+  // bench-and-sim.md). `line` must already be a short, NUL-terminated,
+  // single-line message -- app/debug.cpp's own kDebugMsgMaxBytes bounds
+  // what debugf() ever passes here.
+  void sendDebug(const char* line);
+#endif
+
  private:
   // STATUS/HELP reply formatters -- see their definitions in comms.cpp.
   void sendStatus(Transport& t);
