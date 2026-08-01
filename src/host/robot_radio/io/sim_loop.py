@@ -293,6 +293,10 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
 
     lib.sim_inject_stop.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
     lib.sim_inject_stop.restype = None
+    lib.sim_inject_wheels.argtypes = [ctypes.c_void_p, ctypes.c_float,
+                                      ctypes.c_float, ctypes.c_float,
+                                      ctypes.c_uint32]
+    lib.sim_inject_wheels.restype = None
 
     # `frame` is a `<COMMAND>':'<COBS+CRC bytes>` wire LINE (124-005; was a
     # bare COBS+CRC command body 123-002-124-004, an already-armored
@@ -830,6 +834,32 @@ class SimLoop:
         caller migrating off the "stop() means halt-now" assumption has an
         unambiguous method to call."""
         return self.stop()
+
+    def wheels(self, v_left: float, v_right: float, duration: float,  # [mm/s] x2 [ms]
+               ) -> int:
+        """The WHEELS teleop primitive -- per-wheel velocity held for a bounded
+        `duration`, routed firmware-side straight to ``App::Drive`` after
+        ``planner_.estop()``. No profile, no shaping, no planner stop condition.
+
+        Deliberately the SAME signature and the same wire command as
+        ``NezhaProtocol.wheels()``: a button's message must not depend on which
+        transport is underneath it (stakeholder, 2026-07-31 -- "the button on
+        SIM sends the same message as the button"). Without this, the shared
+        unmanaged-drive routine had no Sim-side primitive to call and the two
+        backends drifted into different commands for the same button, which is
+        precisely the divergence the Sim exists to rule out.
+
+        Bounded by construction: ``App::Drive`` arms it until
+        ``commandDeadline_ = now + duration``, so a host that stops re-arming
+        stops the robot within one lease.
+        """
+        self._require_connected()
+        corr_id = self._next_corr_id()
+        self._run_or_enqueue(
+            lambda: self._lib.sim_inject_wheels(
+                self._handle, ctypes.c_float(v_left), ctypes.c_float(v_right),
+                ctypes.c_float(duration), ctypes.c_uint32(corr_id)))
+        return corr_id
 
     def move(self, *, v_x: float = 0.0, v_y: float = 0.0, omega: float = 0.0,
              v_left: "float | None" = None, v_right: "float | None" = None,

@@ -59,6 +59,56 @@ both wheels to one constant before re-characterizing, or the measurement
 inherits the mismatch."* It was fitted to a plant that no longer matches and was
 never refitted.
 
+## MEASURED 2026-07-31 (duty sweep, firmware v0.20260731.13)
+
+Two runs were needed. **The first was invalid** -- taken against firmware
+flashed from an abandoned branch whose baked constants could not be read back
+(there is no firmware->host config read-back path; `config.proto` has no
+`ConfigSnapshot` arm). Its duty axis was computed from `tovez.json` constants
+the robot was not necessarily using, and every conclusion drawn from it was
+wrong. Recorded here because the failure mode is the reusable lesson:
+
+> **Anchor on a measurement that needs no config constant before trusting one
+> that does.** The saturation point (command a speed high enough that duty
+> clamps to 1.0, then just read the speed) depends on nothing and takes 6
+> seconds. It immediately showed the plant was fine, contradicting the sweep.
+
+### Valid results, after reflashing from a known tree
+
+Saturation (no constants involved): **L 760-795, R 696 mm/s at full duty** --
+consistent with the historical 620-740 plateau measurements.
+
+Linear fit, open loop via the `WHEELS` verb, 10 rungs 0.04-0.60, both directions:
+
+| wheel | gain [mm/s per duty] | implied dps | breakaway [duty] |
+|---|---|---|---|
+| left  | 853.6 | 0.001172 | 0.102 |
+| right | 837.8 | 0.001194 | 0.102 fwd / 0.164 rev |
+
+**L/R spread: 1.9%.**
+
+### What this overturns
+
+- **`duty_per_speed` is too HIGH, not too low.** Config 0.00187325 claims 534
+  mm/s per duty; the plant delivers ~845. Recommended default: **0.001182**.
+  The robot should run ~1.6x FASTER than commanded, not slower -- so the
+  observed 35%-of-commanded was never this constant.
+- **There is no significant wheel mismatch.** 1.9%, not the 28% inferred from
+  the invalid run. The "right wheel is mechanically weak" conclusion drawn
+  across this whole session was an artifact of stale firmware.
+- **Breakaway is uniform (~0.10) except right-reverse (0.164)** -- not the
+  0.027-0.240 spread the invalid run reported. Still worth noting that all four
+  are ~3-5x the configured `output_deadband` of 0.03.
+
+### Still open
+
+If `duty_per_speed` is 1.6x too generous, the measured 35%-of-commanded speed is
+unexplained by calibration and needs its own root cause. The leading candidate
+remains a live-config path overwriting `dutyPerSpeed` at connect time -- the
+`pid.kff` routing documented as removed at `configurator.cpp:122-133`. Confirm
+by re-running `duty_sweep.py` immediately after a connect-time calibration push
+and comparing.
+
 ## Proposed work
 
 1. Set `wheel_gain_* = 1.0`, `wheel_intercept_* = 0.0` (identity), as that note

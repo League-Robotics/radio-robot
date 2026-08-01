@@ -26,7 +26,6 @@ intentional internal ``_ser`` access points are:
                          also before the reader thread starts.
 - ``_poll_ready``    — ``reset_input_buffer()``, ``write()``, ``readline()``
                        before the reader thread starts.
-- ``_keepalive_loop`` — ``write()`` / ``flush()`` under ``_write_lock``.
 - ``handshake()``   — ``write()`` / ``flush()`` under ``_write_lock``, before
                        the reader thread starts (device-detection phase only).
 - ``_reader_loop``  — sole owner of ``readline()`` after ``connect()`` returns.
@@ -55,13 +54,12 @@ Connection handshake (sprint 036, ticket 007):
    connection is indistinguishable from direct: the same plain send, same
    ``#<id>`` corr-id.
 
-   ``connect()`` does NOT start the keepalive daemon (sprint 065, ticket 005:
-   arm-on-demand contract).  The daemon only runs while a caller has
-   explicitly called ``start_keepalive()`` -- the layer that owns an
-   open-ended motion session (e.g. the TestGUI's ``KeyboardDriver``, via
-   ``Transport.arm_keepalive()``) is responsible for arming/disarming it.
-   ``disconnect()`` still calls ``stop_keepalive()`` unconditionally as
-   harmless, idempotent cleanup.
+   There is no host keepalive. The ambient "+" keepalive daemon and its
+   arm-on-demand contract (sprint 065) were deleted once protocol v5 removed
+   the firmware safety-stop watchdog they fed -- "no deadman"
+   (docs/protocol-v5.md section 5): every Move now carries its own bounded
+   `timeout` backstop by construction, so an idle wire is not a hazard and a
+   periodic "+" has nothing to reset.
 
 Radio channel note:
    The relay's channel, group, and mode persist in its flash.  Matching those
@@ -131,23 +129,6 @@ BAUD_RATE = 115200
 DEFAULT_PORT = "/dev/cu.usbmodem21431202"
 READ_TIMEOUT_S = 0.12
 
-# System safety-stop watchdog keepalive. The firmware safety-stops ANY motion
-# after sTimeoutMs (default 500) of host silence, so a host driving open-ended
-# motion (S/VW/R) must continuously send "+" keepalives while doing so. We
-# send them from a background daemon thread well inside that window, so if
-# this process dies the keepalives stop and the robot safety-stops on its
-# own. See LoopScheduler.cpp watchdog.
-#
-# Arm-on-demand contract (sprint 065, ticket 005): start_keepalive() is NOT
-# called automatically by connect() -- the daemon only runs while explicitly
-# armed by the layer that owns motion (e.g. the TestGUI's KeyboardDriver, via
-# Transport.arm_keepalive()/disarm_keepalive()). A connected-but-idle port
-# (bounded commands like T/D/G/TURN/RT carry their own TIME stop and never
-# need it; a hung host process holding the port open must not keep an
-# open-ended motion alive past the watchdog window) sends no ambient "+" at
-# all. disconnect() still calls stop_keepalive() unconditionally as harmless,
-# idempotent cleanup regardless of whether the daemon was ever armed.
-_KEEPALIVE_PERIOD_S = 0.15
 
 # Active readiness-poll constants.
 # After opening the serial port, the device is not immediately ready — the
@@ -456,8 +437,6 @@ class SerialConnection:
         # Serial-write lock: serializes the keepalive thread's writes with the
         # main thread's command writes so their bytes never interleave.
         self._write_lock = threading.RLock()
-        self._ka_thread: threading.Thread | None = None
-        self._ka_stop = threading.Event()
         # Monotonic timestamp of the last byte written to the port (any command
         # OR a keepalive).  The keepalive loop only emits "+" once the wire has
         # been idle for a full period: the firmware resets its safety-stop
@@ -466,7 +445,6 @@ class SerialConnection:
         # next to a command gets merged with it by the relay's RAW250 framing —
         # corrupting the command ("ERR unknown" / dropped reply).  Updated under
         # _write_lock by send()/send_fast() and the keepalive loop itself.
-        self._last_write_s = time.monotonic()
 
         # ── Reader thread infrastructure (sprint 025, ticket 001) ────────────
         # One queue per in-flight corr-id; created before write, deleted after
@@ -567,10 +545,9 @@ class SerialConnection:
             ``self._mode`` is set to ``"direct"``.
 
         After the handshake, ``connect()`` proceeds with the PING readiness
-        poll, then starts the reader thread.  It does NOT start the keepalive
+        poll, then starts the reader thread.  There is no keepalive to start
         daemon (sprint 065, ticket 005: arm-on-demand contract) -- call
-        ``start_keepalive()`` explicitly (or use a ``Transport``'s
-        ``arm_keepalive()``) once an open-ended motion session begins.
+        -- see this module's own docstring for why the daemon was deleted.
 
         Notes on HUPCL and DTR:
             On macOS/Linux close() pulses DTR via the HUPCL termios flag.
@@ -1217,67 +1194,14 @@ class SerialConnection:
         return lines
 
     def disconnect(self) -> dict[str, Any]:
-        """Stop keepalive and reader threads, then close the serial port."""
+        """Stop the reader thread, then close the serial port."""
         if not self.is_open:
             return {"status": "not_connected"}
-        self.stop_keepalive()
         self._stop_reader()
         port = self._port
         self._ser.close()
         self._ser = None
         return {"status": "disconnected", "port": port}
-
-    # ── safety-stop keepalive ────────────────────────────────────────────────
-    def start_keepalive(self, period_s: float = _KEEPALIVE_PERIOD_S) -> None:
-        """Start a background daemon thread that streams "+" keepalives so the
-        firmware safety-stop watchdog never trips during normal operation. If
-        this process dies the daemon thread dies with it, keepalives stop, and
-        the robot safety-stops on its own. Idempotent."""
-        if self._ka_thread is not None and self._ka_thread.is_alive():
-            return
-        self._ka_stop.clear()
-        self._ka_thread = threading.Thread(
-            target=self._keepalive_loop, args=(period_s,),
-            name="serial-keepalive", daemon=True)
-        self._ka_thread.start()
-
-    def stop_keepalive(self) -> None:
-        self._ka_stop.set()
-        t = self._ka_thread
-        if t is not None and t.is_alive() and t is not threading.current_thread():
-            t.join(timeout=1.0)
-        self._ka_thread = None
-
-    def _keepalive_loop(self, period_s: float) -> None:
-        # Always plain "+": after !GO the relay is a transparent pipe, and
-        # direct connections were already plain.  The old ">+" relay prefix is
-        # no longer used on any code path.
-        #
-        # Idle-gate (sprint 040): only emit "+" when the wire has been idle for a
-        # full period.  The firmware resets its watchdog on EVERY received line,
-        # so any command already serves as a keepalive; emitting a redundant "+"
-        # next to a command lets the relay's RAW250 framing merge the two lines
-        # and corrupt the command.  Suppressing "+" while commands flow (connect,
-        # config, streaming) eliminates that collision, while true idle and long
-        # blocking motions (host otherwise silent) still get "+" with nothing to
-        # collide with.  Poll at half-period so idle keepalives stay regular and
-        # worst-case silence (~1.5×period ≈ 225 ms) stays well under the default
-        # sTimeoutMs (500).
-        msg = b"+\n"
-        poll_s = period_s / 2.0
-        while not self._ka_stop.wait(poll_s):
-            try:
-                if not self.is_open:
-                    break
-                with self._write_lock:
-                    if (time.monotonic() - self._last_write_s) < period_s:
-                        continue  # a command fed the watchdog recently; skip "+"
-                    if self._ser is not None:
-                        self._ser.write(msg)
-                        self._ser.flush()
-                        self._last_write_s = time.monotonic()
-            except Exception:
-                break   # port closed / gone — let the robot safety-stop
 
     def send_cleartext(self, verb: str, read_timeout: int = 1500) -> list[str]:  # [ms]
         """Send a bare cleartext verb and return the reply lines.
@@ -1311,7 +1235,6 @@ class SerialConnection:
             with self._write_lock:
                 self._ser.write(f"{verb}\n".encode("utf-8"))
                 self._ser.flush()
-                self._last_write_s = time.monotonic()
         except Exception:
             return []
 
@@ -1381,7 +1304,6 @@ class SerialConnection:
                 with self._write_lock:
                     self._ser.write(cmd.encode("utf-8"))
                     self._ser.flush()
-                    self._last_write_s = time.monotonic()  # defer the next "+"
             except Exception as exc:
                 with self._reply_lock:
                     self._reply_queues.pop(corr_id, None)
@@ -1480,7 +1402,6 @@ class SerialConnection:
             with self._write_lock:
                 self._ser.write(line + b"\n")
                 self._ser.flush()
-                self._last_write_s = time.monotonic()  # defer the next "+"
         except Exception as exc:
             with self._reply_lock:
                 self._reply_queues.pop(str(corr_id), None)
@@ -1552,7 +1473,6 @@ class SerialConnection:
         with self._write_lock:
             self._ser.write(line + b"\n")
             self._ser.flush()
-            self._last_write_s = time.monotonic()  # defer the next "+"
 
         return corr_id
 
@@ -1570,7 +1490,6 @@ class SerialConnection:
         with self._write_lock:
             self._ser.write(cmd.encode("utf-8"))
             self._ser.flush()
-            self._last_write_s = time.monotonic()  # defer the next "+"
 
     def read_lines(self, duration: int = 500,  # [ms]
                    stop_token: str | None = None) -> list[str]:

@@ -16,17 +16,6 @@ Transport (ABC)
         send(line)           — fire-and-forget (no reply read).
         command(line, read_timeout) — send and collect reply lines joined as str.
 
-    Keepalive (sprint 065, ticket 005; default no-ops, not abstract):
-        arm_keepalive()    — arm the ambient host "+" keepalive for an
-            open-ended (S/VW/R) motion session. connect() no longer arms it
-            automatically; the caller that owns the motion session (e.g.
-            KeyboardDriver) is responsible. Hardware backends
-            (_HardwareTransport) delegate to SerialConnection.start_keepalive();
-            SimTransport uses the inherited no-op default (no real serial
-            link, no ambient-keepalive concept).
-        disarm_keepalive() — disarm it (hardware backends delegate to
-            SerialConnection.stop_keepalive()).
-
     Callbacks (set before connect()):
         on_telemetry: Callable[[TLMFrame], None] | None
             Called from the reader thread for every parsed TLM line.
@@ -191,6 +180,167 @@ _CAMERA_TAG_ID = 100
 # backends is transport-vs-none.
 _UNMANAGED_SPEED = 150.0      # [mm/s]
 _UNMANAGED_YAW_RATE = 2.0     # [rad/s]
+
+# Host-side unmanaged-drive tuning.
+#
+# _BURST/_REFRESH: each WHEELS lease is bounded -- App::Drive arms it until
+#   `commandDeadline_ = now + duration` (drive.cpp:16) -- so losing the host
+#   mid-drive stops the robot within one burst. The host MUST re-arm well
+#   inside that window: refresh at <= _BURST/4, leaving four missed sends of
+#   margin. A refresh interval close to the lease is not merely tight, it
+#   visibly HALTS the robot: at burst 150 / refresh 120 the send plus frame
+#   handling overran 150ms several times per drive and both wheels dropped to
+#   zero mid-leg (bench 2026-07-31, dropouts at t = 0.7, 2.8, 3.8 and 5.5s of a
+#   700mm drive).
+_UNMANAGED_BURST = 300.0    # [ms] lease length; also the host-loss coast window
+_UNMANAGED_REFRESH = 60.0   # [ms] re-arm interval -- keep at <= _BURST/4
+#
+# _EASE/_FLOOR: full speed until the last _EASE mm, then taper to _FLOOR, which
+#   must stay clear of breakaway or the wheel stalls short of the target.
+_UNMANAGED_EASE = 60.0      # [mm]
+_UNMANAGED_FLOOR = 90.0     # [mm/s]
+#
+# _TRIM_GAIN/_TRIM_LIMIT: the left/right travel split is nulled by a BOUNDED
+#   DIFFERENTIAL correction about a COMMON speed -- never by giving each wheel
+#   its own independent distance profile. Both wheels always run, always at
+#   comparable speed.
+#
+#   The independent-profile version this replaces let the wheel that got ahead
+#   ease to 0 while the other still ran at 90mm/s -- a pivot. It matched the
+#   encoder counts (714 vs 713 over 700mm) by STEERING: measured 2026-07-31, a
+#   27deg veer during the leg then a 24deg terminal pivot, cancelling in heading
+#   and adding in displacement, for a final pose of theta -0.6deg with y +149mm.
+#   The 1mm encoder split was the symptom, not evidence of a straight line.
+#
+#   Correcting continuously from the first frame is the whole point: the same
+#   authority applied early keeps heading error small instead of dumping it into
+#   one pivot at the end. The limit keeps `speed - trim/2` above breakaway.
+_UNMANAGED_TRIM_GAIN = 2.0    # [mm/s per mm of split]
+_UNMANAGED_TRIM_LIMIT = 40.0  # [mm/s] peak-to-peak differential
+
+
+def effective_track_width(config: Any) -> "float | None":  # [mm]
+    """The robot's EFFECTIVE track width -- the caliper-measured wheel
+    separation corrected for scrub -- the identical quantity, from the identical
+    formula, the firmware computes at boot (``App::effectiveTrackWidth()``):
+
+        effective = trackwidth / rotational_slip   (slip > 0, else trackwidth)
+
+    Ideal differential kinematics say ``omega = (vR - vL) / b``, but a skid-steer
+    robot drags its wheels sideways through a turn and rotates LESS than that, so
+    every kinematic use of the track wants ``b / slip``.
+
+    ANY host-side integration of encoder counts into a pose MUST use this, not
+    the raw ``cfg.trackwidth``. Feeding the raw value made the host dead-reckoner
+    turn 1.097x more per unit of encoder split than the firmware did (tovez: raw
+    128.0 vs effective 140.4), so the Encoder trace and the firmware's own pose
+    diverged in proportion to ACCUMULATED ROTATION -- identical on a straight leg
+    (theta -0.6 vs -0.5), then 15 deg and 710mm apart after a session of turning
+    (bench 2026-07-31, ratio 1.084 observed against 1.097 predicted).
+
+    That bug LOOKS like a broken estimator or a dead sensor, which is what makes
+    it expensive: it sent a debugging session hunting the OTOS and the fusion
+    weights. It is only ever a geometry mismatch between two integrators.
+
+    Returns None when there is no usable geometry, so callers can decline to
+    integrate rather than silently produce a plausible-but-wrong pose.
+    """
+    if config is None:
+        return None
+    geom = getattr(config, "geometry", None)
+    trackwidth = getattr(geom, "trackwidth", None) if geom is not None else None
+    if not trackwidth:
+        return None
+    cal = getattr(config, "calibration", None)
+    slip = getattr(cal, "rotational_slip", None) if cal is not None else None
+    # slip == 0 is the documented "uncalibrated" sentinel: apply no correction.
+    if slip is None or slip <= 0.0:
+        return float(trackwidth)
+    return float(trackwidth) / float(slip)
+
+
+def run_unmanaged_distance_drive(transport: Any, driver: Any, distance: float,
+                                 direction: float, label: str,
+                                 log: Callable[[str], None]) -> None:
+    """Drive `distance` [mm] on the encoders via repeated bounded WHEELS leases
+    at a common speed, with a bounded differential trim holding the wheels
+    together.
+
+    ONE implementation, called by BOTH transports, because a button's message
+    must not depend on which transport is underneath it (stakeholder,
+    2026-07-31: "the button on SIM sends the same message as the button").
+    `driver` is anything exposing the two primitives both ``NezhaProtocol`` and
+    ``SimLoop`` provide -- ``wheels(l, r, ms)`` and ``estop()``.
+
+    UNMANAGED MEANS UNMANAGED. WHEELS is routed firmware-side straight to
+    ``App::Drive`` after ``planner_.estop()``: no profile, no shaping, no
+    firmware stop condition. This replaces a `move_twist()` implementation on
+    BOTH backends that ran the planner and its closed loop -- so the button
+    labelled unmanaged was managed, on hardware and in Sim alike.
+
+    Blocks until the drive finishes; callers that must not block run it on their
+    own worker thread. Always estops on the way out, including on exception.
+    """
+    def observe(ms: float):
+        """Wait `ms`, then return the freshest frame WITHOUT consuming any.
+
+        Deliberately not a drain -- see ``Transport._deliver_tlm()``'s docstring
+        for why draining here blanks the GUI's traces and graphs for the whole
+        move.
+        """
+        time.sleep(ms / 1000.0)
+        return getattr(transport, "latest_frame", None)
+
+    def speed_for(remaining: float) -> float:  # [mm] -> [mm/s]
+        if remaining <= 2.0:
+            return 0.0
+        if remaining > _UNMANAGED_EASE:
+            return _UNMANAGED_SPEED
+        return max(_UNMANAGED_FLOOR,
+                   _UNMANAGED_SPEED * remaining / _UNMANAGED_EASE)
+
+    try:
+        # Baseline from the frame already in hand -- telemetry streams
+        # continuously, so there is nothing to wait for. An earlier version
+        # slept 300ms here first, which was pure dead time before the wheels
+        # ever moved AND long enough to look like "motion settled" to anything
+        # watching for a quiet window (it tripped the GUI button-acceptance
+        # settle detector, whose quiet threshold is 250ms).
+        pre = getattr(transport, "latest_frame", None)
+        base = pre.enc if (pre is not None and pre.enc) else (0.0, 0.0)
+        deadline = time.monotonic() + (distance / _UNMANAGED_SPEED) * 5.0 + 6.0
+        dl = dr = 0.0
+        while (dl + dr) / 2.0 < distance and time.monotonic() < deadline:
+            speed = speed_for(distance - (dl + dr) / 2.0)
+            # If the right wheel has run further, the LEFT is the one that
+            # speeds up. Bounded so neither wheel is ever stopped or reversed
+            # while the other drives -- that is a pivot, not a straight leg.
+            split = _UNMANAGED_TRIM_GAIN * (dr - dl)
+            trim = max(-_UNMANAGED_TRIM_LIMIT,
+                       min(_UNMANAGED_TRIM_LIMIT, split))
+            if speed == 0.0:
+                trim = 0.0  # never trim about a stopped common speed
+            driver.wheels(direction * (speed + trim / 2.0),
+                          direction * (speed - trim / 2.0),
+                          _UNMANAGED_BURST)
+            frame = observe(_UNMANAGED_REFRESH)
+            if frame is not None:
+                if frame.enc:
+                    dl = direction * (frame.enc[0] - base[0])
+                    dr = direction * (frame.enc[1] - base[1])
+                if getattr(frame, "fault_wheel_frozen", False):
+                    log(f"[ERROR] {label}: WHEEL FROZEN -- commanded but not "
+                        f"turning; aborting")
+                    return
+        log(f"[INFO] {label} done: L={dl:+.0f}mm R={dr:+.0f}mm "
+            f"(target {distance:.0f}mm)")
+    except Exception as exc:  # noqa: BLE001 -- a drive worker must never raise
+        log(f"[ERROR] {label} failed: {exc}")
+    finally:
+        try:
+            driver.estop()
+        except Exception:
+            pass
 
 # Move.timeout safety-backstop sizing for every Move/move_twist()/
 # move_wheels() built from an expected duration (the managed D/RT/SEG
@@ -609,6 +759,10 @@ class Transport(abc.ABC):
         self.on_telemetry: TelemetryCB | None = None
         self.on_truth: TruthCB | None = None
         self.on_log: LogCB | None = None
+        # Freshest delivered frame, for observers that must NOT consume the
+        # telemetry stream -- see _deliver_tlm()'s own docstring for why
+        # draining it instead starves the GUI's traces and graphs.
+        self.latest_frame: TLMFrame | None = None
 
     @property
     def turn_scrub_factor(self) -> float:
@@ -718,24 +872,6 @@ class Transport(abc.ABC):
     # ambient-keepalive concept -- its watchdog behavior is exercised
     # directly via ``sim_command()`` (tickets 002/003).
 
-    def arm_keepalive(self) -> None:
-        """Arm the ambient host keepalive for an open-ended motion session.
-
-        No-op by default.  Hardware backends override this to start the
-        underlying ``SerialConnection``'s background ``+`` keepalive thread.
-        """
-
-    def disarm_keepalive(self) -> None:
-        """Disarm the ambient host keepalive.
-
-        No-op by default.  Hardware backends override this to stop the
-        underlying ``SerialConnection``'s background ``+`` keepalive thread.
-        """
-
-    # ------------------------------------------------------------------
-    # Internal helpers shared across hardware backends
-    # ------------------------------------------------------------------
-
     def _log(self, text: str) -> None:
         """Deliver a timestamped text entry to the log callback."""
         if self.on_log:
@@ -746,7 +882,23 @@ class Transport(abc.ABC):
                 pass
 
     def _deliver_tlm(self, frame: TLMFrame) -> None:
-        """Invoke on_telemetry safely."""
+        """Invoke on_telemetry safely, and cache the frame for observers.
+
+        ``latest_frame`` exists so a background worker can watch telemetry
+        WITHOUT consuming it. The read APIs (``read_binary_tlm_frames()`` /
+        ``read_pending_binary_tlm_frames()``) DRAIN the same queue this method
+        is fed from, so any worker that calls them competes with the GUI and
+        wins -- the traces and graphs then show nothing until the worker stops.
+
+        That is not hypothetical: the unmanaged-drive loop polled for encoder
+        feedback that way and the whole display stayed dead for the duration of
+        every move (bench 2026-07-31, "I'm not getting my traces until the move
+        is finished"). Nothing errors when it happens; the graphs just go blank,
+        which reads as a telemetry fault rather than as contention.
+
+        Workers poll this attribute instead. See ``run_unmanaged_distance_drive``.
+        """
+        self.latest_frame = frame
         if self.on_telemetry:
             try:
                 self.on_telemetry(frame)
@@ -1311,11 +1463,17 @@ class _HardwareTransport(Transport):
             self._log("[WARN] run_unmanaged: not connected")
             return
         if distance_mm != 0.0:
-            v_x = math.copysign(_UNMANAGED_SPEED, distance_mm)
-            timeout = _move_timeout_for(abs(distance_mm) / _UNMANAGED_SPEED)
+            # Genuinely unmanaged: the shared WHEELS loop, identical to the one
+            # SimTransport runs. The move_twist() path this replaced went
+            # through the planner and its closed loop -- see
+            # run_unmanaged_distance_drive()'s own docstring.
             label = f"unmanaged drive {distance_mm:+.0f}mm @ {_UNMANAGED_SPEED:.0f}mm/s"
-            kwargs: dict[str, Any] = dict(stop_distance=abs(distance_mm))
-            v_y, omega = 0.0, 0.0
+            threading.Thread(
+                target=run_unmanaged_distance_drive,
+                args=(self, self._proto, abs(distance_mm),
+                      math.copysign(1.0, distance_mm), label, self._log),
+                daemon=True).start()
+            return
         elif angle_deg != 0.0:
             v_x, v_y = 0.0, 0.0
             omega = math.copysign(_UNMANAGED_YAW_RATE, angle_deg)
@@ -1336,20 +1494,6 @@ class _HardwareTransport(Transport):
 
     # ------------------------------------------------------------------
     # Keepalive arm/disarm
-    # ------------------------------------------------------------------
-
-    def arm_keepalive(self) -> None:
-        """Start the underlying ``SerialConnection``'s ``+`` keepalive thread."""
-        if self._conn is not None:
-            self._conn.start_keepalive()
-
-    def disarm_keepalive(self) -> None:
-        """Stop the underlying ``SerialConnection``'s ``+`` keepalive thread."""
-        if self._conn is not None:
-            self._conn.stop_keepalive()
-
-    # ------------------------------------------------------------------
-    # Background threads
     # ------------------------------------------------------------------
 
     def _reader_loop(self) -> None:
@@ -1750,7 +1894,28 @@ class SimTransport(Transport):
             profile = sim_prefs.load_sim_error_profile()
         except Exception:
             profile = dict(sim_prefs.DEFAULT_PROFILE)
-        track_width = profile.get("trackwidth", sim_prefs.DEFAULT_PROFILE["trackwidth"])
+
+        # Geometry comes from the ROBOT, never from the error profile
+        # (stakeholder, 2026-07-31: "always use the robot's configured values").
+        # The Sim Errors panel used to own a `trackwidth` spin box that fed this
+        # straight from a prefs file and defaulted to the RAW 128.0mm -- so every
+        # Sim session ran ~10% different geometry from the robot it was
+        # simulating (tovez: raw 128.0 vs effective 140.4). The discrepancy was
+        # editable in a dialog, which is how it survived unnoticed. A simulator
+        # whose geometry can silently disagree with the robot cannot falsify
+        # anything about it.
+        cfg = robot_config
+        if cfg is None:
+            from robot_radio.config.robot_config import get_robot_config
+            cfg = get_robot_config()
+
+        track_width = effective_track_width(cfg)
+        if track_width is None:
+            track_width = float(profile.get(
+                "trackwidth", sim_prefs.DEFAULT_PROFILE["trackwidth"]))
+            self._log(f"[WARN] SimTransport: no robot geometry available -- "
+                      f"falling back to {track_width:.1f}mm. The sim's geometry "
+                      f"will NOT match any robot.")
 
         loop = SimLoop(track_width=float(track_width), lib_path=lib_path)
         loop.on_telemetry = self._deliver_tlm
@@ -1772,10 +1937,9 @@ class SimTransport(Transport):
         self._config_echo = {}
         self._apply_profile_to_sim(loop, profile)
 
-        cfg = robot_config
-        if cfg is None:
-            from robot_radio.config.robot_config import get_robot_config
-            cfg = get_robot_config()
+        # `cfg` was resolved above, before SimLoop construction -- SimLoop's
+        # track_width is fixed at construction (sim_create()), so the geometry
+        # has to be known by then.
         if cfg is not None:
             try:
                 self.configure_from_robot(cfg)
@@ -2126,11 +2290,16 @@ class SimTransport(Transport):
         if self._loop is None:
             return
         if distance_mm != 0.0:
-            v_x = math.copysign(_UNMANAGED_SPEED, distance_mm)
-            omega = 0.0
-            timeout = _move_timeout_for(abs(distance_mm) / _UNMANAGED_SPEED)
-            kwargs: dict[str, Any] = dict(stop_distance=abs(distance_mm))
+            # The SAME shared routine the hardware transport runs, sending the
+            # SAME WHEELS command -- see run_unmanaged_distance_drive().
             label = f"unmanaged drive {distance_mm:+.0f}mm @ {_UNMANAGED_SPEED:.0f}mm/s"
+            self._motion_stop_event.clear()
+            threading.Thread(
+                target=run_unmanaged_distance_drive,
+                args=(self, self._loop, abs(distance_mm),
+                      math.copysign(1.0, distance_mm), label, self._log),
+                daemon=True).start()
+            return
         elif angle_deg != 0.0:
             v_x = 0.0
             omega = math.copysign(_UNMANAGED_YAW_RATE, angle_deg)

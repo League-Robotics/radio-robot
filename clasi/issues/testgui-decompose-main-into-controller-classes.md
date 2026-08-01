@@ -15,6 +15,27 @@ plain, Qt-decoupled, testable controller). Applying it to the remaining
 state machines makes each one unit-testable headlessly — which is exactly
 how the acceptance suite would have caught the dead STOP path.
 
+## Progress 2026-07-31 (out of process)
+
+**Done — `WorkerSession`** (`src/host/robot_radio/testgui/worker_session.py`,
+10 tests). Tour and GOTO had byte-identical copies of the QThread worker
+lifecycle differing only in which buttons re-enable; both are now one tested
+class, and the six shadow `_state` slots (tour/goto worker/thread/bridge) are
+gone. This was the piece the STOP defect actually hid in, so it went first.
+
+`__main__.py` is now 3,209 lines (was 3,262). That is a small dent in the line
+count and a large one in testability -- the point was never the line count.
+
+**Still to do**, unchanged from below:
+- `ConnectionController` — the connect/disconnect state machine. The largest
+  and riskiest of the three; it touches every button's enabled state.
+- `TourController` / `GotoController` — the remaining non-lifecycle logic
+  (origin reset, sim-mode logging, worker construction). `WorkerSession`
+  removed the shared part; what is left is genuinely per-controller.
+- Moving the "Test S/T/US/UT" build pipeline to `src/tests/sim/`. Deliberately
+  not done out of process: it REMOVES buttons from a GUI the stakeholder is
+  actively using, which is their call, not a refactor's.
+
 ## What to do
 
 1. Extract three controllers following the `OpsController` pattern, each
