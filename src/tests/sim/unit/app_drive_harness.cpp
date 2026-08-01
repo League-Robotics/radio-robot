@@ -88,6 +88,42 @@ void checkFloatEq(float actual, float expected, const std::string& what,
   }
 }
 
+// --- MockMotor (129-001) -------------------------------------------------
+//
+// A dependency-free Devices::Motor double, local to this harness, for the
+// stop-re-assertion scenario below -- it needs direct, test-settable
+// control over velocity() independent of any plant physics, which the real
+// NezhaMotor leaves used by scenarios 1/2 above can't give without a much
+// larger scripted-encoder sequence. Records setDuty() call COUNT (not just
+// the last value, unlike the real leaves' appliedDuty()) -- that count is
+// this scenario's own oracle for "did Drive actually re-issue the write,
+// or did the quiet-at-zero shortcut swallow it."
+class MockMotor : public Devices::Motor {
+ public:
+  void begin() override {}
+  void requestSample() override {}
+  void setDuty(float duty) override { lastDutyCmd = duty; ++setDutyCalls; }
+  void setNeutral(Devices::Neutral) override {}
+  void applyTravelCalib(float) override {}
+  bool reconfigure(const Devices::MotorConfig&) override { return true; }
+  void tick(uint64_t) override {}
+  float position() const override { return 0.0f; }
+  float velocity() const override { return mockVelocity_; }
+  float appliedDuty() const override { return 0.0f; }
+  bool connected() const override { return true; }
+  uint64_t sampleTime() const override { return 0; }
+  void resetPosition() override {}
+  void rebaseline() override {}
+
+  void setMockVelocity(float velocity) { mockVelocity_ = velocity; }  // [mm/s]
+
+  int setDutyCalls = 0;
+  float lastDutyCmd = 0.0f;
+
+ private:
+  float mockVelocity_ = 0.0f;  // [mm/s]
+};
+
 // --- Devices::NezhaMotor scripting helpers (duplicated from
 // devices_motor_harness.cpp -- see this file's own header note) ----------
 
@@ -222,11 +258,80 @@ void scenarioStopZeroesBothTargetsWithinOneCycle() {
   checkFloatEq(right.appliedDuty(), 0.0f, "right appliedDuty() reaches 0 within one cycle of stop()");
 }
 
+// ===========================================================================
+// 3. 129-001 (issue 07, the 2026-07-31 runaway): estop() arms a stop-re-
+//    assertion window (kStopEnforceTicks, drive.h) -- tick() must keep
+//    explicitly re-issuing the zero duty write to a wheel that is still
+//    measurably moving (above kRestVelocity), bypassing the quiet-at-zero
+//    shortcut that would otherwise silently stop calling setDuty() once
+//    writtenLeft_/Right_ first reach 0. This is Drive's own mirror of
+//    NezhaMotor's stopNotTaken write-on-change exemption
+//    (devices_motor_harness.cpp's own dropped-stop-write scenario covers
+//    that layer) -- "a stop is asserted until it is OBSERVED, not until it
+//    is sent" (drive.h's own header).
+// ===========================================================================
+
+void scenarioEstopReassertsStopWhileWheelsStillMoving() {
+  beginScenario("estop() re-asserts a commanded stop while a wheel is still measurably "
+                "moving, bypassing the quiet-at-zero shortcut (129-001)");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
+
+  // Drive a nonzero pair first -- one real setDuty() call each, landing a
+  // nonzero writtenLeft_/writtenRight_ baseline.
+  drive.tick(0.5f, 0.5f);
+  checkTrue(left.setDutyCalls == 1 && right.setDutyCalls == 1,
+            "setup: the nonzero pair actually reached both leaves");
+
+  // ESTOP -- arms the re-assertion window. RobotLoop::handleEstop() zeroes
+  // the blackboard's own cmdVelocity in the SAME cycle (robot_loop.cpp);
+  // this harness drives that same contract directly via tick(0, 0).
+  drive.estop();
+
+  // The wheels are still coasting well above kRestVelocity (8 mm/s) -- every
+  // tick() call while that holds must explicitly re-issue setDuty(0), not
+  // silently take the quiet shortcut once writtenLeft_/Right_ first land at
+  // 0 (which happens on the very first of these calls below).
+  left.setMockVelocity(60.0f);
+  right.setMockVelocity(60.0f);
+  const int callsBeforeReassert = left.setDutyCalls;
+  for (int i = 0; i < 5; ++i) {
+    drive.tick(0.0f, 0.0f);
+  }
+  checkTrue(left.setDutyCalls == callsBeforeReassert + 5,
+            "each tick() while still moving re-issues setDuty(0) on the left leaf -- the "
+            "quiet-at-zero shortcut never engages while wheelsMoving holds");
+  checkTrue(right.setDutyCalls == callsBeforeReassert + 5,
+            "same for the right leaf");
+
+  // Once genuinely at rest AND the fixed-length countdown armed by estop()
+  // has also fully elapsed (well past kStopEnforceTicks == 30 tick() calls
+  // total since estop(), including the 5 above), the quiet-at-zero shortcut
+  // resumes -- Drive stops re-calling setDuty() for a command that hasn't
+  // changed, matching the ORIGINAL (pre-129-001) steady-state behavior.
+  left.setMockVelocity(0.0f);
+  right.setMockVelocity(0.0f);
+  for (int i = 0; i < 40; ++i) {
+    drive.tick(0.0f, 0.0f);
+  }
+  const int callsAfterSettle = left.setDutyCalls;
+  drive.tick(0.0f, 0.0f);
+  checkTrue(left.setDutyCalls == callsAfterSettle,
+            "once at rest and the enforce window has elapsed, the quiet shortcut resumes on "
+            "the left leaf");
+  checkTrue(right.setDutyCalls == callsAfterSettle, "same for the right leaf");
+}
+
 }  // namespace
 
 int main() {
   scenarioSetDutyStagesRawValues();
   scenarioStopZeroesBothTargetsWithinOneCycle();
+  scenarioEstopReassertsStopWhileWheelsStillMoving();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Drive scenarios passed\n");

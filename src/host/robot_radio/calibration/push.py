@@ -247,6 +247,12 @@ def estimator_kwargs(config: Any) -> dict[str, float]:
 # other SET key below uses.
 _SIX_DECIMAL_KEYS = frozenset({"ml", "mr"})
 
+# Per-command read timeouts for calibration_commands()'s pushed sequence.
+# OI (OTOS init) waits longer than a plain SET/OL/OA -- the chip's own init
+# sequence needs more time to settle before it can ack.
+_SET_READ_TIMEOUT_MS = 200
+_OTOS_INIT_READ_TIMEOUT_MS = 500
+
 
 def calibration_commands(config: Any) -> list[tuple[str, int]]:
     """Build the v2 calibration wire-command sequence for *config*.
@@ -328,11 +334,11 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
 
     for key, value in calibration_kwargs(config).items():
         if key == "tw":
-            cmds.append((f"SET tw={value}", 200))
+            cmds.append((f"SET tw={value}", _SET_READ_TIMEOUT_MS))
         elif key in _SIX_DECIMAL_KEYS:
-            cmds.append((f"SET {key}={value:.6f}", 200))
+            cmds.append((f"SET {key}={value:.6f}", _SET_READ_TIMEOUT_MS))
         else:
-            cmds.append((f"SET {key}={value:g}", 200))
+            cmds.append((f"SET {key}={value:g}", _SET_READ_TIMEOUT_MS))
 
     # ── OTOS init + scalars: RESTORED (109-004) ───────────────────────────
     # Dropped 2026-07-16 (out-of-process) because OI/OL/OA had no path over
@@ -354,9 +360,9 @@ def calibration_commands(config: Any) -> list[tuple[str, int]]:
     lin_scale = float(lin_scale) if lin_scale is not None else 1.0
     ang_scale = float(ang_scale) if ang_scale is not None else 1.0
 
-    cmds.append(("OI", 500))
-    cmds.append((f"OL {scale_to_int8(lin_scale)}", 200))
-    cmds.append((f"OA {scale_to_int8(ang_scale)}", 200))
+    cmds.append(("OI", _OTOS_INIT_READ_TIMEOUT_MS))
+    cmds.append((f"OL {scale_to_int8(lin_scale)}", _SET_READ_TIMEOUT_MS))
+    cmds.append((f"OA {scale_to_int8(ang_scale)}", _SET_READ_TIMEOUT_MS))
 
     # (The NOTE about OTOS mounting-offset never being pushable — `odomOff*`
     # aren't registered SET keys — still holds; that stays out too.)

@@ -110,6 +110,26 @@ enum Verb {
   // terminal (they need a COBS+CRC frame), so listing them would advertise
   // commands a human cannot type.
   HELP   = 17 [(binary) = false];
+  // DBG -- unsolicited firmware->host debug message channel (129-003, issue
+  // 05-dbg-debug-message-channel-for-bench-and-sim.md; stakeholder,
+  // 2026-07-31: "Can we add another response field so that you can send
+  // debug messages? ... Let's go make a DBG. It only needs to get compiled
+  // in when you're on the bench or in SIM.").
+  //
+  // Cleartext, "DBG:<message>" -- App::debugf() (src/firm/app/debug.h)
+  // formats a printf-style line and App::Comms::sendDebug() sends it on
+  // both transports via the same one-off sendReliable() path READY/DEVICE
+  // use, never the high-cadence async TLM path. Compiled in ONLY when
+  // ROBOT_DEBUG is defined (a bench-only opt-in CMake option, mirroring
+  // FAKE_OTOS) or HOST_BUILD is defined (Sim/host tests always have it) --
+  // the shipped ARM release build has neither, so debugf()/App::Comms::
+  // sendDebug() compile to nothing there: zero flash cost, zero wire
+  // traffic. Registered here regardless (the closed verb set must name
+  // every verb ever emitted, per this file's own header note) so the host
+  // codec (wire_commands.py) always recognizes "DBG:" as a cleartext line
+  // rather than counting it malformed on a bench/Sim build that DOES emit
+  // it.
+  DBG    = 18 [(binary) = false];
 
   // --- Binary command verbs (host -> robot) -- CommandEnvelope.cmd's
   // oneof arms (envelope.proto), also named on the wire per the uniform

@@ -206,6 +206,93 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
 }
 
 // ===========================================================================
+// 2a. Wheel-frozen fault, GATED (129-002, wheel-frozen-fault-flag-in-
+//     telemetry.md): the SAME freezePosition(1, true) knob as scenario 2
+//     above, but asserting the NEW, per-wheel, motion-qualified
+//     kFlagFaultWheelFrozenLeft -- RobotLoop::publishWheels()'s new
+//     `motorL_.wedgeSuspect()`/`motorR_.wedgeSuspect()` publish point,
+//     wired through App::Telemetry::update() into the wire frame.
+//
+//     Two things this scenario proves that scenario 2 does not:
+//       (a) "not on a single cycle" -- the flag stays CLEAR for the first
+//           part of the freeze window (well under kWedgeThreshold), only
+//           setting once the gated counter actually reaches threshold.
+//       (b) LEFT-only, never RIGHT -- the right wheel is never frozen, so
+//           kFlagFaultWheelFrozenRight must never set, proving the two
+//           bits are genuinely per-wheel, not one shared "a wheel is
+//           frozen" bit.
+//     Deliberately does NOT call estop()/abandon the Move here (unlike
+//     scenario 2b below) -- this ticket wires PUBLICATION only, no new
+//     firmware-side reaction; see this file's own scenario 2b comment for
+//     why an automatic firmware stop on wedgeSuspect was tried once
+//     already and reverted (false positive on an ordinary decel tail
+//     parking in the dead zone).
+// ===========================================================================
+
+void scenarioWheelFrozenGatedFlagSetsOnlyAfterThresholdLeftOnly() {
+  beginScenario("wheel-frozen (gated): kFlagFaultWheelFrozenLeft stays clear under threshold, sets past it, "
+                "kFlagFaultWheelFrozenRight never sets");
+
+  TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
+  sim.boot();
+  sim.step(3);  // settle
+  (void)sim.drainTelemetry();
+
+  sim.injectMove(/*v_x=*/1000.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
+                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/31,
+                 /*corrId=*/31);
+  sim.step(5);  // ramp a bit -- appliedDuty() is genuinely nonzero before freezing
+
+  std::vector<DecodedLine> driving = onlyTelemetry(sim.drainTelemetry());
+  bool sawFrozenBeforeFreeze = false;
+  for (const auto& f : driving) {
+    if (f.telemetry.flags & (App::kFlagFaultWheelFrozenLeft | App::kFlagFaultWheelFrozenRight))
+      sawFrozenBeforeFreeze = true;
+  }
+  checkTrue(!sawFrozenBeforeFreeze, "driving normally (no freeze yet): neither wheel-frozen bit sets");
+
+  sim.plant().freezePosition(/*port=*/1, true);  // 1 == left
+
+  // Well under kWedgeThreshold -- the gated counter is still accumulating,
+  // so the flag must NOT have set yet (this is the "not on a single cycle"
+  // requirement).
+  sim.step(kWedgeThreshold - 4);
+  std::vector<DecodedLine> underThreshold = onlyTelemetry(sim.drainTelemetry());
+  checkTrue(!underThreshold.empty(), "telemetry decoded under the wedge threshold");
+  bool sawFrozenUnderThreshold = false;
+  for (const auto& f : underThreshold) {
+    if (f.telemetry.flags & App::kFlagFaultWheelFrozenLeft) sawFrozenUnderThreshold = true;
+    checkTrue(!(f.telemetry.flags & App::kFlagFaultWheelFrozenRight),
+              "right wheel was never frozen -- kFlagFaultWheelFrozenRight must never set");
+  }
+  checkTrue(!sawFrozenUnderThreshold,
+            "kFlagFaultWheelFrozenLeft stays clear before the gated counter reaches kWedgeThreshold");
+
+  // Comfortably past the threshold now.
+  sim.step(kWedgeThreshold + 5);
+  std::vector<DecodedLine> pastThreshold = onlyTelemetry(sim.drainTelemetry());
+  checkTrue(!pastThreshold.empty(), "telemetry decoded past the wedge threshold");
+  bool sawFrozenPastThreshold = false;
+  for (const auto& f : pastThreshold) {
+    if (f.telemetry.flags & App::kFlagFaultWheelFrozenLeft) sawFrozenPastThreshold = true;
+    checkTrue(!(f.telemetry.flags & App::kFlagFaultWheelFrozenRight),
+              "right wheel was never frozen -- kFlagFaultWheelFrozenRight must never set");
+  }
+  checkTrue(sawFrozenPastThreshold,
+            "kFlagFaultWheelFrozenLeft sets once the gated counter reaches kWedgeThreshold, driving+frozen");
+
+  sim.plant().freezePosition(/*port=*/1, false);
+  sim.step(kWedgeThreshold + 5);
+  std::vector<DecodedLine> released = onlyTelemetry(sim.drainTelemetry());
+  bool sawClear = false;
+  for (const auto& f : released) {
+    if (!(f.telemetry.flags & App::kFlagFaultWheelFrozenLeft)) sawClear = true;
+  }
+  checkTrue(sawClear, "kFlagFaultWheelFrozenLeft clears again once the frozen reading resumes advancing");
+}
+
+// ===========================================================================
 // 2b. SAFETY: a wedge WHILE DRIVING must stop the robot, not just raise a
 //     flag. This is the playfield gate.
 //
@@ -366,6 +453,7 @@ void scenarioEncoderDropoutStaysSaneUnderModerateLoss() {
 int main() {
   scenarioMotorDisconnectFlipsConnLeftAndRecovers();
   scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease();
+  scenarioWheelFrozenGatedFlagSetsOnlyAfterThresholdLeftOnly();
   // NOT REGISTERED -- known gap, see clasi task "a wedged I2C bus makes the
   // motors unstoppable in software". The scenario is correct about the
   // REQUIREMENT and was verified to fail-without / pass-with a first-attempt

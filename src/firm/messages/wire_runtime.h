@@ -33,33 +33,15 @@
 // and returns `false`, leaving `*pos` unchanged, if the value would not
 // fully fit in `[*pos, cap)` -- never a partial write.
 //
-// Sprint 123 added two more schema-agnostic byte primitives to this same
-// layer: COBS frame encode/decode (item 8) and CRC-16/CCITT-FALSE
-// compute/verify (item 9) -- the wire's new binary framing + integrity
-// check, replacing the base64 armor's expansion cost and closing the "no
-// integrity check anywhere" gap (see `clasi/sprints/123-.../sprint.md`
-// Design Rationale). Ticket 002 cut the actual ARMOR over (comms.cpp/
-// telemetry.cpp no longer call base64Encode()/base64Decode() at all) --
-// base64 (item 7) itself is RETAINED, not removed, because
-// wire_differential_harness.cpp (src/tests/sim/unit/) independently
-// depends on it for its own, unrelated debug-CLI wire encoding (comparing
-// this codec's encode/decode against a Python protobuf reference), a
-// consumer with no connection to the Comms armor scheme. Deleting the
-// primitive would be a second, out-of-scope breaking change for zero
-// benefit -- ticket 001's own forward-reference to removal assumed no such
-// independent consumer existed; ticket 002 found one and kept the
-// primitive rather than force that collateral change.
-//
-// Sprint 124 ticket 003 (protocol v5 Part A, issue §2/§3) extended both
-// item 8 and item 9 again, in place, with no new primitive files: COBS is
-// now keyed on a caller-supplied delimiter byte (item 8) instead of a
-// hardcoded 0x00, and CRC-16/CCITT-FALSE gained an incremental
-// crcInit()/crcUpdate() pair (item 9) alongside the existing single-range
-// crcCompute() so a caller can hash a command-name prefix and a payload
-// together without concatenating them into one scratch buffer first. Both
-// changes default to the pre-124 behavior (delimiter 0x00, no prefix) so
-// every call site written against the 123 API keeps compiling and
-// computing byte-identical results unless it opts in.
+// The wire's binary framing + integrity check adds two more schema-agnostic
+// byte primitives to this same layer: COBS frame encode/decode (item 8) and
+// CRC-16/CCITT-FALSE compute/verify (item 9). Comms (comms.cpp/
+// telemetry.cpp) no longer calls base64Encode()/base64Decode() for the
+// wire armor, but base64 (item 7) is RETAINED, not removed: it has an
+// independent consumer, wire_differential_harness.cpp (src/tests/sim/unit/),
+// which uses it for debug-CLI wire encoding unrelated to the Comms armor
+// scheme -- deleting it would be a collateral breaking change for zero
+// benefit.
 //
 // Decode-side contract: every `decode*` function takes a source `const
 // uint8_t* buf`/`size_t len` and a `size_t* pos` cursor; it returns `false`
@@ -213,20 +195,18 @@ bool base64Decode(const char* in, size_t inLen, uint8_t* out, size_t cap, size_t
 // itself. This primitive does NOT append that trailing delimiter;
 // deciding where the delimiter goes (and demuxing it from any
 // differently-terminated content sharing the same byte stream) is
-// `Comms`'s job (sprint 123 ticket 002), not this schema-agnostic
-// primitive's. `cobsEncode()`'s OUTPUT never contains a byte equal to
-// `delimiter` -- that is the whole property that makes the trailing
-// delimiter unambiguous, for WHICHEVER byte value `delimiter` is.
+// `Comms`'s job, not this schema-agnostic primitive's. `cobsEncode()`'s
+// OUTPUT never contains a byte equal to `delimiter` -- that is the whole
+// property that makes the trailing delimiter unambiguous, for WHICHEVER
+// byte value `delimiter` is.
 //
-// `delimiter` defaults to `0x00` -- every call site written before sprint
-// 124 ticket 003 added this parameter keeps compiling unchanged and keeps
-// computing byte-identical output, because XOR-ing by `0x00` is the
-// identity operation (see the mechanism below). Sprint 124 ticket 003
-// (protocol v5 Part A, issue §2) needed `0x0A` instead: COBS guarantees
-// `0x00`-freedom but nothing about any other byte value, and a payload
-// containing a literal `0x0A` corrupted the wire once the frame delimiter
-// became `\n` (proven 0/10 on hardware, fixed narrowly in 123-006/febfb450
-// before this ticket fixed the general case).
+// `delimiter` defaults to `0x00`, and XOR-ing by `0x00` is the identity
+// operation (see the mechanism below), so an all-default call computes the
+// same output as a delimiter-unaware caller would expect. COBS guarantees
+// `0x00`-freedom but nothing about any other byte value -- ERRATUM: a
+// payload containing a literal `0x0A` corrupted the wire when the frame
+// delimiter was `\n`, which is why `delimiter` is parameterized rather than
+// hardcoded to `0x00`.
 //
 // Mechanism: run the standard COBS algorithm (Cheshire & Baker 1999) below
 // EXACTLY as if `delimiter` were always `0x00` -- walk the input, split it
@@ -286,8 +266,8 @@ bool cobsDecode(const uint8_t* in, size_t inLen, uint8_t* out, size_t cap, size_
 
 // --- 9. CRC-16/CCITT-FALSE (wire integrity check) -----------------------
 //
-// Decided variant, PINNED exactly so firmware and host (ticket 003) agree
-// byte-for-byte -- there is no negotiation, no version byte:
+// Decided variant, PINNED exactly so firmware and host agree byte-for-byte
+// -- there is no negotiation, no version byte:
 //   poly   = 0x1021
 //   init   = 0xFFFF
 //   refin  = false  (processed MSB-first, no input reflection)
@@ -298,23 +278,19 @@ bool cobsDecode(const uint8_t* in, size_t inLen, uint8_t* out, size_t cap, size_
 // == 0x29B1` -- exercised as an exact-value test, not merely "some CRC
 // changed."
 //
-// Width decision (sprint 123 Open Question 1): 16 bits, not 32. Frames on
-// this wire are small -- well under 256 B even before this sprint's
-// COBS+CRC change -- so a 16-bit CRC's 2^-16 miss rate on random
-// corruption is strong detection for this size range at HALF the
-// per-frame overhead (2 bytes) a CRC-32 would cost (4 bytes), on a link
-// whose whole point of this sprint is shedding overhead (base64's 33%
-// expansion) rather than re-spending most of it back on the integrity
-// check that replaces it.
+// Width: 16 bits, not 32. Frames on this wire are small -- well under
+// 256 B -- so a 16-bit CRC's 2^-16 miss rate on random corruption is
+// strong detection for this size range at half the per-frame overhead
+// (2 bytes) a CRC-32 would cost (4 bytes).
 //
 // `crcCompute()` takes a raw pointer/length (not the buf/cap/pos cursor
 // shape the encode/decode primitives use) because a CRC is a scalar
 // reduction over a byte range, not a byte-buffer transform with its own
 // cursor -- there is nothing to advance. `encodeCrc16()`/`decodeCrc16()`
 // give the buf/cap/pos-cursor wire-placement pair (little-endian, 2
-// bytes) for a caller (ticket 002) that wants to append/read the CRC value
-// itself as part of a framed byte sequence, following the exact same
-// never-partial contract as `encodeFixed32()`/`decodeFixed32()`.
+// bytes) for a caller that wants to append/read the CRC value itself as
+// part of a framed byte sequence, following the exact same never-partial
+// contract as `encodeFixed32()`/`decodeFixed32()`.
 uint16_t crcCompute(const uint8_t* data, size_t len);
 bool crcVerify(const uint8_t* data, size_t len, uint16_t expectedCrc);
 bool encodeCrc16(uint16_t crc, uint8_t* buf, size_t cap, size_t* pos);
@@ -322,14 +298,13 @@ bool decodeCrc16(const uint8_t* buf, size_t len, size_t* pos, uint16_t* crc);
 
 // crcInit()/crcUpdate() -- the incremental form `crcCompute()` is built on
 // (`crcCompute(data, len) == crcUpdate(crcInit(), data, len)`, exactly,
-// same loop body). Sprint 124 ticket 003 (issue §3): the wire's CRC input
-// extends from "payload alone" to "COMMAND ':' payload" -- the command
-// name and the payload are two byte ranges that are NOT adjacent in
-// memory (one is a caller's literal/buffer, the other is a freshly
-// schema-encoded scratch buffer), so hashing them together needs either a
-// concatenation into a THIRD scratch buffer (extra copy, extra size
-// bookkeeping) or a way to feed the CRC register more than once. This is
-// the latter: `crcInit()` returns the starting register value,
+// same loop body). The wire's CRC input covers "COMMAND ':' payload" --
+// the command name and the payload are two byte ranges that are NOT
+// adjacent in memory (one is a caller's literal/buffer, the other is a
+// freshly schema-encoded scratch buffer), so hashing them together needs
+// either a concatenation into a THIRD scratch buffer (extra copy, extra
+// size bookkeeping) or a way to feed the CRC register more than once. This
+// is the latter: `crcInit()` returns the starting register value,
 // `crcUpdate()` folds in one more byte range and returns the continued
 // register value -- CRC-16/CCITT-FALSE's `xorout = 0x0000`/`refout =
 // false` mean the running register IS the CRC value at every point, so

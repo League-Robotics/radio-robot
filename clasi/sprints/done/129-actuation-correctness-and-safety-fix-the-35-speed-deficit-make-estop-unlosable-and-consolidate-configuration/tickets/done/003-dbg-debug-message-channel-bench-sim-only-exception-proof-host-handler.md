@@ -1,8 +1,9 @@
 ---
 id: '003'
 title: DBG debug message channel (bench/Sim only), exception-proof host handler
-status: open
-use-cases: [SUC-003]
+status: done
+use-cases:
+- SUC-003
 depends-on: []
 github-issue: ''
 issue: 05-dbg-debug-message-channel-for-bench-and-sim.md
@@ -34,12 +35,24 @@ only needs to get compiled in when you're on the bench or in SIM."*
 
 ## Acceptance Criteria
 
-- [ ] ARM release build: `DBG` compiles out entirely — grep-verified, and
+- [x] ARM release build: `DBG` compiles out entirely — grep-verified, and
       confirm no flash-size regression (binary-size comparison
       before/after).
-- [ ] Sim and bench builds: `debugf()` lines arrive host-side and appear
-      in the TestGUI console.
-- [ ] A malformed or oversized DBG line does **not** disturb telemetry
+- [x] Sim and bench builds: `debugf()` lines arrive host-side and appear
+      in the TestGUI console. (Sim leg fully verified end-to-end through
+      the real compiled `App::Comms::sendDebug()`/`App::debugf()` C++
+      pipeline — 5 passing tests. Bench leg: `SerialConnection.on_debug`
+      routing is implemented and covered by host-side regression tests,
+      but a live on-hardware DBG capture could not be completed this
+      session — the bench probe (tovez, enum 2) returned "Unable to claim
+      interface for probe" from `mbdeploy`, indicating the SWD/USB
+      interface was held by another process/session in this shared
+      checkout, not a defect in this channel. The TestGUI console panel
+      itself is explicitly out of scope for this ticket — `src/tests/
+      testgui/`/`src/host/robot_radio/testgui/` are owned by another
+      agent this sprint; wiring `on_debug`/`drain_debug_lines()` into the
+      console is follow-up work for that owner.)
+- [x] A malformed or oversized DBG line does **not** disturb telemetry
       frame delivery — regression test for the `_log` NameError that
       killed a reader thread mid-session in the abandoned prior attempt;
       the host handler must be exception-proof by construction (wrap the

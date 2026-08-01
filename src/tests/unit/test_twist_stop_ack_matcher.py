@@ -26,7 +26,11 @@ none of which need live hardware or even a real `SerialConnection`:
    (telemetry.proto moved `cmd_vel` to `TelemetrySecondary`; an even older
    `from_pb2()` referenced the now-gone `has_cmd_vel`/`cmd_vel_left`/
    `cmd_vel_right` fields and raised `AttributeError` on every real
-   `Telemetry` frame) — kept green across the frame-v2 rewrite too.
+   `Telemetry` frame) — kept green across the frame-v2 rewrite too. Also
+   covers the 129-002 wheel-frozen fault bits (19/20) — both
+   `TLMFrame.fault_wheel_frozen_left`/`fault_wheel_frozen_right` and the
+   `wheel_frozen_reason()` helper, positive (left/right/both set) and
+   negative (neither set, and a non-wheel-frozen flag alone) cases.
 
 3. `NezhaProtocol.wait_for_ack()` — 104-003 promoted the actual poll/match/
    timeout algorithm out of this method into
@@ -53,7 +57,7 @@ from __future__ import annotations
 import pytest
 
 from robot_radio.robot.pb2 import envelope_pb2, telemetry_pb2
-from robot_radio.robot.protocol import AckEntry, NezhaProtocol, TLMFrame
+from robot_radio.robot.protocol import AckEntry, NezhaProtocol, TLMFrame, wheel_frozen_reason
 
 # ---------------------------------------------------------------------------
 # 1. move_twist() / move_wheels() / stop() — schema-level envelope
@@ -233,6 +237,61 @@ def test_from_pb2_flags_defaults_to_zero_not_none():
 
     assert frame.flags == 0
     assert frame.fault_wedge_latch is False
+
+
+# 129-002 (wheel-frozen-fault-flag-in-telemetry.md): bits 19/20, the GATED
+# (motion-qualified) per-wheel stall signal -- deliberately NOT the same
+# signal as fault_wedge_latch (bit 7, the raw latch that also fires on a
+# healthy robot parked at rest). See TLMFrame's own docstring for the full
+# distinction.
+_FLAG_FAULT_WHEEL_FROZEN_LEFT = 1 << 19
+_FLAG_FAULT_WHEEL_FROZEN_RIGHT = 1 << 20
+
+
+def test_from_pb2_decodes_wheel_frozen_left_only():
+    telemetry = telemetry_pb2.Telemetry(now=1, flags=_FLAG_FAULT_WHEEL_FROZEN_LEFT)
+
+    frame = TLMFrame.from_pb2(telemetry)
+
+    assert frame.fault_wheel_frozen_left is True
+    assert frame.fault_wheel_frozen_right is False
+    assert wheel_frozen_reason(frame) == "LEFT"
+
+
+def test_from_pb2_decodes_wheel_frozen_right_only():
+    telemetry = telemetry_pb2.Telemetry(now=1, flags=_FLAG_FAULT_WHEEL_FROZEN_RIGHT)
+
+    frame = TLMFrame.from_pb2(telemetry)
+
+    assert frame.fault_wheel_frozen_left is False
+    assert frame.fault_wheel_frozen_right is True
+    assert wheel_frozen_reason(frame) == "RIGHT"
+
+
+def test_from_pb2_decodes_wheel_frozen_both():
+    telemetry = telemetry_pb2.Telemetry(
+        now=1, flags=_FLAG_FAULT_WHEEL_FROZEN_LEFT | _FLAG_FAULT_WHEEL_FROZEN_RIGHT,
+    )
+
+    frame = TLMFrame.from_pb2(telemetry)
+
+    assert frame.fault_wheel_frozen_left is True
+    assert frame.fault_wheel_frozen_right is True
+    assert wheel_frozen_reason(frame) == "LEFT + RIGHT"
+
+
+def test_from_pb2_wheel_frozen_negative_case_neither_flag_set():
+    """A false positive here is worse than no flag at all (ticket 002's own
+    acceptance criterion) -- confirm an unrelated fault bit (wedge latch,
+    bit 7) does NOT trip either wheel-frozen property or the reason
+    helper."""
+    telemetry = telemetry_pb2.Telemetry(now=1, flags=_FLAG_FAULT_WEDGE_LATCH)
+
+    frame = TLMFrame.from_pb2(telemetry)
+
+    assert frame.fault_wheel_frozen_left is False
+    assert frame.fault_wheel_frozen_right is False
+    assert wheel_frozen_reason(frame) is None
 
 
 def test_from_pb2_err_ack_carries_err_code():

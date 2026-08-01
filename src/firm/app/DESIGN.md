@@ -1307,6 +1307,44 @@ called with real elapsed time between calls).
   for a live `EstimatorConfigPatch` (§3 above) — a plain in-memory update,
   not a bus transaction. All of the above are pure computation: no I2C
   access, no sleep, bounded per call.
+- **`App::debugf(fmt, ...)`/`DBG_EVERY(n, ...)`/`DBG_MILLI(x)`
+  (`app/debug.h`/`.cpp`) + `App::setDebugSink(Comms*)` + `Comms::
+  sendDebug(line)`** (129-003, `DBG`=18 — issue 05-dbg-debug-message-
+  channel-for-bench-and-sim.md; stakeholder, 2026-07-31: "Can we add
+  another response field so that you can send debug messages? ... It only
+  needs to get compiled in when you're on the bench or in SIM."): a
+  firmware→host debug message channel, compile-gated to bench/Sim builds
+  only. **Compiled in ONLY when `ROBOT_DEBUG` is defined** (a bench-only,
+  opt-in CMake option — `CMakeLists.txt`'s `option(ROBOT_DEBUG ...)`,
+  mirroring the existing `FAKE_OTOS` pattern; select via `cmake
+  -DROBOT_DEBUG=ON` or `build.py --robot-debug`) **or `HOST_BUILD`**
+  (`src/sim/CMakeLists.txt` always defines it, so Sim/host tests always
+  have the channel). Neither is defined in the plain, shipped
+  `cmake .. -DROBOT_DEBUG=OFF` (the default) ARM build, so there
+  `debugf()`/`DBG_EVERY()`/`setDebugSink()` are inline no-ops and
+  `Comms::sendDebug()` does not exist at all — zero flash cost, zero wire
+  traffic (measured: 0-byte `.text` delta on the default build with this
+  channel's whole implementation present in the tree but compiled out;
+  see `debug.h`'s own file header for the exact gate). `debugf()` formats
+  a printf-style line and hands it to the installed sink as one cleartext
+  `"DBG:<line>"` wire line (`Comms::sendDebug()`, the same one-off
+  `sendReliable()` broadcast path `sendReady()`/`sendBanner()` use — never
+  the async, drop-on-full `send()` telemetry path). `setDebugSink()`
+  installs a single process-global `Comms*` sink — `main.cpp` wires it to
+  its own `comms` right after constructing it; `TestSim::SimHarness`'s
+  constructor does the same with its own `comms_` member. `DBG_MILLI(x)`
+  exists because newlib-nano's `printf`/`vsnprintf` has no float support
+  (`%f` silently emits nothing on ARM) — any `debugf()` call reporting a
+  float value must convert it to an integer milli-unit first and format
+  with `%ld`. `DBG_EVERY(n, ...)` throttles a per-cycle debug line to
+  every Nth call at that call site (a function-local static counter, one
+  per macro expansion). Host side: `serial_conn.py`'s `on_debug` callback
+  (routed straight off `_handle_text_line()`'s `DBG` branch, wrapped in
+  its own `try/except` so a bug in a caller-supplied handler can never
+  kill the reader thread — the abandoned prior session's own `_log`
+  `NameError` regression this exists to prevent) and `sim_loop.py`'s
+  `SimLoop.drain_debug_lines()`/`drain_pending_debug()` (via a new
+  `sim_drain_debug()` ctypes export, `sim_ctypes.cpp`).
 
 ### Consumes
 
@@ -1424,3 +1462,13 @@ called with real elapsed time between calls).
   baked JSON default. Revisit once fake-OTOS/external-pose fusion
   (future sprints) give these weights real, nonzero, bench-validated
   values worth persisting.
+- **`App::debugf()`'s installed sink is a single process-global pointer,
+  not per-instance.** Fine on real hardware (one board, one `Comms`) and
+  in every current Sim/host-test caller (one `TestSim::SimHarness` per
+  process). If a future test ever constructs more than one `SimHarness`
+  concurrently in the same process, only the most recently constructed
+  one's `App::setDebugSink()` call wins — `debugf()` output from the
+  others is silently misrouted or dropped, not duplicated or errored.
+  Tickets 006/007 (the first real `debugf()` call sites) should keep this
+  in mind if they ever add multi-harness test scenarios; no such scenario
+  exists yet.

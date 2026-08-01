@@ -193,12 +193,9 @@ class RealOtos : public Otos {
   // sampleTime()`, NOT "cycles since sample() last ran" (a caller that only
   // gets scheduled every other cycle, or a rate-limited-skip tick(), must
   // still see the REAL elapsed time since the chip's own reading was
-  // actually taken). App::HeadingSource -- 109-010's own measurement-age
-  // projection consumer this accessor was added for -- is DELETED (115-002,
-  // gut-to-minimal-firmware S1 motion-stack excision); no live App::
-  // consumer remains, but the accessor stays (exercised by
-  // app_robot_loop_harness.cpp and useful for future bench diagnostics; the
-  // protocol-v5 age-based telemetry work re-adds a live consumer).
+  // actually taken). No live App:: consumer reads this today, but the
+  // accessor stays -- exercised by app_robot_loop_harness.cpp and useful
+  // for bench diagnostics.
   uint64_t sampleTime() const override { return lastReadUs_; }  // [us]
 
   // True if a real bus read is due: either no real read has ever happened
@@ -305,7 +302,7 @@ class RealOtos : public Otos {
   // connected()'s own comment for why this is retried every tick() rather
   // than latching permanently false.
   bool connected_ = false;
-  uint8_t lastProbeId_ = 0;   // [101-001] last product-ID byte read by begin()
+  uint8_t lastProbeId_ = 0;   // last product-ID byte read by begin()
 
   PoseReading cachedPose_{};
   bool poseFresh_ = false;   // poseFresh()'s backing field
@@ -339,12 +336,11 @@ class RealOtos : public Otos {
   static constexpr uint8_t kImuCalibSamples = 255;
 
   // LSB scale factors shared by every 6-byte int16-triple pose-domain
-  // register block (POSITION_XL, OFFSET_XL) this leaf touches. See
-  // otos_odometer.h's own historical derivation note for VELOCITY_XL's
-  // pre-existing (unfixed, out of this ticket's scope) reuse of the SAME
-  // constants despite the chip's velocity registers documenting a different
-  // native LSB scale — carried forward unchanged (a live twist-scaling
-  // change needs its own bench-verifiable ticket, not a sim-only port pass).
+  // register block (POSITION_XL, OFFSET_XL) this leaf touches. VELOCITY_XL
+  // reuses the SAME constants despite the chip's velocity registers
+  // documenting a different native LSB scale — carried forward unchanged
+  // (a live twist-scaling change needs its own bench-verifiable ticket,
+  // not a sim-only port pass).
   static constexpr float kPosMmPerLsb = 0.305f;                             // [mm/LSB]
   static constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);  // [rad/LSB]
 
@@ -378,12 +374,12 @@ class RealOtos : public Otos {
   // *** SAME-INSTANT-HEADING CONTRACT — READ BEFORE CALLING ***
   // sensorToCentre()'s sensorHeading parameter MUST be the heading read in
   // the SAME I2C burst/sample as sensorX/sensorY — never a heading left
-  // over from a previous tick. A past regression (commit db11b7c,
-  // pre-rebuild tree) produced ~433mm of phantom translation on a pure spin
-  // on hardware because the offset rotation used a heading that lagged the
-  // live spin by a constant ~omega*dt: the residual is a lever-arm circle
-  // proportional to spin rate, invisible at rest and severe during a fast
-  // turn. Passing the same-instant heading makes the arc cancel exactly,
+  // over from a previous tick. ERRATUM: a past regression produced
+  // ~433mm of phantom translation on a pure spin on hardware because the
+  // offset rotation used a heading that lagged the live spin by a
+  // constant ~omega*dt: the residual is a lever-arm circle proportional
+  // to spin rate, invisible at rest and severe during a fast turn.
+  // Passing the same-instant heading makes the arc cancel exactly,
   // regardless of spin rate. tick() (below) and applyPendingPose() already
   // honor this; any NEW call site must too.
   static void sensorToCentre(float sensorX, float sensorY, float sensorHeading,

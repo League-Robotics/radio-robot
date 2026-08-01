@@ -49,6 +49,7 @@ parser.add_option('-j', '--parallelism', dest='parallelism', action="store", hel
 parser.add_option('-n', '--lines', dest='detail_lines', action="store", help="Sets the number of detail lines to output (only relevant to --status)", default=3 )
 parser.add_option('--fw-only', dest='fw_only', action="store_true", help='Build ONLY the micro:bit firmware; skip the host-simulation library. By default build.py builds BOTH the bench firmware (MICROBIT.hex) and the full-simulation library (src/sim/build/libfirmware_host).', default=False)
 parser.add_option('--fake-otos', dest='fake_otos', action="store_true", help='Build the bench FAKE_OTOS variant (120-002; otos-fake-seam refactor): main.cpp binds the loop\'s Devices::Otos& to an App::FakeOtos that reports the dead-reckoned Odometry pose + wheel twist as if it were the chip, instead of the real Devices::RealOtos I2C leaf. Firmware (MICROBIT.hex) ONLY -- never affects the host-sim build (src/sim uses its own OtosPlant, unrelated to this flag). Always passes an explicit -DFAKE_OTOS=ON/OFF to cmake so a stale CMakeCache.txt from a prior invocation can never leave this flag silently stuck.', default=False)
+parser.add_option('--robot-debug', dest='robot_debug', action="store_true", help='Build the bench ROBOT_DEBUG variant (129-003; DBG debug message channel): compiles in App::debugf()/DBG_EVERY()/DBG_MILLI() (src/firm/app/debug.h) and App::Comms::sendDebug(), and main.cpp wires the channel via App::setDebugSink(). Firmware (MICROBIT.hex) ONLY -- the host-sim build (src/sim, HOST_BUILD) always has the DBG channel regardless of this flag (debug.h: ROBOT_DEBUG OR HOST_BUILD). Always passes an explicit -DROBOT_DEBUG=ON/OFF to cmake, mirroring --fake-otos, so a stale CMakeCache.txt can never leave this flag silently stuck.', default=False)
 
 (options, args) = parser.parse_args()
 
@@ -242,11 +243,16 @@ def _host_sim_dir():
     return os.path.join(root, "src", "sim")
 
 
-def print_build_summary(fw_only, fake_otos=False):
+def print_build_summary(fw_only, fake_otos=False, robot_debug=False):
     """Print a one-glance summary so there is no guessing which versions exist."""
     ver = _project_version()
     print("\n=== build summary ===")
-    variant = "  (FAKE_OTOS bench variant)" if fake_otos else ""
+    variants = []
+    if fake_otos:
+        variants.append("FAKE_OTOS")
+    if robot_debug:
+        variants.append("ROBOT_DEBUG")
+    variant = "  (%s bench variant)" % "+".join(variants) if variants else ""
     print("  firmware hex   v%s   -> MICROBIT.hex%s" % (ver, variant))
     if fw_only:
         print("  host sim lib   (skipped: --fw-only)")
@@ -276,9 +282,12 @@ if not options.test_platform:
     # `build.py`/`build.py --clean` (no --fake-otos) deterministically
     # produce the real, table build every time, regardless of build/'s
     # prior state.
+    # ROBOT_DEBUG (129-003): same "always pass an EXPLICIT ON/OFF" reasoning
+    # as FAKE_OTOS immediately above -- see that comment.
     fake_otos_arg = "-DFAKE_OTOS={}".format("ON" if options.fake_otos else "OFF")
+    robot_debug_arg = "-DROBOT_DEBUG={}".format("ON" if options.robot_debug else "OFF")
     build(options.clean, verbose=options.verbose, parallelism=options.parallelism,
-          extra_cmake_args=fake_otos_arg)
+          extra_cmake_args="{} {}".format(fake_otos_arg, robot_debug_arg))
 
     # Dev build = BOTH versions. After the bench firmware (MICROBIT.hex), also
     # build the full-simulation library (libfirmware_host, HOST_BUILD) so a single
@@ -297,7 +306,7 @@ if not options.test_platform:
         else:
             print("\nbuild.py: src/sim/ absent -- skipping host-sim build (077-001)")
 
-    print_build_summary(options.fw_only, options.fake_otos)
+    print_build_summary(options.fw_only, options.fake_otos, options.robot_debug)
     exit(0)
 
 for json_obj in test_json:

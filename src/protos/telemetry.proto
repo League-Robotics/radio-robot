@@ -293,7 +293,22 @@ message Telemetry {
   //             could route it). Latching, like every other fault count
   //             bit here -- it says "this has happened since boot," not
   //             "this is happening now."
-  //   bits 19-31 reserved
+  //   bit 19 -- fault: LEFT wheel frozen (129-002, wheel-frozen-fault-
+  //             flag-in-telemetry.md) -- Devices::MotorArmor::
+  //             wedgeSuspect(), the GATED (motion-qualified) stall
+  //             detector: commanded nonzero duty for N consecutive cycles
+  //             with no encoder change. Deliberately NOT the same signal
+  //             as bit 7 (the raw, unconditional wedge latch, which also
+  //             fires on a healthy robot merely parked at rest) -- see
+  //             telemetry.h's own kFlagFaultWheelFrozenLeft doc comment.
+  //   bit 20 -- fault: RIGHT wheel frozen -- same as bit 19, right wheel.
+  //   bits 21-31 reserved
+  //
+  // (max)=2097151 ((1<<21)-1) -- 129-002 (wheel-frozen-fault-flag-in-
+  // telemetry.md): widened to cover bits 19/20 above, the same discipline
+  // command-ingestion-...-two-stops.md and 124-008 applied for bits 18 and
+  // 16/17 respectively (see the two notes below) -- the bound tracks the
+  // highest LIVE bit.
   //
   // (max)=524287 ((1<<19)-1) -- widened by command-ingestion-...-two-stops.md
   // to cover bit 18 above, the same way 124-008 widened it for bits 16/17
@@ -307,7 +322,7 @@ message Telemetry {
   // silent because validateBounds() runs on decode only, never encode (see
   // wire.cpp's own decodeInto()/encodeInto() split). Widened to cover both
   // bit 16 and this ticket's own new bit 17.
-  uint32 flags = 4 [(max) = 524287];
+  uint32 flags = 4 [(max) = 2097151];
 
   // ack_corr/ack_err -- DELETED (124-008, issue §B4): the single "freshest
   // ack" scalar slot duplicated the ack ring's (acks, below) newest entry;

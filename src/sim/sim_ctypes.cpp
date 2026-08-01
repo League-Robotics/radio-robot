@@ -100,6 +100,33 @@
 //     demuxed frame with the exact same COBS+CRC codec a real robot's
 //     replies go through (`robot_radio.io.wire_codec`).
 //
+// ---- Debug line drain (129-003, bench/Sim-only DBG channel) ----
+//   int sim_drain_debug(SimHandle h, char* buf, int buflen);
+//     Same drain contract as sim_drain_tlm() above (snprintf()-style
+//     return-value convention, never splits a line across buflen, buf may
+//     be NULL/buflen 0 to drain-and-discard), but sourced from
+//     SimHarness::drainReliable() (the cleartext-plane capture READY/
+//     STATUS/HELP/DEVICE/PONG already ride, comms.h's own Transport doc
+//     comment) filtered down to ONLY lines starting "DBG:" -- the one
+//     cleartext verb this sprint's App::debugf() (app/debug.h) ever emits
+//     unsolicited, at an unbounded rate, that a Python caller (SimLoop.
+//     drain_debug_lines()) wants to poll. A non-DBG reliable line (e.g. a
+//     STATUS reply to some other test's own query) is silently NOT
+//     returned here -- nothing else currently drains drainReliable()
+//     through this C ABI, so nothing else's traffic is lost by this
+//     filtering.
+//   void sim_test_emit_debug(SimHandle h, const char* msg);
+//     TEST-ONLY escape hatch: calls App::debugf("%s", msg) directly against
+//     this handle's own installed sink (SimHarness's constructor already
+//     wires App::setDebugSink(&comms_)), with no real subsystem call site
+//     involved. Exists because this ticket lands the DBG CHANNEL itself,
+//     ahead of tickets 006/007's actual debugf() call sites -- proves the
+//     full setDebugSink()/debugf()/Comms::sendDebug()/sim_drain_debug()
+//     round trip end to end without needing a real diagnostic to exist
+//     yet. A no-op if this library was built without ROBOT_DEBUG/
+//     HOST_BUILD (never true for this library -- HOST_BUILD=1 is always
+//     defined here, see this file's own includes).
+//
 // ---- True pose ----
 //   float sim_true_x(SimHandle h);  // [mm]
 //   float sim_true_y(SimHandle h);  // [mm]
@@ -202,6 +229,7 @@
 #include <string>
 #include <vector>
 
+#include "app/debug.h"
 #include "sim_harness.h"
 
 // Firmware version compiled into THIS shared library -- exported so the host
@@ -366,6 +394,46 @@ int sim_drain_tlm(SimHandle h, uint8_t* buf, int buflen) {
     }
   }
   return static_cast<int>(total);
+}
+
+// ---- Debug line drain (129-003, bench/Sim-only DBG channel) ----
+
+int sim_drain_debug(SimHandle h, char* buf, int buflen) {
+  std::vector<std::string> lines = asHarness(h)->drainReliable();
+
+  std::vector<std::string> debugLines;
+  for (const std::string& line : lines) {
+    if (line.rfind("DBG:", 0) == 0) debugLines.push_back(line);
+  }
+
+  size_t total = 0;
+  for (const std::string& line : debugLines) total += line.size() + 1;  // +1 for the trailing '\n'
+
+  if (buf != nullptr && buflen > 0) {
+    size_t copied = 0;
+    const size_t cap = static_cast<size_t>(buflen);
+    for (const std::string& line : debugLines) {
+      const size_t lineTotal = line.size() + 1;
+      if (copied + lineTotal > cap) break;  // never split a line across the buffer boundary
+      std::memcpy(buf + copied, line.data(), line.size());
+      buf[copied + line.size()] = '\n';
+      copied += lineTotal;
+    }
+  }
+  return static_cast<int>(total);
+}
+
+// TEST-ONLY: see this file's own header comment on sim_drain_debug()'s
+// section for why this exists ahead of tickets 006/007's real debugf()
+// call sites. `msg` is passed through App::debugf()'s own "%s" formatting
+// -- NOT %-interpreted itself, so a test string containing a literal '%'
+// cannot be misread as a format specifier.
+void sim_test_emit_debug(SimHandle h, const char* msg) {
+  (void)h;  // App::debugf() routes through the process-global sink
+            // App::setDebugSink() installed -- SimHarness's constructor
+            // already did this for THIS handle's own comms_ (there is
+            // only ever one live handle per test process in practice).
+  App::debugf("%s", msg);
 }
 
 // ---- True pose ----

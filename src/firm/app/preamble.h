@@ -17,9 +17,9 @@
 // Telemetry flows from power-on (frames report per-device status, via this
 // class's own accessors below); commands are not consumed until the main
 // loop starts. Wiring Preamble's accessors into a boot-time
-// Types::RobotState/Telemetry::update() call (124-009: RobotLoop::boot()'s
-// own job, robot_loop.cpp) is main.cpp's construction job -- this class
-// only builds the driver and its read-only status surface.
+// Types::RobotState/Telemetry::update() call (RobotLoop::boot()'s own job,
+// robot_loop.cpp) is main.cpp's construction job -- this class only
+// builds the driver and its read-only status surface.
 //
 // --- step()'s contract: ONE bounded probe action per call, never sleeps ---
 // Each call to step() advances AT MOST ONE not-yet-resolved device's own
@@ -104,14 +104,14 @@ class Preamble {
   bool done() const;
 
   // --- Per-device status accessors -- boot telemetry. RobotLoop::boot()
-  // (124-009) wires these into a throwaway Types::RobotState's
+  // wires these into a throwaway Types::RobotState's
   // wheelLeft/wheelRight/otos.connected fields (tlm_.update(bootState))
   // while polling done(); once done() goes true, boot()'s own tail
   // (sendBanner()/sendReady()) announces completion in cleartext -- there
-  // is no boot-ready telemetry bit any more (125-002, deleted; see
-  // telemetry.h's flags-layout comment, bit 11 RESERVED). Each accessor
-  // below is a cheap forwarding call to the leaf's own existing status
-  // method -- Preamble holds no separate copy of this state. ---
+  // is no boot-ready telemetry bit (see telemetry.h's flags-layout
+  // comment, bit 11 RESERVED). Each accessor below is a cheap forwarding
+  // call to the leaf's own existing status method -- Preamble holds no
+  // separate copy of this state. ---
   bool leftConnected() const { return left_.connected(); }
   bool rightConnected() const { return right_.connected(); }
   bool otosPresent() const { return otos_.present(); }

@@ -435,7 +435,8 @@ class SerialConnection:
     """
 
     def __init__(self, port: str = DEFAULT_PORT, baud: int = BAUD_RATE,
-                 mode: str | None = None, on_send=None, on_recv=None):
+                 mode: str | None = None, on_send=None, on_recv=None,
+                 on_debug=None):
         self._port = port
         self._baud = baud
         self._mode = mode  # None = auto-detect from announcement
@@ -443,6 +444,15 @@ class SerialConnection:
         self.on_send = on_send  # callback(cmd_str) for verbose TX logging
         self.on_recv = on_recv  # callback(line_str) for verbose RX logging
                                 # (every decoded line from the reader thread)
+        # 129-003 (bench/Sim-only DBG debug channel): callback(line_str) for
+        # every "DBG:<message>" line, routed straight here by
+        # _handle_text_line() -- NEVER through _text_queue, and NEVER
+        # allowed to raise past this class's reader thread. See
+        # _handle_text_line()'s own doc comment for the historical defect
+        # (a `_log` NameError inside an earlier session's DBG handler
+        # killed the reader thread mid-session) this callback's own
+        # try/except wrapper exists to make structurally impossible.
+        self.on_debug = on_debug
         # Serial-write lock: serializes the keepalive thread's writes with the
         # main thread's command writes so their bytes never interleave.
         self._write_lock = threading.RLock()
@@ -943,8 +953,8 @@ class SerialConnection:
     def _handle_text_line(self, command: str, text: str) -> None:
         """Route one cleartext reply already classified by
         ``_handle_wire_line()`` (``command`` is a registered CLEARTEXT verb
-        -- ``DEVICE``/``PONG``/``ID``/``VER``; ``text`` is the FULL decoded
-        line, verb included).
+        -- ``DEVICE``/``PONG``/``ID``/``VER``/``DBG``; ``text`` is the FULL
+        decoded line, verb included).
 
         124-005 (issue §4): the pre-v5 ``TLM``/``EVT`` text-branch routing
         and the ``OK``/``ERR``/``CFG``/``ID`` ``#<corr-id>``-suffix routing
@@ -956,7 +966,33 @@ class SerialConnection:
         then DROPPED here, so every cleartext query looked from the caller's
         side exactly like an unreachable robot -- which cost a bench session
         chasing a radio link that was working the whole time.
+
+        129-003 (bench/Sim-only DBG debug channel): ``DBG`` is intercepted
+        HERE, before ``_text_queue`` -- it is an unsolicited, unbounded
+        diagnostic stream (``App::debugf()``, ``app/debug.h``), not a
+        request/reply verb a blocked ``send_cleartext()`` caller is waiting
+        on, so it never enters that queue. Routed to ``on_debug`` instead,
+        wrapped in its own try/except so a bug in a CALLER-supplied
+        ``on_debug`` handler can never propagate out of this reader thread
+        -- the exact historical defect this ticket's own acceptance
+        criteria name: a ``_log`` ``NameError`` inside an earlier session's
+        DBG handler killed the reader thread mid-session, silently ending
+        TELEMETRY delivery too (this method has no other caller than the
+        reader thread, ``_handle_wire_line()`` -- see ``_reader_loop()``'s
+        own doc comment: nothing between here and there catches an
+        exception). A malformed/oversized DBG line cannot reach this point
+        already-broken either: ``_handle_wire_line()`` decodes with
+        ``"utf-8", "ignore"`` before calling here, so ``text`` is always a
+        plain (possibly garbled, never raising) Python string.
         """
+        if command == "DBG":
+            if self.on_debug is not None:
+                try:
+                    self.on_debug(text)
+                except Exception:
+                    pass
+            return
+
         del command  # the full line (verb included) is what callers want
         if self._text_queue.full():
             try:

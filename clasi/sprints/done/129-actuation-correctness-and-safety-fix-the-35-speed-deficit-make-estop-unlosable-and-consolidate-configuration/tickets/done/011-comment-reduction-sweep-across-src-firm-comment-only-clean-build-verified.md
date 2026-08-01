@@ -1,9 +1,15 @@
 ---
 id: '011'
 title: Comment reduction sweep across src/firm (comment-only, clean-build verified)
-status: open
-use-cases: [SUC-009]
-depends-on: ['001', '002', '003', '006', '007', '009', '010']
+status: done
+use-cases:
+- SUC-009
+depends-on:
+- '001'
+- '002'
+- '003'
+- 009
+- '010'
 github-issue: ''
 issue: 01-reduce-to-minimum-useful-comments-across-src-firm.md
 completes_issue: true
@@ -51,13 +57,13 @@ later pass, per the issue's own scope statement):
 
 ## Acceptance Criteria
 
-- [ ] Diff is comment-only (zero object-code change) — verify with a
+- [x] Diff is comment-only (zero object-code change) — verify with a
       clean build producing identical behavior / passing the same tests.
-- [ ] Each kept comment states something the code cannot: a unit, an
+- [x] Each kept comment states something the code cannot: a unit, an
       ordering constraint, an invariant, an erratum, or a public-API
       contract.
-- [ ] No `[unit]` tag, LOAD-BEARING note, or errata note is lost.
-- [ ] This sprint's own newly-written load-bearing comments (tickets 001,
+- [x] No `[unit]` tag, LOAD-BEARING note, or errata note is lost.
+- [x] This sprint's own newly-written load-bearing comments (tickets 001,
       002, 003, 006, 007, 009) survive the sweep intact.
 
 ## Testing

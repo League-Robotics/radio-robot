@@ -14,22 +14,20 @@ namespace App {
 // at compile time with no runtime cost" idiom this file's own generated
 // siblings (layout_checks.h) already use for standard-layout checks.
 //
-// 124-008: acks_[] is now uint32_t[4] (packed corr_id<<4|err), not
-// msg::AckEntry[4] -- msg::AckEntry is deleted (issue §B4).
+// acks_[] is uint32_t[4] (packed corr_id<<4|err).
 static_assert(sizeof(msg::Telemetry{}.acks_) == static_cast<size_t>(kAckRingDepth) * sizeof(uint32_t),
               "App::kAckRingDepth (telemetry.h) must match telemetry.proto's Telemetry.acks (max_count)");
 
-// Packed ack-ring word format (124-008, issue §B4): corr_id in the upper
-// 28 bits, err (an ErrCode, 0-8) in the low 4 bits. err's real range fits
-// comfortably in 4 bits (ERR_NOT_CONFIGURED=8 is the enum's own ceiling);
-// corr_id needs 16 bits in practice (CommandEnvelope.corr_id/Move.id) and
-// has 28 available.
+// Packed ack-ring word format: corr_id in the upper 28 bits, err (an
+// ErrCode, 0-8) in the low 4 bits. err's real range fits comfortably in 4
+// bits (ERR_NOT_CONFIGURED=8 is the enum's own ceiling); corr_id needs 16
+// bits in practice (CommandEnvelope.corr_id/Move.id) and has 28 available.
 constexpr uint32_t kAckErrBits = 4;
 constexpr uint32_t kAckErrMask = (1u << kAckErrBits) - 1;
 
 // kMaxAge -- EncoderReading.age/OtosReading.age's own wire (max) = 255
-// (telemetry.proto), issue §B2's own bound: "a pathological value obvious
-// rather than silently wrapping."
+// (telemetry.proto): a pathological value obvious rather than silently
+// wrapping.
 constexpr uint32_t kMaxAge = 255;  // [ms]
 
 Telemetry::Telemetry(Comms& comms) : comms_(comms) {}
@@ -96,10 +94,8 @@ void Telemetry::update(const Types::RobotState& state) {
                  msg::Pose2D::packH(state.pose.heading)};
 
   // otos.* -- only refreshed when fresh THIS cycle (state.otos.present);
-  // otherwise frame_.otos keeps its last-staged snapshot, matching the
-  // pre-124-009 assembleFrame()'s own "only update when present" behavior
-  // (frame_ persists across update() calls exactly like it persisted
-  // across assembleFrame() calls).
+  // otherwise frame_.otos keeps its last-staged snapshot (frame_ persists
+  // across update() calls, not a diff since the last call).
   if (state.otos.present) {
     frame_.otos.x = msg::OtosReading::packX(state.otos.x);
     frame_.otos.y = msg::OtosReading::packY(state.otos.y);
@@ -111,7 +107,7 @@ void Telemetry::update(const Types::RobotState& state) {
   }
 
   // line/color -- exactly one of {line, color} ticks a given cycle
-  // (115-005 alternation, RobotLoop's own kPace-block body); only the
+  // (RobotLoop's own kPace-block body alternates them); only the
   // fresh one's word is refreshed here, the other's stays at its
   // last-staged snapshot -- matching the wire spec's "fresh THIS frame"
   // semantics.
@@ -121,19 +117,17 @@ void Telemetry::update(const Types::RobotState& state) {
   frame_.cycleBusy = state.time.cycleBusy;
   frame_.cyclePeriod = state.time.cyclePeriod;
 
-  // Flags -- the single assembly point (124-009, issue §B1): every bit
-  // that CAN be known at this point in the cycle, derived straight from
-  // `state`, replacing the ten scattered setFlag() calls the old
-  // assembleFrame() made. kFlagFaultMoveTimeout/kFlagFaultShapingDisabled
-  // (bits 15/16) are deliberately NOT touched here -- see
-  // setLiveFlag()'s own doc comment (telemetry.h) for why their
-  // defining condition does not exist yet at update() time, and why
-  // leaving them untouched here (rather than re-deriving them from a
-  // state.health field that itself is only fresh post-tick) is exactly
-  // what reproduces the pre-124-009 "flag rides the next frame" behavior:
-  // whatever setLiveFlag() last set survives across this update()
-  // call unchanged, precisely because this method never mutates those two
-  // bits itself.
+  // Flags -- the single assembly point: every bit that CAN be known at
+  // this point in the cycle, derived straight from `state`.
+  // kFlagFaultMoveTimeout/kFlagFaultShapingDisabled (bits 15/16) are
+  // deliberately NOT touched here -- see setLiveFlag()'s own doc comment
+  // (telemetry.h) for why their defining condition does not exist yet at
+  // update() time, and why leaving them untouched here (rather than
+  // re-deriving them from a state.health field that itself is only fresh
+  // post-tick) is exactly what makes a flag "ride the next frame":
+  // whatever setLiveFlag() last set survives across this update() call
+  // unchanged, precisely because this method never mutates those two bits
+  // itself.
   setFlag(kFlagActive, state.command.moveActive);
   setFlag(kFlagConnLeft, state.wheelLeft.connected);
   setFlag(kFlagConnRight, state.wheelRight.connected);
@@ -146,11 +140,12 @@ void Telemetry::update(const Types::RobotState& state) {
   setFlag(kFlagLinePresent, state.perception.lineFresh);
   setFlag(kFlagColorPresent, state.perception.colorFresh);
   setFlag(kFlagFaultPositionClamped, state.health.positionClamped);
+  setFlag(kFlagFaultWheelFrozenLeft, state.health.wheelFrozenLeft);
+  setFlag(kFlagFaultWheelFrozenRight, state.health.wheelFrozenRight);
 
-  // lastActivity_/everMoved_ (issue Part 3, "New state replacing old arms
-  // 1+2") -- computed against state.time.cycleStart, NOT the `now` local
-  // above: that local is the age-computation instant (cycleStart +
-  // cycleBusy); emit()'s own `now` parameter -- the clock domain
+  // lastActivity_/everMoved_ -- computed against state.time.cycleStart,
+  // NOT the `now` local above: that local is the age-computation instant
+  // (cycleStart + cycleBusy); emit()'s own `now` parameter -- the clock domain
   // lastActivity_ is compared against -- is always the bare
   // state.time.cycleStart RobotLoop::cycle() passes it. Order matters:
   // windowOpen is evaluated against lastActivity_'s value BEFORE this
@@ -210,7 +205,7 @@ void Telemetry::pushAckRing(uint32_t corrId, uint32_t errCode) {
     tail = ackRingHead_;
     ackRingHead_ = static_cast<uint8_t>((ackRingHead_ + 1) % kAckRingDepth);
   }
-  // Packed word (124-008, issue §B4): corr_id<<4 | err.
+  // Packed word: corr_id<<4 | err.
   ackRing_[tail] = (corrId << kAckErrBits) | (errCode & kAckErrMask);
   // Undelivered: this entry now forces frames until it has been carried
   // kAckRepeats times (pendingAckDeliveries()). Reset explicitly rather than
@@ -224,15 +219,13 @@ bool Telemetry::primaryDue(uint32_t now) const {
   return (now - lastPrimaryEmit_) >= kPrimaryPeriod;
 }
 
-// pendingAckDeliveries -- issue Part 3, reason 3 (rename of the old
-// hasSomethingToSay()'s arm 3, moved verbatim): true while any ack-ring
-// entry has not yet been carried kAckRepeats times. Honored in EVERY mode
-// (see emit() below), never gated: a host that commands the robot the
-// instant READY lands must still get its ack, in kOff exactly like every
-// other mode -- protocol v5 has no separate ack message, so the telemetry
-// frame is the ack's only vehicle, and suppressing it would strand the
-// outcome of any command issued to a parked robot ("acked but nothing
-// happened", the failure class that cost this project a bench session).
+// pendingAckDeliveries -- true while any ack-ring entry has not yet been
+// carried kAckRepeats times. Honored in EVERY mode (see emit() below),
+// never gated: a host that commands the robot the instant READY lands
+// must still get its ack, in kOff exactly like every other mode --
+// protocol v5 has no separate ack message, so the telemetry frame is the
+// ack's only vehicle, and suppressing it would strand the outcome of any
+// command issued to a parked robot ("acked but nothing happened").
 bool Telemetry::pendingAckDeliveries() const {
   for (uint8_t i = 0; i < ackRingCount_; ++i) {
     const uint8_t idx = static_cast<uint8_t>((ackRingHead_ + i) % kAckRingDepth);
@@ -241,7 +234,7 @@ bool Telemetry::pendingAckDeliveries() const {
   return false;
 }
 
-// emit -- the whole three-mode policy (issue Part 3), and nothing more.
+// emit -- the whole three-mode policy, and nothing more.
 // `activity` mirrors update()'s own lastActivity_/everMoved_ derivation
 // (kFlagActive live OR an already-open window kept alive by nonzero staged
 // wheel velocity within kCoastHoldoff of the last refresh). `unsolicited`
@@ -275,10 +268,10 @@ void Telemetry::emitPrimary(uint32_t now) {
   msg::Telemetry tlm;
 
   tlm.now = now;
-  // seq wraps at telemetry.proto's own declared (max)=127 (124-008, issue
-  // §B5's size-accounting) -- kept genuinely small on the real value too,
-  // not just the wire bound, so the two never drift: a caller reading the
-  // declared bound sees the true worst case, not an optimistic one.
+  // seq wraps at telemetry.proto's own declared (max)=127 -- kept
+  // genuinely small on the real value too, not just the wire bound, so
+  // the two never drift: a caller reading the declared bound sees the
+  // true worst case, not an optimistic one.
   tlm.seq = seq_;
   seq_ = (seq_ + 1) % 128u;
   tlm.mode = frame_.mode;
@@ -288,15 +281,14 @@ void Telemetry::emitPrimary(uint32_t now) {
   // call's flags_ currently holds.
   tlm.flags = flags_;
 
-  // Ack ring (120, ADDITIVE) -- serialize the ring's CURRENT contents,
-  // oldest-to-newest (ackRingHead_'s own push/evict order), every
-  // emitPrimary() call, exactly like every other Frame field: the last
-  // staged snapshot, not a diff since the last send (app/DESIGN.md Sec 3).
-  // A frame this call sends carries whatever the ring holds RIGHT NOW,
-  // regardless of whether a new ack() landed since the last emit -- no
-  // separate "is this new" bit applies (telemetry.proto's own
-  // Telemetry.acks doc comment). 124-008: each entry is a packed uint32_t
-  // (corr_id<<4|err), not msg::AckEntry (deleted).
+  // Ack ring -- serialize the ring's CURRENT contents, oldest-to-newest
+  // (ackRingHead_'s own push/evict order), every emitPrimary() call,
+  // exactly like every other Frame field: the last staged snapshot, not a
+  // diff since the last send (app/DESIGN.md Sec 3). A frame this call
+  // sends carries whatever the ring holds RIGHT NOW, regardless of
+  // whether a new ack() landed since the last emit -- no separate "is
+  // this new" bit applies (telemetry.proto's own Telemetry.acks doc
+  // comment). Each entry is a packed uint32_t (corr_id<<4|err).
   tlm.acks_count = ackRingCount_;
   for (uint8_t i = 0; i < ackRingCount_; ++i) {
     const uint8_t idx = static_cast<uint8_t>((ackRingHead_ + i) % kAckRingDepth);

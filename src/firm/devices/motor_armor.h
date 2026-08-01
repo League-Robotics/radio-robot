@@ -2,19 +2,17 @@
 // the OBSERVATION/RECOVERY policies — the wedge detector and the
 // standstill-guarded reset dispatch.
 //
-// Restructured 2026-07-18 (stakeholder): MotorArmor used to be the BASE
-// CLASS of every motor leaf, and it also owned the write gate (reversal
-// dwell + output deadband). Both moved:
-//   - The write gate is Nezha-brick wedge PROTECTION — write shaping in the
-//     same family as the slew cap and write throttle — so it now lives in
-//     Devices::NezhaMotor's own write path (nezha_motor.cpp's
-//     writeShapedDuty(); configured by the same MotorConfig
-//     reversalDwell/outputDeadband fields as before, 0/0 = off).
-//   - What remains here is a pure DECORATOR over Devices::Motor (motor.h):
-//     construct a motor, hand it to MotorArmor, hand the armor to whatever
-//     wants a Motor. Don't want the armor? Hand the motor over directly.
-//     The sim does exactly that (src/sim/sim_harness.h — bare motors); the
-//     ARM build wraps (src/firm/main.cpp).
+// A pure DECORATOR over Devices::Motor (motor.h): construct a motor, hand
+// it to MotorArmor, hand the armor to whatever wants a Motor. Don't want
+// the armor? Hand the motor over directly. The sim does exactly that
+// (src/sim/sim_harness.h — bare motors); the ARM build wraps
+// (src/firm/main.cpp).
+//
+// The write gate (reversal dwell + output deadband) is NOT here — it is
+// Nezha-brick wedge PROTECTION, write shaping in the same family as the
+// slew cap and write throttle, so it lives in Devices::NezhaMotor's own
+// write path (nezha_motor.cpp's writeShapedDuty(); configured by the same
+// MotorConfig reversalDwell/outputDeadband fields, 0/0 = off).
 //
 // Policies kept here:
 //   - Wedge detector: the raw, unconditional stuck-encoder latch
@@ -51,13 +49,10 @@ class MotorArmor : public Motor {
  public:
   explicit MotorArmor(Motor& inner) : inner_(inner) {}
 
-  // reconfigure — REVISION 1 (114-001, motor.h): forwards the whole config
-  // to the wrapped inner_ motor FIRST (the actual boot-identity replacement
-  // — port/fwdSign/velGains/etc, previously never reached through this
-  // decorator at all), then, only if the inner motor actually accepted it,
-  // refreshes this armor's own derived motionThreshold_ cache from the
-  // SAME config's required outputDeadband field (sprint 114 ticket 003 — no
-  // more ship-default substitution here either) — the SAME value the inner
+  // reconfigure — forwards the whole config to the wrapped inner_ motor
+  // FIRST (see motor.h), then, only if the inner motor actually accepted
+  // it, refreshes this armor's own derived motionThreshold_ cache from the
+  // SAME config's required outputDeadband field — the SAME value the inner
   // NezhaMotor's write shaping uses for its deadband, read here for the
   // independent "was the motor actually being asked to move" gate. Only
   // updating motionThreshold_ when applied is true means an armor whose
@@ -121,9 +116,9 @@ class MotorArmor : public Motor {
 
   // Rest tracking — feeds the NEXT tick's processResetIfPending(). At rest
   // == not measurably moving AND nothing written to the H-bridge
-  // (appliedDuty() reflects the last successfully written percent; the old
-  // base-class gate read its own lastRequestedDuty_, which a decorator
-  // cannot see — appliedDuty()==0 is the observable equivalent).
+  // (appliedDuty() reflects the last successfully written percent — the
+  // only motion signal a decorator can observe from outside the inner
+  // motor).
   void updateRestTracking() {
     bool atRest = (fabsf(inner_.velocity()) < kRestVelocity) &&
                   (inner_.appliedDuty() == 0.0f);

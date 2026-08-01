@@ -33,6 +33,7 @@
 
 #include "app/comms.h"
 #include "app/configurator.h"
+#include "app/debug.h"
 #include "app/drive.h"
 #include "app/preamble.h"
 #include "app/robot_loop.h"
@@ -138,6 +139,12 @@ class SimHarness {
         robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,
                    drive_, configurator_, odom_, planner_, preamble_,
                    clock_, sleeper_) {
+    // 129-003: wires the bench/Sim-only DBG debug channel to this harness's
+    // own Comms -- HOST_BUILD is always defined for this whole library
+    // (src/sim/CMakeLists.txt's `-DHOST_BUILD=1`), so App::debugf() is
+    // always live here, matching main.cpp's own ROBOT_DEBUG-gated call.
+    App::setDebugSink(&comms_);
+
     // App::Drive is the ONE exception to the "no self-configuration" rule
     // below, and it is not a robot's calibration: it is THIS SIM'S OWN plant
     // gain. TestSim::WheelPlant is a fixed synthetic plant (velocity

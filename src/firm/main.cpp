@@ -8,6 +8,7 @@
 #include <cstring>
 
 #include "app/comms.h"
+#include "app/debug.h"
 #include "app/drive.h"
 #include "app/fake_otos.h"
 #include "app/preamble.h"
@@ -40,13 +41,11 @@ namespace {
 // devices/ isolation invariant (DESIGN.md) forbids devices/ from including
 // messages/ or config/.
 //
-// 125-003: vel_gains/vel_filt_alpha/min_duty are NO LONGER copied here --
-// Devices::MotorConfig dropped those fields (the velocity PID they fed has
-// since been deleted outright -- see drive.h's own header). vel_filt_alpha
-// has no live consumer at all this sprint (the EMA estimator it fed was
-// deleted outright, pending ticket 004's App::WheelObserver) -- the wire
-// field itself is untouched (no protocol change), simply unread by
-// firmware for now.
+// vel_gains/vel_filt_alpha/min_duty are NOT copied here -- Devices::
+// MotorConfig has no such fields (the velocity PID they fed has been
+// deleted outright -- see drive.h's own header). vel_filt_alpha has no
+// live consumer at all -- the wire field itself is untouched (no
+// protocol change), simply unread by firmware for now.
 Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   Devices::MotorConfig cfg;
   cfg.wheelTravelCalib = src.travel_calib;
@@ -54,37 +53,66 @@ Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   cfg.slewRate = src.slew_rate;
   cfg.port = src.port;
   // Devices::MotorConfig's reversalDwell/outputDeadband are plain required
-  // floats (sprint 114 ticket 003) -- gen_boot_config.py + ticket 002's
-  // required-key gate guarantee src.reversal_dwell/src.output_deadband are
-  // always set (.has == true) here, so read .val directly rather than
-  // changing the wire msg::MotorConfig itself (still Opt<float> -- the wire
-  // schema is out of scope, see the ticket's own Approach step 6).
+  // floats -- gen_boot_config.py's required-key gate guarantees
+  // src.reversal_dwell/src.output_deadband are always set (.has == true)
+  // here, so read .val directly rather than changing the wire
+  // msg::MotorConfig itself (still Opt<float> -- the wire schema is out
+  // of scope here).
   cfg.reversalDwell = src.reversal_dwell.val;
   cfg.outputDeadband = src.output_deadband.val;
   cfg.polled = src.polled;
   return cfg;
 }
 
-// toMotionGains -- DELETED (command-ingestion-...-two-stops.md §4). It fed
-// App::Drive's interim per-wheel closed-loop velocity-PID pair, which is
-// gone (128-015 deleted that class outright, zero instantiations -- see
-// src/motion/DESIGN.md's "wheel control generations" note): Drive is
-// open-loop duty from calibrated speed and holds no controller at all
-// (drive.h's own file header). The boot JSON's vel_gains reach the one
-// controller that still exists -- Motion::Planner's duty stage -- through
-// App::Configurator's pid.* wire keys, not through this seeding path.
+// Converts the boot config's fail-closed Config::PlannerBootConfig (baked
+// from the active robot JSON's `planner` block) into the
+// Motion::PlannerLimits Motion::Planner's constructor needs. Lives here
+// for the same reason toDeviceMotorConfig() above does -- main.cpp is the
+// one place both types are reachable (config/ may depend only on
+// messages/, never on src/motion; see PlannerBootConfig's own doc
+// comment, config/boot_config.h).
+//
+// Deliberately leaves trackWidth/velocityFilterWeight UNSET on the
+// returned struct -- both are sourced from DrivetrainConfig at the call
+// site below.
+Motion::PlannerLimits toPlannerLimits(const Config::PlannerBootConfig& src) {
+  Motion::PlannerLimits out;
+  out.vMax = src.vMax;
+  out.aMax = src.aMax;
+  out.aDecel = src.aDecel;
+  out.omegaMax = src.omegaMax;
+  out.alphaMax = src.alphaMax;
+  out.alphaDecel = src.alphaDecel;
+  out.jerkMax = src.jerkMax;
+  out.yawJerkMax = src.yawJerkMax;
 
+  out.controlPeriod = src.controlPeriod;
+  out.actuationDelay = src.actuationDelay;
 
-// toFusionWeights() -- DELETED (128-016,
-// robot-state-pose-needs-exactly-one-writer.md): its one consumer,
-// Motion::StateEstimator's constructor, is gone (a per-cycle computation
-// with no consumer -- its own former header said so). Config::
-// EstimatorBootConfig/Config::defaultEstimatorConfig() themselves are
-// UNTOUCHED here (out of this ticket's scope -- see boot_config.h's own
-// doc comment): they still bake fail-closed fusion-weight defaults from
-// each robot JSON for a future estimator rebuild
-// (clasi/issues/estimator-v2-otos-fusion-sim-first.md) to read; this
-// file simply no longer has anywhere to feed the result.
+  out.requireSettle = src.requireSettle;
+  out.settleRestVelocity = src.settleRestVelocity;
+  out.settleRestOmega = src.settleRestOmega;
+  out.settleWindow = src.settleWindow;
+  out.settleEpsilonLinear = src.settleEpsilonLinear;
+  out.settleEpsilonAngular = src.settleEpsilonAngular;
+  out.headingHoldGain = src.headingHoldGain;
+
+  out.velKff = src.velKff;
+  out.velKp = src.velKp;
+  out.velKi = src.velKi;
+  out.velIMax = src.velIMax;
+  out.velKaff = src.velKaff;
+  out.velIAccelGate = src.velIAccelGate;
+  out.dutyFloor = src.dutyFloor;
+
+  out.trimKp = src.trimKp;
+  out.trimKi = src.trimKi;
+  out.trimIMax = src.trimIMax;
+  out.trimKaff = src.trimKaff;
+  out.trimMax = src.trimMax;
+  out.decelPlanFraction = src.decelPlanFraction;
+  return out;
+}
 
 // The boot tag: the DAY of the version's date field, then the build number.
 // "0.20260726.1" -> "261" (day 26, build 1).
@@ -224,18 +252,17 @@ int main() {
   static Devices::MicroBitClock clock;
   static Devices::MicroBitSleeper sleeper;
 
-  // ID:<drivetrain>:<profile>:<version> -- sprint 124 architecture
-  // Decision 4: configured-robot identity (drivetrain type +
-  // calibration-profile name/version), distinct from `banner`'s hardware
-  // identity. Both Config::kDrivetrainType and Config::kRobotProfileName
-  // are generated string constants (boot_config.h) baked from the robot
-  // JSON's own identity.drivetrain_type/filename stem -- NOT derived from
-  // any wire-level DrivetrainConfig field (defaultDrivetrainConfig()
-  // never bakes half_track; it stays at its wire default 0.0f for every
+  // ID:<drivetrain>:<profile>:<version> -- configured-robot identity
+  // (drivetrain type + calibration-profile name/version), distinct from
+  // `banner`'s hardware identity. Both Config::kDrivetrainType and
+  // Config::kRobotProfileName are generated string constants
+  // (boot_config.h) baked from the robot JSON's own
+  // identity.drivetrain_type/filename stem -- NOT derived from any
+  // wire-level DrivetrainConfig field (defaultDrivetrainConfig() never
+  // bakes half_track; it stays at its wire default 0.0f for every
   // profile, so it cannot answer this question -- see kDrivetrainType's
-  // own doc comment for why an earlier draft's half_track-based check was
-  // wrong). The version reuses VER:'s own generated build-version
-  // constant (zero new version-tracking infrastructure, same Decision 4).
+  // own doc comment). The version reuses VER:'s own generated
+  // build-version constant.
   static char idLine[96];
   snprintf(idLine, sizeof(idLine), "ID:%s:%s:%s", Config::kDrivetrainType,
            Config::kRobotProfileName, FIRMWARE_VERSION_STR);
@@ -243,9 +270,10 @@ int main() {
   static App::SerialTransport serialLink(serial);
   static App::RadioTransport radioLink(radio);
   static App::Comms comms(serialLink, radioLink, banner, idLine);
-  // 124-009: Telemetry no longer holds direct Transport& references (those
-  // existed only for TelemetrySecondary's own independently-armored line,
-  // now deleted) -- comms already owns both transports internally.
+  // Wires the bench/Sim-only DBG debug channel to this robot's own Comms
+  // -- a no-op call unless ROBOT_DEBUG is defined (app/debug.h's own
+  // compile gate), so a shipped ARM release build never even calls this.
+  App::setDebugSink(&comms);
   static App::Telemetry tlm(comms);
   // Effective track width = physical separation corrected for SCRUB.
   //
@@ -268,9 +296,8 @@ int main() {
                       : drivetrainConfig.trackwidth;
 
   static App::Drive drive(motorL, motorR, kEffectiveTrack);
-  // Wheel calibration comes from the ROBOT JSON, never from C++
-  // (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
-  // §6): App::Drive carries no calibration defaults, and without this
+  // Wheel calibration comes from the ROBOT JSON, never from C++:
+  // App::Drive carries no calibration defaults, and without this
   // install it refuses to drive. gen_boot_config.py fails the build outright
   // if the active robot's JSON is missing any of the three keys, so
   // reaching here means they are real, measured, per-robot numbers.
@@ -294,127 +321,41 @@ int main() {
   Devices::Otos& otos = realOtos;
 #endif
 
-  // Planner integration (2026-07-26): the on-robot Motion::Planner is the
-  // loop's motion decider, writing Types::RobotState::Wheel::cmdVelocity
-  // directly (robot_state.h's own field doc). Limits assembled from
-  // the SAME boot-config sources the old stack used: shaper keys ->
-  // profile ceilings, vel_gains -> the planner's own duty-stage PID,
-  // vel_filt_alpha -> the planner's velocity-filter weight. controlPeriod
-  // is the loop's own kCycle; actuationDelay is the one-cycle staging
-  // latency (duty staged at the NEXT cycle top -- the exact shape the
-  // planner's duty scenario tier validates).
-  // Planner tuning: the PLANT-VALIDATED set from the measured-constants
-  // reference tour (motion checkout, square_tour_sim.py tourLimits() --
-  // plant ID 2026-07-26: gain ~1370 mm/s per duty, tau ~230 ms), NOT the
-  // boot JSON's vel_gains/shaper block: those numbers were bench-tuned
-  // for the DELETED NezhaMotor MotorVelocityPid (the JSON's own
-  // _vel_gains_domain note) and are wrong for this loop -- deployed as-is
-  // (kp 0.0016, aMax 800, jMax 5000) they limit-cycled the real wheels at
-  // ~2-3 Hz across the whole first on-robot tour (2026-07-27 plot). A
-  // planner-domain config surface can supersede these constants later;
-  // until then the JSON's old-loop gains must not reach this controller.
-  Motion::PlannerLimits plannerLimits;
-  plannerLimits.vMax = 400.0f;   // [mm/s]
-  plannerLimits.aMax = 300.0f;   // [mm/s^2]
-  plannerLimits.aDecel = 250.0f; // [mm/s^2]
-  plannerLimits.omegaMax = 3.0f;     // [rad/s]
-  plannerLimits.alphaMax = 6.0f;     // [rad/s^2]
-  plannerLimits.alphaDecel = 5.0f;   // [rad/s^2]
-  plannerLimits.jerkMax = 1500.0f;   // [mm/s^3] aMax reached in ~0.2 s
-  plannerLimits.yawJerkMax = 30.0f;  // [rad/s^3] alphaMax reached in ~0.2 s
+  // Motion::Planner is the on-robot loop's motion decider, writing
+  // Types::RobotState::Wheel::cmdVelocity directly (robot_state.h's own
+  // field doc).
+  //
+  // PlannerLimits below is the plant-validated tuning from the
+  // measured-constants reference tour (motion checkout,
+  // square_tour_sim.py tourLimits()), deliberately NOT the boot JSON's
+  // old-loop control.vel_gains/shaper block: those numbers were bench-tuned
+  // for the DELETED NezhaMotor MotorVelocityPid and the also-deleted
+  // Motion::VelocityShaper. ERRATUM: deployed as-is against THIS
+  // controller (kp 0.0016, aMax 800, jMax 5000), they limit-cycled the
+  // real wheels at ~2-3 Hz across the whole first on-robot tour -- do not
+  // resurrect those values for this controller. The validated tuning
+  // lives in the active robot JSON's own `planner` section
+  // (data/robots/robot_config.schema.json), baked fail-closed via
+  // Config::defaultPlannerLimits(). Full measurement provenance (plant ID
+  // dates, sweep results, the limit-cycle warning) lives in that JSON's
+  // own planner._domain_note/_timing_note/_settle_note/_duty_stage_note/
+  // _trim_note.
+  //
+  // trackWidth/velocityFilterWeight are the two PlannerLimits fields NOT
+  // sourced from the `planner` block -- they come from DrivetrainConfig
+  // (trackWidth is the scrub-corrected kEffectiveTrack computed above;
+  // velocityFilterWeight mirrors the same EMA weight the old stack used,
+  // vel_filt_alpha, with the same >0.05 sanity floor).
+  Motion::PlannerLimits plannerLimits = toPlannerLimits(Config::defaultPlannerLimits());
   plannerLimits.trackWidth = kEffectiveTrack;
-  // MEASURED loop period, not the kCycle nominal: the schedule's real
-  // delivered cycle is 46-48 ms on the bench (tlm cycle-delta capture,
-  // 2026-07-27, after the 1 ms scheduler tick + overrun-yield fixes) --
-  // the vendor bus clearances outside the paced windows add ~7 ms the
-  // nominal does not include. The planner's discrete math (accel steps,
-  // braking sums, ramp tick counts) must use the period the loop actually
-  // delivers; telemetry cycle_period re-measures this on every frame if
-  // the schedule ever changes.
-  plannerLimits.controlPeriod = 47.0f;   // [ms]
-  plannerLimits.actuationDelay = 47.0f;  // [ms]
   plannerLimits.velocityFilterWeight =
       drivetrainConfig.vel_filt_alpha > 0.05f ? drivetrainConfig.vel_filt_alpha
                                               : 1.0f;
-  // Settle-confirm OFF (stakeholder 2026-07-27): the creep/breakaway-kick
-  // landing machinery pulsed the wheels at ~0.18 duty against gearbox
-  // stiction after every move -- functional but unacceptable sawtooth.
-  // Landing residual (small at the measured 47 ms period) is instead
-  // absorbed by the NEXT chained move via the cumulative baseline ledger,
-  // at full speed where the plant is linear and no stiction compensation
-  // is needed. The last move of a chain keeps its own small residual.
-  plannerLimits.requireSettle = false;
-  // Rest floors sized to the measured hardware encoder-velocity noise
-  // (plant ID 2026-07-26: ~+-7 mm/s at rest) -- the rest-damping stage
-  // outputs exactly zero duty below the floor, so it must clear the
-  // noise band or the wheels twitch at rest forever.
-  plannerLimits.settleRestVelocity = 10.0f;  // [mm/s]
-  plannerLimits.settleRestOmega = 0.16f;     // [rad/s] 2*floor/trackWidth
-  plannerLimits.settleWindow = 2500.0f;  // [ms]
-  plannerLimits.headingHoldGain = 2.0f;  // [1/s] sim-validated
-  {
-    // Measured-plant duty-stage gains (square_tour_sim.py tourLimits()):
-    // kff = 1/gain, kaff = tau/gain -- physics-derived, per-robot only
-    // through the plant measurement, not the JSON's old-loop vel_gains.
-    constexpr float kPlantGain = 1370.0f;  // [mm/s per duty]
-    constexpr float kPlantTau = 0.23f;     // [s]
-    plannerLimits.velKff = 1.0f / kPlantGain;
-    plannerLimits.velKp = 0.0009f;
-    plannerLimits.velKi = 0.004f;
-    plannerLimits.velIMax = 0.25f;
-    plannerLimits.velKaff = kPlantTau / kPlantGain;
-    plannerLimits.velIAccelGate = 50.0f;  // [mm/s^2]
-    // Stiction floor: must clear the gearbox BREAKAWAY duty, not merely
-    // MotorArmor's write-suppression threshold (output_deadband 0.03 --
-    // a whine gate, not a friction model). 0.05 is estimated from the
-    // measured integral wind-up time to first motion during the stalled
-    // settle creep (2026-07-27 single-turn trace); replace with a proper
-    // plant-ID breakaway measurement when one exists.
-    plannerLimits.dutyFloor = 0.18f;
-    // Arrival tolerances sized to the stiction-limited creep resolution
-    // (one dutyFloor pulse per period ~= 2-4 deg of heading): tighter is
-    // unreachable and just burns the settle window at every landing.
-    plannerLimits.settleEpsilonLinear = 4.0f;      // [mm]
-    plannerLimits.settleEpsilonAngular = 0.035f;   // [rad] ~2 deg --
-    // the demonstrated one-sided-creep resolution (single-turn probe
-    // 2026-07-27 landed +1.76 deg; the right wheel does not reverse
-    // under the breakaway kick, so fine correction rides the left wheel)
-
-    // VELOCITY-DOMAIN TRIM (wheel_trim.h) -- the closed loop that actually
-    // reaches the wheels. The loop's one actuation contract is a wheel
-    // VELOCITY (RobotState::Wheel::cmdVelocity), which App::Drive converts
-    // through its measured per-wheel per-direction map. The duty-stage
-    // gains above configure Planner::stageDuty() -- PARKED as of 128-015:
-    // Planner::tick() no longer calls it at all (it used to run every
-    // cycle and its output was DISCARDED here regardless, since nothing on
-    // this robot ever read commandedDutyLeft/Right()) -- see
-    // src/motion/DESIGN.md's "wheel control generations" note.
-    //
-    // COMMISSIONING VALUES, to be raised on the stand rather than trusted:
-    //   trimKp is DIMENSIONLESS (mm/s of trim per mm/s of error). The sim
-    //     tour ran 0.25 against a +-4.8% wheel mismatch; this robot's
-    //     residual after the 2026-07-27 calibration is ~2%, and measured
-    //     wheel velocity is a raw per-tick difference quotient, so start
-    //     at 0.15. An over-gained loop on THIS hardware limit-cycled at
-    //     2-3 Hz (see the tuning note above) -- the failure to watch for.
-    //   trimKaff is the plant time constant [s]. FULL tau measured
-    //     UNSTABLE in sim (closure 696 mm vs 16 mm at half) -- half it is.
-    plannerLimits.trimKp = 0.15f;            // [1]
-    plannerLimits.trimKi = 0.4f;             // [1/s]
-    plannerLimits.trimIMax = 40.0f;          // [mm/s]
-    plannerLimits.trimKaff = kPlantTau / 2;  // [s]
-    plannerLimits.trimMax = 80.0f;           // [mm/s]
-    // Plan the brake START at 40% of the decel ceiling, keeping the rest
-    // in reserve so the plant can TRACK the ramp down and arrives at each
-    // boundary already slow instead of coasting past (tau ~230 ms).
-    // Swept 0.0-0.6 in sim: 0.4 gave the best closure (16.0 vs 23.3 mm).
-    plannerLimits.decelPlanFraction = 0.4f;  // [1]
-  }
   static Motion::Planner planner(plannerLimits);
   // Mark shaping CONFIGURED through the same applyShaperLimits() entry the
   // wire push uses, with the validated ceilings above (NOT the boot JSON's
-  // old-shaper block -- see the tuning comment) so
-  // kFlagFaultShapingDisabled (119-001) stays quiet.
+  // old-shaper block -- see the doc comment above) so
+  // kFlagFaultShapingDisabled stays quiet.
   planner.applyShaperLimits(plannerLimits.aMax, plannerLimits.aDecel,
                             plannerLimits.alphaMax, plannerLimits.alphaDecel,
                             plannerLimits.jerkMax, plannerLimits.yawJerkMax);
@@ -425,7 +366,7 @@ int main() {
 
 
   // App::Configurator owns the CONFIG lifecycle and the persisted-tuning
-  // store (command-ingestion-...-two-stops.md §6); RobotLoop routes to it.
+  // store; RobotLoop routes to it.
   static App::Configurator configurator(drive, motorL, motorR, otos, planner,
                                         &tuningStore);
 

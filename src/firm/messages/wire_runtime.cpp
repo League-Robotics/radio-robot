@@ -388,8 +388,7 @@ bool cobsEncode(const uint8_t* data, size_t len, uint8_t* out, size_t cap, size_
     if (byte == 0) {
       // XOR-ed in place, per delimiter (see wire_runtime.h item 8's doc
       // comment for why this is equivalent to XOR-ing the whole 0x00-keyed
-      // output afterward): delimiter == 0x00 makes this the identity, the
-      // pre-124 behavior.
+      // output afterward): delimiter == 0x00 makes this the identity.
       out[codePos] = static_cast<uint8_t>(code ^ delimiter);
       codePos = writePos;
       if (writePos >= cap) return false;
@@ -430,9 +429,9 @@ bool cobsDecode(const uint8_t* in, size_t inLen, uint8_t* out, size_t cap, size_
   while (readPos < inLen) {
     // XOR-ed at the point of reading (never a materialized de-XORed copy --
     // this file allocates nothing): delimiter == 0x00 makes this the
-    // identity, the pre-124 behavior, and recovers exactly the same
-    // 0x00-keyed bytes cobsEncode()'s standard algorithm produced before
-    // its own per-byte XOR.
+    // identity, and recovers exactly the same 0x00-keyed bytes
+    // cobsEncode()'s standard algorithm produced before its own per-byte
+    // XOR.
     const uint8_t code = static_cast<uint8_t>(in[readPos] ^ delimiter);
     if (code == 0) return false;  // a literal 0x00 code byte never appears in a valid COBS frame -- corrupt
     ++readPos;

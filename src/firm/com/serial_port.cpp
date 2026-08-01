@@ -20,14 +20,14 @@ bool SerialPort::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
     int c;
     while ((c = _serial.read(ASYNC)) != MICROBIT_NO_DATA) {
         if (c == '\n') {
-            // 124-005: UNCONDITIONAL terminator -- no heuristic, no
-            // recognizer. Deliver the accumulated bytes AS-IS (no '\r'
-            // stripping here -- a binary line may legitimately carry 0x0D
-            // as content; App::Comms::dispatchLine() strips a trailing
-            // '\r' only once it has classified the line as cleartext).
-            // Safe: COBS is now keyed on 0x0A (wire_runtime.h item 8), so
-            // a binary line's own bytes never contain a literal 0x0A --
-            // this terminator can never collide with real frame content.
+            // UNCONDITIONAL terminator -- no heuristic, no recognizer.
+            // Deliver the accumulated bytes AS-IS (no '\r' stripping here
+            // -- a binary line may legitimately carry 0x0D as content;
+            // App::Comms::dispatchLine() strips a trailing '\r' only once
+            // it has classified the line as cleartext). Safe: COBS is
+            // keyed on 0x0A (wire_runtime.h item 8), so a binary line's
+            // own bytes never contain a literal 0x0A -- this terminator
+            // can never collide with real frame content.
             uint16_t copy = (_rxLen < cap - 1) ? _rxLen : (cap - 1);
             memcpy(buf, _rxBuf, copy);
             buf[copy] = '\0';
@@ -43,23 +43,22 @@ bool SerialPort::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
 
 void SerialPort::send(const uint8_t* data, uint16_t len) {
     // ASYNC: queue the WHOLE line and return IMMEDIATELY, never blocking
-    // the loop. 123-006: drop-on-full now means drop the ENTIRE line, not
-    // whatever prefix happens to fit -- CODAL's ASYNC send() (setTxInterrupt())
-    // copies bytes until the buffer fills and then silently stops, which used
-    // to hand a truncated frame to the wire. A truncated frame always fails
-    // the host's CRC (malformed), and if the dropped tail included the
-    // trailing terminator, the leftover bytes prefix the NEXT line and
-    // corrupt it too. Checking free space FIRST and refusing to send at all
-    // when the line doesn't fit costs one honest, countable seq gap instead
-    // -- never a corrupt or merged frame. For must-arrive lines use
-    // sendReliable() instead.
+    // the loop. Drop-on-full means drop the ENTIRE line, not whatever
+    // prefix happens to fit -- CODAL's ASYNC send() (setTxInterrupt())
+    // copies bytes until the buffer fills and then silently stops, which
+    // would otherwise hand a truncated frame to the wire. A truncated
+    // frame always fails the host's CRC (malformed), and if the dropped
+    // tail included the trailing terminator, the leftover bytes prefix
+    // the NEXT line and corrupt it too. Checking free space FIRST and
+    // refusing to send at all when the line doesn't fit costs one honest,
+    // countable seq gap instead -- never a corrupt or merged frame. For
+    // must-arrive lines use sendReliable() instead.
     //
-    // 124-005: `data`/`len` is the full `<COMMAND>':'<COBS bytes>` wire
-    // line content (App::Comms::sendReply() builds it); this appends the
-    // SINGLE trailing '\n' terminator (converged from the pre-124 0x00 --
-    // issue §7), via the raw uint8_t*/len send() overload (NOT
-    // ManagedString -- the content is not a NUL-terminated C string and
-    // may not be printable ASCII).
+    // `data`/`len` is the full `<COMMAND>':'<COBS bytes>` wire line
+    // content (App::Comms::sendReply() builds it); this appends the
+    // SINGLE trailing '\n' terminator, via the raw uint8_t*/len send()
+    // overload (NOT ManagedString -- the content is not a NUL-terminated
+    // C string and may not be printable ASCII).
     uint8_t framed[256];
     uint16_t n = (len < sizeof(framed) - 1) ? len : (uint16_t)(sizeof(framed) - 1);
     memcpy(framed, data, n);
@@ -79,8 +78,7 @@ void SerialPort::sendReliable(const char* msg) {
     // fits before handing off to ASYNC. 5 ms cap: a dead/absent reader can't
     // hang the loop — falls through and sends anyway, dropping the overflow
     // exactly as pure ASYNC would. Cleartext-plane only (HELLO/PING/ID/VER
-    // replies) -- single '\n'-terminated (124-005, issue §7: the old
-    // "\r\n" is retired along with the rest of the two-terminator split).
+    // replies) -- single '\n'-terminated.
     ManagedString s = ManagedString(msg) + ManagedString("\n");
     const int len = s.length();
     const uint64_t deadline = system_timer_current_time_us() + 5000;   // [us]

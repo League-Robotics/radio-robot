@@ -6,26 +6,17 @@
  * SerialPort — binary-clean 115200-baud serial over USB.
  * Design/rationale: DESIGN.md.
  *
- * 124-005 (protocol v5 Part A, "framing grammar cutover"): readLine() reads
- * to an UNCONDITIONAL '\n' terminator -- no heuristic, no recognizer, no
- * text/binary distinction at this layer at all (App::Comms decides
- * text-vs-binary from the parsed `<COMMAND>` prefix, once the transport
- * hands it a complete line -- see comms.h's own file header). This is safe
- * because COBS is now keyed on 0x0A (wire_runtime.h item 8, 124-003): a
+ * readLine() reads to an UNCONDITIONAL '\n' terminator -- no heuristic, no
+ * recognizer, no text/binary distinction at this layer at all (App::Comms
+ * decides text-vs-binary from the parsed `<COMMAND>` prefix, once the
+ * transport hands it a complete line -- see comms.h's own file header).
+ * This is safe because COBS is keyed on 0x0A (wire_runtime.h item 8): a
  * binary frame's own bytes never contain a literal 0x0A, so '\n' is a
  * genuine, unconditional terminator in both directions. Bytes are
  * accumulated UNFILTERED (no '\r' stripping here -- under one uniform rule
  * '\r' is legal binary content; a caller that has already classified a
- * line as cleartext strips it, App::Comms::dispatchLine()).
- *
- * Supersedes 123-002/123-006's two-terminator demux (`kTextCommands[]`/
- * `isRecognizedTextCommand()`, an exact-match recognizer against the
- * closed HELLO/PING set that decided whether an accumulated 0x0A ended a
- * text line or was binary content) -- DELETED, not adapted: the
- * recognizer's entire reason to exist (0x0A was not an unconditional
- * terminator) no longer holds. The host's mirror,
- * wire_codec.py's `ByteStreamDemuxer`, collapses the same way (splits on
- * '\n' alone).
+ * line as cleartext strips it, App::Comms::dispatchLine()). The host's
+ * mirror, wire_codec.py's `ByteStreamDemuxer`, splits on '\n' alone.
  *
  * Non-blocking: readLine() drains the CODAL ASYNC receive buffer each call
  * and returns false until a complete line is ready.
@@ -39,7 +30,7 @@ public:
     // to 255 bytes (the uint8_t max); a circular buffer of N bytes holds at
     // most N-1 bytes before head catches tail (ambiguous with empty), so the
     // true ceiling is 254 -- this constant keeps a small extra margin below
-    // that. 123-006: single source of truth so send()'s drop check and
+    // that, and is the single source of truth so send()'s drop check and
     // sendReliable()'s spin-wait can never assume two different capacities.
     static constexpr uint16_t kTxBufferCapacity = 250;  // [bytes]
 
@@ -65,7 +56,7 @@ public:
     // App::Transport::send()'s own contract); this appends the trailing
     // 0x00 delimiter itself and sends the raw buffer (never a
     // ManagedString/strlen-based path -- the content is not necessarily
-    // printable ASCII). 123-006: checks free TX-buffer space FIRST -- if the
+    // printable ASCII). Checks free TX-buffer space FIRST -- if the
     // full framed length (body + delimiter) does not fit, the ENTIRE frame
     // is dropped and nothing is written. Never hands CODAL's ASYNC send() a
     // frame it might only partially copy: a partial write both corrupts

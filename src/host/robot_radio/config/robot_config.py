@@ -309,6 +309,70 @@ class EstimatorConfig(BaseModel):
     staleness_ms:        Optional[float] = None  # [ms] estimator.staleness_ms
 
 
+class PlannerConfig(BaseModel):
+    """``Motion::Planner``'s full tuning surface -- mirrors the robot JSON's
+    top-level ``planner`` object 1:1 (``robot_config.schema.json``'s own
+    ``planner`` block; see that file's description for the full
+    field-by-field rationale). Baked at build time by
+    ``gen_boot_config.py``'s ``planner_config_for_config()`` into
+    ``Config::defaultPlannerLimits()`` for real hardware.
+
+    129-009 (config consolidation): before this ticket every one of these
+    values was a C++ literal ``src/firm/main.cpp`` assembled directly into
+    a ``Motion::PlannerLimits`` -- this model exists purely so a
+    ``RobotConfig``-typed read of a robot JSON stays lossless (the SAME
+    "declare every key the generator reads, or pydantic silently drops it"
+    contract ``ControlConfig``/``EstimatorConfig`` already established
+    above), not because anything on the host side pushes these live: there
+    is no wire SET surface for this block (boot-time-baked only, same
+    posture as ``OtosBootConfig``/``ShaperBootConfig``).
+
+    All Optional, same "None -> the field is simply absent" contract as
+    every sibling model here -- ``gen_boot_config.py``'s own ``_require()``
+    is what actually enforces fail-closed-ness at codegen time, not this
+    model.
+
+    ``vel_kff``/``vel_kaff``/``trim_kaff`` are deliberately NOT fields
+    here: they are DERIVED by the generator from ``plant_gain``/
+    ``plant_tau`` (see ``PlannerBootConfig``'s own doc comment,
+    ``src/firm/config/boot_config.h``), never stored raw in the JSON.
+    """
+    v_max:        Optional[float] = None  # [mm/s] planner.v_max
+    a_max:        Optional[float] = None  # [mm/s^2] planner.a_max
+    a_decel:      Optional[float] = None  # [mm/s^2] planner.a_decel
+    omega_max:    Optional[float] = None  # [rad/s] planner.omega_max
+    alpha_max:    Optional[float] = None  # [rad/s^2] planner.alpha_max
+    alpha_decel:  Optional[float] = None  # [rad/s^2] planner.alpha_decel
+    jerk_max:     Optional[float] = None  # [mm/s^3] planner.jerk_max
+    yaw_jerk_max: Optional[float] = None  # [rad/s^3] planner.yaw_jerk_max
+
+    control_period:   Optional[float] = None  # [ms] planner.control_period
+    actuation_delay:  Optional[float] = None  # [ms] planner.actuation_delay
+
+    require_settle:          Optional[bool] = None   # planner.require_settle
+    settle_rest_velocity:    Optional[float] = None  # [mm/s] planner.settle_rest_velocity
+    settle_rest_omega:       Optional[float] = None  # [rad/s] planner.settle_rest_omega
+    settle_window:           Optional[float] = None  # [ms] planner.settle_window
+    settle_epsilon_linear:   Optional[float] = None  # [mm] planner.settle_epsilon_linear
+    settle_epsilon_angular:  Optional[float] = None  # [rad] planner.settle_epsilon_angular
+    heading_hold_gain:       Optional[float] = None  # [1/s] planner.heading_hold_gain
+
+    plant_gain: Optional[float] = None  # [mm/s per duty] planner.plant_gain
+    plant_tau:  Optional[float] = None  # [s] planner.plant_tau
+
+    vel_kp:            Optional[float] = None  # [duty/(mm/s)] planner.vel_kp
+    vel_ki:            Optional[float] = None  # [duty/(mm/s)/s] planner.vel_ki
+    vel_i_max:         Optional[float] = None  # [duty] planner.vel_i_max
+    vel_i_accel_gate:  Optional[float] = None  # [mm/s^2] planner.vel_i_accel_gate
+    duty_floor:        Optional[float] = None  # [-1,1] planner.duty_floor
+
+    trim_kp:              Optional[float] = None  # [1] planner.trim_kp
+    trim_ki:              Optional[float] = None  # [1/s] planner.trim_ki
+    trim_i_max:           Optional[float] = None  # [mm/s] planner.trim_i_max
+    trim_max:             Optional[float] = None  # [mm/s] planner.trim_max
+    decel_plan_fraction:  Optional[float] = None  # [1] planner.decel_plan_fraction
+
+
 # ---------------------------------------------------------------------------
 # Root config model
 # ---------------------------------------------------------------------------
@@ -327,6 +391,7 @@ class RobotConfig(BaseModel):
     calibration: CalibrationConfig = CalibrationConfig()
     control: ControlConfig = ControlConfig()
     estimator: EstimatorConfig = EstimatorConfig()
+    planner: PlannerConfig = PlannerConfig()
 
     # Derived field — not stored in JSON, computed after load
     mm_per_tick: Optional[float] = None

@@ -3,56 +3,47 @@
 // Devices::Motor interface (motor.h). Owns the register map, split-phase
 // 0x46 encoder sequencing, and ALL of the brick's own write shaping — slew
 // limiting, write throttle, write-on-change, reversal dwell, and output
-// deadband (see writeShapedDuty()/writeRawDuty() below). Sprint 114 ticket
-// 005: the output deadband BOOSTS a genuine nonzero sub-deadband duty to
-// the deadband floor instead of zeroing it (an exact zero still stays an
-// immediate hard stop) -- see writeShapedDuty()'s own doc comment. Wedge
+// deadband (see writeShapedDuty()/writeRawDuty() below). The output
+// deadband BOOSTS a genuine nonzero sub-deadband duty to the deadband
+// floor instead of zeroing it (an exact zero still stays an immediate
+// hard stop) -- see writeShapedDuty()'s own doc comment. Wedge
 // OBSERVATION/RECOVERY policy lives in the Devices::MotorArmor decorator
 // (motor_armor.h), which a caller may wrap this leaf in — or not (the sim
 // composes the bare leaf directly).
 //
-// 125-003 (sprint 125, Decision 2 -- "protection vs. control", see
-// sprint.md): SHRUNK to its base-contract residue -- protocol + bus hygiene
-// + dwell/deadband + clamp, ~200 lines (from 885). Everything that was a
-// VELOCITY DECISION or MEASUREMENT-CONDITIONING mechanism is gone:
-//   - The staged-velocity setter, the embedded per-channel velocity
-//     control law, and the kff mapping -- DELETED. The closed-loop
-//     velocity control law relocated to the motion library, which App::
-//     Drive held an interim instance of for one sprint -- that class is
-//     since deleted outright (128-015, zero instantiations; App::Drive
-//     holds no controller of its own, see drive.h's own header and
-//     src/motion/DESIGN.md's "wheel control generations" note). [The
-//     original rate argument -- "~80ms encoder freshness bounds the loop"
-//     -- was measured FALSE 2026-07-26 (docs/design/
-//     encoder-refresh-characterization.md); the relocation stands on
-//     one-estimate-one-controller and host tunability instead.]
-//   - The freshness gate, source-side glitch rejection, and the
-//     live-switchable EMA/least-squares velocity-estimator pair -- DELETED
-//     OUTRIGHT, not relocated. velocity()/position() below report a NAIVE
-//     per-tick difference quotient / the raw collected sample -- honest,
-//     and BETTER than its author feared: the register was measured LIVE
-//     at <=16 ms (docs/design/encoder-refresh-characterization.md -- the
-//     "~80ms refresh" was a pre-118 schedule artifact), so on the clean
-//     interleaved schedule every tick collects a genuinely fresh sample
-//     and the naive difference quotient is a real velocity every cycle.
-//     A wheel observer can still replace this with one principled
-//     predict-correct estimator (freshness + glitch/innovation rejection +
-//     the estimate, folded into a single model) -- this is the sprint's
-//     own accepted, disclosed interim (see sprint.md Migration Concerns).
-//   - Duty-boxcar smoothing (the bench-only output-averaging window and
-//     its setter) -- DELETED, no replacement planned (never shipped
-//     live-tuned).
+// velocity()/position() below report a NAIVE per-tick difference quotient
+// / the raw collected sample -- no freshness gate, glitch rejection, or
+// smoothing. This is safe because the encoder register was measured LIVE
+// at <=16 ms refresh on the current interleaved schedule
+// (docs/design/encoder-refresh-characterization.md), so every tick
+// collects a genuinely fresh sample and the naive difference quotient is
+// a real velocity every cycle. A wheel observer could still replace this
+// with a single principled predict-correct estimator (freshness +
+// glitch/innovation rejection + the estimate) if a future need arises.
 //
-// KEPT unchanged: the split-phase 0x46 protocol, hardReset()'s
+// This leaf owns the split-phase 0x46 protocol, hardReset()'s
 // median-of-3 + readback-verify + retry, connected()/failure-hold, bus/
 // write hygiene (fwdSign, clamp ±100%, integer-% quantization,
-// write-on-change, NAK retry, write-rate throttle), the slew cap
-// (UNMODIFIED -- ticket 010 owns its disposition, not this ticket),
-// reversal dwell + output deadband (writeShapedDuty()), wheelTravelCalib,
-// and the software-offset rebaseline mechanism (rebaseline()/
-// softRebaseline() -- the stakeholder ruling that encoders are NEVER reset
-// by device command stands unmodified; RobotLoop's position-rebaseline
-// policy, robot_loop.cpp, is untouched by this ticket).
+// write-on-change, NAK retry, write-rate throttle), and the slew cap.
+//
+// LOAD-BEARING (129-001, issue 07): write-on-change (writeRawDuty(), above)
+// is NOT a pure "skip if unchanged" -- it is stopNotTaken-exempt. The Nezha
+// brick physically latches its last commanded speed and does not reset on
+// an nRF52 reset, only on power loss. lastWrittenPct_ records what this
+// leaf last ATTEMPTED to write, not what actually landed on the brick, so a
+// single lost zero write used to be permanent: the host believed the stop
+// was sent, the wheel kept its prior nonzero speed forever, and every
+// subsequent stop (including ESTOP) was suppressed as a no-op because
+// lastWrittenPct_ already said 0. writeRawDuty() now re-issues a commanded
+// zero whenever the wheel is still measurably moving above
+// kStopConfirmVelocity, regardless of what lastWrittenPct_ claims. Do not
+// simplify this back to a bare `pct == lastWrittenPct_` guard.
+//
+// Also unchanged: reversal dwell + output deadband (writeShapedDuty()),
+// wheelTravelCalib, and the software-offset rebaseline mechanism
+// (rebaseline()/softRebaseline() -- the stakeholder ruling that encoders
+// are NEVER reset by device command stands; RobotLoop's own
+// position-rebaseline policy, robot_loop.cpp, is separate).
 //
 // Deliberate scope-downs from a full motor abstraction:
 //   - No message-plane surface (apply()/state()/capabilities()/
@@ -111,14 +102,13 @@ class NezhaMotor : public Motor {
   void resetPosition() override;
   void rebaseline() override;
 
-  // applyTravelCalib -- 125-003 (motor.h's own header): narrowed from the
-  // pre-125-003 applyGains(Gains, Opt<float>) to the ONE field this leaf
-  // still live-applies. No reflash, no I2C side effect -- tick()'s own
+  // applyTravelCalib -- the ONE field this leaf still live-applies (see
+  // motor.h's own header). No reflash, no I2C side effect -- tick()'s own
   // position() conversion reads config_.wheelTravelCalib fresh every call.
   void applyTravelCalib(float travelCalib) override;
 
-  // reconfigure — REVISION 1 (114-001, motor.h): whole-config replacement,
-  // guarded. Refuses (returns false, leaves config_ unchanged) unless
+  // reconfigure — whole-config replacement, guarded (see motor.h).
+  // Refuses (returns false, leaves config_ unchanged) unless
   // mode_ == Mode::None (never yet commanded) or the motor is
   // independently at rest (|velocity()| < kReconfigureRestVelocity AND
   // appliedDuty() == 0.0f). On success, reassigns config_ wholesale and
@@ -144,30 +134,27 @@ class NezhaMotor : public Motor {
 
   bool connected() const override { return connected_; }
 
-  // Motor::sampleTime() override -- 125-003: with the freshness gate
-  // deleted (this file's own header), every tick() call is now treated as
-  // "fresh" -- this simply returns lastTickUs_, the nowUs of the most
-  // recent tick() call -- which the encoder characterization says is the
+  // Motor::sampleTime() override -- every tick() call is treated as
+  // fresh, so this simply returns lastTickUs_, the nowUs of the most
+  // recent tick() call -- the encoder characterization says this is the
   // truth on the clean schedule (fresh sample every cycle; docs/design/
   // encoder-refresh-characterization.md), not a degraded placeholder.
   uint64_t sampleTime() const override { return lastTickUs_; }  // [us]
 
-  // tick() — the leaf's 2-step contract (see nezha_motor.cpp; the old base-
-  // armor steps 1/3/5 now live in the MotorArmor DECORATOR's own tick()):
+  // tick() — the leaf's 2-step contract (see nezha_motor.cpp; MotorArmor's
+  // own tick() wraps this with its own decorator-level steps):
   //   1. sample + cache this motor's own encoder (device-specific), and
   //      compute a naive per-tick velocity from it (see this file's own
-  //      header for why this is a disclosed interim, not the pre-125-003
-  //      freshness-gated behavior).
+  //      header).
   //   2. mode dispatch — Mode::Active writes the staged raw duty via
   //      writeShapedDuty(); Mode::Neutral writes 0 via writeShapedDuty();
   //      Mode::None dispatches nothing.
   void tick(uint64_t nowUs) override;   // [us]
 
  private:
-  // --- Device write path + resets (leaf internals — no longer virtuals;
-  // the old MotorArmor base-class seam is gone) ---
-  void writeShapedDuty(float duty, uint32_t now);   // [-1,1] [ms] output-deadband boost (sub-deadband nonzero -> deadband floor; exact zero stays zero), then reversal dwell, then writeRawDuty() -- see nezha_motor.cpp's own doc comment (114-005)
-  void writeRawDuty(float duty);    // clamp + write-on-change + throttle + slew + fwdSign + bus write
+  // --- Device write path + resets (leaf internals — no longer virtuals) ---
+  void writeShapedDuty(float duty, uint32_t now);   // [-1,1] [ms] output-deadband boost (sub-deadband nonzero -> deadband floor; exact zero stays zero), then reversal dwell, then writeRawDuty() -- see nezha_motor.cpp's own doc comment
+  void writeRawDuty(float duty);    // clamp + write-on-change (stopNotTaken-exempt, 129-001) + throttle + slew + fwdSign + bus write
   void hardReset();                 // median-of-3 + readback-verify + retry
   void softRebaseline();            // software-only rebaseline
 
@@ -184,7 +171,7 @@ class NezhaMotor : public Motor {
 
   // ---- tick() encoder-sample cache ----
   float lastPosition_ = 0.0f;          // [mm]
-  float velocity_ = 0.0f;              // [mm/s] naive per-tick difference quotient (125-003 -- see this file's own header)
+  float velocity_ = 0.0f;              // [mm/s] naive per-tick difference quotient (see this file's own header)
   uint64_t lastTickUs_ = 0;            // [us] this leaf's own time seam — see file header
   bool hasLastTick_ = false;
   bool connected_ = false;
@@ -193,19 +180,19 @@ class NezhaMotor : public Motor {
   int8_t lastWrittenPct_ = -128;        // [%] sentinel (outside +/-100) forces the first write
   uint64_t lastWriteTimeUs_ = 0;        // [us]
 
-  // ---- Write shaping (folded from the old MotorArmor base, 2026-07-18):
-  // reversal dwell + output deadband — Nezha-brick wedge protection (an
-  // instantaneous H-bridge sign flip under way latches the 0x46 readback;
-  // near-zero dither would request such flips every tick — see
-  // docs/knowledge/2026-07-04-encoder-wedge.md). Config-driven: cached
-  // straight from MotorConfig's required reversalDwell/outputDeadband
-  // fields in reconfigure() (sprint 114 ticket 003 — no more code-side ship
-  // default substitution; gen_boot_config.py always emits real values, see
-  // data/robots/*.json's control.reversal_dwell_ms/output_deadband). An
-  // explicit 0/0 makes writeShapedDuty() a pure pass-through. Sprint 114
-  // ticket 005: outputDeadband_ BOOSTS a genuine nonzero sub-deadband duty
-  // up to itself (sign-preserving) rather than zeroing it -- an explicit 0
-  // here still means "never boost," i.e. still a pure pass-through. ----
+  // ---- Write shaping: reversal dwell + output deadband — Nezha-brick
+  // wedge protection (an instantaneous H-bridge sign flip under way
+  // latches the 0x46 readback; near-zero dither would request such flips
+  // every tick — see docs/knowledge/2026-07-04-encoder-wedge.md).
+  // Config-driven: cached straight from MotorConfig's required
+  // reversalDwell/outputDeadband fields in reconfigure() -- no code-side
+  // ship default substitution; gen_boot_config.py always emits real
+  // values, see data/robots/*.json's control.reversal_dwell_ms/
+  // output_deadband. An explicit 0/0 makes writeShapedDuty() a pure
+  // pass-through. outputDeadband_ BOOSTS a genuine nonzero sub-deadband
+  // duty up to itself (sign-preserving) rather than zeroing it -- an
+  // explicit 0 here still means "never boost," i.e. still a pure
+  // pass-through. ----
   float reversalDwell_ = 0.0f;          // [ms] cached from MotorConfig
   float outputDeadband_ = 0.0f;         // [-1,1] fraction, cached from MotorConfig
   bool dwelling_ = false;
@@ -222,11 +209,24 @@ class NezhaMotor : public Motor {
   static constexpr uint8_t kDirCcw = 2;     // negative speed from chip perspective
   static constexpr float kDefaultSlewRate = 25.0f;   // default max |delta PWM| per write
 
-  // reconfigure()'s own at-rest guard threshold — REVISION 1 (114-001).
-  // Mirrors MotorArmor's own kRestVelocity at-rest threshold (motor_armor.h)
+  // reconfigure()'s own at-rest guard threshold. Mirrors MotorArmor's own
+  // kRestVelocity at-rest threshold (motor_armor.h)
   // conceptually, but is NOT shared across the class boundary: this is a
   // leaf-local constant for a leaf-local guard.
   static constexpr float kReconfigureRestVelocity = 5.0f;  // [mm/s] mirrors MotorArmor's own kRestVelocity at-rest threshold
+
+  // writeRawDuty()'s stopNotTaken threshold (129-001, issue 07 -- see that
+  // file's own doc comment below). lastWrittenPct_ records the WRITE
+  // ATTEMPT, not the physically landed brick state -- the Nezha brick
+  // latches its last commanded speed and does not reset on an nRF52 reset,
+  // only on power loss, so one lost zero write is otherwise permanent and
+  // every later ESTOP is suppressed as a no-op. A commanded zero whose
+  // wheel is still measurably turning above this threshold is NOT
+  // write-on-change-suppressed, regardless of what lastWrittenPct_ already
+  // claims was sent. NOT shared with kReconfigureRestVelocity above or
+  // MotorArmor's own kRestVelocity -- same "leaf-local constant for a
+  // leaf-local guard" reasoning.
+  static constexpr float kStopConfirmVelocity = 8.0f;  // [mm/s]
 
   // ---- Private helpers: write path ----
   // Returns the CODAL status from bus_.write() (0/kOk == success):

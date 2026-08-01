@@ -15,11 +15,8 @@
 //      leaves, shaper ceilings -> Motion::Planner, OTOS scalars and
 //      offsets -> the OTOS leaf. The ESTIMATOR patch's own
 //      weight_heading_otos/weight_omega_otos/staleness_ms fields are
-//      accepted on the wire but land nowhere (128-016,
-//      robot-state-pose-needs-exactly-one-writer.md): they used to feed
-//      Motion::StateEstimator, deleted this ticket as a per-cycle
-//      computation with no consumer -- see apply()'s own ESTIMATOR-branch
-//      comment.
+//      accepted on the wire but land nowhere -- there is no live consumer
+//      for them -- see apply()'s own ESTIMATOR-branch comment.
 //
 // Named `Configurator`, not `Config`, because `Config::` is already a
 // namespace in this tree (config/persisted_tuning.h) -- a class of that

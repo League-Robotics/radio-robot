@@ -1,8 +1,5 @@
 ---
-status: in-progress
-sprint: '129'
-tickets:
-- 129-006
+status: pending
 ---
 
 # Bench duty readers see zero after stageDuty() park (128-015 residual)
