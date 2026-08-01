@@ -23,6 +23,7 @@
 #pragma once
 
 #include <cstddef>
+#include "app/debug.h"
 #include <cstdint>
 
 #include "firm/types/robot_state.h"
@@ -302,6 +303,35 @@ class Comms {
     return action;
   }
 
+  // DbgAction -- the parsed effect of one inbound `DBG:<subcmd> ...` line
+  // (system-test fault injection; ROBOT_DEBUG builds only -- without it,
+  // inbound DBG falls through to the malformed count like any other
+  // unhandled cleartext verb). Comms parses and STAGES exactly this;
+  // RobotLoop::cycle() drains takeDbgAction() and applies it -- the same
+  // stage/consume split TlmAction uses, for the same reason (Comms holds
+  // no reference to the subsystems a fault targets).
+  enum class DbgActionKind : uint8_t { kNone, kMark, kPing, kWedge, kClear,
+                                       kUnrecognized };
+  struct DbgAction {
+    DbgActionKind kind = DbgActionKind::kNone;
+    char text[64] = {};   // kMark: the full original data ("mark leg1a")
+    uint8_t port = 0;     // kWedge: 1 = left, 2 = right, 3 = both
+    uint32_t duration = 0;  // [ms] kWedge auto-clear; 0 = latched
+  };
+
+  // takeDbgAction -- consume-on-read from a small FIFO ring. UNLIKE
+  // TlmAction's collapse-to-last: a tour legitimately sends `DBG:mark X`
+  // and `DBG:wedge ...` back to back within one cycle, and losing the
+  // mark silently corrupts the dataset's ordering record. Ring full =
+  // drop-newest (the sender is a paced test script, not a firehose).
+  DbgAction takeDbgAction() {
+    if (dbgCount_ == 0) return DbgAction{};
+    const DbgAction action = dbgRing_[dbgHead_];
+    dbgHead_ = (dbgHead_ + 1) % kDbgRingDepth;
+    --dbgCount_;
+    return action;
+  }
+
   // sendTlmReply -- the reply half of a just-consumed TlmAction: the
   // STATUS line for a recognized mode change (kSetOff/kSetAuto/kSetOn), the
   // HELP line for kUnrecognized (`TLM:<garbage>`), nothing for kNone/kFrame
@@ -508,6 +538,15 @@ class Comms {
   // ever point at is one of Comms's own long-lived member references (never
   // dangling for the life of this object).
   TlmAction tlmAction_ = TlmAction::kNone;
+  static constexpr uint8_t kDbgRingDepth = 4;
+  DbgAction dbgRing_[kDbgRingDepth]{};  // staged by dispatchLine(); drained by RobotLoop
+  uint8_t dbgHead_ = 0;
+  uint8_t dbgCount_ = 0;
+  void pushDbgAction(const DbgAction& action) {
+    if (dbgCount_ >= kDbgRingDepth) return;  // drop-newest
+    dbgRing_[(dbgHead_ + dbgCount_) % kDbgRingDepth] = action;
+    ++dbgCount_;
+  }
   Transport* tlmReplyTransport_ = nullptr;
   uint32_t malformedCount_ = 0;
   uint32_t commandsDroppedCount_ = 0;

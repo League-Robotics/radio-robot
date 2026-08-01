@@ -22,6 +22,7 @@
 #pragma once
 
 #include <cstdint>
+#include "app/debug.h"
 
 #include "app/comms.h"
 #include "app/configurator.h"
@@ -139,6 +140,20 @@ class RobotLoop {
   void publishTiming(uint64_t cycleStartUs);  // [us] cycleBusy/cyclePeriod
   // Move-fault flags + completion ack (rides next frame).
   void publishMoveResult(const Motion::TickResult& moveResult);
+
+#ifdef ROBOT_DEBUG
+  // DBG fault injection (system test): apply one staged Comms::DbgAction
+  // and expire any duration-bounded injected wedge. Compiled out of
+  // shipped images with the whole inbound-DBG surface.
+  void applyDbgAction(uint32_t now);  // [ms]
+#endif
+
+#ifdef ROBOT_DEBUG
+  // Injected-wedge auto-clear deadlines, per wheel; 0 = no injection
+  // armed, UINT32_MAX = latched until DBG:clear.
+  uint32_t dbgWedgeUntilL_ = 0;  // [ms]
+  uint32_t dbgWedgeUntilR_ = 0;  // [ms]
+#endif
 
   Devices::I2CBus& bus_;
   Devices::Motor& motorL_;

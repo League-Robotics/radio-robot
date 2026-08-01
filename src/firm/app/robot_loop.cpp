@@ -1,6 +1,7 @@
 // robot_loop.cpp -- App::RobotLoop implementation. See robot_loop.h and
 // DESIGN.md for the schedule and routing rationale.
 #include "app/robot_loop.h"
+#include "app/debug.h"
 
 #include <cmath>
 
@@ -555,6 +556,12 @@ void RobotLoop::cycle() {
     // choice. Comms parses a `TLM`/`TLM:...` line's argument and stages
     // the result; Telemetry never parses wire text, so RobotLoop is the
     // one that hands Comms's staged action across.
+#ifdef ROBOT_DEBUG
+    // DBG fault-injection surface (system test) -- drained once per cycle,
+    // same stage/consume split as the TLM action below.
+    applyDbgAction(state_.time.cycleStart);
+#endif
+
     const Comms::TlmAction tlmAction = comms_.takeTlmAction();
     const bool forceFrame = tlm_.applyAction(tlmAction);
 
@@ -598,5 +605,59 @@ void RobotLoop::cycle() {
     publishMoveResult(moveResult);
   });
 }
+
+
+#ifdef ROBOT_DEBUG
+void RobotLoop::applyDbgAction(uint32_t now) {
+  // Expire duration-bounded injections FIRST, so a wedge armed for N ms
+  // clears on time even if no further DBG traffic ever arrives.
+  if (dbgWedgeUntilL_ != 0 && dbgWedgeUntilL_ != UINT32_MAX &&
+      static_cast<int32_t>(now - dbgWedgeUntilL_) >= 0) {
+    motorL_.setForcedWedge(false);
+    dbgWedgeUntilL_ = 0;
+  }
+  if (dbgWedgeUntilR_ != 0 && dbgWedgeUntilR_ != UINT32_MAX &&
+      static_cast<int32_t>(now - dbgWedgeUntilR_) >= 0) {
+    motorR_.setForcedWedge(false);
+    dbgWedgeUntilR_ = 0;
+  }
+
+  for (Comms::DbgAction action = comms_.takeDbgAction();
+       action.kind != Comms::DbgActionKind::kNone;
+       action = comms_.takeDbgAction()) {
+  switch (action.kind) {
+    case Comms::DbgActionKind::kNone:
+      break;
+    case Comms::DbgActionKind::kMark:
+      // Echo through the robot's own output stream so the marker lands in
+      // the dataset with correct ordering relative to telemetry.
+      App::debugf("%s", action.text);
+      break;
+    case Comms::DbgActionKind::kPing:
+      App::debugf("pong");
+      break;
+    case Comms::DbgActionKind::kWedge: {
+      const uint32_t until =
+          action.duration == 0 ? UINT32_MAX : now + action.duration;
+      if (action.port & 1) { motorL_.setForcedWedge(true); dbgWedgeUntilL_ = until; }
+      if (action.port & 2) { motorR_.setForcedWedge(true); dbgWedgeUntilR_ = until; }
+      App::debugf("wedge armed port=%u dur=%lu", action.port,
+                  static_cast<unsigned long>(action.duration));
+      break;
+    }
+    case Comms::DbgActionKind::kClear:
+      motorL_.setForcedWedge(false);
+      motorR_.setForcedWedge(false);
+      dbgWedgeUntilL_ = 0;
+      dbgWedgeUntilR_ = 0;
+      App::debugf("clear");
+      break;
+    case Comms::DbgActionKind::kUnrecognized:
+      App::debugf("unrecognized dbg: %s", action.text);
+      break;
+  }
+  }
+}
+#endif  // ROBOT_DEBUG
 
 }  // namespace App

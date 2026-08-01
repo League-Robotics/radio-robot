@@ -82,6 +82,12 @@ class Motor {
 
   virtual void tick(uint64_t nowUs) = 0;   // [us]
 
+  // DBG fault injection (system test, ROBOT_DEBUG builds): force the wedge
+  // latch so the whole wedge-response machinery runs against an induced
+  // fault. Default no-op -- only MotorArmor implements it; the wire path
+  // that calls it is compiled out of shipped images.
+  virtual void setForcedWedge(bool) {}
+
   // --- Getters ---
   virtual float position() const = 0;        // [mm]
   virtual float velocity() const = 0;        // [mm/s] signed -- a naive

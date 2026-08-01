@@ -1,6 +1,8 @@
 // comms.cpp -- App::Comms implementation. See comms.h's file header for
 // the module's boundary.
 #include "app/comms.h"
+#include "app/debug.h"
+#include <cstdlib>
 
 #include <cstdio>
 #include <cstring>
@@ -145,6 +147,70 @@ App::Comms::TlmAction classifyTlmArg(const uint8_t* data, uint16_t len) {
   return App::Comms::TlmAction::kUnrecognized;
 }
 
+// classifyDbgArg() -- tokenize one inbound `DBG:<subcmd> [args]` payload
+// (ROBOT_DEBUG builds; see the dispatchLine() interception). Grammar:
+//   mark <text>       echo request -- text preserved verbatim
+//   ping              inbound-path self-test (replies DBG:pong)
+//   wedge left|right|both [ms]   force the wedge latch; 0/omitted = latched
+//   clear             clear every injected override
+#ifdef ROBOT_DEBUG
+App::Comms::DbgAction classifyDbgArg(const uint8_t* data, uint16_t len) {
+  App::Comms::DbgAction action;
+  action.kind = App::Comms::DbgActionKind::kUnrecognized;
+  if (data == nullptr || len == 0) return action;
+  const size_t cap = sizeof(action.text) - 1;
+  const size_t n = (len < cap) ? len : cap;
+  std::memcpy(action.text, data, n);
+  action.text[n] = '\0';
+
+  char* saveptr = action.text;
+  auto isSep = [](char c) {
+    return c == ' ' || c == '\n' || c == '\r' || c == '\t';
+  };
+  auto nextToken = [&saveptr, &isSep]() -> char* {
+    while (isSep(*saveptr)) ++saveptr;
+    if (*saveptr == '\0') return nullptr;
+    char* tok = saveptr;
+    while (!isSep(*saveptr) && *saveptr != '\0') ++saveptr;
+    if (*saveptr != '\0') { *saveptr = '\0'; ++saveptr; }
+    return tok;
+  };
+
+  // Tokenizing mutates text; keep the verbatim copy for kMark's echo.
+  char verbatim[sizeof(action.text)];
+  std::memcpy(verbatim, action.text, sizeof(verbatim));
+
+  const char* sub = nextToken();
+  if (sub == nullptr) return action;
+  if (std::strcmp(sub, "mark") == 0) {
+    action.kind = App::Comms::DbgActionKind::kMark;
+    std::memcpy(action.text, verbatim, sizeof(action.text));
+    return action;
+  }
+  if (std::strcmp(sub, "ping") == 0) {
+    action.kind = App::Comms::DbgActionKind::kPing;
+    return action;
+  }
+  if (std::strcmp(sub, "clear") == 0) {
+    action.kind = App::Comms::DbgActionKind::kClear;
+    return action;
+  }
+  if (std::strcmp(sub, "wedge") == 0) {
+    const char* which = nextToken();
+    if (which == nullptr) return action;
+    if (std::strcmp(which, "left") == 0) action.port = 1;
+    else if (std::strcmp(which, "right") == 0) action.port = 2;
+    else if (std::strcmp(which, "both") == 0) action.port = 3;
+    else return action;
+    const char* ms = nextToken();
+    if (ms != nullptr) action.duration = static_cast<uint32_t>(std::strtoul(ms, nullptr, 10));
+    action.kind = App::Comms::DbgActionKind::kWedge;
+    return action;
+  }
+  return action;
+}
+#endif  // ROBOT_DEBUG
+
 // bodyKindToVerb() -- ReplyEnvelope::BodyKind (envelope.proto) and
 // msg::Verb (commands.proto) are two independently-generated enums over
 // the SAME three reply shapes (TLM/OK/ERR); this is the one seam that
@@ -282,6 +348,18 @@ void Comms::dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& 
     tlmAction_ = (colonPos >= lineLen) ? TlmAction::kFrame : classifyTlmArg(dataPtr, dataLen);
     return;
   }
+
+#ifdef ROBOT_DEBUG
+  // Inbound DBG (system-test fault injection): parse and stage, mirroring
+  // the TLM interception above. Shipped images (no ROBOT_DEBUG) never
+  // compile this block, so an inbound DBG there stays an unhandled
+  // cleartext verb (malformed count) -- fault injection cannot exist on a
+  // robot in the field.
+  if (entry->verb == msg::Verb::DBG) {
+    pushDbgAction(classifyDbgArg(dataPtr, dataLen));
+    return;
+  }
+#endif
 
   if (entry->binary) {
     decodeBinaryFrame(reinterpret_cast<const uint8_t*>(cmdPtr), cmdLen, dataPtr, dataLen, out);

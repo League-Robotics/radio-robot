@@ -93,7 +93,13 @@ class MotorArmor : public Motor {
   void rebaseline() override { inner_.rebaseline(); }
 
   // --- Motor: observability ---
-  bool wedged() const override { return wedgeLatched_; }
+  bool wedged() const override { return wedgeLatched_ || forcedWedge_; }
+  // DBG-injected wedge (system test): OR-ed into wedged() above so every
+  // consumer -- health publication, flag bit 7, Drive's wedge handling --
+  // sees an induced wedge exactly as it would a real one. The real
+  // detector's own latch state is untouched; clearing the force restores
+  // the true state.
+  void setForcedWedge(bool on) override { forcedWedge_ = on; }
   bool wedgeSuspect() const override { return wedgeSuspect_; }
 
   // --- Armor-specific accessors (beyond the Motor faceplate) ---
@@ -176,6 +182,7 @@ class MotorArmor : public Motor {
   uint8_t stuckCount_ = 0;                // raw, unconditional
   uint8_t movingStuckCount_ = 0;          // gated by |appliedDuty()| > motionThreshold_
   bool wedgeLatched_ = false;
+  bool forcedWedge_ = false;  // DBG injection override (setForcedWedge)
   bool wedgeSuspect_ = false;
 
   // Ship default for the wedge-suspect motion gate — matches NezhaMotor's

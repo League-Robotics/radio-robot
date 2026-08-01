@@ -399,12 +399,12 @@ int sim_drain_tlm(SimHandle h, uint8_t* buf, int buflen) {
 // ---- Debug line drain (129-003, bench/Sim-only DBG channel) ----
 
 int sim_drain_debug(SimHandle h, char* buf, int buflen) {
-  std::vector<std::string> lines = asHarness(h)->drainReliable();
-
-  std::vector<std::string> debugLines;
-  for (const std::string& line : lines) {
-    if (line.rfind("DBG:", 0) == 0) debugLines.push_back(line);
-  }
+  // System-test change: return the WHOLE reliable cleartext plane, not
+  // just DBG: lines -- the Python side (SimLoop._drain_debug_into_queue)
+  // routes DBG to the debug queue and everything else (READY/STATUS/PONG/
+  // DEVICE replies) to its on_cleartext observer, so sim datasets carry
+  // the same cleartext records hardware datasets do.
+  std::vector<std::string> debugLines = asHarness(h)->drainReliable();
 
   size_t total = 0;
   for (const std::string& line : debugLines) total += line.size() + 1;  // +1 for the trailing '\n'
