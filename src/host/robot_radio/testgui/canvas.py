@@ -139,11 +139,29 @@ _TRACE_COLORS = {
     "fused":   (255, 69, 160, 255),    # magenta
 }
 
+# Each label names its SOURCE, so a trace can be read without knowing the
+# pipeline (stakeholder, 2026-07-31):
+#   Camera   -- an actual overhead camera fix
+#   Encoder  -- host-integrated from the raw `enc` counts, independent of the
+#               robot's own estimate
+#   OTOS     -- the OTOS sensor's own reported pose
+#   Pose     -- telemetry's `pose` field: the robot's own belief
+#
+# "Pose" replaces the former "Fused", which claimed a fusion that does not
+# happen: weight_heading_otos/weight_omega_otos are 0.0 in every robot JSON (the
+# encoder-only-v1 decision) and position is never blended at any weight
+# (state_estimator.cpp's `body_.x = input.pose.x`), so telemetry.proto documents
+# the field as "encoder-odometry integrated pose". A label that overstates what
+# produced a number is how a frozen OTOS gets read as a fusion disagreement.
+#
+# NOTE: the internal trace KEY is still "fused" (~130 references across the GUI
+# and its tests). Only the user-facing label changes here; the key rename is a
+# separate mechanical sweep.
 _TRACE_LABELS = {
     "camera":  "Camera / Truth",
     "encoder": "Encoder",
     "otos":    "OTOS",
-    "fused":   "Fused",
+    "fused":   "Pose",
 }
 
 
@@ -812,6 +830,29 @@ class CanvasController:
                     path.lineTo(px, py)
             item.setPath(path)  # type: ignore[attr-defined]
             item.setVisible(self._trace_model.enabled[name])  # type: ignore[attr-defined]
+
+            # A trace ROW exists only once that source has actually produced
+            # something (stakeholder, 2026-07-31). One rule covers all four:
+            #   Camera  -- no overhead camera on the bench or in Sim, so no
+            #              truth exists there; hide the row rather than offer a
+            #              checkbox for a line that can never be drawn.
+            #   OTOS    -- hidden until the sensor reports. A permanently empty
+            #              OTOS row and a live-but-FROZEN OTOS look identical in
+            #              a legend, and only one of them is a sensor fault.
+            #   Encoder -- hidden until raw `enc` counts arrive.
+            # A row that appears when its data does carries information; a row
+            # that is always present carries none, and a checkbox for a source
+            # this rig does not have invites misreading the plot.
+            cb = self._checkboxes.get(name)
+            if cb is not None:
+                try:
+                    cb.setVisible(bool(points))
+                except RuntimeError:
+                    # The underlying C++ QCheckBox can outlive its Python
+                    # wrapper during teardown ("Internal C++ object already
+                    # deleted"). A destroyed row has no visibility to set, and a
+                    # redraw racing teardown must not raise.
+                    pass
 
     def _update_marker(self, fused_yaw_rad: float | None) -> None:
         """Position and rotate the robot marker at the latest known pose.
