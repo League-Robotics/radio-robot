@@ -25,4 +25,6 @@ TWIST vx=150 dist=700 timeout=15
 TWIST omega=45 angle=90 timeout=8
 STOP dwell=0.5
 
+SEND STATUS
+EXPECT '.type=="cleartext" and .verb=="STATUS" and .payload.ready==1' timeout=2.0
 CAMFIX x=0 y=0 radius=80

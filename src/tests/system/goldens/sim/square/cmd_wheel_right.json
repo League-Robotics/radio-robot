@@ -1,0 +1,11 @@
+{
+  "spec": {
+    "x_low": -4.736,
+    "x_high": 37.696,
+    "y_low": -22.5,
+    "y_high": 172.5,
+    "width": 640,
+    "height": 480
+  },
+  "tolerance": 10.0
+}

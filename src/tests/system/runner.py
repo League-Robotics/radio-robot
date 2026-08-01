@@ -109,8 +109,11 @@ class SimBackend:
         return self._loop.read_pending_binary_tlm_frames()
 
     def send_line(self, line: str) -> None:
-        """Inject one cleartext wire line (terminator appended)."""
-        self._loop.inject_command(line.encode("ascii") + b"\n")
+        """Inject one cleartext wire line. NO terminator: the sim's
+        inject path treats the whole buffer as one line (verified: an
+        appended 0x0A reaches the firmware verb/data parser as a literal
+        byte -- 'STATUS\\n' fails the registry lookup entirely)."""
+        self._loop.inject_command(line.encode("ascii"))
 
     def true_pose(self) -> dict | None:
         return self._loop.get_true_pose()

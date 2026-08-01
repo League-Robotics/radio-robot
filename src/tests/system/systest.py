@@ -83,27 +83,23 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--out", default="src/tests/system/out")
     p_run.set_defaults(fn=_cmd_run)
 
-    # plot / compare / bless land with the golden-wiring increment; the
-    # subcommands exist so the CLI shape is stable from day one.
     for name in ("plot", "compare", "bless"):
-        p = sub.add_parser(name, help=f"{name} (golden-wiring increment)")
+        p = sub.add_parser(name, help=f"{name} signals vs goldens")
         p.add_argument("dataset")
         p.add_argument("--goldens", default="src/tests/system/goldens")
-        p.add_argument("--runs", nargs="*", default=[])
+        p.add_argument("--runs", nargs="*", default=[],
+                       help="bless: extra no-change datasets for "
+                            "suggest_tolerance()")
         p.add_argument("--out", default="src/tests/system/out")
-        p.set_defaults(fn=_cmd_not_yet, which=name)
+        p.set_defaults(fn=_cmd_golden, which=name)
 
     args = parser.parse_args(argv)
     return args.fn(args)
 
 
-def _cmd_not_yet(args: argparse.Namespace) -> int:
-    try:
-        import goldens as _goldens  # noqa: F401
-    except ImportError:
-        print(f"{args.which}: golden wiring lands in a later increment")
-        return 2
-    return _goldens.dispatch(args)
+def _cmd_golden(args: argparse.Namespace) -> int:
+    import goldens
+    return goldens.dispatch(args)
 
 
 if __name__ == "__main__":
