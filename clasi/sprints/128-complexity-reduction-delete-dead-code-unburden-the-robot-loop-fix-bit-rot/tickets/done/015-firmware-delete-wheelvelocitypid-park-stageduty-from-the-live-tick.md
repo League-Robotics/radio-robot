@@ -1,7 +1,7 @@
 ---
 id: '015'
 title: 'Firmware: delete WheelVelocityPid; park stageDuty() from the live tick'
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 depends-on:
