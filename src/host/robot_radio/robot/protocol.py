@@ -258,6 +258,12 @@ _FLAG_LINE_PRESENT = 1 << 13
 _FLAG_COLOR_PRESENT = 1 << 14
 _FLAG_FAULT_MOVE_TIMEOUT = 1 << 15
 _FLAG_FAULT_SHAPING_DISABLED = 1 << 16
+# bit 17 (kFlagFaultPositionClamped) / bit 18 (kFlagFaultCommandsDropped) --
+# declared in telemetry.h, not yet decoded here (no host consumer needed one
+# until now) -- NOT skipped, reserved for a future ticket to fill in the gap
+# rather than renumbered around.
+_FLAG_FAULT_WHEEL_FROZEN_LEFT = 1 << 19
+_FLAG_FAULT_WHEEL_FROZEN_RIGHT = 1 << 20
 
 
 def _unpack_channels4(word: "int | None") -> "tuple[int, int, int, int] | None":
@@ -363,6 +369,17 @@ class TLMFrame:
         boundary: with no taper, the land-at-zero completion path can
         never fire and the threshold/timeout backstop is the ONLY
         completion path.
+      - ``fault_wheel_frozen_left``/``fault_wheel_frozen_right`` (bits
+        19/20, 129-002, wheel-frozen-fault-flag-in-telemetry.md) — that
+        wheel was commanded a nonzero duty for N consecutive cycles with
+        NO encoder change (``Devices::MotorArmor::wedgeSuspect()``, the
+        GATED, motion-qualified stall detector) — deliberately NOT the
+        same signal as ``fault_wedge_latch`` (bit 7, the raw,
+        unconditional stuck-encoder latch that also fires on a healthy
+        robot merely parked at rest). The TestGUI shows a red banner
+        naming the frozen wheel; ``planner.tour.run_tour()`` aborts the
+        active leg the instant either bit is observed rather than
+        driving on.
     These properties are the ticket's own "existing downstream consumer
     keeps working unchanged" surface — grep ``src/host/robot_radio/`` for
     every attribute name the pre-115 standalone bool/bitmask fields
@@ -493,6 +510,21 @@ class TLMFrame:
         return self._flag(_FLAG_FAULT_SHAPING_DISABLED)
 
     @property
+    def fault_wheel_frozen_left(self) -> bool:
+        """Bit 19 (129-002) -- the LEFT wheel was commanded a nonzero duty
+        for N consecutive cycles with NO encoder change
+        (``Devices::MotorArmor::wedgeSuspect()``, GATED/motion-qualified --
+        see this class's own docstring for why this is deliberately NOT
+        ``fault_wedge_latch``)."""
+        return self._flag(_FLAG_FAULT_WHEEL_FROZEN_LEFT)
+
+    @property
+    def fault_wheel_frozen_right(self) -> bool:
+        """Bit 20 (129-002) -- same as ``fault_wheel_frozen_left``, RIGHT
+        wheel."""
+        return self._flag(_FLAG_FAULT_WHEEL_FROZEN_RIGHT)
+
+    @property
     def event_deadman_expired(self) -> bool:
         return self._flag(_FLAG_EVENT_DEADMAN_EXPIRED)
 
@@ -595,6 +627,32 @@ class TLMFrame:
         frame.acks = [AckEntry.from_ring_entry(entry) for entry in telemetry.acks]
 
         return frame
+
+
+def wheel_frozen_reason(frame: "TLMFrame") -> "str | None":
+    """Which wheel(s), if any, `frame`'s wheel-frozen fault flags (129-002,
+    wheel-frozen-fault-flag-in-telemetry.md; ``TLMFrame.
+    fault_wheel_frozen_left``/``fault_wheel_frozen_right``, flags bits
+    19/20) report frozen RIGHT NOW -- ``None`` if neither is set. One of
+    ``"LEFT"``/``"RIGHT"``/``"LEFT + RIGHT"``, naming the wheel(s) exactly
+    the way the source issue's own acceptance criterion asks the GUI
+    banner to ("the GUI shows a red banner naming which wheel").
+
+    The single shared helper for both host-side consumers of this signal
+    (the TestGUI banner and ``planner.tour.run_tour()``'s abort-on-flag
+    check) -- kept HERE, not in ``testgui/``, because ``planner/`` must
+    never import ``testgui/`` (see ``tour.py``'s own module docstring) and
+    both already import ``TLMFrame`` from this module.
+    """
+    left = bool(frame.fault_wheel_frozen_left)
+    right = bool(frame.fault_wheel_frozen_right)
+    if left and right:
+        return "LEFT + RIGHT"
+    if left:
+        return "LEFT"
+    if right:
+        return "RIGHT"
+    return None
 
 
 @dataclass

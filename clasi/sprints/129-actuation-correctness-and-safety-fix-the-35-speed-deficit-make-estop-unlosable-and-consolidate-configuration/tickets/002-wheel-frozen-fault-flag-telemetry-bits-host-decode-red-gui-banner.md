@@ -1,16 +1,18 @@
 ---
 id: '002'
-title: 'Wheel-frozen fault flag: telemetry bits + host decode + red GUI banner'
-status: open
-use-cases: [SUC-002]
-depends-on: ['001']
+title: 'Wheel-frozen fault flag: telemetry bits + host decode'
+status: in-progress
+use-cases:
+- SUC-002
+depends-on:
+- '001'
 github-issue: ''
 issue: wheel-frozen-fault-flag-in-telemetry.md
 completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
-# Wheel-frozen fault flag: telemetry bits + host decode + red GUI banner
+# Wheel-frozen fault flag: telemetry bits + host decode
 
 ## Description
 
@@ -37,42 +39,45 @@ correction note).
 3. `robot_loop.cpp` — publish `motorL_.wedgeSuspect()`/
    `motorR_.wedgeSuspect()` into `Health` each cycle.
 4. Host `protocol.py` — decode the two new flags.
-5. TestGUI — red banner naming which wheel; the host drive loop aborts
-   the leg on the flag rather than driving on.
+5. NOT IN THIS SPRINT: the TestGUI red banner and the host drive
+   loop's abort-on-flag. TestGUI is owned by another agent right now
+   (stakeholder, 2026-08-01) — this ticket stops at the decoded flag on
+   `TLMFrame`. The GUI consumer rides a later sprint.
 
 ## Acceptance Criteria
 
 - [ ] Physically stall one wheel on the stand: the correct per-wheel flag
-      sets within ~0.5 s and the GUI shows a red banner naming which
-      wheel.
+      sets within ~0.5 s and is observable on the decoded `TLMFrame`
+      (a short bench script, NOT the TestGUI).
 - [ ] A full healthy 700 mm leg raises **neither** flag — verify
       explicitly; a false positive here is worse than no flag at all.
-- [ ] `src/tests/testgui/test_wheel_frozen_indicator.py` (or equivalent)
-      covers both the positive and negative case.
+- [ ] A host unit test (`src/tests/unit/`, NOT `src/tests/testgui/`)
+      covers decode of both flags, positive and negative case.
 - [ ] `grep -n "wedgeSuspect\|wedgeLatched_" src/firm` confirms the
       published flag sources `wedgeSuspect()`, not `wedgeLatched_`.
 
 ## Testing
 
 - **Existing tests to run**: `app_telemetry_harness.cpp`, firmware pytest
-  tiers, `uv run python -m pytest` (host side), `test_gui_button_acceptance.py`.
+  tiers, targeted host unit tests. Do NOT touch or run the TestGUI suite.
 - **New tests to write**: firmware unit test asserting the flag sets only
   after N consecutive no-encoder-change cycles with nonzero commanded
-  duty (not on a single cycle); host test for the red-banner rendering
-  and the drive-loop abort-on-flag behavior.
+  duty (not on a single cycle); host unit test for flag decode.
 - **Bench verification (required)**: physically stall one wheel on the
-  stand and confirm the flag/banner per Acceptance Criteria; run one full
-  healthy 700 mm leg and confirm no false positive.
+  stand and confirm the flag on decoded telemetry per Acceptance
+  Criteria; run one full healthy 700 mm leg and confirm no false
+  positive.
 - **Verification command**: `uv run pytest`.
 
 ## Implementation Plan
 
 - **Approach**: wire an existing, already-computed detector through to
-  telemetry and the GUI — no new detection logic, only publication.
+  telemetry and the host decode — no new detection logic, only
+  publication. No GUI work in this sprint.
 - **Files to modify**: `src/firm/messages/telemetry.h`,
   `src/firm/types/robot_state.h`, `src/firm/app/robot_loop.cpp`,
-  `src/host/robot_radio/robot/protocol.py`, the TestGUI panel that shows
-  fault banners, and the host drive loop (abort-on-flag).
+  `src/host/robot_radio/robot/protocol.py`. NOTHING under
+  `src/host/robot_radio/testgui/`.
 - **Documentation updates**: `telemetry.h`'s flag-table comment block
   (bits 19/20); note the gated-vs-ungated distinction inline since it is
   the one correction the source issue explicitly flags as easy to get

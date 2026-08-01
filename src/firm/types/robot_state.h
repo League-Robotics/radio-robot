@@ -302,7 +302,8 @@ struct RobotState {
   } command;
 
   // --- Health --- writer: the owning module for each signal (I2CBus,
-  // Comms, the two Motor leaves' wedge latch, RobotLoop itself for
+  // Comms, the two Motor leaves' wedge latch and gated wedge-suspect
+  // stall, RobotLoop itself for
   // moveTimeout/shapingDisabled -- RobotLoop::publishMoveResult(), sourced
   // from Motion::TickResult and planner_.shaperConfigured()). Per-cycle
   // dynamics, like every other section --
@@ -331,6 +332,21 @@ struct RobotState {
     // (RobotLoop::clampToPositionWireBound(), Decision 6) -- see
     // telemetry.h's own kFlagFaultPositionClamped doc comment.
     bool positionClamped = false;
+    // wheelFrozenLeft/wheelFrozenRight (129-002, wheel-frozen-fault-flag-
+    // in-telemetry.md): writer RobotLoop::publishWheels(), sourced from
+    // the bound Devices::Motor's own wedgeSuspect() -- the GATED
+    // (motion-qualified) stall detector, commanded nonzero duty for N
+    // consecutive cycles with no encoder change, NOT the raw,
+    // unconditional wedgeLatch above (which also latches on a healthy
+    // robot merely sitting parked at rest -- see telemetry.h's own bit
+    // 19/20 doc comment for the full distinction). Feeds
+    // kFlagFaultWheelFrozenLeft/Right (telemetry.h). This is ALSO the
+    // regression guard 129-007's adaptive duty/speed gain learner reads
+    // to refuse training on a stalled wheel's bogus near-zero speed --
+    // keep this field sourcing wedgeSuspect(), never wedgeLatch/wedged(),
+    // or that guard silently stops guarding.
+    bool wheelFrozenLeft = false;
+    bool wheelFrozenRight = false;
     // ready (128-012, App::Comms::updateStatus()'s own doc comment): the
     // one genuinely loop-owned fact STATUS answers that isn't a projection
     // of some other subsystem's own sensed/derived state -- "we are past

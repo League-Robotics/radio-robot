@@ -383,6 +383,7 @@ def _build_main_window():  # type: ignore[return]
     from robot_radio.testgui.recorder import SessionRecorder, direction_from_marker
     from robot_radio.testgui import camera_prefs
     from robot_radio.testgui import sim_prefs
+    from robot_radio.robot.protocol import wheel_frozen_reason
 
     # QApplication must exist before any QWidget is created.  We create one
     # only if one does not already exist (e.g. during testing).
@@ -415,6 +416,11 @@ def _build_main_window():  # type: ignore[return]
         # _TelemetryBridge.on_frame_ready() -- see that method's own
         # docstring.
         "shaping_disabled_active": False,
+        # 129-002: tracks the LAST drained frame's own wheel_frozen_reason()
+        # (None while healthy, else "LEFT"/"RIGHT"/"LEFT + RIGHT"), for the
+        # same edge-triggered logging + level-set banner pattern as
+        # shaping_disabled_active above.
+        "wheel_frozen_reason": None,
     }
 
     # Session recorder — Qt-free; accumulates TX/RX lines to a JSONL file.
@@ -1279,6 +1285,24 @@ def _build_main_window():  # type: ignore[return]
     shaping_disabled_banner.setVisible(False)
     right_layout.addWidget(shaping_disabled_banner)
 
+    # Wheel-frozen banner (129-002, wheel-frozen-fault-flag-in-telemetry.md)
+    # -- the stakeholder's own "the test program should be throwing big red
+    # errors when it happens" ask. Loud off-state indicator for flags bits
+    # 19/20 (kFlagFaultWheelFrozenLeft/Right / TLMFrame.
+    # fault_wheel_frozen_left/right). Hidden by default; shown by
+    # _TelemetryBridge.on_frame_ready() below, naming which wheel via
+    # robot.protocol.wheel_frozen_reason() (the one shared helper both this
+    # banner and planner.tour.run_tour()'s own abort-on-flag check read --
+    # see that function's own docstring for why it lives in protocol.py, not
+    # here).
+    wheel_frozen_banner = QLabel("")
+    wheel_frozen_banner.setObjectName("wheel_frozen_banner")
+    wheel_frozen_banner.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    wheel_frozen_banner.setStyleSheet(
+        "color: white; background-color: #c02020; font-weight: bold; padding: 2px;")
+    wheel_frozen_banner.setVisible(False)
+    right_layout.addWidget(wheel_frozen_banner)
+
     right_splitter = QSplitter(Qt.Orientation.Vertical)
     right_layout.addWidget(right_splitter)
 
@@ -1603,6 +1627,12 @@ def _build_main_window():  # type: ignore[return]
             instead tracks the LAST drained frame's own state (a level, not
             an edge) -- an honest snapshot of "is this true right now" even
             if this burst never itself crossed an edge.
+
+            129-002 (wheel-frozen-fault-flag-in-telemetry.md): every drained
+            frame's ``wheel_frozen_reason()`` (flags bits 19/20) gets the
+            SAME edge-triggered-log / level-set-banner treatment as
+            ``fault_shaping_disabled`` above, via ``_state
+            ["wheel_frozen_reason"]`` and ``wheel_frozen_banner``.
             """
             last_frame = None
             avatar_yaw_rad = None
@@ -1632,8 +1662,24 @@ def _build_main_window():  # type: ignore[return]
                         )
                     else:
                         _append_log("[SHAPE] flags bit 16 cleared -- shaping active again")
+                # 129-002: loud off-state edge log for a frozen wheel -- see
+                # this method's own docstring addition above.
+                wheel_frozen_now = wheel_frozen_reason(frame)
+                if wheel_frozen_now != _state.get("wheel_frozen_reason"):
+                    _state["wheel_frozen_reason"] = wheel_frozen_now
+                    if wheel_frozen_now is not None:
+                        _append_log(
+                            f"[WHEEL] {wheel_frozen_now} wheel FROZEN -- commanded to move, "
+                            "encoder not advancing (flags bit 19/20, gated wedge-suspect)"
+                        )
+                    else:
+                        _append_log("[WHEEL] wheel-frozen fault cleared")
             if any_frame:
                 shaping_disabled_banner.setVisible(_state.get("shaping_disabled_active", False))
+                wheel_frozen_reason_now = _state.get("wheel_frozen_reason")
+                if wheel_frozen_reason_now is not None:
+                    wheel_frozen_banner.setText(f"WHEEL FROZEN: {wheel_frozen_reason_now}")
+                wheel_frozen_banner.setVisible(wheel_frozen_reason_now is not None)
                 if _state.get("live_view_active"):
                     canvas_ctrl.refresh(update_marker=False)
                 else:

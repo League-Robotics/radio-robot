@@ -470,6 +470,81 @@ void scenarioFlagsAreFreshlyDerivedFromStateEveryUpdate() {
 }
 
 // ===========================================================================
+// 4b. kFlagFaultWheelFrozenLeft/Right (129-002, wheel-frozen-fault-flag-in-
+//     telemetry.md): derived from Health::wheelFrozenLeft/Right, independent
+//     LEFT/RIGHT, and -- the one correction the source issue explicitly
+//     flags as easy to get wrong again -- INDEPENDENT of Health::wedgeLatch
+//     (kFlagFaultWedgeLatch, bit 7). wedgeLatch is the raw, unconditional
+//     stuck-encoder latch (also true on a healthy robot merely parked at
+//     rest); wheelFrozenLeft/Right must publish ONLY the gated,
+//     motion-qualified wedgeSuspect() signal. A frame with wedgeLatch=true
+//     but both wheelFrozen* false (an idle-parked robot) must NOT set
+//     either wheel-frozen bit -- proving the two are wired from genuinely
+//     separate Health fields, not the same one relabeled.
+// ===========================================================================
+
+void scenarioWheelFrozenFlagsAreGatedAndIndependentOfWedgeLatch() {
+  beginScenario("update(state): kFlagFaultWheelFrozenLeft/Right derive from Health::wheelFrozenLeft/Right, "
+                "independently of Health::wedgeLatch");
+
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  App::Comms comms(serialFake, radioFake, banner);
+  App::Telemetry telemetry(comms);
+
+  Types::RobotState state;
+  state.time.cycleStart = 0;
+  state.wheelLeft.sampleTime = state.time.cycleStart;
+  state.wheelRight.sampleTime = state.time.cycleStart;
+
+  // Idle-parked shape: the raw latch is set (as it genuinely is on a
+  // healthy robot sitting still), but NEITHER wheel is being commanded to
+  // move, so wedgeSuspect() -- and therefore both wheel-frozen bits --
+  // must stay clear.
+  state.health.wedgeLatch = true;
+  state.health.wheelFrozenLeft = false;
+  state.health.wheelFrozenRight = false;
+  telemetry.update(state);
+  checkU64Eq(telemetry.flags(), App::kFlagFaultWedgeLatch,
+             "idle-parked: wedgeLatch sets, neither wheel-frozen bit sets from the same idle condition");
+
+  // LEFT wheel commanded and stuck -- only bit 19 sets, bit 20 and the raw
+  // latch stay exactly as Health reports them (latch cleared this cycle,
+  // matching a real robot that just started driving).
+  state.time.cycleStart = 40;
+  state.wheelLeft.sampleTime = state.time.cycleStart;
+  state.wheelRight.sampleTime = state.time.cycleStart;
+  state.health.wedgeLatch = false;
+  state.health.wheelFrozenLeft = true;
+  state.health.wheelFrozenRight = false;
+  telemetry.update(state);
+  checkU64Eq(telemetry.flags(), App::kFlagFaultWheelFrozenLeft,
+             "left wheel frozen: only kFlagFaultWheelFrozenLeft sets");
+
+  // Both wheels commanded and stuck (e.g. a wedged bus) -- both bits set
+  // together.
+  state.time.cycleStart = 80;
+  state.wheelLeft.sampleTime = state.time.cycleStart;
+  state.wheelRight.sampleTime = state.time.cycleStart;
+  state.health.wheelFrozenLeft = true;
+  state.health.wheelFrozenRight = true;
+  telemetry.update(state);
+  checkU64Eq(telemetry.flags(), App::kFlagFaultWheelFrozenLeft | App::kFlagFaultWheelFrozenRight,
+             "both wheels frozen: both bits set together");
+
+  // Released -- both clear again via re-derivation, no caller-side un-set
+  // (matches scenario 4's own "freshly derived every update()" contract).
+  state.time.cycleStart = 120;
+  state.wheelLeft.sampleTime = state.time.cycleStart;
+  state.wheelRight.sampleTime = state.time.cycleStart;
+  state.health.wheelFrozenLeft = false;
+  state.health.wheelFrozenRight = false;
+  telemetry.update(state);
+  checkU64Eq(telemetry.flags(), 0, "released: both wheel-frozen bits clear once Health reports recovery");
+}
+
+// ===========================================================================
 // 5. setLiveFlag() (124-009): the narrow escape hatch for
 //    kFlagFaultMoveTimeout/kFlagFaultShapingDisabled, whose defining
 //    condition (Motion::MoveQueue::tick()'s own outcome) is not known yet
@@ -559,7 +634,7 @@ void scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase() {
   tlm.now = 2097151u;   // (max) -- sizing bound, not a hard wire limit
   tlm.seq = 127u;       // (max) -- sizing bound, not a hard wire limit
   tlm.mode = msg::DriveMode::GO_TO;
-  tlm.flags = 262143u;  // (max) -- covers bit 16 (kFlagFaultShapingDisabled) and bit 17 (kFlagFaultPositionClamped)
+  tlm.flags = 2097151u;  // (max) -- 129-002 widened to cover bits 19/20 (kFlagFaultWheelFrozenLeft/Right)
   // EncoderReading/OtosReading/Pose2D/BodyTwist3: raw wire ints at their
   // own declared (abs_max) -- the RUNTIME engine's validateBounds()/
   // worst-case-size calculator both operate on the raw sint32 value, never
@@ -1420,6 +1495,7 @@ int main() {
   scenarioAgeIsComputedIndependentlyPerReading();
   scenarioAckRingCarriesEveryPushAndPersistsAcrossEmits();
   scenarioFlagsAreFreshlyDerivedFromStateEveryUpdate();
+  scenarioWheelFrozenFlagsAreGatedAndIndependentOfWedgeLatch();
   scenarioSetLiveFlagMutatesLiveFlagsIndependentlyOfUpdate();
   scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase();
   scenarioMeasuredCadenceReport();

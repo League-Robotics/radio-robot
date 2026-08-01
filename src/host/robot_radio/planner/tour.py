@@ -51,6 +51,7 @@ from enum import Enum
 from typing import TYPE_CHECKING, Callable, Literal, Protocol, Sequence
 
 from robot_radio.controllers.pid import normalize_angle
+from robot_radio.robot.protocol import wheel_frozen_reason
 
 if TYPE_CHECKING:
     from robot_radio.planner.heading import HeadingCorrector

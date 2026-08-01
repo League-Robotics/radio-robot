@@ -16,8 +16,6 @@ issues:
 - 07-estop-did-not-stop-write-on-change-vs-latching-brick.md
 - wheel-frozen-fault-flag-in-telemetry.md
 - bench-duty-readers-see-zero-after-stageduty-park.md
-- testgui-unmanaged-drive-lease-expiry-and-terminal-pivot.md
-- testgui-host-dead-reckoner-used-raw-not-effective-trackwidth.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -110,11 +108,12 @@ don't collide with tickets that are still actively editing the same files:
 3. **DBG debug channel** (05) — a compiled-conditional (bench/Sim only)
    firmware-to-host debug message channel, landed early because the duty
    sweep and calibration work in (4)-(6) below wants it.
-4. **Two independent TestGUI defect fixes** — drive-lease expiry margin
-   and the terminal-pivot equalizer (testgui-unmanaged-drive-lease-expiry),
-   and the host dead-reckoner's raw-vs-effective trackwidth
-   (testgui-host-dead-reckoner). Neither depends on the actuation work
-   above or on each other.
+4. **REMOVED FROM SCOPE (stakeholder, 2026-08-01)**: the two TestGUI
+   defect fixes originally planned here. Another agent owns the TestGUI
+   concurrently, so `src/host/robot_radio/testgui/` is off limits this
+   sprint; both issues were returned to the pool unstarted. Tickets 002
+   and 008 were rescoped off the GUI at the same time (002 stops at the
+   decoded telemetry flag; 008 is a CLI command, not a GUI button).
 5. **Static plant-gain reconciliation** (06, plus the small
    bench-duty-readers-see-zero residual folded in) — set `wheel_gain`/
    `wheel_intercept` to identity, measure the real per-wheel plant gain
@@ -209,10 +208,6 @@ Exactly the 11 linked issues:
 
 **Bench/debug tooling**
 3. `05-dbg-debug-message-channel-for-bench-and-sim.md`
-
-**TestGUI defects**
-4. `testgui-unmanaged-drive-lease-expiry-and-terminal-pivot.md`
-5. `testgui-host-dead-reckoner-used-raw-not-effective-trackwidth.md`
 
 **Plant-gain / duty calibration**
 6. `06-duty-per-speed-and-wheel-gain-disagree-with-the-plant.md`
@@ -365,13 +360,9 @@ Seven responsibility groups, each changing for its own reason:
 3. **Bench/Sim debug channel** (05) — a firmware-to-host message channel
    that costs nothing in the shipped ARM build, needed by the calibration
    work below.
-4. **TestGUI unmanaged-drive host-loop correctness** (testgui-unmanaged-
-   drive) — lease timing margin and a common-speed-plus-bounded-trim
-   equalizer, replacing an independent-per-wheel profile that produced a
-   terminal pivot.
-5. **TestGUI dead-reckoning geometry correctness** (testgui-host-dead-
-   reckoner) — one source of truth for effective trackwidth, shared by
-   both host-side dead-reckoner instances.
+4-5. **Withdrawn** — the two TestGUI responsibilities are out of scope
+   (see Solution item 4); no `src/host/robot_radio/testgui/` file is
+   touched by this sprint.
 6. **Plant-gain measurement and reconciliation, static then adaptive**
    (06, bench-duty-readers residual, 04) — first correct the compiled
    baseline with a real measurement, then let the robot refine it per
@@ -1016,13 +1007,13 @@ single-issue auto-link does not fire).
 | # | Title | Issue(s) | Depends On |
 |---|-------|----------|------------|
 | 001 | ESTOP unlosable: stop-not-taken write exemption + Drive stop re-assertion, bench-verified 10x | 07 | — |
-| 002 | Wheel-frozen fault flag: telemetry bits + host decode + red GUI banner | wheel-frozen-fault-flag-in-telemetry | 001 |
+| 002 | Wheel-frozen fault flag: telemetry bits + host decode | wheel-frozen-fault-flag-in-telemetry | 001 |
 | 003 | DBG debug message channel (bench/Sim only), exception-proof host handler | 05 | — |
-| 004 | TestGUI unmanaged drive: lease timing fix + common-speed/bounded-trim equalizer | testgui-unmanaged-drive-lease-expiry-and-terminal-pivot | — |
-| 005 | TestGUI host dead-reckoner: use effective (not raw) trackwidth in both instances | testgui-host-dead-reckoner-used-raw-not-effective-trackwidth | — |
+| ~~004~~ | ~~TestGUI unmanaged drive~~ — WITHDRAWN 2026-08-01, issue returned to pool (TestGUI owned by another agent) | — | — |
+| ~~005~~ | ~~TestGUI host dead-reckoner~~ — WITHDRAWN 2026-08-01, issue returned to pool (TestGUI owned by another agent) | — | — |
 | 006 | Plant-gain reconciliation: identity wheel correction, duty_sweep.py, reconcile vel_kff; fix zero-reading bench duty tools | 06, bench-duty-readers-see-zero-after-stageduty-park | 001 |
 | 007 | Drive-owned adaptive duty-per-speed trim (gainTrim): slow asymmetric learner, RAM-only, telemetry-projected | 04 | 006 |
-| 008 | Host-side bake action: fold learned gainTrim into duty_per_speed config | 04 | 007 |
+| 008 | Host-side bake action (CLI, not GUI): fold learned gainTrim into duty_per_speed config | 04 | 007 |
 | 009 | Config consolidation: main.cpp PlannerLimits → data/robots/*.json planner block | 03, 02 | 007 |
 | 010 | Config consolidation: sweep remaining hard-coded values across src/firm and src/host | 02 | 009 |
 | 011 | Comment reduction sweep across src/firm (comment-only, clean-build verified) | 01 | 001, 002, 003, 006, 007, 009, 010 |

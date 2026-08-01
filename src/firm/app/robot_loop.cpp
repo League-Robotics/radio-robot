@@ -394,6 +394,15 @@ void RobotLoop::publishWheels() {
   publishWheel(motorL_, state_.wheelLeft, positionEpochLeft_, clampedL);
   publishWheel(motorR_, state_.wheelRight, positionEpochRight_, clampedR);
   state_.health.wedgeLatch = motorL_.wedged() || motorR_.wedged();
+  // 129-002: per-wheel, GATED stall visibility -- wedgeSuspect(), not
+  // wedged()/wedgeLatch above. wedgeSuspect() requires |appliedDuty()|
+  // above the motion-threshold deadband as well as the stuck-position
+  // read, so it stays false on an idle parked robot (unlike wedged(),
+  // which latches on ANY stuck reading, including at rest) -- see
+  // telemetry.h's kFlagFaultWheelFrozenLeft/Right doc comment for the
+  // full rationale. Do not source these from wedged()/wedgeLatch.
+  state_.health.wheelFrozenLeft = motorL_.wedgeSuspect();
+  state_.health.wheelFrozenRight = motorR_.wedgeSuspect();
   state_.health.positionClamped = clampedL || clampedR;
 }
 

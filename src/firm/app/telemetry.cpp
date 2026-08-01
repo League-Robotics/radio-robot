@@ -146,6 +146,8 @@ void Telemetry::update(const Types::RobotState& state) {
   setFlag(kFlagLinePresent, state.perception.lineFresh);
   setFlag(kFlagColorPresent, state.perception.colorFresh);
   setFlag(kFlagFaultPositionClamped, state.health.positionClamped);
+  setFlag(kFlagFaultWheelFrozenLeft, state.health.wheelFrozenLeft);
+  setFlag(kFlagFaultWheelFrozenRight, state.health.wheelFrozenRight);
 
   // lastActivity_/everMoved_ (issue Part 3, "New state replacing old arms
   // 1+2") -- computed against state.time.cycleStart, NOT the `now` local

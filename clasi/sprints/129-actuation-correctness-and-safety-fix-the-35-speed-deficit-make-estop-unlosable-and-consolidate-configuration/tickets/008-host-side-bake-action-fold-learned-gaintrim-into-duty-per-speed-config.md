@@ -26,8 +26,9 @@ time, always (stakeholder: "we're not ready for the complexity of storing
 it," 2026-08-01). But a ~60 s learning time constant makes relearning
 from scratch every boot costly in practice. The host, which already
 receives `gainTrim` live in telemetry (ticket 007), is given a **deliberate,
-explicit** bake action — a GUI button or a CLI command (implementer's
-choice) — that:
+explicit** bake action — a **CLI command** (NOT a GUI button: TestGUI is
+owned by another agent right now, stakeholder 2026-08-01, so this sprint
+adds nothing under `src/host/robot_radio/testgui/`) — that:
 
 1. Reads the currently-observed `gainTrimLeft/Right` off the live
    telemetry stream.
@@ -77,21 +78,22 @@ baseline. Boot itself is unchanged: it starts from config, same as today.
   property (per Acceptance Criteria); a schema-validation test on the
   post-bake JSON.
 - **Bench verification**: a short calibration drive session on the stand,
-  observe `gainTrim` in the TestGUI, trigger the bake action, confirm the
-  written JSON and a subsequent boot's starting telemetry.
+  observe `gainTrim` on decoded telemetry (a bench script or `rogo`, NOT
+  the TestGUI), trigger the bake action, confirm the written JSON and a
+  subsequent boot's starting telemetry.
 - **Verification command**: `uv run pytest`.
 
 ## Implementation Plan
 
-- **Approach**: a small, explicit, host-side action — no daemon, no
-  scheduler. Implementer chooses GUI button vs. CLI command and the exact
-  JSON write shape (direct fold-in recommended); document the choice.
-- **Files to create/modify**: likely `src/host/robot_radio/testgui/`
-  (a new button/panel) and/or a new CLI command alongside existing
-  `rogo`/`io/` config-push commands; `data/robots/*.json` write path
+- **Approach**: a small, explicit, host-side CLI action — no daemon, no
+  scheduler, no GUI. Implementer chooses the exact JSON write shape
+  (direct fold-in recommended); document the choice.
+- **Files to create/modify**: a new CLI command alongside existing
+  `rogo`/`io/` config-push commands — NOTHING under
+  `src/host/robot_radio/testgui/`; `data/robots/*.json` write path
   (reuse existing config-write utilities if any exist, e.g. near
   `gen_boot_config.py`'s readers, rather than hand-rolling JSON I/O).
-- **Documentation updates**: user-facing note (README or TestGUI help
+- **Documentation updates**: user-facing note (README or CLI help
   text) describing the "calibrate with a host, bake, then run hostless"
   operational model — this is a workflow change worth documenting where
   operators will actually see it, not just in `sprint.md`.

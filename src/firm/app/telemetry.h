@@ -173,6 +173,42 @@ namespace App {
 //                                    Derived from Types::RobotState::
 //                                    Health::commandsDroppedCount inside
 //                                    update(), exactly like bit 9.
+//   bit 19 (kFlagFaultWheelFrozenLeft) -- 129-002 (wheel-frozen-fault-
+//                                    flag-in-telemetry.md): the LEFT wheel
+//                                    was commanded a nonzero duty for N
+//                                    consecutive cycles with NO encoder
+//                                    change -- Devices::MotorArmor::
+//                                    wedgeSuspect(), the GATED (motion-
+//                                    qualified) derivation, NOT the raw
+//                                    wedged()/kFlagFaultWedgeLatch (bit 7)
+//                                    this bit is deliberately independent
+//                                    of. wedged() fires on ANY stuck
+//                                    encoder reading, including a healthy
+//                                    robot sitting parked at rest (it
+//                                    reads ~always-set while idle) --
+//                                    publishing THAT as a fault would cry
+//                                    wolf on every idle frame. wedgeSuspect()
+//                                    additionally requires |appliedDuty()|
+//                                    above the motion-threshold deadband,
+//                                    i.e. "asked to move, not moving" --
+//                                    the actual "frozen wheel" signal a
+//                                    driving robot cares about. Derived
+//                                    from Types::RobotState::Health::
+//                                    wheelFrozenLeft inside update(),
+//                                    exactly like bit 7. Also the
+//                                    regression guard for 129-001 (ESTOP
+//                                    unlosable): a duty write silently
+//                                    lost again shows up here within the
+//                                    wedge threshold instead of requiring
+//                                    another incident to notice, and is
+//                                    the required guard against 129-007's
+//                                    adaptive gain learner ever training
+//                                    on a stalled wheel's bogus zero
+//                                    speed.
+//   bit 20 (kFlagFaultWheelFrozenRight) -- same as bit 19, RIGHT wheel
+//                                    (Devices::MotorArmor::wedgeSuspect()
+//                                    on motorR_, Types::RobotState::
+//                                    Health::wheelFrozenRight).
 //
 // === Freshness bits -- valid-THIS-FRAME qualifiers for a payload field;
 //     toggle BY DESIGN every cycle they are not fresh; carry NO
@@ -218,7 +254,7 @@ namespace App {
 //                                    the edge). The `READY` cleartext line
 //                                    already announces this, same
 //                                    treatment as bit 5.
-//   bits 19-31 -- reserved for future use.
+//   bits 21-31 -- reserved for future use.
 constexpr uint32_t kFlagOtosPresent = 1u << 0;
 constexpr uint32_t kFlagOtosConnected = 1u << 1;
 constexpr uint32_t kFlagActive = 1u << 2;
@@ -238,6 +274,8 @@ constexpr uint32_t kFlagFaultMoveTimeout = 1u << 15;
 constexpr uint32_t kFlagFaultShapingDisabled = 1u << 16;
 constexpr uint32_t kFlagFaultPositionClamped = 1u << 17;
 constexpr uint32_t kFlagFaultCommandsDropped = 1u << 18;
+constexpr uint32_t kFlagFaultWheelFrozenLeft = 1u << 19;
+constexpr uint32_t kFlagFaultWheelFrozenRight = 1u << 20;
 
 // Primary cadence target: primary period == cycle period (115-005, closes
 // kcycle-kprimaryperiod-mismatch.md -- the frame is emitted every loop
