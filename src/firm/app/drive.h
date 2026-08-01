@@ -45,14 +45,33 @@ class Drive {
   // telemetry twist, and Drive is where it has always been constructed.
   Drive(Devices::Motor& left, Devices::Motor& right, float trackWidth);
 
+  // The measured plant inverse: duty = speed * kDutyPerSpeed.
+  //
+  // BAKED IN, NOT CONFIGURED (stakeholder, 2026-07-31). Measured by
+  // src/tests/bench/duty_sweep.py on the stand at firmware v0.20260731.13:
+  // 853.6 mm/s per unit duty on the left wheel, 837.8 on the right -- 1.9%
+  // apart -- corroborated by a saturation reading (696-795 mm/s at full duty)
+  // that depends on no constant at all. 1/845.7 = 0.001182.
+  //
+  // ONE constant for both wheels on purpose. At 1.9% the two wheels are the
+  // same wheel, and a per-wheel pair invites fitting one against the other --
+  // which is exactly how duty_per_speed and wheel_gain became circularly
+  // calibrated, each measured against the other's error (see
+  // `_wheel_correction_note` in data/robots/tovez.json).
+  //
+  // The robot JSONs still carry duty_per_speed_left/right and the generator
+  // still bakes them into Config::DriveBootConfig; main.cpp deliberately
+  // ignores those fields. They are removed as part of
+  // clasi/issues/04-continuous-duty-per-speed-calibration.md, which also makes
+  // this value the boot-time starting estimate for runtime adaptation rather
+  // than a fixed constant.
+  static constexpr float kDutyPerSpeed = 0.001182f;  // [duty/(mm/s)]
+
   // Install this robot's own wheel calibration
   // (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
   // §6). Drive carries NO calibration defaults, so this MUST be called --
-  // by the composition root, from Config::defaultDriveConfig() -- before
-  // any motion is commanded; until it is, tick() writes nothing (see
-  // calibrated() below). dutyPerSpeed* is the inverse of the measured plant
-  // gain: duty = speed * dutyPerSpeed, per wheel because the two gearboxes
-  // genuinely differ ~10%.
+  // by the composition root -- before any motion is commanded; until it is,
+  // tick() writes nothing (see calibrated() below).
   void setDutyPerSpeed(float left, float right) {  // [duty/(mm/s)] x2
     dutyPerSpeedLeft_ = left;
     dutyPerSpeedRight_ = right;

@@ -276,7 +276,28 @@ int main() {
   // reaching here means they are real, measured, per-robot numbers.
   {
     const Config::DriveBootConfig driveConfig = Config::defaultDriveConfig();
-    drive.setDutyPerSpeed(driveConfig.dutyPerSpeedLeft, driveConfig.dutyPerSpeedRight);
+    // MEASURED, NOT CONFIGURED (stakeholder, 2026-07-31): one baked constant
+    // for both wheels, deliberately ignoring driveConfig.dutyPerSpeedLeft/
+    // Right. The JSON value (0.00187325, claiming 534 mm/s at full duty) is
+    // wrong by ~1.6x -- a duty sweep on the stand at firmware v0.20260731.13
+    // measured 853.6 (left) and 837.8 (right) mm/s per unit duty, only 1.9%
+    // apart, corroborated by a saturation reading of 696-795 mm/s at full
+    // duty that depends on no constant at all. See
+    // clasi/issues/06-duty-per-speed-and-wheel-gain-disagree-with-the-plant.md
+    // for the measurement, and note that an EARLIER sweep the same day
+    // produced badly wrong numbers because it ran against firmware whose
+    // baked constants could not be read back.
+    //
+    // Per-wheel split is dropped on purpose: at 1.9% the two wheels are the
+    // same wheel, and two numbers invite re-fitting one against the other --
+    // which is how duty_per_speed and wheel_gain ended up circularly
+    // calibrated in the first place.
+    //
+    // Temporary by design. This becomes the boot-time starting estimate for
+    // runtime adaptation from the WheelTrim integral --
+    // clasi/issues/04-continuous-duty-per-speed-calibration.md -- at which
+    // point setDutyPerSpeed() is the adaptation entry point, not a config sink.
+    drive.setDutyPerSpeed(App::Drive::kDutyPerSpeed, App::Drive::kDutyPerSpeed);
     drive.setWheelCorrection(
         driveConfig.gainLeftAccel, driveConfig.interceptLeftAccel,
         driveConfig.gainLeftDecel, driveConfig.interceptLeftDecel,

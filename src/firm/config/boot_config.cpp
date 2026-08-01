@@ -171,14 +171,14 @@ DriveBootConfig defaultDriveConfig() {
     cfg.dutyPerSpeedLeft = 0.00187325f;    // [duty/(mm/s)]
     cfg.dutyPerSpeedRight = 0.00187325f;  // [duty/(mm/s)]
     cfg.crawlPulse = 0.0f;                  // [-1,1]; 0 = off
-    cfg.gainLeftAccel = 1.4703f;
-    cfg.interceptLeftAccel = 5.34f;   // [mm/s]
-    cfg.gainLeftDecel = 1.4668f;
-    cfg.interceptLeftDecel = 9.22f;   // [mm/s]
-    cfg.gainRightAccel = 1.4345f;
-    cfg.interceptRightAccel = -6.91f;   // [mm/s]
-    cfg.gainRightDecel = 1.4188f;
-    cfg.interceptRightDecel = 2.12f;   // [mm/s]
+    cfg.gainLeftAccel = 1.0f;
+    cfg.interceptLeftAccel = 0.0f;   // [mm/s]
+    cfg.gainLeftDecel = 1.0f;
+    cfg.interceptLeftDecel = 0.0f;   // [mm/s]
+    cfg.gainRightAccel = 1.0f;
+    cfg.interceptRightAccel = 0.0f;   // [mm/s]
+    cfg.gainRightDecel = 1.0f;
+    cfg.interceptRightDecel = 0.0f;   // [mm/s]
     return cfg;
 }
 
