@@ -62,14 +62,14 @@ docs living outside those two roots.
 
 | Subsystem | Role |
 |---|---|
-| [`app/`](../../src/firm/app/DESIGN.md) | The single cooperatively-timed control loop (`App::RobotLoop`) and its BASE-side passive modules: Comms, Telemetry, Drive (122 — narrowed to the wheel-target sink implementing the boundary interface below), Preamble. `RobotLoop` also constructs and drives the motion-library's `Motion::MoveQueue`/`Motion::Odometry`/`Motion::StateEstimator` (122 — moved to [`src/motion/`](../../src/motion/DESIGN.md), a sibling tree, see §5) through that boundary. |
+| [`app/`](../../src/firm/app/DESIGN.md) | The single cooperatively-timed control loop (`App::RobotLoop`) and its BASE-side passive modules: Comms, Telemetry, Drive (owns WHEELS teleop and wheel-speed-to-duty actuation), Preamble. `RobotLoop` also constructs and drives the motion-library's `Motion::Planner`/`Motion::Odometry`/`Motion::StateEstimator` (122 — moved to [`src/motion/`](../../src/motion/DESIGN.md), a sibling tree, see §5), which write `Types::RobotState::Wheel::cmdVelocity` directly (128 — the plain blackboard field IS the boundary, no interface). |
 | [`com/`](../../src/firm/com/DESIGN.md) | ARM-only raw transports: USB CDC serial, the micro:bit radio, persisted radio-channel storage. |
 | [`config/`](../../src/firm/config/DESIGN.md) | Generated boot configuration — per-robot calibration baked at build time from `data/robots/active_robot.json`. |
 | [`devices/`](../../src/firm/devices/DESIGN.md) | I2C-attached device leaves (Nezha motors, OTOS, color/line sensors), the shared `MotorArmor` policy, the velocity PID, and the pure `I2CBus`/`Clock`/`Sleeper` hardware seams. |
 | [`kinematics/`](../../src/firm/kinematics/DESIGN.md) | **Retired (122) — code moved to [`src/motion/`](../../src/motion/DESIGN.md).** `BodyKinematics` (stateless differential-drive twist↔wheel maps, curvature-preserving saturation) now lives in the sibling `src/motion` tree; this directory keeps only a redirect `DESIGN.md` (the original derivation, unchanged) so the validator has a doc for this still-declared child of `src/firm`. |
 | [`messages/`](../../src/firm/messages/DESIGN.md) | The wire schema: generated message structs, the generated envelope codec, the hand-written byte-level wire runtime. |
 | [`motion/`](../../src/firm/motion/DESIGN.md) | **Retired (122) — code moved to [`src/motion/`](../../src/motion/DESIGN.md).** `Motion::StopCondition`/`Motion::VelocityShaper` (bounded-motion stop/timeout comparison and the decel-into-the-goal speed shaper) now live in the sibling `src/motion` tree; this directory keeps only a redirect `DESIGN.md` (the original derivation, unchanged) so the validator has a doc for this still-declared child of `src/firm`. |
-| [`types/`](../../src/firm/types/DESIGN.md) | `Types::RobotState` (sprint 124) — the dependency-free, per-cycle blackboard struct that is now a SECOND shared floor `src/firm` and `src/motion` both stand on, alongside `Motion::WheelSink` (see §5's "Wire boundary" note and the dependency graph below). Also holds vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
+| [`types/`](../../src/firm/types/DESIGN.md) | `Types::RobotState` (sprint 124) — the dependency-free, per-cycle blackboard struct that is now a SECOND shared floor `src/firm` and `src/motion` both stand on; its own `Wheel::cmdVelocity` field is THE base/motion actuation boundary (128, see §5's "Wire boundary" note and the dependency graph below). Also holds vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
 
 (`src/firm/README-DESIGN.md` is a one-paragraph pointer back to this
 document — `src/firm` itself has no co-located `DESIGN.md`; see §4.)
@@ -89,7 +89,7 @@ even though nothing requires it:
 
 | Subsystem | Role |
 |---|---|
-| [`src/motion/`](../../src/motion/DESIGN.md) | The motion-control library (sprint 122's two-layer base/motion split): `MoveQueue`, `StateEstimator`, `Odometry`, `BodyKinematics`, `StopCondition`, `VelocityShaper`, and the `WheelSink` boundary interface the base (`src/firm/app`'s `Drive`) implements. A SIBLING tree of `src/firm` (not a child), imports nothing from `src/firm` except `messages/`, and builds its own standalone `motion_tests` CMake target (no sim library, no Python). Real, current documentation — deliberately kept OUTSIDE the validated `sources:` list (Design Rationale Decision 3, sprint 122), same unvalidated-but-real treatment this table's other rows already get. |
+| [`src/motion/`](../../src/motion/DESIGN.md) | The motion-control library (sprint 122's two-layer base/motion split): `StateEstimator`, `Odometry`, `BodyKinematics`, `WheelVelocityPid`, and `planner/` — `Motion::Planner`, its own standalone CMake project, the larger and now-live half of this tree, writing `Types::RobotState::Wheel::cmdVelocity` directly (128 — the plain blackboard field is the boundary; `MoveQueue`/`WheelSink`/`StopCondition`/`VelocityShaper` were deleted as dead code, zero callers). A SIBLING tree of `src/firm` (not a child), imports nothing from `src/firm` except `messages/`/`firm/types`, and builds its own standalone `motion_tests` CMake target (no sim library, no Python). Real, current documentation — deliberately kept OUTSIDE the validated `sources:` list (Design Rationale Decision 3, sprint 122), same unvalidated-but-real treatment this table's other rows already get. |
 | [`src/sim/`](../../src/sim/DESIGN.md) | The host-build firmware simulator: compiles the real firmware into a shared library, drives it from Python over an `extern "C"` ABI. One sim object shared by the pytest suite and the TestGUI. |
 | [`src/protos/`](../../src/protos/DESIGN.md) | The wire-schema source of truth (`.proto` files) both the firmware and host codegen compile from. |
 | [`src/scripts/`](../../src/scripts/DESIGN.md) | Build-time code generators (messages, host protobuf bindings, boot config, firmware version) plus one CI-only config-sync lint. |
@@ -366,8 +366,10 @@ generated `(scale)` conversion; the ack ring's elements pack to a single
 `uint32` each; the older single scalar "freshest ack" slot is deleted —
 the bounded `acks` ring is the sole ack-observability path now.
 `Types::RobotState` (`src/firm/types/robot_state.h`) becomes a SECOND
-dependency-free shared floor `src/firm` and `src/motion` both stand on,
-alongside `Motion::WheelSink` — the one struct every subsystem publishes
+dependency-free shared floor `src/firm` and `src/motion` both stand on —
+its own `Wheel::cmdVelocity` field later (128) becomes THE base/motion
+actuation boundary in its own right, superseding `Motion::WheelSink` — the
+one struct every subsystem publishes
 its per-cycle section to and the one source `Telemetry::update(state)`
 projects from; `Motion::StateEstimator::Input` is now a type alias onto
 it, not a hand-copied near-duplicate. `msg::TelemetrySecondary` — frame
@@ -383,6 +385,47 @@ rebase), and
 and [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) §1/§4/§5 for
 the subsystem-level detail.
 
+**125–127 (velocity-PID relocation + `Motion::Planner` integration —
+landed, superseding the `MoveQueue`/`WheelSink` story two paragraphs
+above).** `Motion::WheelVelocityPid` (125-003) relocates the closed-loop
+velocity control law from `Devices::NezhaMotor` into `src/motion` — same
+control law, motion-local `Gains` type only. Separately, `Motion::Planner`
+(`src/motion/planner/`, its own standalone CMake project — profile
+generation, jerk-limited shaping, a duty-stage PID/trim, wheel-command
+estimation) becomes the on-robot motion decider in place of `Motion::
+MoveQueue`: `Motion::Planner::update()` writes `Types::RobotState::
+Wheel::cmdVelocity` directly, and `App::RobotLoop::cycle()` reads it back
+directly to drive `App::Drive::tick()`. `Motion::WheelSink` — the
+boundary interface `MoveQueue` drove `App::Drive` through — is left with
+zero callers at this point (Planner never adopts it; Drive's own WHEELS
+teleop path already wrote `cmdVelocity` directly too, via `App::Drive::
+update()`), though it is not yet deleted.
+
+**128 (complexity reduction: delete dead `WheelSink`/`MoveQueue`
+generation) — landed, SUC-002 Decision 1.** With zero callers confirmed
+(`Motion::Planner::update()`/`App::Drive::update()` already write
+`cmdVelocity` directly; `RobotLoop::cycle()` already reads it directly),
+`Motion::WheelSink`, `Motion::MoveQueue`, `Motion::StopCondition`, and
+`Motion::VelocityShaper` (~1,500 lines) are deleted outright — not
+retired, not redirect-only, deleted — along with their `motion_tests`
+ctest targets and `test_app_move_queue.py`. `Types::RobotState::Wheel::
+cmdVelocity` (`src/firm/types/robot_state.h`) is promoted to be THE
+documented actuation boundary between `src/firm` and `src/motion` in
+`WheelSink`'s place: sole-or-arbitrated writer (`Motion::Planner::
+update()` when a Move owns motion, `App::Drive::update()` for WHEELS
+teleop, arbitrated by `RobotLoop`'s own ordering — exactly one of the two
+`update()` calls writes it per cycle), consumer `RobotLoop::cycle()`. No
+new interface was introduced to replace `WheelSink` — the plain
+blackboard field IS the boundary, the same way `Types::RobotState`
+already is for every other base/motion crossing (117/124). The
+land-at-zero completion predicate's own empirical margin-factor
+derivation (118/119/121, ~250 lines of sweep history) is preserved,
+verbatim, as dated design history rather than lost with the code:
+[`docs/design/history/land-at-zero-margin-derivation.md`](history/land-at-zero-margin-derivation.md).
+See [`src/motion/DESIGN.md`](../../src/motion/DESIGN.md) and
+[`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) for the
+subsystem-level detail.
+
 Flow of one cycle, at orientation altitude:
 
 1. **Comms in** — `App::Comms` polls the two transports (serial, radio)
@@ -392,13 +435,13 @@ Flow of one cycle, at orientation altitude:
    delimited-frame-vs-HELLO/PING-text-rump demux this step used to
    describe), then decodes a binary command line into a
    `msg::CommandEnvelope`.
-2. **Dispatch** — the loop's own switch acts on the command: a Move
-   enqueues onto `Motion::MoveQueue` (122 — moved to `src/motion`, see
-   below; 1 active + 4 pending; `replace=true` flushes pending and
-   preempts the active `Move`, `replace=false` enqueues or acks
-   `ERR_FULL` past 4 pending), which stages the active motion's velocity
-   onto `App::Drive` through the `Motion::WheelSink` boundary and drives
-   its own `Motion::StopCondition`; a Stop flushes the queue and halts
+2. **Dispatch** — the loop's own switch acts on the command: a Move is
+   handed to `Motion::Planner` (`src/motion/planner/`, 125–128 — replaces
+   the deleted `Motion::MoveQueue`), which owns the active/pending queue,
+   profiles and shapes the commanded motion, and each cycle writes
+   `Types::RobotState::Wheel::cmdVelocity` directly — no boundary
+   interface, the blackboard field IS the boundary (128, superseding the
+   `Motion::WheelSink` story below); a Stop flushes the queue and halts
    `Drive` immediately; config/queries reply via the primary telemetry
    frame's bounded ack ring (sprint 124 ticket 008 deleted the older
    single scalar ack slot — ring membership alone means "acked" — see
@@ -434,14 +477,16 @@ command consumption starts only when `preamble.done()`.
 
 Dependency direction (arrows = "includes/uses"). **122 changed this
 diagram's shape**: `motion/`/`kinematics/` stop being children of
-`src/firm` and become `src/motion`, a SIBLING tree `app` depends on
-through one narrow boundary interface (`Motion::WheelSink`) — not a
-`src/firm`-internal include any more:
+`src/firm` and become `src/motion`, a SIBLING tree `app` depends on —
+**128** deletes the boundary INTERFACE that crossing briefly went
+through (`Motion::WheelSink`, zero callers) in favor of the plain
+`Types::RobotState::Wheel::cmdVelocity` field already crossing it in
+practice:
 
 ```
 main.cpp ──► app ──► devices ──► (nothing project-local except itself)
    │          │  └─► messages
-   │          ├────► src/motion (sibling tree, via Motion::WheelSink) ──► messages
+   │          ├────► src/motion (sibling tree, via RobotState::Wheel::cmdVelocity) ──► messages
    │          └────► com (via ARM-only Transport adapters)
    ├────────► config ──► messages
    └────────► com, devices, config, src/motion
@@ -492,13 +537,13 @@ only what's specific to it — this is the shared set):
   are frozen protocol surface, excluded from the naming-convention
   rename sweep — see §3.
 - **No deadman — every `Move` is structurally self-bounding:**
-  `Motion::MoveQueue::tick()` (122 — moved to `src/motion`) runs
-  unconditionally every cycle and drains to `Drive::stop()` once the
-  active `Move`'s stop condition or
-  `timeout` fires and nothing is pending — an emergent property of every
-  queued command carrying its own bound, not a second, independently-
-  timed staleness timer. `App::Deadman` does not exist in this tree. No
-  ad hoc watchdog belongs anywhere in the firmware.
+  `Motion::Planner::tick()` (125–128 — replaces the deleted `Motion::
+  MoveQueue`) runs unconditionally every cycle and drains once the
+  active `Move`'s stop condition or `timeout` fires and nothing is
+  pending — an emergent property of every queued command carrying its
+  own bound, not a second, independently-timed staleness timer.
+  `App::Deadman` does not exist in this tree. No ad hoc watchdog belongs
+  anywhere in the firmware.
 - **`newlib-nano` has no `%f`:** `printf`-family float formatting emits
   nothing on ARM (works fine in host builds). Floats cross the wire as
   scaled integers or via the binary codec.

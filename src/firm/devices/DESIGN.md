@@ -325,7 +325,7 @@ too, not just the integrator (2026-07-22 bench fix, refined same day).**
 The deadband freeze above only ever silenced the *integral* term —
 `compute()` still computed and returned `kp * err` for an in-deadband
 target, including the literal `target == 0.0f` case `Drive::stop()`/an
-emptied `MoveQueue` produce at rest. Since `err = target - measured`, an
+emptied Move queue produce at rest. Since `err = target - measured`, an
 exact-zero target's own "error" is just whatever residual/noisy
 `measured` velocity the plant happens to report that tick, and
 `writeShapedDuty()` (`nezha_motor.cpp`) boosts that noise-driven nonzero

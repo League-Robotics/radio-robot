@@ -51,7 +51,6 @@ _APP_SOURCES = [
     # reference to -- so this graph must link it.
     _SOURCE_DIR / "app" / "configurator.cpp",
     _SOURCE_DIR / "app" / "telemetry.cpp",
-    _REPO_ROOT / "src" / "motion" / "move_queue.cpp",
     # Planner integration (2026-07-26): the on-robot Motion::Planner now
     # drives the loop -- its library core joins every RobotLoop-linking
     # dependency graph.
@@ -70,8 +69,6 @@ _APP_SOURCES = [
     _REPO_ROOT / "src" / "motion" / "state_estimator.cpp",
 ]
 _MOTION_SOURCES = [
-    _REPO_ROOT / "src" / "motion" / "stop_condition.cpp",
-    _REPO_ROOT / "src" / "motion" / "velocity_shaper.cpp",
     # 125-003: relocated from devices/velocity_pid.cpp -- App::Drive's
     # interim Motion::WheelVelocityPid instances this sprint.
     _REPO_ROOT / "src" / "motion" / "wheel_velocity_pid.cpp",

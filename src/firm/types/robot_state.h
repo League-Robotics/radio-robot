@@ -18,11 +18,13 @@
 // This is what lets `src/motion` -- a sibling tree that must build and run
 // independently of `src/firm` -- include this header too: `firm/types`
 // becomes a second shared floor both trees stand on, alongside
-// `Motion::WheelSink` (`src/motion/wheel_sink.h`, the actuation crossing).
-// `Motion::StateEstimator` is the first real consumer on the motion side
-// (state_estimator.h now `#include`s this file in place of its own former
-// private `Input` struct -- see that file's own header for the crossing's
-// rationale).
+// `RobotState::Wheel::cmdVelocity` itself (this file, below), THE
+// documented base<->motion actuation boundary (sprint 128 ticket 014 --
+// cmdVelocity's own field comment carries the deleted-interface history
+// this crossing used to go through). `Motion::StateEstimator` is the first real
+// consumer on the motion side (state_estimator.h now `#include`s this file
+// in place of its own former private `Input` struct -- see that file's own
+// header for the crossing's rationale).
 //
 // Float-typed, throughout: RobotState holds values in the units the
 // odometry/estimator/PID actually compute in (mm, mm/s, rad, rad/s, ...).
@@ -100,8 +102,9 @@ struct RobotState {
   // connected) writer: today RobotLoop reads Devices::Motor directly each
   // cycle (Decision 1 -- device ownership stays on RobotLoop this sprint);
   // sprint 125's Drive::update() takes over once the ownership reshuffle
-  // lands. cmdVelocity writer: App::Drive::tick()'s own staged target.
-  // positionEpoch writer: App::RobotLoop's new per-cycle rebaseline trigger
+  // lands. cmdVelocity writer: see cmdVelocity's own field comment below --
+  // it is THE base<->motion actuation boundary, not just another sensed
+  // field. positionEpoch writer: App::RobotLoop's new per-cycle rebaseline trigger
   // (architecture Decision 6, ticket 008) -- increments each time
   // RobotLoop calls the wheel's existing Devices::Motor::rebaseline() as
   // its raw position nears the wire's sint32/zigzag bound; NOT touched by
@@ -121,7 +124,35 @@ struct RobotState {
                                  // App::Telemetry::update()'s age = now - sampleTime projection.
     bool connected = false;     // Devices::Motor::connected()
     uint8_t positionEpoch = 0;  // wraps; +1 each RobotLoop-triggered rebaseline() (Decision 6)
-    float cmdVelocity = 0.0f;   // [mm/s] signed, App::Drive's last-staged target for this wheel
+
+    // cmdVelocity -- THE documented actuation boundary between src/firm and
+    // src/motion (sprint 128 ticket 014, SUC-002 Decision 1, stakeholder-
+    // settled plan of record). Whichever subsystem currently owns motion
+    // writes this cycle's commanded wheel speed here; RobotLoop::cycle()
+    // reads it back and hands it to the hardware -- no interface required,
+    // just this field.
+    //   - Writer: sole-or-arbitrated. Motion::Planner::update()
+    //     (planner.cpp) writes it when a Move owns motion; App::Drive::
+    //     update() (drive.cpp) writes it for WHEELS teleop, but ONLY while
+    //     Drive owns motion (owns() true) -- when the planner owns motion,
+    //     Drive::update() is a no-op on this field, leaving the planner's
+    //     write as the cycle's only one. RobotLoop::publishWheels() never
+    //     touches it (see that function's own doc comment) -- exclusivity
+    //     is enforced by ORDERING (exactly one of the two update() calls
+    //     actually writes, per cycle), not by a shared/locked resource.
+    //     RobotLoop::handleEstop() also zeroes it directly, belt-and-
+    //     suspenders, so an emergency stop does not depend on the rest of
+    //     the cycle's schedule running to completion to take effect.
+    //   - Consumer: RobotLoop::cycle() (robot_loop.cpp), which hands both
+    //     wheels' cmdVelocity straight to drive_.tick() for actuation.
+    //   - History: `Motion::WheelSink` (formerly src/motion/wheel_sink.h)
+    //     was the documented interface for this same crossing before this
+    //     ticket. It had zero callers -- Motion::Planner::update() already
+    //     wrote this field directly, and RobotLoop::cycle() already read
+    //     it directly -- so it was deleted outright rather than kept as an
+    //     unused seam. See docs/design/design.md §5 and
+    //     src/motion/DESIGN.md for the current architecture.
+    float cmdVelocity = 0.0f;  // [mm/s] signed, this cycle's commanded target for this wheel
   };
   Wheel wheelLeft;
   Wheel wheelRight;
@@ -185,10 +216,13 @@ struct RobotState {
   // Motion::WheelPeer/BodyPeer/Innovations field-for-field (125-002:
   // Motion::StateEstimator's own private peer-basis structs were renamed
   // WheelEstimate -> WheelPeer / BodyEstimate -> BodyPeer to free the
-  // `WheelEstimate` name for Motion::WheelSink's own retooled boundary
-  // struct -- a base->motion actuation-observer crossing, a DIFFERENT
-  // concept from this ZOH peer-basis reading, that now owns the name) --
-  // those become the CANONICAL shape once ticket 009 threads this section
+  // `WheelEstimate` name for a retooled actuation-observer boundary struct
+  // that briefly lived in a since-deleted motion-boundary interface (sprint
+  // 128 ticket 014 -- see cmdVelocity's own field comment above for that
+  // deletion's history) -- a DIFFERENT concept from this ZOH peer-basis
+  // reading; the name is simply free again today, not reserved for
+  // anything) -- those become the CANONICAL shape
+  // once ticket 009 threads this section
   // through in place of StateEstimator's own private members; today they
   // remain two independently-valid copies (this ticket lands the type,
   // not the wiring).
@@ -220,54 +254,39 @@ struct RobotState {
     Innovations innovations;
   } estimate;
 
-  // --- Command --- writer: App::RobotLoop::processMessage()'s dispatch
-  // (mode/moveActive, mid-cycle, deliberately -- sprint.md's own "Command
-  // dispatch writes state.command mid-cycle" note) and
-  // Motion::MoveQueue's per-cycle tick (v_x/omega, the currently-commanded
-  // body-frame twist target). v_x/omega, not a bare `v` (naming-and-style.md
-  // rule 2 -- a twist is never directionless) -- named identically to
-  // Pose::v_x/BodyEstimate::v_x rather than `targetVx` (avoids mashing a
-  // "target" prefix onto a mathematical subscript); the `command.` section
-  // prefix at every call site is what disambiguates "commanded" from
-  // "sensed"/"estimated," the same way wheelLeft.velocity vs.
-  // wheelLeft.cmdVelocity are already disambiguated by field name within
-  // one section rather than by a redundant prefix.
+  // --- Command --- writer: the SAME sole-or-arbitrated pair that writes
+  // cmdVelocity above -- Motion::Planner::update() (mode/moveActive/v_x/
+  // omega, reporting the trimmed body-frame twist actually being asked of
+  // the wheels) when a Move owns motion, App::Drive::update() (mode/
+  // moveActive/v_x/omega derived from its own WHEELS targets) when Drive
+  // owns motion. RobotLoop::publishHealth() then re-derives mode/moveActive
+  // from a fresh `planner_.active() || drive_.owns()` read as its own
+  // cross-check, overwriting whichever of the two updates() ran that cycle
+  // -- see publishHealth()'s own comment. v_x/omega, not a bare `v`
+  // (naming-and-style.md rule 2 -- a twist is never directionless) --
+  // named identically to Pose::v_x/BodyEstimate::v_x rather than
+  // `targetVx` (avoids mashing a "target" prefix onto a mathematical
+  // subscript); the `command.` section prefix at every call site is what
+  // disambiguates "commanded" from "sensed"/"estimated," the same way
+  // wheelLeft.velocity vs. wheelLeft.cmdVelocity are already disambiguated
+  // by field name within one section rather than by a redundant prefix.
   struct Command {
     Mode mode = Mode::Idle;
-    bool moveActive = false;  // Motion::MoveQueue::active()
+    bool moveActive = false;  // true while either decider owns motion
     float v_x = 0.0f;         // [mm/s] signed, current commanded body-frame forward velocity
     float omega = 0.0f;       // [rad/s] signed, current commanded yaw rate
   } command;
-  // Ticket 009 note: mode/moveActive are published from RobotLoop::cycle()'s
-  // own pace block (a fresh moveQueue_.active() read immediately before
-  // tlm_.update(state_), matching where the pre-ticket-009 assembleFrame()
-  // call used to read it) rather than literally inside processMessage() --
-  // processMessage()'s own handlers (handleMove/handleConfig/handleStop)
-  // mutate moveQueue_ directly, not a `command` field, so there is nothing
-  // for this section's mid-cycle write to actually do at dispatch time
-  // itself; the doc comment above describes the target ownership, not (yet)
-  // the literal call site. v_x/omega stay at their default 0.0f -- unwired
-  // this ticket: Motion::MoveQueue exposes no accessor for its own
-  // currently-staged cruise twist target (move_queue.h's private
-  // active_.cruiseVX/cruiseOmega), and adding one is outside this ticket's
-  // touch points (robot_loop.{h,cpp}/telemetry.{h,cpp}/state_estimator.h) --
-  // no wire field ever read this value either (TelemetrySecondary included),
-  // so this is a real, harmless gap for a future ticket, not a silently
-  // wrong one.
 
   // --- Health --- writer: the owning module for each signal (I2CBus,
-  // Comms, the two Motor leaves' wedge latch, MoveQueue). Per-cycle
-  // dynamics, like every other section -- NOT a place for a Deadman-style
-  // signal: App::Deadman was fully retired in an earlier sprint (its
-  // former telemetry flag, kFlagEventDeadmanExpired, is declared but
-  // unwired -- see telemetry.h's own comment), so there is no live
-  // "deadman expired" signal today to carry here; the issue's own struct
-  // sketch names one, but this ticket derives the actual field list from
-  // what genuinely exists, per this ticket's own instructions, and adds
-  // moveTimeout/shapingDisabled instead -- both ARE genuinely live
-  // (App::RobotLoop's own kFlagFaultMoveTimeout/kFlagFaultShapingDisabled
-  // derivation, set every cycle straight from Motion::MoveQueue::tick()'s
-  // outcome and Motion::MoveQueue::shapingDisabled()).
+  // Comms, the two Motor leaves' wedge latch, RobotLoop itself for
+  // moveTimeout/shapingDisabled -- RobotLoop::publishMoveResult(), sourced
+  // from Motion::TickResult and planner_.shaperConfigured()). Per-cycle
+  // dynamics, like every other section --
+  // NOT a place for a Deadman-style signal: App::Deadman was fully retired
+  // in an earlier sprint (its former telemetry flag,
+  // kFlagEventDeadmanExpired, is declared but unwired -- see telemetry.h's
+  // own comment), so there is no live "deadman expired" signal today to
+  // carry here.
   struct Health {
     uint32_t i2cSafetyNetCount = 0;    // Devices::I2CBus::clearanceSafetyNetCount()
     uint32_t commsMalformedCount = 0;  // App::Comms::malformedCount()

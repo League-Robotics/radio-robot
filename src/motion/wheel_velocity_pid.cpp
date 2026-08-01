@@ -19,7 +19,7 @@ float clampf(float v, float lo, float hi) {
 // exemption applies -- gating on `target == 0.0f` ALONE (the first cut)
 // also suppressed the P-term's active braking while STILL DECELERATING
 // FROM REAL SPEED the instant a Move's target snaps to zero (Drive::
-// stop()/an emptied MoveQueue give NO deceleration ramp of their own --
+// stop()/an emptied Move queue give NO deceleration ramp of their own --
 // the bang-bang P4 Move model runs at full commanded velocity until its
 // stop condition fires, then target goes directly to 0.0f), which is a
 // real, wanted correction, not noise -- confirmed by two sim regressions

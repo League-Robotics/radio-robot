@@ -20,10 +20,8 @@
 // reuse of that type, because `src/motion` may not `#include "devices/..."`
 // (the base/motion isolation invariant: motion depends on nothing in
 // src/firm except messages/ and firm/types/). Whoever supplies gains to
-// this class (125-003: App::Drive's own interim closed loop; a later
-// ticket: Motion::MoveQueue, once it owns two of these instances per
-// Decision 1) constructs a Motion::Gains from whatever its own source of
-// truth is.
+// this class (125-003: App::Drive's own interim closed loop) constructs a
+// Motion::Gains from whatever its own source of truth is.
 //
 // `velDeadband` (not `minDuty`) is the parameter name: it gates the
 // VELOCITY TARGET magnitude for integrator-freeze, not a duty — see the

@@ -44,7 +44,6 @@
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
 #include "fake_transport.h"
-#include "motion/move_queue.h"
 #include "motion/planner/planner.h"
 
 namespace TestSim {
@@ -137,14 +136,8 @@ class SimHarness {
         // build time; src/sim/CMakeLists.txt's own "Absent (deliberately)"
         // note). Behaviorally equivalent (FusionWeights{}'s defaults match
         // every robot JSON's committed estimator weights). Kept solely for
-        // robotLoop_'s own stateEstimator_.update() call -- Motion::MoveQueue
-        // no longer holds a StateEstimator& (move_queue.h).
+        // robotLoop_'s own stateEstimator_.update() call.
         stateEstimator_(),
-        // shaperLimits similarly left at its default (Motion::ShaperLimits{},
-        // shaping OFF) for the same "not part of the sim graph" boundary --
-        // a test needing different limits calls planner().applyShaperLimits().
-        // No Devices::Clock& argument (122-002): Motion::MoveQueue takes
-        // `now` explicitly at each enqueue() call instead.
         planner_(simPlannerLimits(trackWidth)),
         preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
         // App::Configurator owns the CONFIG lifecycle (configurator.h).

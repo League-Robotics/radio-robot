@@ -45,11 +45,6 @@ _ROBOT_LOOP_SRC = _SOURCE_DIR / "app" / "robot_loop.cpp"
 _PREAMBLE_SRC = _SOURCE_DIR / "app" / "preamble.cpp"
 _COMMS_SRC = _SOURCE_DIR / "app" / "comms.cpp"
 _TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
-# 116-006 (MOVE protocol cutover): App::MoveQueue + Motion::StopCondition
-# replace the deleted App::Deadman.
-_MOVE_QUEUE_SRC = _REPO_ROOT / "src" / "motion" / "move_queue.cpp"
-_STOP_CONDITION_SRC = _REPO_ROOT / "src" / "motion" / "stop_condition.cpp"
-_VELOCITY_SHAPER_SRC = _REPO_ROOT / "src" / "motion" / "velocity_shaper.cpp"
 _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 # 122-002: App::applyOtosSample() split out of odometry.cpp (now
 # Motion::Odometry, src/motion/) into this new base-side file --
@@ -164,9 +159,6 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
         _PREAMBLE_SRC,
         _COMMS_SRC,
         _TELEMETRY_SRC,
-        _MOVE_QUEUE_SRC,
-        _STOP_CONDITION_SRC,
-        _VELOCITY_SHAPER_SRC,
         _DRIVE_SRC,
         _ODOMETRY_SRC,
         _STATE_ESTIMATOR_SRC,

@@ -26,7 +26,6 @@
 #include "devices/motor_armor.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
-#include "motion/move_queue.h"
 #include "motion/planner/planner.h"
 #include "motion/odometry.h"
 #include "motion/state_estimator.h"
@@ -81,17 +80,6 @@ Motion::FusionWeights toFusionWeights(const Config::EstimatorBootConfig& src) {
   weights.omegaOtos = src.omegaOtos;
   weights.staleness = src.staleness;
   return weights;
-}
-
-Motion::ShaperLimits toShaperLimits(const Config::ShaperBootConfig& src) {
-  Motion::ShaperLimits limits;
-  limits.aMax = src.aMax;
-  limits.aDecel = src.aDecel;
-  limits.alphaMax = src.alphaMax;
-  limits.alphaDecel = src.alphaDecel;
-  limits.jMax = src.jMax;
-  limits.yawJerkMax = src.yawJerkMax;
-  return limits;
 }
 
 // The boot tag: the DAY of the version's date field, then the build number.
@@ -306,8 +294,9 @@ int main() {
   static Motion::StateEstimator stateEstimator(toFusionWeights(estimatorBootConfig));
 
 
-  // Planner integration (2026-07-26): the on-robot Motion::Planner replaces
-  // Motion::MoveQueue as the loop's motion decider. Limits assembled from
+  // Planner integration (2026-07-26): the on-robot Motion::Planner is the
+  // loop's motion decider, writing Types::RobotState::Wheel::cmdVelocity
+  // directly (robot_state.h's own field doc). Limits assembled from
   // the SAME boot-config sources the old stack used: shaper keys ->
   // profile ceilings, vel_gains -> the planner's own duty-stage PID,
   // vel_filt_alpha -> the planner's velocity-filter weight. controlPeriod

@@ -22,33 +22,33 @@ the BASE-side passive modules it owns:
   loop-timing fields — now on the PRIMARY frame every cycle, 123-004;
   landed on the secondary frame as an interim placement at 122-003, see §4
   below),
-* `Drive` (122-002, NARROWED — the wheel-target sink only:
-  `setDuty()`/`stop()`/`tick()` (125-002 renamed `setWheels()` ->
-  `setDuty()`, `Motion::WheelSink`'s own velocity-sink -> duty-sink retool
-  — a placeholder, unclamped pass-through until ticket 007's real duty
-  implementation lands; see `src/motion/wheel_sink.h`/`drive.h`'s own
-  doc comments), implementing `Motion::WheelSink`
-  (`src/motion/wheel_sink.h`); it lost `setTwist()`/its `BodyKinematics`
-  dependency to `Motion::MoveQueue`, see below), and
+* `Drive` (current contract, 128 — see this section's own Drive bullet in
+  §5 Interfaces for the full two-lifecycle contract: a bounded WHEELS
+  command lifecycle, `command()`/`estop()`/`owns()`/`takeCompletion()`,
+  plus actuation, `tick()`/`update()`), and
 * `Preamble` (boot-time device detection).
 
-**`RobotLoop` also constructs and drives three MOTION-LIBRARY objects
-through the velocity-sink boundary** (sprint 122's two-layer base/motion
-split — `docs/design/design.md` §2/§5): `Motion::MoveQueue` (the
-1-active + 4-pending bounded-motion queue — every `Move` is self-bounding
-by construction, so there is no separate staleness gate), `Motion::
-Odometry` (dead reckoning, plus cumulative path length), and `Motion::
-StateEstimator` (117 — predict-to-now wheel/body peer estimates,
+**`RobotLoop` also constructs and drives MOTION-LIBRARY objects**
+(sprint 122's two-layer base/motion split — `docs/design/design.md`
+§2/§5): `Motion::Planner` (125–128, the on-robot motion decider,
+superseding the deleted `Motion::MoveQueue` — every `Move` is
+self-bounding by construction, so there is no separate staleness gate),
+`Motion::Odometry` (dead reckoning, plus cumulative path length), and
+`Motion::StateEstimator` (117 — predict-to-now wheel/body peer estimates,
 zero-order-hold extrapolation, v1 complementary blend against OTOS).
-These three live in `src/motion/` (a sibling tree, not a child of
-`app/`) as of sprint 122 ticket 002 — `RobotLoop` holds them by reference
-exactly like its own base-side modules (constructed at the composition
-root, `main.cpp`/`SimHarness`) and calls into them at specific points in
-its own schedule, but they are motion-library types, not `app/`'s own.
-See this file's own "122 (motion-library extraction)" note at the end of
-this section for the full before/after, and
+These live in `src/motion/` (a sibling tree, not a child of `app/`) —
+`RobotLoop` holds them by reference exactly like its own base-side
+modules (constructed at the composition root, `main.cpp`/`SimHarness`)
+and calls into them at specific points in its own schedule, but they are
+motion-library types, not `app/`'s own. Planner and Drive write into the
+SAME `Types::RobotState::Wheel::cmdVelocity` field directly (128 — no
+boundary interface; see §5's Drive bullet and
+[`src/firm/types/DESIGN.md`](../types/DESIGN.md)), arbitrated purely by
+`RobotLoop`'s own call ordering. See this file's own "122
+(motion-library extraction)"/"125–128" notes at the end of this section
+for the full before/after, and
 [`src/motion/DESIGN.md`](../../motion/DESIGN.md) for their current
-orientation, boundary contract, and standalone `motion_tests` build.
+orientation and standalone test builds.
 
 This is the seam that owns the robot's *timing* — every I2C
 transaction, every wait, every cadence decision lives here or is called from
@@ -522,6 +522,46 @@ replaces 123-002's `kArmoredBufSize` as the whole-line scratch-buffer
 size, `kMaxCommandPrefixBytes` itself derived at compile time from
 `messages/commands.h`'s own longest verb name rather than hand-picked.
 
+**125–127 (velocity-PID relocation + `Motion::Planner` integration) —
+landed.** `Motion::WheelVelocityPid` (125-003) relocates the closed-loop
+velocity control law out of `Devices::NezhaMotor` into `src/motion` —
+`App::Drive` holds the interim instances for its own WHEELS-teleop path;
+`velocity_pid.{h,cpp}` (`src/firm/devices/`) is deleted. Separately,
+`Motion::Planner` (`src/motion/planner/`) becomes the on-robot motion
+decider for `Move` dispatch, replacing `Motion::MoveQueue`:
+`RobotLoop` holds a `Motion::Planner&` in place of the `Motion::
+MoveQueue&` slot described throughout this file's own pre-125 history
+below, and `Motion::Planner::update()` writes `Types::RobotState::
+Wheel::cmdVelocity` directly rather than routing through `Motion::
+WheelSink`.
+
+**128 (complexity reduction: delete dead `WheelSink`/`MoveQueue`
+generation) — landed, SUC-002 Decision 1.** With `Motion::Planner::
+update()`/`App::Drive::update()` confirmed as the only two writers of
+`cmdVelocity` and `RobotLoop::cycle()` confirmed as its only reader,
+`Motion::WheelSink`, `Motion::MoveQueue`, `Motion::StopCondition`, and
+`Motion::VelocityShaper` (~1,500 lines, zero callers) are deleted
+outright, along with `App::Drive`'s own `WheelSink` overrides
+(`setDuty()`/`stop()` — narrowed to the current `command()`/`estop()`/
+`owns()`/`takeCompletion()`/`tick()`/`update()` contract, §5 below) and
+`main.cpp`'s `#include "motion/move_queue.h"`. Every mention of `App::
+MoveQueue`/`Motion::MoveQueue`/`Motion::WheelSink`/`Motion::
+StopCondition`/`Motion::VelocityShaper` earlier in this file's own
+history (115–124) is an accurate record of where that code lived and
+what it did AT THE TIME — not restated or renamed throughout this
+document, matching this file's own established convention for the
+122 motion-library-extraction paragraph above. The land-at-zero
+completion predicate's own empirical derivation, previously living in
+`move_queue.cpp`'s anonymous-namespace comment and narrated in this
+file's own "Both `MoveQueue::landAtZero()`..."/"118 ticket 004"/
+"119-005"/"121-003" paragraphs above, is additionally preserved verbatim
+as dated design history:
+[`docs/design/history/land-at-zero-margin-derivation.md`](../../../docs/design/history/land-at-zero-margin-derivation.md).
+See [`src/motion/DESIGN.md`](../../motion/DESIGN.md) for the motion
+library's own current orientation and `robot_state.h`'s own `cmdVelocity`
+field comment for the boundary's current, exact writer/consumer
+contract.
+
 ## 2. Orientation
 
 `RobotLoop` has two phases. `boot()` steps `Preamble` until every device
@@ -530,33 +570,39 @@ emitting a boot telemetry frame each pass; commands are not consumed during
 boot. `cycle()` is the steady-state loop body. It opens with `Drive::tick()`
 (119 ticket 005 — pure computation, before either motor's own select, so
 both leaves apply the SAME staged target this cycle — see §4's own
-"same-generation actuation staging" note), then interleaves per port (118 —
+"same-generation actuation staging" note), actuating whichever decider
+(`Motion::Planner` or `Drive` itself) staged `state_.wheelLeft/Right.
+cmdVelocity` the PREVIOUS cycle. It then interleaves per port (118 —
 select L → collect L → select R → collect R, the schedule this section
 always claimed for the request/collect halves): request/settle(borrow:
 `Comms::pump`)/collect/PID for the left motor, a post-duty clearance window
 (119 ticket 005: no borrowed work left here — see below), request/
-settle(borrow: `processMessage`)/collect/PID for the right motor
-(immediately followed by the wheel section's own `state_` publish —
-124-009, see below), then a trailing pace block that integrates odometry
-(`Odometry::integrate`), samples OTOS inline (uniform across builds; the
-sensor behind it is a real chip or an `App::FakeOtos`, chosen at
-construction), polls line/color at a rate-limited, alternating cadence,
+settle(borrow: command-ring drain/`routeCommand()`)/collect/PID for the
+right motor (immediately followed by the wheel section's own `state_`
+publish — 124-009, see below), then a trailing pace block that integrates
+odometry (`Odometry::integrate`), samples OTOS inline (uniform across
+builds; the sensor behind it is a real chip or an `App::FakeOtos`, chosen
+at construction), polls line/color at a rate-limited, alternating cadence,
 refreshes `Motion::StateEstimator`'s predict-to-now estimates from that
 same cycle's published `state_` (117), and ONLY THEN calls
 `tlm_.update(state_)`/`tlm_.emit(now)` (124-009 — the one assembly point,
 LAST among the pace-block's own publishers so every section it projects
 is already coherent; superseding this paragraph's former "FIRST stages
 and emits telemetry" ordering, which predates the RobotState blackboard),
-evaluates the `MoveQueue`'s unconditional per-cycle stop decision
-(`moveQueue_.tick(now, odom_)` — 118: AFTER odometry/estimator refresh
-AND AFTER `tlm_.update()`/`emit()`, so the decision reads THIS cycle's
-data and a completion ack still rides the NEXT frame, protocol-v5 §7.2),
-and paces the whole cycle. `Drive`, `Odometry`, and `MoveQueue` are pure,
-bounded, non-bus-touching helpers that `RobotLoop` calls at specific
-points in its own schedule; `MoveQueue::tick()` is called unconditionally
-once per cycle and drains to `Drive::stop()` once its queue empties.
-See `robot_loop.cpp` for the exact call order — it is the schedule's single
-source of truth.
+then ticks BOTH motion deciders (128 — supersedes the `MoveQueue`
+unconditional-stop-decision shape this paragraph used to describe):
+`planner_.tick(state_)` (the profiling/shaping/completion-detection step,
+returning a `Motion::TickResult`), `planner_.update(state_)` (writes
+`cmdVelocity` unconditionally), then `drive_.update(state_, now)` LAST —
+so that while Drive owns motion, ITS targets are what's left on the
+blackboard for next cycle's `drive_.tick()`, not the planner's own
+drained-to-zero write (`robot_loop.cpp`'s own inline comment at this call
+site is the load-bearing ordering note). Both deciders tick AFTER
+`emit()`, so a completion ack rides the NEXT frame (protocol-v5 §7.2).
+`Drive`, `Odometry`, `Motion::Planner`, and `Motion::StateEstimator` are
+pure, bounded, non-bus-touching helpers that `RobotLoop` calls at
+specific points in its own schedule. See `robot_loop.cpp` for the exact
+call order — it is the schedule's single source of truth.
 
 **RobotState assembly + `Telemetry::update()`/`emit()` (124-009,
 robot-state-blackboard-...md, superseding the `updateTlm()`/scattered-
@@ -580,8 +626,9 @@ old `updateTlm()`-style field staging and the ten scattered
 never calls `tlm_.setFlag()` at all any more (grep-enforceable:
 `grep setFlag src/firm/app/robot_loop.cpp` returns nothing).
 `kFlagFaultMoveTimeout`/`kFlagFaultShapingDisabled` are the one documented
-exception (their defining condition, `MoveQueue::tick()`'s own outcome,
-isn't known until after `tlm_.update()`/`emit()` run) — `RobotLoop` sets
+exception (their defining condition, `Motion::Planner::tick()`'s own
+outcome via `RobotLoop::publishMoveResult()`, isn't known until after
+`tlm_.update()`/`emit()` run) — `RobotLoop` sets
 those via `tlm_.setLiveFlag(bit, active)`, a narrow, deliberately
 NOT-named-`setFlag` escape hatch (telemetry.h's own doc comment).
 `Telemetry::emit(now)` sends the primary frame when its own cadence gate
@@ -720,12 +767,12 @@ same block.
   `readLine()` per transport, first transport to have something wins), so
   `processMessage()` needs no separate "already handled" flag.
 - **No deadman — every `Move` is structurally self-bounding:**
-  `App::MoveQueue::tick()` runs unconditionally once per cycle and drains
-  to `Drive::stop()` once the active `Move`'s `Motion::StopCondition` or
-  `timeout` fires and nothing is pending — an emergent property of every
-  queued `Move` carrying its own bound, not a second, independently-timed
-  staleness timer. `App::Deadman` does not exist in this tree. Do not add
-  an ad hoc watchdog anywhere in `app/`.
+  `Motion::Planner::tick()` runs unconditionally once per cycle and drains
+  once the active `Move`'s stop condition or `timeout` fires and nothing
+  is pending — an emergent property of every queued `Move` carrying its
+  own bound, not a second, independently-timed staleness timer.
+  `App::Deadman` does not exist in this tree. Do not add an ad hoc
+  watchdog anywhere in `app/`.
 - **Telemetry always carries the last staged snapshot, not a diff:** a
   cycle that doesn't update a `Frame` field still sends whatever was last
   staged. Nothing here is "only send on change" — a dropped or unread frame
@@ -775,9 +822,9 @@ dispatch graph of modules each with their own timing. The alternative
 (subsystems/fibers each owning a slice of the schedule) hides the bus
 schedule and the sleeps inside layers, which makes both hard-realtime
 problems — bus discipline and fiber-scheduler yielding — undebuggable.
-Modules (`Drive`, `Odometry`, `Telemetry`, `Comms`, `MoveQueue`, `Preamble`)
-were factored *out* of that one function only as passive, bounded helpers;
-none of them run their own timing loop.
+Modules (`Drive`, `Odometry`, `Telemetry`, `Comms`, `Motion::Planner`,
+`Preamble`) were factored *out* of that one function only as passive,
+bounded helpers; none of them run their own timing loop.
 
 **The timing primitive.** `runAndWait(gap, body)` marks time, runs `body`,
 then sleeps until at least `gap` has elapsed since its own mark. Each block
@@ -1063,12 +1110,11 @@ already announces boot completion), bit 12
 bit 15 `kFlagFaultMoveTimeout` (116: wired — set on the cycle an active
 `Move` ends via `timeout` rather than its kind-specific stop condition),
 bit 16 `kFlagFaultShapingDisabled` (119 ticket 001,
-kill-the-silent-off-shaping-config-boundary.md: set on every cycle a `Move`
-is active AND `MoveQueue::shapingDisabled()` — both linear and angular
-`ShaperLimits` axes disabled — mirroring `shapeAndStage()`'s own
-early-return gate exactly, so the bit tracks precisely the regime where the
-land-at-zero completion path can never fire and the threshold/timeout
-backstop is the ONLY completion path; the loud off-state for a
+kill-the-silent-off-shaping-config-boundary.md, current condition per
+128: set on every cycle a `Move` is active AND `Motion::Planner::
+shaperConfigured()` is false — `RobotLoop::publishMoveResult()`'s own
+`planner_.active() && !planner_.shaperConfigured()` derivation — the
+loud off-state for a
 20x-turn-accuracy-delta feature that used to have a silent, invisible off
 state), bit 17 `kFlagFaultPositionClamped` (124-008, Decision 6's
 "bound-exceeded fallback": a wheel's position was clamped to
@@ -1089,8 +1135,8 @@ via `Telemetry::setFlag(bit, active)` at the point in the cycle each
 condition becomes known" call-site-scattered pattern this paragraph used
 to describe); `kFlagFaultMoveTimeout`/`kFlagFaultShapingDisabled` are the
 one exception, set via `Telemetry::setLiveFlag(bit, active)` after
-`MoveQueue::tick()` runs (their own defining condition isn't known at
-`update()` time — see `telemetry.h`'s own doc comment).
+`Motion::Planner::tick()` runs (their own defining condition isn't known
+at `update()` time — see `telemetry.h`'s own doc comment).
 
 **Boot contract.** `Preamble::step()` advances at most one not-yet-resolved
 device's own detection entry point per call, never sleeps, and never
@@ -1151,28 +1197,39 @@ called with real elapsed time between calls).
   `sendStatus()` formats from, in one call — replaces the loop's own
   former field-by-field `Comms::Status` assembly. See the same §4
   paragraph.
-- **`Drive::setDuty(left, right)`/`stop()`/`tick()`:** (122-002,
-  NARROWED — `setTwist()` is GONE, moved to `Motion::MoveQueue`, which now
-  calls `BodyKinematics::inverse()` itself and hands `Drive` an
-  already-decomposed wheel-target pair through the `Motion::WheelSink`
-  boundary `Drive` implements; see
-  [`src/motion/DESIGN.md`](../../motion/DESIGN.md).) `setDuty()` only
-  STAGES a target; `tick()` stages the last `setDuty()`/`stop()` target
-  onto the two motor leaves via their own `setVelocity()` — it never calls
-  a motor's own `tick()`, never touches the bus, never sleeps. `stop()`
-  stages zero. `Drive` depends on nothing but `Devices::Motor` now — it
-  lost its `BodyKinematics` dependency along with `setTwist()` (122-002);
-  see `drive.h`'s own doc comment for the exact current contract. (Pre-122
-  history: through sprint 121, `Drive::setTwist(v_x, v_y, omega)` was a
-  second staging path computing wheel velocities via
-  `BodyKinematics::inverse()` internally, and had already lost its
-  acceleration-feedforward term at 115-005 — both `setTwist()` and that
-  internal `BodyKinematics::inverse()` call moved to `Motion::MoveQueue`
-  at 122-002, not merely deleted.) **125-002:** `Motion::WheelSink`'s own
-  boundary retooled from a velocity sink to a duty sink — `setWheels()`
-  renamed `setDuty()`, `[-1,1]` per the base contract's plausibility bound
-  (unenforced here yet — a placeholder, unclamped pass-through; ticket 007
-  adds the real `|duty|<=1`/NaN→0 clamp and `App::WheelObserver` wiring).
+- **`App::Drive` — two responsibilities, two independent lifecycles**
+  (current contract; supersedes every `setDuty()`/`Motion::WheelSink`
+  description below, which described a 122–127-era interim shape now
+  deleted — sprint 128 ticket 014):
+  1. **The bounded WHEELS command lifecycle** — `command(vLeft, vRight,
+     duration, moveId, now)` arms a time-bounded per-wheel velocity pair
+     (superseding any command already armed, no completion ack for the
+     superseded one); `estop()` halts now, zeroing targets and disarming
+     with NO completion ack for the discarded command (the ESTOP path,
+     also what `RobotLoop` uses when a MOVE takes motion over from
+     Drive); `owns()` reports whether an armed command is currently
+     running (i.e. whether Drive, not `Motion::Planner`, owns motion this
+     cycle); `takeCompletion(&moveId)` is the one-shot event for a
+     command that reached its deadline, latched until the loop acks it.
+  2. **Actuation** — `tick(speedLeft, speedRight)` converts commanded
+     wheel SPEED to duty via the per-wheel open-loop calibration
+     (`setDutyPerSpeed()`/`setWheelCorrection()`, config-supplied, no
+     defaults — an uncalibrated Drive refuses to write) and the crawl
+     shaper, then writes the two motor leaves; `update(state, now)`
+     expires an armed command whose deadline has passed (latching the
+     completion event) and publishes Drive's own targets into
+     `state.wheelLeft/Right.cmdVelocity` — but ONLY while Drive owns
+     motion (`owns()` true this cycle); when the planner owns it,
+     `update()` is a no-op on the blackboard, leaving `Motion::Planner::
+     update()` as the cycle's sole writer. Must run AFTER `Motion::
+     Planner::update()` in the cycle (`robot_loop.cpp`'s own ordering is
+     what enforces "exactly one writer per cycle" — see
+     `robot_state.h`'s own `cmdVelocity` field comment).
+  There is no controller inside `Drive` — duty is open-loop from
+  calibrated speed; closed-loop wheel control lives in `Motion::
+  Planner`'s own duty stage. `Drive` depends on nothing but
+  `Devices::Motor` and `Types::RobotState`. See `drive.h`'s own file
+  header for the exact current contract.
 - **`Motion::Odometry::integrate(leftPosition, rightPosition)`/
   `pathLength()`:** (122-002, MOVED to `src/motion/` — see
   [`src/motion/DESIGN.md`](../../motion/DESIGN.md) for the current,
@@ -1197,23 +1254,22 @@ called with real elapsed time between calls).
   loop's job).
 - **`RobotLoop::updateLineColor(nowUs)`:** private, called once per cycle
   from the `kPace` block — see §2's own doc comment for the full contract.
-- **`Motion::MoveQueue::enqueue(move, now)`/`tick(now, odom)`/`flush()`/
-  `active()`:** (116, MOVED to `src/motion/` at 122-002 — see
-  [`src/motion/DESIGN.md`](../../motion/DESIGN.md) and `move_queue.h`'s
-  own doc comment for the current, exact signatures; `MoveQueue` no
-  longer holds a concrete `App::Drive&` or a `Devices::Clock&` — it holds
-  a `Motion::WheelSink&` and takes `now` as an explicit parameter
-  instead.) `enqueue()` applies `replace`/enqueue semantics (`ERR_FULL`
-  past 4 pending) and, for the newly-active slot, computes wheel targets
-  (`BodyKinematics::inverse()`, for a twist-kind `Move` — 122-002 moved
-  this call here from `Drive::setTwist()`) and stages them onto the
-  `WheelSink` boundary, capturing the `Motion::StopCondition` baseline;
-  `tick()` advances the active `Move`'s `StopCondition`, hands off to the
-  next pending `Move` on stop/timeout (same cycle, no motion gap), and
-  calls the sink's `stop()` when the queue drains empty; `flush()` clears
-  every pending slot without disturbing the active one (used by `STOP`).
-  `active()` reports whether a `Move` is currently in progress (feeds
-  `frame_.mode`/`driving_`).
+- **`Motion::Planner::move(move, replace)`/`plannedStop(id)`/`estop()`/
+  `tick(state)`/`update(state)`/`active()`/`shaperConfigured()`:** (125–128
+  — the live motion decider, superseding `Motion::MoveQueue`, deleted as
+  dead code in sprint 128 ticket 014 after being confirmed to have zero
+  callers; see [`src/motion/DESIGN.md`](../../motion/DESIGN.md) §2/§4/§5
+  and `planner/planner.h`'s own doc comment for the current, exact
+  contract — this file does not re-derive it.) `move()` applies
+  `replace`/enqueue semantics; `tick(state)` profiles/shapes the active
+  Move's motion each cycle and returns a `Motion::TickResult` (completion/
+  timeout outcome `RobotLoop::publishMoveResult()` consumes);
+  `update(state)` writes `Types::RobotState::Wheel::cmdVelocity` directly
+  — no boundary interface, the blackboard field IS the boundary (128, see
+  `robot_state.h`'s own field comment); `active()` reports whether a Move
+  is currently in progress (feeds `state.command.moveActive` via
+  `RobotLoop::publishHealth()`'s own fresh read, `planner_.active() ||
+  drive_.owns()`).
 - **`Preamble::step()`/`done()`/per-device status accessors:** `step()`
   never blocks; `done()` is true once every device has reached a terminal
   state (present-and-ready or confirmed-absent).
@@ -1252,9 +1308,9 @@ called with real elapsed time between calls).
   — see [devices/DESIGN.md](../devices/DESIGN.md).
 - **`BodyKinematics::inverse()`/`forward()`:** stateless twist↔wheel math
   — moved to `src/motion/body_kinematics.{h,cpp}` at 122-001 (from
-  `src/firm/kinematics/`); `Motion::MoveQueue` now calls `inverse()`
-  directly (122-002 — the twist-decomposition call moved out of
-  `Drive::setTwist()`, see above), while `RobotLoop::cycle()` still calls
+  `src/firm/kinematics/`); `Motion::Planner` calls `inverse()`-equivalent
+  twist decomposition internally as part of its own profile/shape stages
+  (`planner/`, 125–128), while `RobotLoop::cycle()` still calls
   `forward()` directly here in `app/` to fuse the two leaves' measured
   velocities into `state_.pose.v_x/v_y/omega` (124-009 — formerly
   `frame_.twist`/`updateTlm()`; `Drive::trackWidth()`'s own doc comment).
@@ -1272,17 +1328,15 @@ called with real elapsed time between calls).
 - **`SerialPort`, `Radio` (ARM builds only):** the two real transports
   `SerialTransport`/`RadioTransport` adapt into `app::Transport` — see
   [com/DESIGN.md](../com/DESIGN.md).
-- **`Motion::StopCondition`** (116, moved to `src/motion/stop_condition.h`
-  at 122-001, from `src/firm/motion/`): the bounded-motion stop/timeout
-  comparison `Motion::MoveQueue` owns and drives per active `Move` — see
-  [`src/motion/DESIGN.md`](../../motion/DESIGN.md) and
-  [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) (retired, redirects
-  to the current doc) for the full derivation. This is NOT a revival of
-  the deleted `Motion::Executor`/`Motion::Cmd`/`Motion::fromMove()`
-  (115-005, still gone) — `src/motion/` contains only the modules listed
-  in [`src/motion/DESIGN.md`](../../motion/DESIGN.md) §2, mirroring the
-  original tiny `src/firm/motion/`'s own small-pure-comparison pattern at
-  a new, sibling-tree location.
+- **`Motion::Planner`** (`src/motion/planner/`, 125–128): the bounded-Move
+  stop/timeout/completion decision, profiling, and shaping — superseding
+  the deleted `Motion::StopCondition`/`Motion::MoveQueue` (116/122,
+  deleted 128 as dead code; see [`src/motion/DESIGN.md`](../../motion/DESIGN.md)
+  §1's own "128" note for the deletion and
+  [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md), retired since 122,
+  for that stack's own historical derivation). `src/motion/` contains
+  only the modules listed in
+  [`src/motion/DESIGN.md`](../../motion/DESIGN.md) §2.
 - **`Types::RobotState`** (124-007/009, `src/firm/types/robot_state.h`,
   superseding this entry's former `Telemetry::Frame`/hand-copied
   `Motion::StateEstimator::Input` description): the dependency-free

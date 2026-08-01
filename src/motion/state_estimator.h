@@ -38,9 +38,9 @@
 //
 // No I2C bus access, no sleeping, no owned Devices::Clock& collaborator:
 // every time-taking method (update()/wheelAt()/bodyAt()/whereAmI()) takes
-// an EXPLICIT now/t argument instead, mirroring Motion::StopCondition's own
-// "hand-fed readings, no owned collaborator" shape (stop_condition.h's own
-// file header) -- keeps this class constructible/testable with plain
+// an EXPLICIT now/t argument instead -- the same "hand-fed readings, no
+// owned collaborator" shape this project's other pure-computation motion
+// modules use -- keeps this class constructible/testable with plain
 // numbers, no fake clock needed. Basis times are uint32_t [ms], matching
 // EncoderReading/OtosReading::time's existing wire-frame units (NOT
 // uint64_t [us]) -- the granularity the caller's own frame actually

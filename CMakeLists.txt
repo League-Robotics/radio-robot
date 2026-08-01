@@ -318,12 +318,12 @@ list(FILTER MOTION_INCLUDE_DIRS EXCLUDE REGEX "/build")
 list(APPEND INCLUDE_DIRS ${MOTION_INCLUDE_DIRS})
 list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}")
 # The parent of BOTH src/firm and src/motion ("src/"), so a qualified
-# `#include "motion/stop_condition.h"` (the SAME include string these
-# modules used when they lived at src/firm/motion/, back when src/firm
-# itself being on the include path made "motion/..." resolve) keeps
-# resolving now that "motion" is a top-level dir under src/ instead of a
-# child of src/firm -- zero #include text churn in src/firm callers
-# (app/move_queue.h etc.) that already said `#include "motion/...h"`.
+# `#include "motion/odometry.h"` (the SAME include string these modules
+# used when they lived at src/firm/motion/, back when src/firm itself
+# being on the include path made "motion/..." resolve) keeps resolving
+# now that "motion" is a top-level dir under src/ instead of a child of
+# src/firm -- zero #include text churn in src/firm callers that already
+# said `#include "motion/...h"`.
 list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/src")
 RECURSIVE_FIND_FILE(MOTION_SOURCE_FILES "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}" "*.cpp")
 # src/motion/planner is the HOST-ONLY standalone planner tree (its own CMake

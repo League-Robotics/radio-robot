@@ -1028,8 +1028,9 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
     // to rest on the clock; Distance/Angle-bounded Wheels Moves (the wire
     // protocol's other arms) ramp and HOLD -- their completion is the
     // standard measured-threshold test in tick(), and the post-completion
-    // drain ramps down (the pre-integration MoveQueue semantics: wheels
-    // Moves are direct wheel commands, not profiled landings).
+    // drain ramps down (the pre-Planner-integration semantics carried
+    // forward: wheels Moves are direct wheel commands, not profiled
+    // landings).
     const float ticksLeft =
         m.kind == Move::Kind::Time ? (m.threshold - elapsed) / period
                                    : 1.0e9f;

@@ -24,8 +24,9 @@ is the sole cross-subsystem AND cross-tree data contract (sprint 124
 architecture Step 3; `clasi/issues/robot-state-blackboard-one-struct-for-
 all-shared-state-and-telemetry.md`). It gives `types/` a second, deliberate
 purpose alongside version plumbing: a shared floor `src/firm` and
-`src/motion` both stand on, the same role `Motion::WheelSink`
-(`src/motion/wheel_sink.h`) plays for actuation. Three roles, one struct:
+`src/motion` both stand on — its own `Wheel::cmdVelocity` field is THE
+actuation boundary in its own right (sprint 128, superseding the deleted
+`Motion::WheelSink` interface). Three roles, one struct:
 the blackboard every subsystem publishes its own per-cycle section to and
 reads other subsystems' sections from; the source `App::Telemetry` projects
 into the lossy, scaled wire frame (`msg::Telemetry` — a DIFFERENT, later
@@ -170,8 +171,9 @@ instructions are to derive the field list from what genuinely exists
 today, not to reproduce the issue's illustrative sketch verbatim, so
 `Health` carries the two fault signals that ARE genuinely live instead
 (`App::RobotLoop`'s own `kFlagFaultMoveTimeout`/`kFlagFaultShapingDisabled`
-derivation, sourced from `Motion::MoveQueue::tick()`'s outcome and
-`Motion::MoveQueue::shapingDisabled()`).
+derivation, sourced from `Motion::Planner::tick()`'s own `Motion::
+TickResult` outcome and `Motion::Planner::shaperConfigured()` — 128,
+superseding the deleted `Motion::MoveQueue`).
 
 **Version generation pipeline.** The firmware needs to report a build
 version over the wire without a hand-edited constant silently drifting (this

@@ -134,15 +134,17 @@ ShaperBootConfig defaultShaperConfig() {
     // JSON's control.a_max/a_decel/alpha_max/alpha_decel/j_max/
     // yaw_jerk_max (data/robots/robot_config.schema.json). a_max/a_decel/
     // j_max/yaw_jerk_max are the deleted msg::PlannerConfig's own former
-    // fields, orphaned by 115-003 and read again here into a NEW consumer
-    // (Motion::VelocityShaper); alpha_max/alpha_decel are new (a_max/
-    // a_decel's own angular sibling -- yaw_jerk_max already covered the
-    // angular jerk slot). NOT a live SET/wire surface itself -- see
-    // App::MoveQueue's own setShaperLimits()/EstimatorConfigPatch's
-    // a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max fields
-    // (config.proto) for the separate, volatile live-tuning path (mirrors
-    // OtosBootConfig/EstimatorBootConfig's own "boot bake vs. live
-    // ConfigPatch" split).
+    // fields, orphaned by 115-003 and read again here into a velocity-
+    // shaping consumer that has SINCE ALSO been deleted, as dead code, in
+    // sprint 128 ticket 014 (zero callers, superseded by Motion::Planner's
+    // own hand-baked PlannerLimits) -- this whole struct is currently
+    // unread by anything; alpha_max/alpha_decel are new (a_max/a_decel's
+    // own angular sibling -- yaw_jerk_max already covered the angular
+    // jerk slot). NOT a live SET/wire surface itself -- see
+    // EstimatorConfigPatch's a_max/a_decel/alpha_max/alpha_decel/j_max/
+    // yaw_jerk_max fields (config.proto) for the separate, volatile
+    // live-tuning path (mirrors OtosBootConfig/EstimatorBootConfig's own
+    // "boot bake vs. live ConfigPatch" split).
     ShaperBootConfig cfg;
     cfg.aMax = 800.0f;                  // [mm/s^2]
     cfg.aDecel = 800.0f;               // [mm/s^2]

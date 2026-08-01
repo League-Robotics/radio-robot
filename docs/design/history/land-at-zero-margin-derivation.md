@@ -1,17 +1,30 @@
-// move_queue.cpp -- Motion::MoveQueue implementation. See move_queue.h's file
-// header for the module's boundary and storage rationale.
-#include "motion/move_queue.h"
+# Land-at-zero margin derivation (design history)
 
-#include <cmath>
-#include <limits>
+**Preserved 2026-07-31, sprint 128 ticket 014**, when
+`Motion::MoveQueue`/`Motion::WheelSink`/`Motion::StopCondition`/
+`Motion::VelocityShaper` were deleted outright as dead code (zero
+callers — `Motion::Planner::update()` already writes
+`Types::RobotState::Wheel::cmdVelocity` directly and `RobotLoop::cycle()`
+already consumes it directly; see SUC-002 / sprint 128's Decision 1).
+This document exists solely to preserve the empirical/analytical work
+behind the three `kStoppingMarginFactor*` constants and
+`kDiscretizationCyclesChain` — the "land-at-zero completion predicate" —
+that lived in `src/motion/move_queue.cpp`'s anonymous namespace before
+deletion. **None of this code is live.** It is not consumed by
+`Motion::Planner` or any other current component; it is kept here purely
+as a record of the tuning methodology and the sweep data, in case a
+future planner-side completion predicate needs the same kind of
+empirical derivation and wants to avoid re-discovering the same pitfalls
+(narrow-pocket vs. broad-plateau selection, cadence sensitivity,
+same-axis-chain vs. orthogonal-chain vs. final-move boundary kinds).
 
-#include "motion/body_kinematics.h"
-#include "motion/velocity_shaper.h"
+The text below is copied verbatim from `move_queue.cpp` as it stood
+immediately before deletion (original authorship spans tickets 118-004,
+118-003, 119-005, and 121-003, as cited inline).
 
-namespace Motion {
+## Verbatim derivation (former `move_queue.cpp` anonymous-namespace comment)
 
-namespace {
-
+```cpp
 // Land-at-zero completion predicate (118 ticket 004, issue
 // land-at-zero-completion-delete-stop-lead.md).
 //
@@ -325,221 +338,14 @@ constexpr float kStoppingMarginFactorOrthogonal = 0.67f;  // dimensionless
 // miss against its 3.0deg tolerance when this term was applied
 // unconditionally).
 constexpr float kDiscretizationCyclesChain = 0.53f;  // [cycles]
+```
 
-// sameAxisCompatible -- see this file's own landAtZero() and the
-// declaration's doc comment (move_queue.h). Pure predicate: true iff
-// `next` is a TWIST Move whose commanded component on `endingKind`'s own
-// axis (v_x for Distance, omega for Angle) is NONZERO and matches
-// `endingCruiseVX`/`endingCruiseOmega`'s SIGN. A WHEELS `next`, a zero
-// component on that axis, or an OPPOSITE-sign component are all NOT
-// compatible -- landAtZero() treats every one of those as an ORTHOGONAL
-// boundary (land at zero): there is no velocity worth carrying into a
-// Move that doesn't keep driving the SAME axis the SAME direction.
-// Free function (not a MoveQueue member) taking explicit hand-fed
-// arguments, matching this project's established pure-computation
-// testability shape (Motion::StopCondition, kinematics/) -- MoveQueue's
-// own sameAxisCompatible() member (move_queue.h) is a thin forwarder
-// reading active_.kind/cruiseVX/cruiseOmega.
-bool sameAxisCompatibleImpl(Motion::StopCondition::Kind endingKind, float endingCruiseVX,
-                            float endingCruiseOmega, const msg::Move& next) {
-  if (next.velocity_kind != msg::Move::VelocityKind::TWIST) return false;
-  if (endingKind == Motion::StopCondition::Kind::Distance) {
-    return (endingCruiseVX > 0.0f && next.velocity.twist.v_x > 0.0f) ||
-           (endingCruiseVX < 0.0f && next.velocity.twist.v_x < 0.0f);
-  }
-  if (endingKind == Motion::StopCondition::Kind::Angle) {
-    return (endingCruiseOmega > 0.0f && next.velocity.twist.omega > 0.0f) ||
-           (endingCruiseOmega < 0.0f && next.velocity.twist.omega < 0.0f);
-  }
-  return false;  // Kind::Time -- landAtZero() never reaches Distance/Angle-only code for Time
-}
+## Verbatim application (former `MoveQueue::landAtZero()`)
 
-}  // namespace
+How the derivation above was actually consumed, per cycle, to decide
+whether a `Move` had reached its land-at-zero completion point:
 
-MoveQueue::MoveQueue(WheelSink& sink, Odometry& odom, float trackWidth,
-                      ShaperLimits shaperLimits)
-    : sink_(sink), odom_(odom), trackWidth_(trackWidth), shaperLimits_(shaperLimits) {}
-
-void MoveQueue::activate(const msg::Move& move, uint64_t now, float pathLength, float theta) {
-  // Disabled-axis gate -- see ShaperLimits's own doc comment (move_queue.h)
-  // for the "0 == off, byte-identical to pre-shaping behavior" contract.
-  bool linearShaping =
-      shaperLimits_.aMax > 0.0f && shaperLimits_.aDecel > 0.0f && shaperLimits_.jMax > 0.0f;
-  bool angularShaping = shaperLimits_.alphaMax > 0.0f && shaperLimits_.alphaDecel > 0.0f &&
-                        shaperLimits_.yawJerkMax > 0.0f;
-
-  active_.velocityKind = move.velocity_kind;
-
-  if (move.velocity_kind == msg::Move::VelocityKind::WHEELS) {
-    active_.cruiseVLeft = move.velocity.wheels.v_left;
-    active_.cruiseVRight = move.velocity.wheels.v_right;
-    active_.cruiseVX = 0.0f;
-    active_.cruiseVY = 0.0f;
-    active_.cruiseOmega = 0.0f;
-
-    // Shaping enabled: stage the CARRIED-OVER running shaper state (0 on a
-    // fresh boot's first-ever Move; a chained/replaced Move's own
-    // just-ended value otherwise -- SUC-051 continuity, no instant jump)
-    // rather than the raw cruise target; shapeAndStage()'s own tick() calls
-    // ramp it toward the cruise target from there. Shaping disabled: stage
-    // the raw target immediately (UNCHANGED pre-shaping behavior) and keep
-    // the shaper's own state mirror in sync (syncTo()) so a LATER
-    // live-enabled shaping call doesn't inherit a stale value.
-    float vLeft = active_.cruiseVLeft;
-    float vRight = active_.cruiseVRight;
-    if (linearShaping) {
-      vLeft = shaperVLeft_.commandedSpeed();
-      vRight = shaperVRight_.commandedSpeed();
-    } else {
-      shaperVLeft_.syncTo(vLeft);
-      shaperVRight_.syncTo(vRight);
-    }
-    sink_.setDuty(vLeft, vRight);
-  } else {
-    // TWIST (and the defensive NONE fallback -- see move_queue.h's own
-    // header: a well-formed Move never reaches here with velocity_kind ==
-    // NONE, that shape check is RobotLoop::handleMove()'s job).
-    active_.cruiseVX = move.velocity.twist.v_x;
-    active_.cruiseVY = move.velocity.twist.v_y;
-    active_.cruiseOmega = move.velocity.twist.omega;
-    active_.cruiseVLeft = 0.0f;
-    active_.cruiseVRight = 0.0f;
-
-    float vx = active_.cruiseVX;
-    float omega = active_.cruiseOmega;
-    if (linearShaping) {
-      vx = shaperVX_.commandedSpeed();
-    } else {
-      shaperVX_.syncTo(vx);
-    }
-    if (angularShaping) {
-      omega = shaperOmega_.commandedSpeed();
-    } else {
-      shaperOmega_.syncTo(omega);
-    }
-    float vLeft = 0.0f, vRight = 0.0f;
-    BodyKinematics::inverse(vx, omega, trackWidth_, vLeft, vRight);
-    sink_.setDuty(vLeft, vRight);
-  }
-
-  Motion::StopCondition::Kind kind = Motion::StopCondition::Kind::Time;
-  float threshold = 0.0f;
-  switch (move.stop_kind) {
-    case msg::Move::StopKind::DISTANCE:
-      kind = Motion::StopCondition::Kind::Distance;
-      threshold = move.stop.distance;
-      break;
-    case msg::Move::StopKind::ANGLE:
-      kind = Motion::StopCondition::Kind::Angle;
-      threshold = move.stop.angle;
-      break;
-    case msg::Move::StopKind::TIME:
-    case msg::Move::StopKind::NONE:
-    default:
-      // NONE is the same defensive fallback as VelocityKind::NONE above --
-      // a well-formed Move never reaches here with stop_kind == NONE.
-      kind = Motion::StopCondition::Kind::Time;
-      threshold = move.stop.time;
-      break;
-  }
-
-  active_.occupied = true;
-  active_.moveId = move.id;
-  active_.kind = kind;
-  active_.threshold = threshold;
-  active_.timeout = move.timeout;
-  active_.activationNow = now;
-  active_.activationPathLength = pathLength;
-  active_.activationTheta = theta;
-
-  lastShapeNow_ = now;  // dt baseline for this Move's own first shapeAndStage() call
-}
-
-// shapeAndStage -- see move_queue.h's own tick()/shapeAndStage() doc
-// comments for the full contract. Per-velocity-kind axis selection:
-//   WHEELS  -- v_left/v_right shaped INDEPENDENTLY, both on the LINEAR
-//              axis (aMax/aDecel) regardless of the Move's own stop_kind
-//              -- a wheel target has no "angular" component of its own to
-//              shape; an Angle-kind WHEELS Move (a differential turn
-//              commanded by raw wheel speeds rather than TWIST.omega) gets
-//              accel-ramped but never decel-tapered on this axis (its own
-//              "remaining" stays +infinity, matching the Kind::Time
-//              posture) -- a known, documented scope limitation: WHEELS
-//              moves are not the ticket's own primary target (90-degree
-//              TWIST turns and TWIST distance stops are), and a
-//              wheel-speed-only remaining-angle mapping is not this
-//              module's concern to invent.
-//   TWIST   -- v_x shaped on the LINEAR axis, omega shaped on the ANGULAR
-//              axis, EACH independently gated by its own ShaperLimits
-//              fields and each using ITS OWN kind-matched `remaining`
-//              (Distance-kind -> remainingLinear real, remainingAngular
-//              +infinity; Angle-kind -> the reverse; Time-kind -> both
-//              +infinity). A Move whose stop_kind doesn't match a nonzero
-//              component it's ALSO commanding (e.g. a Distance-kind TWIST
-//              Move with a nonzero omega -- an arc, not a pure straight)
-//              still gets that OTHER component accel-ramped (remaining
-//              stays +infinity for it, exactly the Kind::Time posture) --
-//              never decel-tapered, since this module has no basis to
-//              measure "remaining" on an axis the Move's own stop
-//              condition doesn't watch.
-void MoveQueue::shapeAndStage(uint64_t now, float pathLength, float theta) {
-  bool linearShaping =
-      shaperLimits_.aMax > 0.0f && shaperLimits_.aDecel > 0.0f && shaperLimits_.jMax > 0.0f;
-  bool angularShaping = shaperLimits_.alphaMax > 0.0f && shaperLimits_.alphaDecel > 0.0f &&
-                        shaperLimits_.yawJerkMax > 0.0f;
-  if (!linearShaping && !angularShaping) return;  // Drive already holds the raw cruise target
-
-  float dt = static_cast<float>(now - lastShapeNow_) / 1.0e6f;  // [us] -> [s]
-  if (dt < 0.0f) dt = 0.0f;  // clock-monotonicity defense, same posture as StopCondition's own
-  lastShapeNow_ = now;
-
-  const float kInfinity = std::numeric_limits<float>::infinity();
-  float remainingLinear = kInfinity;
-  float remainingAngular = kInfinity;
-  if (active_.kind == Motion::StopCondition::Kind::Distance) {
-    remainingLinear = active_.threshold - std::fabs(pathLength - active_.activationPathLength);
-  } else if (active_.kind == Motion::StopCondition::Kind::Angle) {
-    remainingAngular = active_.threshold - std::fabs(theta - active_.activationTheta);
-  }
-  // Kind::Time -- both axes stay +infinity: accel/jerk-limited ramp-up
-  // still applies (Motion::VelocityShaper::next()'s own accel/jerk
-  // clamps), no decel taper (a Time Move ends on elapsed wall-clock time,
-  // not position -- move_queue.h's own tick() doc comment).
-
-  if (active_.velocityKind == msg::Move::VelocityKind::WHEELS) {
-    if (!linearShaping) return;
-    float vLeft = shaperVLeft_.next(active_.cruiseVLeft, remainingLinear, dt, shaperLimits_.aMax,
-                                     shaperLimits_.aDecel, shaperLimits_.jMax);
-    float vRight = shaperVRight_.next(active_.cruiseVRight, remainingLinear, dt, shaperLimits_.aMax,
-                                       shaperLimits_.aDecel, shaperLimits_.jMax);
-    sink_.setDuty(vLeft, vRight);
-    return;
-  }
-
-  // TWIST.
-  float vx = active_.cruiseVX;
-  float omega = active_.cruiseOmega;
-  if (linearShaping) {
-    vx = shaperVX_.next(active_.cruiseVX, remainingLinear, dt, shaperLimits_.aMax,
-                         shaperLimits_.aDecel, shaperLimits_.jMax);
-  }
-  if (angularShaping) {
-    omega = shaperOmega_.next(active_.cruiseOmega, remainingAngular, dt, shaperLimits_.alphaMax,
-                               shaperLimits_.alphaDecel, shaperLimits_.yawJerkMax);
-  }
-  float vLeft = 0.0f, vRight = 0.0f;
-  BodyKinematics::inverse(vx, omega, trackWidth_, vLeft, vRight);
-  sink_.setDuty(vLeft, vRight);
-}
-
-// sameAxisCompatible -- thin forwarder onto the anonymous namespace's own
-// sameAxisCompatibleImpl() (see that function's own doc comment for the
-// full predicate), reading this instance's active_.kind/cruiseVX/
-// cruiseOmega. Declared in move_queue.h.
-bool MoveQueue::sameAxisCompatible(const msg::Move& next) const {
-  return sameAxisCompatibleImpl(active_.kind, active_.cruiseVX, active_.cruiseOmega, next);
-}
-
+```cpp
 // landAtZero -- see move_queue.h's own tick() doc comment for the full
 // contract. TWIST moves only: a WHEELS Move's own linearly-shaped axes
 // (v_left/v_right) have no stop_kind-matched pairing the way a TWIST
@@ -550,48 +356,12 @@ bool MoveQueue::sameAxisCompatible(const msg::Move& next) const {
 bool MoveQueue::landAtZero(float pathLength, float theta, float dt) const {
   if (active_.velocityKind != msg::Move::VelocityKind::TWIST) return false;
 
-  // Boundary-kind selection (121 ticket 003, land-at-zero-at-orthogonal-
-  // chain-boundaries.md -- NARROWS the original two-way "any chain-advance"
-  // split described in the anonymous-namespace comment's own history into
-  // three). See this file's own anonymous-namespace comment
-  // (kStoppingMarginFactorChain/kStoppingMarginFactorFinal/
-  // kStoppingMarginFactorOrthogonal/kDiscretizationCyclesChain) for the
-  // full derivation, including the sweep table and the honest residual
-  // that remains even at the shipped orthogonal value. Three boundary
-  // kinds:
-  //   - a SAME-AXIS COMPATIBLE chain boundary (sameAxisCompatible(
-  //     pending_[0]) true -- the incoming pending Move continues this axis
-  //     the SAME direction, e.g. two Distance legs; owned by sprint 122,
-  //     unchanged here) selects kStoppingMarginFactorChain.
-  //   - the queue-drain case (pendingCount_ == 0, Drive::stop() runs for
-  //     real and the plant's own residual speed coasts further before
-  //     rest) selects kStoppingMarginFactorFinal.
-  //   - an ORTHOGONAL chain boundary (pendingCount_ > 0 but
-  //     sameAxisCompatible() false -- e.g. turn->straight, straight->turn;
-  //     Drive::stop() never runs, but there is no velocity worth carrying
-  //     into a Move that doesn't command this axis either) selects
-  //     kStoppingMarginFactorOrthogonal -- its OWN independently-swept
-  //     constant, NOT a re-use of kStoppingMarginFactorFinal (verified,
-  //     not assumed: literally reusing 0.92 here measurably fails the
-  //     closure gate -- see the anonymous-namespace comment).
   bool sameAxisChainBoundary = pendingCount_ > 0 && sameAxisCompatible(pending_[0]);
   bool orthogonalChainBoundary = pendingCount_ > 0 && !sameAxisChainBoundary;
   float marginFactor = sameAxisChainBoundary
                             ? kStoppingMarginFactorChain
                             : (orthogonalChainBoundary ? kStoppingMarginFactorOrthogonal
                                                         : kStoppingMarginFactorFinal);
-  // The per-cycle discretization allowance (118 ticket 003 resolution) is
-  // gated on the SAME same-axis-compatible-chain condition as the margin
-  // above (121 ticket 003 narrowed this alongside it) -- see the
-  // anonymous-namespace comment for why: the final-move regime's own
-  // kStoppingMarginFactorFinal plateau was already broad and verified
-  // robust (worst=1.189deg settle-based) without it, and re-adding it to
-  // the orthogonal branch during that ticket's own sweep made every
-  // candidate margin WORSE, not better; adding it to either the
-  // queue-drain OR the orthogonal case pushes that regime's own firing
-  // point earlier for no benefit, costing real margin instead (measured
-  // regression: test_managed_angle_preset[-90] went from comfortably
-  // passing to a 3.07deg miss against its 3.0deg tolerance).
   float discretizationCycles = sameAxisChainBoundary ? kDiscretizationCyclesChain : 0.0f;
 
   if (active_.kind == Motion::StopCondition::Kind::Distance) {
@@ -599,9 +369,6 @@ bool MoveQueue::landAtZero(float pathLength, float theta, float dt) const {
         shaperLimits_.aMax > 0.0f && shaperLimits_.aDecel > 0.0f && shaperLimits_.jMax > 0.0f;
     if (!linearShaping) return false;  // no taper -- the backstop is the only completion path
     float remaining = active_.threshold - std::fabs(pathLength - active_.activationPathLength);
-    // "Have we already entered our own braking envelope for our CURRENT
-    // commanded speed" PLUS a per-cycle discretization allowance -- see the
-    // anonymous-namespace comment for kDiscretizationCyclesChain.
     float cmd = shaperVX_.commandedSpeed();
     float epsilonRemaining =
         (cmd * cmd) / (2.0f * shaperLimits_.aDecel) * marginFactor +
@@ -623,169 +390,16 @@ bool MoveQueue::landAtZero(float pathLength, float theta, float dt) const {
 
   return false;  // Kind::Time -- no spatial `remaining`, never qualifies.
 }
+```
 
-MoveQueue::EnqueueResult MoveQueue::enqueue(const msg::Move& move, uint32_t corrId,
-                                             uint64_t now) {
-  EnqueueResult result;
-  result.corrId = corrId;
+## Status as of deletion
 
-  if (move.replace) {
-    pendingCount_ = 0;  // flush -- no completion ack for any of them
-    activate(move, now, odom_.pathLength(), odom_.theta());
-    return result;
-  }
-
-  if (!active_.occupied) {
-    // Queue was empty -- nothing to flush/preempt, but the activation
-    // itself is identical to the replace==true path above.
-    activate(move, now, odom_.pathLength(), odom_.theta());
-    return result;
-  }
-
-  if (pendingCount_ >= kMaxPending) {
-    // Nothing above this line mutated any queue state -- the existing
-    // active Move and all 4 pending Moves are provably unchanged.
-    result.err = msg::ErrCode::ERR_FULL;
-    return result;
-  }
-
-  pending_[pendingCount_] = move;
-  ++pendingCount_;
-  return result;
-}
-
-MoveQueue::TickResult MoveQueue::tick(uint64_t now, const Odometry& odom) {
-  TickResult result;
-  if (!active_.occupied) return result;
-
-  Motion::StopCondition sc(active_.kind, active_.threshold, active_.timeout,
-                            active_.activationNow, active_.activationPathLength,
-                            active_.activationTheta);
-
-  float pathLength = odom.pathLength();
-  float theta = odom.theta();
-
-  // dt since this Move's own last shaped tick -- the SAME quantity
-  // shapeAndStage() computes below (from the same lastShapeNow_ baseline),
-  // read here first (read-only, no mutation) so landAtZero() can fold in
-  // its own per-cycle discretization term (118 ticket 003 resolution --
-  // see landAtZero()'s own doc comment). shapeAndStage() recomputes and
-  // mutates lastShapeNow_ itself on the Continue path below; duplicating
-  // the read here is cheaper and clearer than threading a second output
-  // parameter back out of shapeAndStage().
-  float dt = static_cast<float>(now - lastShapeNow_) / 1.0e6f;  // [us] -> [s]
-  if (dt < 0.0f) dt = 0.0f;  // clock-monotonicity defense, same posture as StopCondition's own
-
-  // Backstop (threshold/timeout) is always-armed and evaluated first --
-  // "first to fire wins" (move_queue.h's own tick() doc comment). Only
-  // when it does NOT already end the Move this cycle (Continue) is the
-  // land-at-zero completion path (118 ticket 004) checked as an
-  // ADDITIONAL way for the Move to end -- treated identically to
-  // StopConditionMet (never TimedOut): the taper decided this Move is
-  // done, not the timeout backstop.
-  Motion::StopCondition::Outcome outcome = sc.tick(now, pathLength, theta);
-  if (outcome == Motion::StopCondition::Outcome::Continue && landAtZero(pathLength, theta, dt)) {
-    outcome = Motion::StopCondition::Outcome::StopConditionMet;
-  }
-
-  if (outcome == Motion::StopCondition::Outcome::Continue) {
-    // Velocity shaping (decel-into-the-goal campaign) -- reuses the SAME
-    // pathLength/theta just computed above for the stop-condition
-    // comparison; see move_queue.h's own tick()/shapeAndStage() doc
-    // comments. Only reached on Continue -- a Move ending THIS cycle is
-    // about to be superseded by a chain-advance activate() or
-    // drive_.stop() below regardless, so shaping it first would be
-    // immediately overwritten.
-    shapeAndStage(now, pathLength, theta);
-    return result;
-  }
-
-  result.completed = true;
-  result.completion.moveId = active_.moveId;
-  result.completion.timedOut = (outcome == Motion::StopCondition::Outcome::TimedOut);
-
-  active_.occupied = false;
-
-  // Reset the axis this Move's own stop_kind was tapering, on EVERY
-  // completion (backstop OR land-at-zero), not just the empty-queue drain
-  // below. Rationale (118 ticket 004, discovered empirically against the
-  // sim tour-closure gate): the shaper* members are deliberately
-  // MoveQueue-level, not ActiveMove-level, so a same-axis chained Move
-  // continues its ramp smoothly (SUC-051 continuity, move_queue.h's own
-  // shaper* doc comment) -- but that same continuity means a Move that
-  // ends with a NONZERO residual commandedSpeed_ (any Move can, whether it
-  // ended via the exact-threshold backstop or the land-at-zero predicate
-  // above, both of which tolerate the taper not having fully reached zero)
-  // leaks that residual into the chain-advanced Move's own activation
-  // baseline, and from there into landAtZero()'s own `cmd` read for
-  // WHATEVER Move next uses this same axis -- corrupting that LATER Move's
-  // completion decision with a value that describes the PREVIOUS Move, not
-  // its own taper. Resetting here, unconditionally, cuts that leak at the
-  // source; SUC-051 continuity is preserved for the case it actually
-  // matters (a Move's OWN shaping while it runs), just not across a
-  // completion boundary.
-  //
-  // 118 ticket 003 resolution: tested making this reset conditional on
-  // pendingCount() == 0 (skip it on a chain-advance, letting the next
-  // Move's own accel-ramp-toward-cruise decay any residual naturally
-  // instead of a hard step to 0) on the theory that TOUR_1/TOUR_2's own
-  // alternating Distance/Angle leg structure gives a same-axis Move
-  // several seconds to decay before its axis is reused anyway, so the
-  // corruption this reset guards against couldn't occur in THOSE tours
-  // regardless. Measured against the 40ms closure gate: no improvement
-  // (still no broad plateau across a re-swept kStoppingMarginFactorChain,
-  // best worst-case 2.932deg, itself just as fragile) -- reverted. Kept
-  // unconditional, since it is the more conservative, generally-correct
-  // choice and the conditional variant bought nothing.
-  if (active_.kind == Motion::StopCondition::Kind::Angle) {
-    shaperOmega_.reset();
-  } else if (active_.kind == Motion::StopCondition::Kind::Distance) {
-    shaperVX_.reset();
-  }
-
-  if (pendingCount_ > 0) {
-    msg::Move next = pending_[0];
-    for (int i = 1; i < pendingCount_; ++i) pending_[i - 1] = pending_[i];
-    --pendingCount_;
-    activate(next, now, odom.pathLength(), odom.theta());
-  } else {
-    sink_.stop();
-    // The robot has genuinely stopped -- reset() every shaper's own
-    // (commandedSpeed, commandedAccel) state too, not just Drive's own
-    // staged targets, so the NEXT unrelated Move (whenever it activates)
-    // ramps from a true (0, 0) instead of inheriting a stale nonzero pair
-    // from a taper that never finished (e.g. this Move ended via the
-    // timeout backstop mid-taper). See move_queue.h's own shaper* member
-    // doc comment.
-    shaperVX_.reset();
-    shaperOmega_.reset();
-    shaperVLeft_.reset();
-    shaperVRight_.reset();
-  }
-
-  return result;
-}
-
-void MoveQueue::flush() {
-  pendingCount_ = 0;
-  active_.occupied = false;
-  active_.moveId = 0;
-  sink_.stop();
-  // Same reasoning as tick()'s own empty-queue-drain path above -- the
-  // robot has genuinely stopped, so every shaper's own state must reset
-  // to (0, 0) too, not just Drive's own staged targets.
-  shaperVX_.reset();
-  shaperOmega_.reset();
-  shaperVLeft_.reset();
-  shaperVRight_.reset();
-}
-
-bool MoveQueue::shapingDisabled() const {
-  bool linearShaping =
-      shaperLimits_.aMax > 0.0f && shaperLimits_.aDecel > 0.0f && shaperLimits_.jMax > 0.0f;
-  bool angularShaping = shaperLimits_.alphaMax > 0.0f && shaperLimits_.alphaDecel > 0.0f &&
-                        shaperLimits_.yawJerkMax > 0.0f;
-  return !linearShaping && !angularShaping;
-}
-
-}  // namespace Motion
+This predicate and its constants were dead code at deletion time —
+`Motion::MoveQueue` had zero callers (`Motion::Planner::update()` writes
+`Types::RobotState::Wheel::cmdVelocity` directly, bypassing this whole
+generation path). The "HONEST RESIDUAL" section above should be read as
+a candid account of where the tuning effort landed, not as a claim that
+the mechanism was ever fully satisfactory — a future planner-side
+completion predicate inheriting this problem should expect to need the
+measured-velocity/characterized-`tauPlant` extension flagged there, not
+just a fourth fitted constant.
