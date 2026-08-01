@@ -59,6 +59,44 @@ both wheels to one constant before re-characterizing, or the measurement
 inherits the mismatch."* It was fitted to a plant that no longer matches and was
 never refitted.
 
+## MEASURED 2026-07-31 (duty sweep on the stand)
+
+`src/tests/bench/duty_sweep.py`, open loop via the `WHEELS` verb, 12 rungs
+0.04-0.60 duty, both wheels, both directions. Data in `duty_sweep.csv`, chart in
+`duty_sweep.png`.
+
+| wheel | dir | gain [mm/s per duty] | breakaway [duty] | implied dps |
+|---|---|---|---|---|
+| left  | fwd | 362.5 | 0.027 | 0.002759 |
+| left  | rev | 444.5 | 0.087 | 0.002250 |
+| right | fwd | 335.4 | 0.054 | 0.002982 |
+| right | rev | 427.4 | **0.240** | 0.002339 |
+
+**Config claims 534 mm/s per duty. Every direction of every wheel is weaker than
+that** — mean ~392, so `duty_per_speed` should be ~**0.00255**, not 0.00187. The
+config is ~1.4x too optimistic, which is most of the missing speed.
+
+**The bigger finding is the deadband, not the gain.** `output_deadband` is
+configured at **0.03**; measured breakaway ranges **0.027 to 0.240** — up to
+**8x** the configured value. The right wheel in reverse does not turn at all
+below 0.24 duty: at rungs 0.04 / 0.09 / 0.14 / 0.19 it measured exactly 0 mm/s.
+
+This reframes the problem. The apparent 28% "L/R gain spread" in a combined fit
+is mostly breakaway asymmetry leaking into the slope, not a gearbox difference —
+which is why a host-side trim on encoder counts could never fix it, and why
+forward and reverse legs behave like different robots. It is also the honest
+explanation for the "right wheel is mechanically weak" impression: it is not
+weak in gain (335 vs 362 fwd), it is nearly immovable from rest in reverse.
+
+Follow-ups this opens:
+
+- Fit `speed = m*(duty - breakaway)` per wheel per direction rather than one
+  slope+intercept — the current fit conflates the two.
+- `output_deadband` needs to be per wheel and per direction, or the boost at
+  `nezha_motor.cpp:279-284` is meaningless for three of the four cases.
+- A 0.24 breakaway on right-reverse warrants a mechanical inspection before any
+  more calibration is fitted on top of it.
+
 ## Proposed work
 
 1. Set `wheel_gain_* = 1.0`, `wheel_intercept_* = 0.0` (identity), as that note
