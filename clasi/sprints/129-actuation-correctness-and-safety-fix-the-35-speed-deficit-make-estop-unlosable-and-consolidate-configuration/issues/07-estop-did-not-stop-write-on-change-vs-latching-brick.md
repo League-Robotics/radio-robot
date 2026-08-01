@@ -1,6 +1,9 @@
 ---
-status: pending
+status: in-progress
 priority: critical
+sprint: '129'
+tickets:
+- 129-001
 ---
 
 # ESTOP did not stop the robot — write-on-change vs. a latching motor controller

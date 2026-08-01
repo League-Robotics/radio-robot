@@ -1,6 +1,9 @@
 ---
-status: pending
+status: in-progress
 priority: high
+sprint: '129'
+tickets:
+- 129-004
 ---
 
 # Unmanaged drive: leases expiring mid-leg, and a terminal pivot that hid a 27 deg heading error

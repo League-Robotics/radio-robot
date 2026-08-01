@@ -1,6 +1,9 @@
 ---
-status: pending
+status: in-progress
 priority: medium
+sprint: '129'
+tickets:
+- 129-003
 ---
 
 # DBG: a firmware->host debug message channel, compiled in only for bench and Sim

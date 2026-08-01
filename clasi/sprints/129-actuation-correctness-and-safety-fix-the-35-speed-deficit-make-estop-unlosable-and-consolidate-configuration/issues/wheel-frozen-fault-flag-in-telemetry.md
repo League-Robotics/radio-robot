@@ -1,6 +1,9 @@
 ---
-status: pending
+status: in-progress
 priority: medium
+sprint: '129'
+tickets:
+- 129-002
 ---
 
 # Wheel-frozen fault flag in telemetry, surfaced as a red GUI banner

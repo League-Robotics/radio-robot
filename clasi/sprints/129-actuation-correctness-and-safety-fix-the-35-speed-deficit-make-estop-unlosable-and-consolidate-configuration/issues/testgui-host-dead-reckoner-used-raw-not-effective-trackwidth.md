@@ -1,6 +1,9 @@
 ---
-status: pending
+status: in-progress
 priority: high
+sprint: '129'
+tickets:
+- 129-005
 ---
 
 # The GUI's encoder trace integrated with the RAW track width while the firmware used the EFFECTIVE one
