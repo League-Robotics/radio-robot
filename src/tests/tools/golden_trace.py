@@ -95,12 +95,17 @@ class Comparison:
 
     sample_count: int
     outside_count: int          # samples farther than tolerance from the golden
-    max_deviation: float        # [data units] worst sample distance
-    rms_deviation: float        # [data units]
+    # UNITLESS multiples of tolerance: 1.0 is exactly on the acceptance
+    # ellipse, 2.0 is twice as far out as allowed. With a per-axis tolerance
+    # there is no single unit to report a distance in, and normalizing makes
+    # severity comparable across signals.
+    max_deviation: float        # [x tolerance] worst sample
+    rms_deviation: float        # [x tolerance]
     outside_pixels: int         # raster: new-run ink outside the band (FAILURE)
     uncovered_pixels: int       # raster: band the run never visited (coverage)
     band_pixels: int
-    tolerance: float            # [data units]
+    tolerance_x: float          # [x-axis data units]
+    tolerance_y: float          # [y-axis data units]
 
     @property
     def outside_fraction(self) -> float:
@@ -116,10 +121,50 @@ class Comparison:
         verdict = "PASS" if self.passed() else "FAIL"
         return (
             f"[{verdict}] {self.outside_count}/{self.sample_count} samples outside "
-            f"band (tolerance {self.tolerance:g}); max {self.max_deviation:.4g}, "
-            f"rms {self.rms_deviation:.4g}; raster outside={self.outside_pixels} "
+            f"band (tol x={self.tolerance_x:g} y={self.tolerance_y:g}); "
+            f"max {self.max_deviation:.3g}x rms {self.rms_deviation:.3g}x tol; "
+            f"raster outside={self.outside_pixels} "
             f"uncovered={self.uncovered_pixels}/{self.band_pixels}"
         )
+
+
+@dataclass(frozen=True)
+class AxisTolerance:
+    """Per-axis tolerance, each in ITS OWN axis's data units.
+
+    A single scalar tolerance is only meaningful when both axes carry the same
+    unit -- true for ``xy_trace`` (mm vs mm), false for every time series, where
+    x is seconds and y is mm/s, mm, rad or ms. A scalar there measures Euclidean
+    distance through a blended space, silently equating one second with one mm/s.
+
+    Measured consequence (circle tour, 2026-08-01): at the shipped scalar
+    tolerances the band covered 96.8% of the wheel-speed plot, 81% of x_t/y_t
+    and 100% of both cycle-timing plots -- and since ``compare()`` scored with
+    the same metric, a run displaced by 10 SECONDS still sat inside a "15"
+    tolerance. The band was not merely ugly; the gate could barely fail.
+
+    Geometrically the acceptance region is the trace dilated by an ELLIPSE with
+    semi-axes (x, y) -- an oval kernel swept along the polyline. Dividing each
+    axis by its own tolerance maps that ellipse onto the unit circle, so the
+    test stays exact (not rasterized) and costs nothing over the scalar form.
+    """
+
+    x: float
+    y: float
+
+    def __post_init__(self) -> None:
+        if self.x <= 0.0 or self.y <= 0.0:
+            raise ValueError(f"tolerance must be positive on both axes: {self}")
+
+
+def as_axis_tolerance(tolerance: "float | AxisTolerance") -> AxisTolerance:
+    """Accept a scalar (same tolerance on both axes) or an explicit pair.
+
+    Scalars stay valid for same-unit plots -- not deprecated, just insufficient
+    for mixed-unit ones."""
+    if isinstance(tolerance, AxisTolerance):
+        return tolerance
+    return AxisTolerance(float(tolerance), float(tolerance))
 
 
 def _segment_distance(
@@ -166,7 +211,8 @@ def distance_to_polyline(
 
 
 def band_mask(
-    gx: np.ndarray, gy: np.ndarray, spec: PlotSpec, tolerance: float
+    gx: np.ndarray, gy: np.ndarray, spec: PlotSpec,
+    tolerance: "float | AxisTolerance",
 ) -> np.ndarray:
     """Boolean raster of the tolerance band around the golden polyline.
 
@@ -174,6 +220,7 @@ def band_mask(
     polyline. Computed per segment over that segment's own bounding box, so
     cost scales with the trace length rather than with width*height*segments.
     """
+    tol = as_axis_tolerance(tolerance)
     xs, ys = spec.pixel_centres()
     mask = np.zeros((spec.height, spec.width), dtype=bool)
     gx = np.asarray(gx, dtype=float)
@@ -188,10 +235,12 @@ def band_mask(
         ax, ay = gx[i], gy[i]
         bx, by = (gx[i + 1], gy[i + 1]) if gx.size > 1 else (gx[i], gy[i])
 
-        col_low = int(np.floor((min(ax, bx) - tolerance - spec.x_low) / x_step)) - 1
-        col_high = int(np.ceil((max(ax, bx) + tolerance - spec.x_low) / x_step)) + 1
-        row_low = int(np.floor((spec.y_high - (max(ay, by) + tolerance)) / y_step)) - 1
-        row_high = int(np.ceil((spec.y_high - (min(ay, by) - tolerance)) / y_step)) + 1
+        # Bounding box from each axis's OWN tolerance -- the ellipse's extent,
+        # not one radius reused on both axes.
+        col_low = int(np.floor((min(ax, bx) - tol.x - spec.x_low) / x_step)) - 1
+        col_high = int(np.ceil((max(ax, bx) + tol.x - spec.x_low) / x_step)) + 1
+        row_low = int(np.floor((spec.y_high - (max(ay, by) + tol.y)) / y_step)) - 1
+        row_high = int(np.ceil((spec.y_high - (min(ay, by) - tol.y)) / y_step)) + 1
 
         col_low, col_high = max(col_low, 0), min(col_high, spec.width)
         row_low, row_high = max(row_low, 0), min(row_high, spec.height)
@@ -199,10 +248,35 @@ def band_mask(
             continue
 
         grid_x, grid_y = np.meshgrid(xs[col_low:col_high], ys[row_low:row_high])
-        near = _segment_distance(grid_x, grid_y, ax, ay, bx, by) <= tolerance
+        # Scaling each axis by its own tolerance maps the acceptance ELLIPSE
+        # onto the unit circle, so one distance test covers both axes exactly.
+        near = _segment_distance(
+            grid_x / tol.x, grid_y / tol.y,
+            ax / tol.x, ay / tol.y, bx / tol.x, by / tol.y,
+        ) <= 1.0
         mask[row_low:row_high, col_low:col_high] |= near
 
     return mask
+
+
+def normalized_distance_to_polyline(
+    px: np.ndarray, py: np.ndarray, gx: np.ndarray, gy: np.ndarray,
+    tolerance: "float | AxisTolerance",
+) -> np.ndarray:
+    """Distance to the golden polyline in UNITS OF TOLERANCE, per axis.
+
+    Unitless: <= 1.0 is inside the acceptance ellipse, 2.0 is twice as far out
+    as allowed. This is what the verdict uses -- a raw geometric distance cannot
+    be tested against one threshold when the axes carry different units.
+
+    It also makes signals commensurable: "1.4x tolerance" means the same
+    severity on a wheel-speed plot and a heading plot, where "0.09" would not.
+    """
+    tol = as_axis_tolerance(tolerance)
+    return distance_to_polyline(
+        np.asarray(px, dtype=float) / tol.x, np.asarray(py, dtype=float) / tol.y,
+        np.asarray(gx, dtype=float) / tol.x, np.asarray(gy, dtype=float) / tol.y,
+    )
 
 
 def compare(
@@ -211,7 +285,7 @@ def compare(
     golden_x: np.ndarray,
     golden_y: np.ndarray,
     spec: PlotSpec,
-    tolerance: float,
+    tolerance: "float | AxisTolerance",
 ) -> Comparison:
     """Score a run against a golden.
 
@@ -227,25 +301,28 @@ def compare(
         raise ValueError("new trace is empty -- a run that produced no samples "
                          "must never score as a clean pass")
 
-    deviation = distance_to_polyline(new_x, new_y, golden_x, golden_y)
+    tol = as_axis_tolerance(tolerance)
+    deviation = normalized_distance_to_polyline(
+        new_x, new_y, golden_x, golden_y, tol)
 
     band = band_mask(golden_x, golden_y, spec, tolerance)
     # A hairline raster of the new run: tolerance of one pixel diagonal, so the
     # ink is thin enough that "outside the band" means genuinely outside.
     x_step = (spec.x_high - spec.x_low) / spec.width
     y_step = (spec.y_high - spec.y_low) / spec.height
-    hairline = float(np.hypot(x_step, y_step)) * 0.5
+    hairline = AxisTolerance(x_step * 0.75, y_step * 0.75)
     ink = band_mask(new_x, new_y, spec, hairline)
 
     return Comparison(
         sample_count=int(new_x.size),
-        outside_count=int(np.count_nonzero(deviation > tolerance)),
+        outside_count=int(np.count_nonzero(deviation > 1.0)),
         max_deviation=float(deviation.max()),
         rms_deviation=float(np.sqrt(np.mean(deviation ** 2))),
         outside_pixels=int(np.count_nonzero(ink & ~band)),
         uncovered_pixels=int(np.count_nonzero(band & ~ink)),
         band_pixels=int(np.count_nonzero(band)),
-        tolerance=float(tolerance),
+        tolerance_x=float(tol.x),
+        tolerance_y=float(tol.y),
     )
 
 
@@ -274,9 +351,36 @@ def suggest_tolerance(
 # diagnosable and lets a later re-score at a different tolerance happen
 # without re-running the robot.
 
+def suggest_axis_tolerance(
+    runs: "list[tuple[np.ndarray, np.ndarray]]",
+    golden_x: np.ndarray, golden_y: np.ndarray,
+    base: AxisTolerance, margin: float = 1.5,
+) -> AxisTolerance:
+    """Scale a per-axis tolerance to the observed run-to-run spread.
+
+    ``base`` supplies the SHAPE of the acceptance ellipse -- the ratio between
+    the two axes, which encodes their unrelated units and cannot be discovered
+    from the data. Repeat runs with no code change then supply the SIZE: the
+    worst normalized deviation seen, times ``margin``.
+
+    Splitting it this way keeps both halves honest. Deriving the ratio from
+    measured spread would let one noisy axis silently reshape the ellipse;
+    deriving the size by hand would let the band be whatever makes today's run
+    pass.
+    """
+    if not runs:
+        raise ValueError("need at least one run to derive a tolerance")
+    worst = 0.0
+    for rx, ry in runs:
+        deviation = normalized_distance_to_polyline(rx, ry, golden_x, golden_y, base)
+        worst = max(worst, float(deviation.max()))
+    scale = max(worst, 1e-9) * margin
+    return AxisTolerance(base.x * scale, base.y * scale)
+
+
 def save_golden(
     directory: pathlib.Path, name: str, x: np.ndarray, y: np.ndarray,
-    spec: PlotSpec, tolerance: float,
+    spec: PlotSpec, tolerance: "float | AxisTolerance",
 ) -> pathlib.Path:
     """Write the raw series plus its spec. Promotion to golden is a human act;
     this only records the candidate."""
@@ -284,41 +388,57 @@ def save_golden(
     data = directory / f"{name}.csv"
     np.savetxt(data, np.column_stack([x, y]), delimiter=",", header="x,y", comments="")
     (directory / f"{name}.json").write_text(
-        json.dumps({"spec": asdict(spec), "tolerance": tolerance}, indent=2) + "\n"
+        json.dumps({"spec": asdict(spec),
+                    "tolerance": asdict(as_axis_tolerance(tolerance))},
+                   indent=2) + "\n"
     )
     return data
 
 
 def load_golden(
     directory: pathlib.Path, name: str
-) -> "tuple[np.ndarray, np.ndarray, PlotSpec, float]":
+) -> "tuple[np.ndarray, np.ndarray, PlotSpec, AxisTolerance]":
     rows = np.loadtxt(directory / f"{name}.csv", delimiter=",", skiprows=1, ndmin=2)
     meta = json.loads((directory / f"{name}.json").read_text())
-    return rows[:, 0], rows[:, 1], PlotSpec(**meta["spec"]), float(meta["tolerance"])
+    raw = meta["tolerance"]
+    # Goldens blessed before per-axis tolerances stored a bare number.
+    tol = AxisTolerance(**raw) if isinstance(raw, dict) else as_axis_tolerance(raw)
+    return rows[:, 0], rows[:, 1], PlotSpec(**meta["spec"]), tol
 
 
 def render_png(
     path: pathlib.Path, x: np.ndarray, y: np.ndarray, spec: PlotSpec,
-    tolerance: float, label: str,
+    tolerance: "float | AxisTolerance", label: str = "",
 ) -> None:
-    """Human-facing image: the tolerance band as a shaded region with the trace
-    over it. Never used for the verdict -- purely what Eric eyeballs before
-    promoting a candidate to golden."""
+    """The acceptance image: the band, the trace, nothing else.
+
+    NO axes, ticks, title, margins or legend (stakeholder, 2026-08-01). Every
+    adornment is another thing that can move between runs for reasons unrelated
+    to the robot -- a matplotlib release that renders a tick label one pixel
+    wider shifts the plot area, which does not change the verdict but does stop
+    two images being comparable by eye. The picture is the trace and its band;
+    the label belongs in the FILENAME.
+
+    Axes fill the figure exactly, so the raster is in direct correspondence with
+    the data: pixel (0,0) is (spec.x_low, spec.y_high), and because the spec is
+    pinned rather than autoscaled, the same data always lands on the same pixels.
+    """
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
     band = band_mask(x, y, spec, tolerance)
-    fig, ax = plt.subplots(figsize=(spec.width / 100, spec.height / 100), dpi=100)
+    fig = plt.figure(figsize=(spec.width / 100, spec.height / 100), dpi=100)
+    ax = fig.add_axes((0.0, 0.0, 1.0, 1.0))
     ax.imshow(
-        band, cmap="Greys", alpha=0.25, origin="upper",
-        extent=(spec.x_low, spec.x_high, spec.y_low, spec.y_high), aspect="auto",
+        band, cmap="Greys", alpha=0.30, origin="upper",
+        extent=(spec.x_low, spec.x_high, spec.y_low, spec.y_high),
+        aspect="auto", interpolation="nearest",
     )
-    ax.plot(x, y, linewidth=1.0)
+    ax.plot(x, y, linewidth=1.0, color="#1f77b4")
     ax.set_xlim(spec.x_low, spec.x_high)   # never autoscale
     ax.set_ylim(spec.y_low, spec.y_high)
-    ax.set_title(f"{label}  (band = {tolerance:g})")
-    fig.tight_layout()
+    ax.set_axis_off()
     path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(path)
+    fig.savefig(path, dpi=100)
     plt.close(fig)

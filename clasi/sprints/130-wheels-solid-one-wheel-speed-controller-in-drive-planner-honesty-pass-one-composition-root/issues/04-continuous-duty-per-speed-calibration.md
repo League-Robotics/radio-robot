@@ -1,5 +1,9 @@
 ---
-status: pending
+status: in-progress
+sprint: '130'
+tickets:
+- 130-004
+- 130-005
 ---
 
 # Continuous duty-per-speed calibration

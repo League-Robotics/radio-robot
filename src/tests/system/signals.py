@@ -111,15 +111,96 @@ def extract_signals(recs: list[dict], *, track_width: float  # [mm]
 
 # Per-signal default tolerances for a first bless with no spread runs --
 # replaced by suggest_tolerance() the moment N no-change runs exist.
-DEFAULT_TOLERANCE = {
-    "wheel_speed_left": 15.0,   # [mm/s]
-    "wheel_speed_right": 15.0,
-    "cmd_wheel_left": 10.0,
-    "cmd_wheel_right": 10.0,
-    "xy_trace": 15.0,           # [mm]
-    "heading_t": 0.06,          # [rad]
-    "x_t": 15.0,                # [mm]
-    "y_t": 15.0,
-    "cycle_period_t": 5.0,      # [ms]
-    "cycle_busy_t": 5.0,
+# Canonical, FIXED plot domains -- (x_low, x_high, y_low, y_high).
+#
+# Axes are pinned per signal, never derived from the run's own extent
+# (stakeholder, 2026-08-01). Autoscaling makes two runs incomparable: a short
+# run and a long one render to visually similar images at different scales, so
+# a difference in the robot shows up as no difference in the picture, and a
+# difference in the picture may be nothing but a rescale.
+#
+# The time axis spans the LONGEST tour, not a typical one. 0..15 s was sized
+# from the circle (12 s) and silently truncated the square (33 s): more than
+# half of every time series fell off-plot, and since the band is only drawn
+# where the trace is, the gate stopped covering the run at 15 s. Out-of-domain
+# data is now a loud failure (assert_within_domain) rather than a quiet crop --
+# but the domain still has to be big enough in the first place.
+#
+# Velocity axes are SYMMETRIC rather than 0..500. The stakeholder specified
+# 0..500 for the forward case; symmetric costs half the vertical resolution but
+# a reverse leg clipped off-plot would leave an empty band and a gate that
+# cannot fail. Silently hiding data is the worse trade -- revisit if every tour
+# is forward-only.
+CANONICAL_DOMAIN = {
+    #                     x_low  x_high  y_low   y_high
+    "wheel_speed_left":  (0.0,  40.0,  -500.0,  500.0),   # [s] [mm/s]
+    "wheel_speed_right": (0.0,   40.0,  -500.0,  500.0),
+    "cmd_wheel_left":    (0.0,   40.0,  -500.0,  500.0),
+    "cmd_wheel_right":   (0.0,   40.0,  -500.0,  500.0),
+    "x_t":               (0.0,   40.0, -1000.0, 1000.0),   # [s] [mm]
+    "y_t":               (0.0,   40.0, -1000.0, 1000.0),
+    "heading_t":         (0.0,   40.0,    -7.0,    7.0),   # [s] [rad]
+    "cycle_period_t":    (0.0,   40.0,     0.0,  100.0),   # [s] [ms]
+    "cycle_busy_t":      (0.0,   40.0,     0.0,  100.0),
+    # Square domain: the only signal whose axes share a unit, so it is the only
+    # one where equal x/y extents are meaningful.
+    "xy_trace":       (-1000.0, 1000.0, -1000.0, 1000.0),  # [mm] [mm]
 }
+
+# Per-axis acceptance tolerance -- each in ITS OWN axis's units.
+#
+# The x entry is SECONDS for every time series and MILLIMETRES for xy_trace.
+# That distinction is the whole point: the previous single scalar was applied
+# to both axes, so "15" meant 15 seconds horizontally on a 12-second run and
+# the band swallowed the plot (96.8% coverage on wheel_speed_left, 100% on the
+# cycle-timing signals). See golden_trace.AxisTolerance.
+AXIS_TOLERANCE = {
+    "wheel_speed_left":  (0.20, 15.0),   # [s] [mm/s]
+    "wheel_speed_right": (0.20, 15.0),
+    "cmd_wheel_left":    (0.20, 10.0),   # [s] [mm/s]
+    "cmd_wheel_right":   (0.20, 10.0),
+    "x_t":               (0.20, 15.0),   # [s] [mm]
+    "y_t":               (0.20, 15.0),
+    "heading_t":         (0.20, 0.06),   # [s] [rad]
+    "cycle_period_t":    (0.20, 5.0),    # [s] [ms]
+    "cycle_busy_t":      (0.20, 5.0),
+    "xy_trace":          (15.0, 15.0),   # [mm] [mm] -- same unit both axes
+}
+
+#: Fallback when a signal is not in the table above. Kept so an unlisted signal
+#: still renders, but it is a smell: add the signal to both tables instead.
+DEFAULT_AXIS_TOLERANCE = (0.20, 10.0)
+
+
+def assert_within_domain(name: str, x, y) -> "list[str]":
+    """Report any sample outside the signal's canonical domain.
+
+    Silent cropping is the failure this prevents: matplotlib happily draws a
+    clipped trace, and because the acceptance band is only generated where the
+    trace is, a truncated plot produces a band that simply stops -- so the gate
+    quietly ceases to cover the tail of the run. Measured 2026-08-01: the square
+    tour (33 s) against a 15 s domain lost more than half its samples this way,
+    and every plot still looked plausible.
+
+    Returns a list of human-readable complaints; empty means fully in-domain.
+    """
+    import numpy as np
+
+    dom = CANONICAL_DOMAIN.get(name)
+    if dom is None:
+        return [f"{name}: no canonical domain"]
+    x_lo, x_hi, y_lo, y_hi = dom
+    x = np.asarray(x, dtype=float)
+    y = np.asarray(y, dtype=float)
+    if x.size == 0:
+        return []
+    out = []
+    n_x = int(np.count_nonzero((x < x_lo) | (x > x_hi)))
+    n_y = int(np.count_nonzero((y < y_lo) | (y > y_hi)))
+    if n_x:
+        out.append(f"{name}: {n_x}/{x.size} samples outside x domain "
+                   f"[{x_lo:g}, {x_hi:g}] (data {x.min():g}..{x.max():g})")
+    if n_y:
+        out.append(f"{name}: {n_y}/{y.size} samples outside y domain "
+                   f"[{y_lo:g}, {y_hi:g}] (data {y.min():g}..{y.max():g})")
+    return out

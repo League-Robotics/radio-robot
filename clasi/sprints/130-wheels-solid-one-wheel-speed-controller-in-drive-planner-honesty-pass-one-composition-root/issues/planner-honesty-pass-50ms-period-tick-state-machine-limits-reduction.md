@@ -1,5 +1,11 @@
 ---
-status: pending
+status: in-progress
+sprint: '130'
+tickets:
+- 130-007
+- 130-008
+- 130-009
+- 130-011
 ---
 
 # Planner honesty pass: 50 ms period everywhere, tick() as a real state machine, PlannerLimits 34 → 23

@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '130'
+tickets:
+- 130-012
 ---
 
 # Measure the actuation floor and replace the provisional TERMINATION_TOLERANCE

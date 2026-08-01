@@ -1,6 +1,9 @@
 ---
-status: pending
+status: in-progress
 priority: high
+sprint: '130'
+tickets:
+- 130-001
 ---
 
 # duty_sweep.py found the plant saturates well below its historical ceiling, and two-wheel-simultaneous is worse than one-wheel-alone -- likely a power-delivery limit, not a calibration error

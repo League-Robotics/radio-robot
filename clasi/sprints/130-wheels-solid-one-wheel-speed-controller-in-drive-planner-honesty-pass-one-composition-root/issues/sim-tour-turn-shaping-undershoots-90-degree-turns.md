@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '130'
+tickets:
+- 130-010
 ---
 
 # Sim tour turns undershoot 90° deterministically (−10.8° first turn, −20.8° after)

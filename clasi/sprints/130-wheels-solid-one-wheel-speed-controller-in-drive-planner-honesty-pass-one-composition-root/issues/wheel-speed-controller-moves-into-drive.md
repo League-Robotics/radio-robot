@@ -1,5 +1,12 @@
 ---
-status: pending
+status: in-progress
+sprint: '130'
+tickets:
+- 130-001
+- 130-003
+- 130-004
+- 130-005
+- 130-006
 ---
 
 # Move the wheel-speed controller into Drive: conversion + slow trim + fast PID

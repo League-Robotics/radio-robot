@@ -7,7 +7,7 @@ per-signal golden dirs at goldens/<tier>/<tour>/<signal>.{csv,json,png}.
 - bless:   promote a dataset's signals to goldens (manual, stakeholder-
            triggered -- nothing self-blesses). --runs feeds
            suggest_tolerance() from no-change repeat runs; without them the
-           per-signal DEFAULT_TOLERANCE seeds the band.
+           per-signal AXIS_TOLERANCE seeds the band.
 - compare: score a dataset against the blessed goldens; nonzero exit on
            any signal outside tolerance. The verdict is analytic
            (max/rms deviation), never pixels (golden_trace's own design).
@@ -31,7 +31,9 @@ sys.path.insert(0, str(_REPO / "src" / "tests" / "tools"))
 
 import golden_trace as gt  # noqa: E402
 from signals import (  # noqa: E402
-    DEFAULT_TOLERANCE, dataset_meta, extract_signals, load_dataset,
+    AXIS_TOLERANCE, CANONICAL_DOMAIN, DEFAULT_AXIS_TOLERANCE,
+    assert_within_domain,
+    dataset_meta, extract_signals, load_dataset,
 )
 
 
@@ -44,19 +46,28 @@ def _track_width(meta: dict) -> float:  # [mm]
         return 128.0  # ship default; recorded in the golden meta either way
 
 
-def _spec_for(x: np.ndarray, y: np.ndarray) -> gt.PlotSpec:
-    """Pinned axes from the blessing run's own extent + 15% margin,
-    rounded outward -- stored with the golden, reused verbatim by every
-    later compare (never autoscaled again)."""
+def _spec_for(name: str) -> gt.PlotSpec:
+    """The signal's CANONICAL, pinned axes -- never the run's own extent.
 
-    def bounds(v: np.ndarray) -> tuple[float, float]:
-        lo, hi = float(np.min(v)), float(np.max(v))
-        span = max(hi - lo, 1e-6)
-        return lo - 0.15 * span, hi + 0.15 * span
-
-    x_lo, x_hi = bounds(x)
-    y_lo, y_hi = bounds(y)
+    Deriving limits from the blessing run (the previous behaviour) meant every
+    golden carried a different coordinate system, so two runs of different
+    length rendered to similar-looking images at different scales. A pinned
+    domain makes the same data land on the same pixels, every run, forever.
+    """
+    dom = CANONICAL_DOMAIN.get(name)
+    if dom is None:
+        raise KeyError(
+            f"no canonical plot domain for signal {name!r} -- add it to "
+            f"CANONICAL_DOMAIN and AXIS_TOLERANCE in signals.py. Refusing to "
+            f"autoscale: an unpinned axis silently makes runs incomparable.")
+    x_lo, x_hi, y_lo, y_hi = dom
     return gt.PlotSpec(x_low=x_lo, x_high=x_hi, y_low=y_lo, y_high=y_hi)
+
+
+def _tolerance_for(name: str) -> gt.AxisTolerance:
+    """Per-axis acceptance tolerance for one signal."""
+    x_tol, y_tol = AXIS_TOLERANCE.get(name, DEFAULT_AXIS_TOLERANCE)
+    return gt.AxisTolerance(x_tol, y_tol)
 
 
 def _signals_from(dataset: str) -> tuple[dict, dict]:
@@ -76,8 +87,10 @@ def cmd_plot(args: argparse.Namespace) -> int:
     out = Path(args.out) / (Path(args.dataset).stem + "_plots")
     out.mkdir(parents=True, exist_ok=True)
     for name, (x, y) in sigs.items():
-        tol = DEFAULT_TOLERANCE.get(name, 10.0)
-        gt.render_png(out / f"{name}.png", x, y, _spec_for(x, y), tol, name)
+        for complaint in assert_within_domain(name, x, y):
+            print(f"WARNING {complaint}", file=sys.stderr)
+        gt.render_png(out / f"{name}.png", x, y, _spec_for(name),
+                      _tolerance_for(name), name)
     print(f"plot: {len(sigs)} signals -> {out}")
     return 0
 
@@ -87,13 +100,14 @@ def cmd_bless(args: argparse.Namespace) -> int:
     gdir = _golden_dir(args.goldens, meta)
     spread_runs = [_signals_from(r)[1] for r in (args.runs or [])]
     for name, (x, y) in sigs.items():
-        spec = _spec_for(x, y)
+        spec = _spec_for(name)
         runs = [(rx, ry) for run in spread_runs
                 for rname, (rx, ry) in run.items() if rname == name]
         if runs:
-            tol = gt.suggest_tolerance(runs, x, y)
+            # Repeat runs set the SIZE; the table sets the ellipse's SHAPE.
+            tol = gt.suggest_axis_tolerance(runs, x, y, _tolerance_for(name))
         else:
-            tol = DEFAULT_TOLERANCE.get(name, 10.0)
+            tol = _tolerance_for(name)
         gt.save_golden(gdir, name, x, y, spec, tol)
         gt.render_png(gdir / f"{name}.png", x, y, spec, tol, name)
     with open(args.dataset, "rb") as f_in, \
@@ -115,6 +129,15 @@ def cmd_compare(args: argparse.Namespace) -> int:
     names = sorted(p.stem for p in gdir.glob("*.csv"))
     for name in names:
         gx, gy, spec, tol = gt.load_golden(gdir, name)
+        if name in sigs:
+            # A clipped run cannot be scored: the band stops where the trace
+            # leaves the domain, so the tail would pass by never being drawn.
+            clipped = assert_within_domain(name, *sigs[name])
+            if clipped:
+                for complaint in clipped:
+                    print(f"FAIL {complaint}")
+                failures += 1
+                continue
         if name not in sigs:
             print(f"FAIL {name}: signal missing from this run")
             failures += 1

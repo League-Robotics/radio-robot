@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '130'
+tickets:
+- 130-002
 ---
 
 # Unify sim and robot composition roots to eliminate all sim/hardware firmware differences

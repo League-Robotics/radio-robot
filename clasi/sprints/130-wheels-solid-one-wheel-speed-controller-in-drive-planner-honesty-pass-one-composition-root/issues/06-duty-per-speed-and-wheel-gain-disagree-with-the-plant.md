@@ -1,6 +1,10 @@
 ---
-status: pending
+status: in-progress
 priority: high
+sprint: '130'
+tickets:
+- 130-001
+- 130-006
 ---
 
 # The robot runs at ~35% of commanded speed: three plant-gain constants that disagree
