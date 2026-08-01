@@ -182,4 +182,49 @@ DriveBootConfig defaultDriveConfig() {
     return cfg;
 }
 
+PlannerBootConfig defaultPlannerLimits() {
+    // 129-009 (config consolidation) -- fail-closed baked from the robot
+    // JSON's `planner` block (data/robots/robot_config.schema.json). These
+    // were HARD-CODED C++ literals in main.cpp before this ticket -- see
+    // PlannerBootConfig's own doc comment (src/firm/config/boot_config.h)
+    // for why, and for the velKff/velKaff/trimKaff derivation this
+    // function performs from the JSON's plant_gain/plant_tau primitives.
+    PlannerBootConfig cfg;
+    cfg.vMax = 400.0f;              // [mm/s]
+    cfg.aMax = 300.0f;              // [mm/s^2]
+    cfg.aDecel = 250.0f;          // [mm/s^2]
+    cfg.omegaMax = 3.0f;      // [rad/s]
+    cfg.alphaMax = 6.0f;      // [rad/s^2]
+    cfg.alphaDecel = 5.0f;  // [rad/s^2]
+    cfg.jerkMax = 1500.0f;        // [mm/s^3]
+    cfg.yawJerkMax = 30.0f;  // [rad/s^3]
+
+    cfg.controlPeriod = 47.0f;    // [ms]
+    cfg.actuationDelay = 47.0f;  // [ms]
+
+    cfg.requireSettle = false;
+    cfg.settleRestVelocity = 10.0f;    // [mm/s]
+    cfg.settleRestOmega = 0.16f;          // [rad/s]
+    cfg.settleWindow = 2500.0f;                // [ms]
+    cfg.settleEpsilonLinear = 4.0f;  // [mm]
+    cfg.settleEpsilonAngular = 0.035f;  // [rad]
+    cfg.headingHoldGain = 2.0f;  // [1/s]
+
+    cfg.velKff = 0.000729927f;    // [duty/(mm/s)] = 1/plant_gain
+    cfg.velKp = 0.0009f;      // [duty/(mm/s)]
+    cfg.velKi = 0.004f;      // [duty/(mm/s)/s]
+    cfg.velIMax = 0.25f;  // [duty]
+    cfg.velKaff = 0.0001678832f;  // [duty/(mm/s^2)] = plant_tau/plant_gain
+    cfg.velIAccelGate = 50.0f;  // [mm/s^2]
+    cfg.dutyFloor = 0.18f;          // [-1,1]
+
+    cfg.trimKp = 0.15f;        // [1]
+    cfg.trimKi = 0.4f;        // [1/s]
+    cfg.trimIMax = 40.0f;    // [mm/s]
+    cfg.trimKaff = 0.115f;    // [s] = plant_tau/2
+    cfg.trimMax = 80.0f;      // [mm/s]
+    cfg.decelPlanFraction = 0.4f;  // [1]
+    return cfg;
+}
+
 }  // namespace Config

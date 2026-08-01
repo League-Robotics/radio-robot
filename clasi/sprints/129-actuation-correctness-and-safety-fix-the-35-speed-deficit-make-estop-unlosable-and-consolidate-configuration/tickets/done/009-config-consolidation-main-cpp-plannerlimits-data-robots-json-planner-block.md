@@ -2,8 +2,9 @@
 id: 009
 title: "Config consolidation: main.cpp PlannerLimits \u2192 data/robots/*.json planner\
   \ block"
-status: open
-use-cases: [SUC-008]
+status: done
+use-cases:
+- SUC-008
 depends-on: []
 github-issue: ''
 issue:
@@ -55,14 +56,14 @@ failure already paid for once (`Config::DriveBootConfig`'s own history).
 
 ## Acceptance Criteria
 
-- [ ] `main.cpp` contains no numeric planner/tuning literal — `grep` for
+- [x] `main.cpp` contains no numeric planner/tuning literal — `grep` for
       `plannerLimits.` assignments shows only `trackWidth`/
       `velocityFilterWeight` plumbing sourced from other config.
-- [ ] Booting with a `planner`-less JSON raises the configured boot fault.
-- [ ] Booting `tovez.json` yields byte-identical `PlannerLimits` to
+- [x] Booting with a `planner`-less JSON raises the configured boot fault.
+- [x] Booting `tovez.json` yields byte-identical `PlannerLimits` to
       today's literals — a host-side test comparing loader output to the
       recorded values.
-- [ ] Full clean build + `motion_tests` + planner `ctest` suite +
+- [x] Full clean build + `motion_tests` + planner `ctest` suite +
       firmware pytest tiers pass; one square-tour sim run matches
       pre-change closure numbers (no behavior change from the move
       itself).

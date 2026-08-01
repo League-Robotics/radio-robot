@@ -228,4 +228,88 @@ struct DriveBootConfig {
 // above and gen_boot_config.py's drive_config_for_config().
 DriveBootConfig defaultDriveConfig();
 
+// PlannerBootConfig (129-009, config consolidation) -- Motion::Planner's
+// full tuning surface (profile ceilings, loop timing, settle/rest,
+// duty-stage PID, trim loop), baked from the active robot JSON's new
+// `planner` block (data/robots/robot_config.schema.json). Before this
+// ticket every one of these values was a C++ literal assembled directly
+// in main.cpp -- this struct/loader moves them to the same config-as-truth
+// path every other per-robot calibration already uses (sprint 114).
+//
+// Field-for-field mirror of the TUNABLE subset of Motion::PlannerLimits
+// (src/motion/planner/planner_types.h) -- NOT the whole struct: trackWidth
+// and velocityFilterWeight stay sourced from DrivetrainConfig (unchanged),
+// and otosStaleness/headingOtosWeight are untouched by this ticket (never
+// set by main.cpp before this move, so they keep PlannerLimits' own
+// struct defaults). Declared independently here, rather than reusing
+// Motion::PlannerLimits directly, because config/ may depend only on
+// messages/ (docs/design/design.md §5's dependency diagram), never on
+// src/motion -- the same reasoning EstimatorBootConfig's own doc comment
+// above gives for not reusing App::StateEstimator::FusionWeights directly.
+// main.cpp (the one place both types are visible) converts this struct
+// into a Motion::PlannerLimits, the same toDeviceMotorConfig() pattern
+// already uses for msg::MotorConfig -> Devices::MotorConfig.
+//
+// velKff/velKaff/trimKaff are DERIVED, not stored raw in the robot JSON:
+// the JSON carries the measured plant primitives (`planner.plant_gain`
+// [mm/s per duty], `planner.plant_tau` [s]) and gen_boot_config.py's
+// planner_config_for_config() computes velKff = 1/plant_gain,
+// velKaff = plant_tau/plant_gain, trimKaff = plant_tau/2 once, in the
+// generator -- "store the measurement, derive the gain, so the derivation
+// stays in one reviewed place" (ticket 03's own instruction).
+//
+// REQUIRED, same fail-closed posture as every other struct here: a robot
+// JSON missing the `planner` block (or any of its keys) fails codegen
+// loudly (MissingRobotConfigKeyError) -- a robot must never boot with
+// another robot's plant measurements (sprint 114's own convention,
+// `Config::DriveBootConfig`'s own history is exactly this failure mode).
+struct PlannerBootConfig {
+  // Profile ceilings.
+  float vMax = 0.0f;        // [mm/s] linear velocity ceiling
+  float aMax = 0.0f;        // [mm/s^2] linear accel-ramp ceiling
+  float aDecel = 0.0f;      // [mm/s^2] linear decel-taper ceiling
+  float omegaMax = 0.0f;    // [rad/s] angular velocity ceiling
+  float alphaMax = 0.0f;    // [rad/s^2] angular accel-ramp ceiling
+  float alphaDecel = 0.0f;  // [rad/s^2] angular decel-taper ceiling
+  float jerkMax = 0.0f;     // [mm/s^3] linear jerk ceiling
+  float yawJerkMax = 0.0f;  // [rad/s^3] angular jerk ceiling
+
+  // Loop timing -- the MEASURED delivered cycle period, not a nominal.
+  float controlPeriod = 0.0f;   // [ms]
+  float actuationDelay = 0.0f;  // [ms] command-staged-to-wheels latency
+
+  // Settle/rest and heading hold.
+  bool requireSettle = false;
+  float settleRestVelocity = 0.0f;    // [mm/s]
+  float settleRestOmega = 0.0f;       // [rad/s]
+  float settleWindow = 0.0f;          // [ms] max extra wait past profile-complete
+  float settleEpsilonLinear = 0.0f;   // [mm]
+  float settleEpsilonAngular = 0.0f;  // [rad]
+  float headingHoldGain = 0.0f;       // [1/s] rad/s of correction per rad of error
+
+  // Duty-stage PID (Motion::Planner's M4 stage). velKff/velKaff derived
+  // from planner.plant_gain/planner.plant_tau -- see this struct's own
+  // doc comment above.
+  float velKff = 0.0f;          // [duty/(mm/s)] feedforward slope, = 1/plant_gain
+  float velKp = 0.0f;           // [duty/(mm/s)] proportional
+  float velKi = 0.0f;           // [duty/(mm/s)/s] integral rate
+  float velIMax = 0.0f;         // [duty] integrator clamp
+  float velKaff = 0.0f;         // [duty/(mm/s^2)] accel feedforward, = plant_tau/plant_gain
+  float velIAccelGate = 0.0f;   // [mm/s^2] integral ramp gate
+  float dutyFloor = 0.0f;       // [-1,1] stiction floor
+
+  // Velocity-domain trim (wheel_trim.h). trimKaff derived from
+  // planner.plant_tau -- see this struct's own doc comment above.
+  float trimKp = 0.0f;             // [1] dimensionless: mm/s of trim per mm/s of error
+  float trimKi = 0.0f;             // [1/s]
+  float trimIMax = 0.0f;           // [mm/s] integrator clamp
+  float trimKaff = 0.0f;           // [s] accel feedforward, = plant_tau/2
+  float trimMax = 0.0f;            // [mm/s] total trim authority
+  float decelPlanFraction = 0.0f;  // [1] fraction of decel ceiling to plan brake-start against
+};
+
+// The boot PlannerBootConfig default -- see PlannerBootConfig's own doc
+// comment above and gen_boot_config.py's planner_config_for_config().
+PlannerBootConfig defaultPlannerLimits();
+
 }  // namespace Config

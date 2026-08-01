@@ -35,6 +35,7 @@
     "identity.*": "host-side robot identity metadata (name/uid/hardware model/drivetrain type); never a wire config verb",
     "mm_per_tick": "derived host-side after load from wheel geometry; never stored or pushed",
     "peripherals.laser_port": "host-side port-wiring description; no wire config verb",
+    "planner.*": "129-009 (config consolidation): Motion::PlannerLimits' full tuning surface, moved out of a main.cpp C++ literal block into the robot JSON's `planner` section. Tier-2 boot-only (gen_boot_config.py's new planner_config_for_config() -> Config::PlannerBootConfig -> main.cpp's toPlannerLimits() -> Motion::Planner construction); no live SET/Patch key of any kind exists for this block -- same boot-bake-only posture as control.duty_per_speed_left/right and OtosBootConfig/ShaperBootConfig above, not a gap this ticket introduces.",
     "schema_version": "per-file JSON schema version marker; not a firmware config value",
     "vision.*": "host-side camera/AprilTag geometry, consumed entirely host-side by the vision/goto stack; never pushed to firmware",
     "wheels.*": "host-side wheel geometry used to derive mm_per_tick; not a Patch field itself",

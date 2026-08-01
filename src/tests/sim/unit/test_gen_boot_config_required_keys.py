@@ -53,6 +53,13 @@ config"): ``estimator.weight_heading_otos``/``weight_omega_otos``/
 source-side fallback, mirroring `App::StateEstimator`'s own fail-closed
 boot-config precedent.
 
+ADDED (129-009, config consolidation): all 29 ``planner.*`` keys join
+``_REQUIRED_KEY_PATHS`` below the same way -- ``gen_boot_config.py``'s new
+``planner_config_for_config()`` reads every one via ``_require()``, no
+source-side fallback, same fail-closed posture as every other field this
+ticket's own acceptance criteria call for ("Booting with a `planner`-less
+JSON raises the configured boot fault").
+
 REMOVED (118 ticket 004, land-at-zero-completion-delete-stop-lead.md): a
 former fourth ``estimator.*`` key -- a boot-time anticipation-lead
 constant -- briefly joined this list (turn-prediction campaign) and is
@@ -138,6 +145,35 @@ _REQUIRED_KEY_PATHS = [
     ("estimator", "weight_heading_otos"),
     ("estimator", "weight_omega_otos"),
     ("estimator", "staleness_ms"),
+    ("planner", "v_max"),
+    ("planner", "a_max"),
+    ("planner", "a_decel"),
+    ("planner", "omega_max"),
+    ("planner", "alpha_max"),
+    ("planner", "alpha_decel"),
+    ("planner", "jerk_max"),
+    ("planner", "yaw_jerk_max"),
+    ("planner", "control_period"),
+    ("planner", "actuation_delay"),
+    ("planner", "require_settle"),
+    ("planner", "settle_rest_velocity"),
+    ("planner", "settle_rest_omega"),
+    ("planner", "settle_window"),
+    ("planner", "settle_epsilon_linear"),
+    ("planner", "settle_epsilon_angular"),
+    ("planner", "heading_hold_gain"),
+    ("planner", "plant_gain"),
+    ("planner", "plant_tau"),
+    ("planner", "vel_kp"),
+    ("planner", "vel_ki"),
+    ("planner", "vel_i_max"),
+    ("planner", "vel_i_accel_gate"),
+    ("planner", "duty_floor"),
+    ("planner", "trim_kp"),
+    ("planner", "trim_ki"),
+    ("planner", "trim_i_max"),
+    ("planner", "trim_max"),
+    ("planner", "decel_plan_fraction"),
 ]
 
 

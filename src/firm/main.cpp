@@ -66,6 +66,57 @@ Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   return cfg;
 }
 
+// Converts the boot config's fail-closed Config::PlannerBootConfig (baked
+// from the active robot JSON's `planner` block, 129-009 config
+// consolidation) into the Motion::PlannerLimits Motion::Planner's
+// constructor needs. Lives here for the same reason toDeviceMotorConfig()
+// above does -- main.cpp is the one place both types are reachable
+// (config/ may depend only on messages/, never on src/motion; see
+// PlannerBootConfig's own doc comment, config/boot_config.h).
+//
+// Deliberately leaves trackWidth/velocityFilterWeight UNSET on the
+// returned struct -- both are sourced from DrivetrainConfig at the call
+// site below, unchanged from before this ticket moved every other field
+// out of a main.cpp literal block and into config.
+Motion::PlannerLimits toPlannerLimits(const Config::PlannerBootConfig& src) {
+  Motion::PlannerLimits out;
+  out.vMax = src.vMax;
+  out.aMax = src.aMax;
+  out.aDecel = src.aDecel;
+  out.omegaMax = src.omegaMax;
+  out.alphaMax = src.alphaMax;
+  out.alphaDecel = src.alphaDecel;
+  out.jerkMax = src.jerkMax;
+  out.yawJerkMax = src.yawJerkMax;
+
+  out.controlPeriod = src.controlPeriod;
+  out.actuationDelay = src.actuationDelay;
+
+  out.requireSettle = src.requireSettle;
+  out.settleRestVelocity = src.settleRestVelocity;
+  out.settleRestOmega = src.settleRestOmega;
+  out.settleWindow = src.settleWindow;
+  out.settleEpsilonLinear = src.settleEpsilonLinear;
+  out.settleEpsilonAngular = src.settleEpsilonAngular;
+  out.headingHoldGain = src.headingHoldGain;
+
+  out.velKff = src.velKff;
+  out.velKp = src.velKp;
+  out.velKi = src.velKi;
+  out.velIMax = src.velIMax;
+  out.velKaff = src.velKaff;
+  out.velIAccelGate = src.velIAccelGate;
+  out.dutyFloor = src.dutyFloor;
+
+  out.trimKp = src.trimKp;
+  out.trimKi = src.trimKi;
+  out.trimIMax = src.trimIMax;
+  out.trimKaff = src.trimKaff;
+  out.trimMax = src.trimMax;
+  out.decelPlanFraction = src.decelPlanFraction;
+  return out;
+}
+
 // toMotionGains -- DELETED (command-ingestion-...-two-stops.md §4). It fed
 // App::Drive's interim per-wheel closed-loop velocity-PID pair, which is
 // gone (128-015 deleted that class outright, zero instantiations -- see
@@ -301,124 +352,41 @@ int main() {
 
   // Planner integration (2026-07-26): the on-robot Motion::Planner is the
   // loop's motion decider, writing Types::RobotState::Wheel::cmdVelocity
-  // directly (robot_state.h's own field doc). Limits assembled from
-  // the SAME boot-config sources the old stack used: shaper keys ->
-  // profile ceilings, vel_gains -> the planner's own duty-stage PID,
-  // vel_filt_alpha -> the planner's velocity-filter weight. controlPeriod
-  // is the loop's own kCycle; actuationDelay is the one-cycle staging
-  // latency (duty staged at the NEXT cycle top -- the exact shape the
-  // planner's duty scenario tier validates).
-  // Planner tuning: the PLANT-VALIDATED set from the measured-constants
-  // reference tour (motion checkout, square_tour_sim.py tourLimits() --
-  // plant ID 2026-07-26: gain ~1370 mm/s per duty, tau ~230 ms), NOT the
-  // boot JSON's vel_gains/shaper block: those numbers were bench-tuned
-  // for the DELETED NezhaMotor MotorVelocityPid (the JSON's own
-  // _vel_gains_domain note) and are wrong for this loop -- deployed as-is
+  // directly (robot_state.h's own field doc).
+  //
+  // 129-009 (config consolidation): PlannerLimits used to be assembled
+  // here as a ~120-line C++ literal block -- the plant-validated tuning
+  // from the measured-constants reference tour (motion checkout,
+  // square_tour_sim.py tourLimits()), deliberately NOT the boot JSON's
+  // old-loop control.vel_gains/shaper block: those numbers were bench-tuned
+  // for the DELETED NezhaMotor MotorVelocityPid and the also-deleted
+  // Motion::VelocityShaper, and deployed as-is against THIS controller
   // (kp 0.0016, aMax 800, jMax 5000) they limit-cycled the real wheels at
-  // ~2-3 Hz across the whole first on-robot tour (2026-07-27 plot). A
-  // planner-domain config surface can supersede these constants later;
-  // until then the JSON's old-loop gains must not reach this controller.
-  Motion::PlannerLimits plannerLimits;
-  plannerLimits.vMax = 400.0f;   // [mm/s]
-  plannerLimits.aMax = 300.0f;   // [mm/s^2]
-  plannerLimits.aDecel = 250.0f; // [mm/s^2]
-  plannerLimits.omegaMax = 3.0f;     // [rad/s]
-  plannerLimits.alphaMax = 6.0f;     // [rad/s^2]
-  plannerLimits.alphaDecel = 5.0f;   // [rad/s^2]
-  plannerLimits.jerkMax = 1500.0f;   // [mm/s^3] aMax reached in ~0.2 s
-  plannerLimits.yawJerkMax = 30.0f;  // [rad/s^3] alphaMax reached in ~0.2 s
+  // ~2-3 Hz across the whole first on-robot tour (2026-07-27 plot). That
+  // literal block now lives in the active robot JSON's own `planner`
+  // section (data/robots/robot_config.schema.json) and is baked
+  // fail-closed via Config::defaultPlannerLimits(), mirroring every other
+  // per-robot boot default constructed below -- same values, new home, no
+  // behavior change. Full measurement provenance (plant ID dates, sweep
+  // results, the limit-cycle warning) lives in that JSON's own
+  // planner._domain_note/_timing_note/_settle_note/_duty_stage_note/
+  // _trim_note, not lost with the literal block.
+  //
+  // trackWidth/velocityFilterWeight are the two PlannerLimits fields NOT
+  // sourced from the `planner` block -- they come from DrivetrainConfig,
+  // unchanged from before this ticket (trackWidth is the scrub-corrected
+  // kEffectiveTrack computed above; velocityFilterWeight mirrors the same
+  // EMA weight the old stack used, vel_filt_alpha, with the same >0.05
+  // sanity floor).
+  Motion::PlannerLimits plannerLimits = toPlannerLimits(Config::defaultPlannerLimits());
   plannerLimits.trackWidth = kEffectiveTrack;
-  // MEASURED loop period, not the kCycle nominal: the schedule's real
-  // delivered cycle is 46-48 ms on the bench (tlm cycle-delta capture,
-  // 2026-07-27, after the 1 ms scheduler tick + overrun-yield fixes) --
-  // the vendor bus clearances outside the paced windows add ~7 ms the
-  // nominal does not include. The planner's discrete math (accel steps,
-  // braking sums, ramp tick counts) must use the period the loop actually
-  // delivers; telemetry cycle_period re-measures this on every frame if
-  // the schedule ever changes.
-  plannerLimits.controlPeriod = 47.0f;   // [ms]
-  plannerLimits.actuationDelay = 47.0f;  // [ms]
   plannerLimits.velocityFilterWeight =
       drivetrainConfig.vel_filt_alpha > 0.05f ? drivetrainConfig.vel_filt_alpha
                                               : 1.0f;
-  // Settle-confirm OFF (stakeholder 2026-07-27): the creep/breakaway-kick
-  // landing machinery pulsed the wheels at ~0.18 duty against gearbox
-  // stiction after every move -- functional but unacceptable sawtooth.
-  // Landing residual (small at the measured 47 ms period) is instead
-  // absorbed by the NEXT chained move via the cumulative baseline ledger,
-  // at full speed where the plant is linear and no stiction compensation
-  // is needed. The last move of a chain keeps its own small residual.
-  plannerLimits.requireSettle = false;
-  // Rest floors sized to the measured hardware encoder-velocity noise
-  // (plant ID 2026-07-26: ~+-7 mm/s at rest) -- the rest-damping stage
-  // outputs exactly zero duty below the floor, so it must clear the
-  // noise band or the wheels twitch at rest forever.
-  plannerLimits.settleRestVelocity = 10.0f;  // [mm/s]
-  plannerLimits.settleRestOmega = 0.16f;     // [rad/s] 2*floor/trackWidth
-  plannerLimits.settleWindow = 2500.0f;  // [ms]
-  plannerLimits.headingHoldGain = 2.0f;  // [1/s] sim-validated
-  {
-    // Measured-plant duty-stage gains (square_tour_sim.py tourLimits()):
-    // kff = 1/gain, kaff = tau/gain -- physics-derived, per-robot only
-    // through the plant measurement, not the JSON's old-loop vel_gains.
-    constexpr float kPlantGain = 1370.0f;  // [mm/s per duty]
-    constexpr float kPlantTau = 0.23f;     // [s]
-    plannerLimits.velKff = 1.0f / kPlantGain;
-    plannerLimits.velKp = 0.0009f;
-    plannerLimits.velKi = 0.004f;
-    plannerLimits.velIMax = 0.25f;
-    plannerLimits.velKaff = kPlantTau / kPlantGain;
-    plannerLimits.velIAccelGate = 50.0f;  // [mm/s^2]
-    // Stiction floor: must clear the gearbox BREAKAWAY duty, not merely
-    // MotorArmor's write-suppression threshold (output_deadband 0.03 --
-    // a whine gate, not a friction model). 0.05 is estimated from the
-    // measured integral wind-up time to first motion during the stalled
-    // settle creep (2026-07-27 single-turn trace); replace with a proper
-    // plant-ID breakaway measurement when one exists.
-    plannerLimits.dutyFloor = 0.18f;
-    // Arrival tolerances sized to the stiction-limited creep resolution
-    // (one dutyFloor pulse per period ~= 2-4 deg of heading): tighter is
-    // unreachable and just burns the settle window at every landing.
-    plannerLimits.settleEpsilonLinear = 4.0f;      // [mm]
-    plannerLimits.settleEpsilonAngular = 0.035f;   // [rad] ~2 deg --
-    // the demonstrated one-sided-creep resolution (single-turn probe
-    // 2026-07-27 landed +1.76 deg; the right wheel does not reverse
-    // under the breakaway kick, so fine correction rides the left wheel)
-
-    // VELOCITY-DOMAIN TRIM (wheel_trim.h) -- the closed loop that actually
-    // reaches the wheels. The loop's one actuation contract is a wheel
-    // VELOCITY (RobotState::Wheel::cmdVelocity), which App::Drive converts
-    // through its measured per-wheel per-direction map. The duty-stage
-    // gains above configure Planner::stageDuty() -- PARKED as of 128-015:
-    // Planner::tick() no longer calls it at all (it used to run every
-    // cycle and its output was DISCARDED here regardless, since nothing on
-    // this robot ever read commandedDutyLeft/Right()) -- see
-    // src/motion/DESIGN.md's "wheel control generations" note.
-    //
-    // COMMISSIONING VALUES, to be raised on the stand rather than trusted:
-    //   trimKp is DIMENSIONLESS (mm/s of trim per mm/s of error). The sim
-    //     tour ran 0.25 against a +-4.8% wheel mismatch; this robot's
-    //     residual after the 2026-07-27 calibration is ~2%, and measured
-    //     wheel velocity is a raw per-tick difference quotient, so start
-    //     at 0.15. An over-gained loop on THIS hardware limit-cycled at
-    //     2-3 Hz (see the tuning note above) -- the failure to watch for.
-    //   trimKaff is the plant time constant [s]. FULL tau measured
-    //     UNSTABLE in sim (closure 696 mm vs 16 mm at half) -- half it is.
-    plannerLimits.trimKp = 0.15f;            // [1]
-    plannerLimits.trimKi = 0.4f;             // [1/s]
-    plannerLimits.trimIMax = 40.0f;          // [mm/s]
-    plannerLimits.trimKaff = kPlantTau / 2;  // [s]
-    plannerLimits.trimMax = 80.0f;           // [mm/s]
-    // Plan the brake START at 40% of the decel ceiling, keeping the rest
-    // in reserve so the plant can TRACK the ramp down and arrives at each
-    // boundary already slow instead of coasting past (tau ~230 ms).
-    // Swept 0.0-0.6 in sim: 0.4 gave the best closure (16.0 vs 23.3 mm).
-    plannerLimits.decelPlanFraction = 0.4f;  // [1]
-  }
   static Motion::Planner planner(plannerLimits);
   // Mark shaping CONFIGURED through the same applyShaperLimits() entry the
   // wire push uses, with the validated ceilings above (NOT the boot JSON's
-  // old-shaper block -- see the tuning comment) so
+  // old-shaper block -- see the doc comment above) so
   // kFlagFaultShapingDisabled (119-001) stays quiet.
   planner.applyShaperLimits(plannerLimits.aMax, plannerLimits.aDecel,
                             plannerLimits.alphaMax, plannerLimits.alphaDecel,
