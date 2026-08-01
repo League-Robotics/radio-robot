@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # TestGUI avatar should follow the Camera/Truth line, not the encoder line

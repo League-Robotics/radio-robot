@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Orphaned "+" keepalive machinery: `Transport.arm_keepalive()`/`disarm_keepalive()`, `SerialConnection.start_keepalive()`/`stop_keepalive()`
