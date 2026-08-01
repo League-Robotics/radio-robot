@@ -1,13 +1,16 @@
 """src/tests/testgui/test_smoke.py — Headless end-to-end smoke tests for the testgui package.
 
-Ported from tests_old/testgui/test_smoke.py (ticket 083-004). Everything
-this file touches (``_build_main_window()``, ``TraceModel``, ``build_canvas``,
-``commands.COMMANDS``/``build_wire_string``) is unchanged in shape by sprint
-083's transport/drive/traces reconciliation — ``Transport``'s abstract
-surface (``connect``/``disconnect``/``send``/``command``), the button
-object names (``tour_btn_tour_1``, ``stop_tour_btn``, ``goto_btn``), and the
-window title ("Robot Test GUI") all still match, so this file ports
-unchanged apart from this header.
+Ported from tests_old/testgui/test_smoke.py (ticket 083-004); the
+``build_wire_string`` coverage below was updated at 128-004 for
+``commands.COMMANDS``'s new EMPTY shape (the S/T/D/R/TURN/RT/G schema rows
+this file used to pull specs from are deleted -- see ``commands.py``'s own
+module docstring). ``build_wire_string`` itself is unchanged code, so these
+tests now build their own literal ``CommandSpec`` dicts instead of indexing
+into ``COMMANDS``. Everything else this file touches (``_build_main_window()``,
+``TraceModel``, ``build_canvas``) is unchanged in shape — ``Transport``'s
+abstract surface (``connect``/``disconnect``/``send``/``command``), the
+button object names (``tour_btn_tour_1``, ``stop_tour_btn``, ``goto_btn``),
+and the window title ("Robot Test GUI") all still match.
 
 Runs with ``QT_QPA_PLATFORM=offscreen`` (set by conftest.py).  No display
 server, no hardware, and no sim lib are required.  All external I/O is
@@ -33,9 +36,10 @@ test_robot_marker_moves
     marker's scene position differs from the origin (it was updated).
 
 test_command_rows_emit_correct_wire_strings
-    For each command row (S, T, D, R, TURN, RT, G), call ``build_wire_string``
-    with known values and a FakeTransport, and assert the emitted wire
-    string equals the expected value.
+    For each of the old command shapes (S, T, D, R, TURN, RT, G), call
+    ``build_wire_string`` against a literal spec with known values and a
+    FakeTransport, and assert the emitted wire string equals the expected
+    value.
 
 test_turn_row_converts_degrees_to_centidegrees
     Set the TURN heading field to 90 (degrees) and assert the wire string
@@ -80,6 +84,11 @@ def _make_fake_transport():
         def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
             self.sent.append(line)
             return "OK"
+
+        def halt(self) -> None:
+            # 128-003: Transport.halt() is now abstract; this file never
+            # exercises STOP/halt behavior, so a no-op satisfies the ABC.
+            pass
 
     return FakeTransport()
 
@@ -291,13 +300,76 @@ class TestRobotMarkerMoves:
 # ---------------------------------------------------------------------------
 
 
+# 128-004: COMMANDS itself is now empty (see commands.py's own module
+# docstring) -- these literal specs preserve build_wire_string()'s own test
+# coverage for the old command shapes without depending on COMMANDS
+# containing them.
+_SPECS = {
+    "S": {
+        "label": "S",
+        "params": [
+            {"name": "left", "type": int, "min": -1000, "max": 1000, "default": 200, "unit": "mm/s"},
+            {"name": "right", "type": int, "min": -1000, "max": 1000, "default": 200, "unit": "mm/s"},
+        ],
+    },
+    "T": {
+        "label": "T",
+        "params": [
+            {"name": "left", "type": int, "min": -1000, "max": 1000, "default": 200, "unit": "mm/s"},
+            {"name": "right", "type": int, "min": -1000, "max": 1000, "default": 200, "unit": "mm/s"},
+            {"name": "ms", "type": int, "min": 1, "max": 30000, "default": 1000, "unit": "ms"},
+        ],
+    },
+    "D": {
+        "label": "D",
+        "params": [
+            {"name": "left", "type": int, "min": -1000, "max": 1000, "default": 200, "unit": "mm/s"},
+            {"name": "right", "type": int, "min": -1000, "max": 1000, "default": 200, "unit": "mm/s"},
+            {"name": "mm", "type": int, "min": 1, "max": 10000, "default": 500, "unit": "mm"},
+        ],
+    },
+    "R": {
+        "label": "R",
+        "params": [
+            {"name": "speed", "type": int, "min": -1000, "max": 1000, "default": 200, "unit": "mm/s"},
+            {"name": "radius", "type": int, "min": -10000, "max": 10000, "default": 500, "unit": "mm"},
+        ],
+    },
+    "TURN": {
+        "label": "TURN",
+        "params": [
+            {"name": "heading", "type": int, "min": -3600, "max": 3600, "default": 90, "unit": "deg"},
+            {"name": "eps", "type": int, "min": 0, "max": 18, "default": 0, "unit": "deg", "optional": True},
+        ],
+        "cdeg_fields": ["heading", "eps"],
+        "optional_zero_fields": ["eps"],
+        "wrap_deg_fields": ["heading"],
+    },
+    "RT": {
+        "label": "RT",
+        "params": [
+            {"name": "deg", "type": int, "min": -1800, "max": 1800, "default": 90, "unit": "deg"},
+        ],
+        "cdeg_fields": ["deg"],
+    },
+    "G": {
+        "label": "G",
+        "params": [
+            {"name": "x", "type": int, "min": -10000, "max": 10000, "default": 0, "unit": "mm"},
+            {"name": "y", "type": int, "min": -10000, "max": 10000, "default": 0, "unit": "mm"},
+            {"name": "speed", "type": int, "min": 1, "max": 1000, "default": 200, "unit": "mm/s"},
+        ],
+    },
+}
+
+
 class TestCommandRowsEmitCorrectWireStrings:
     """build_wire_string emits the expected wire string for every command."""
 
     def _build_wire(self, label: str, values: dict) -> str:
-        from robot_radio.testgui.commands import COMMANDS, build_wire_string
+        from robot_radio.testgui.commands import build_wire_string
 
-        spec = next(s for s in COMMANDS if s["label"] == label)
+        spec = _SPECS[label]
         fake = _make_fake_transport()
         line = build_wire_string(spec, values)
         fake.command(line)
@@ -360,9 +432,9 @@ class TestTurnRowCentidegrees:
 
     def test_turn_row_converts_degrees_to_centidegrees(self):
         """Setting TURN heading spinbox to 90 deg emits '9000' on the wire."""
-        from robot_radio.testgui.commands import COMMANDS, build_wire_string
+        from robot_radio.testgui.commands import build_wire_string
 
-        turn_spec = next(s for s in COMMANDS if s["label"] == "TURN")
+        turn_spec = _SPECS["TURN"]
 
         # Set heading to 90 degrees (= 9000 cdeg on the wire).
         values = {"heading": 90, "eps": 0}

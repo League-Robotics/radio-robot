@@ -14,6 +14,7 @@ import time
 from typing import Any, Generator
 
 from robot_radio.robot.robot import Robot
+from robot_radio.robot.halt import halt_now
 from robot_radio.io.serial_conn import SerialConnection
 
 GRIPPER_OFFSET_CM = 14.0
@@ -69,11 +70,18 @@ class Cutebot(Robot):
                 # Re-send S to keep motors alive (firmware timeout is 200ms)
                 self._conn.send_fast(cmd)
         except GeneratorExit:
-            # Stop re-sending S. Send explicit X, then wait for firmware
-            # to confirm stop (SAFETY_STOP or LOG:X) before returning.
-            # This avoids closing the port while motors are still running.
+            # Stop re-sending S. halt_now() retries the halt-now command
+            # 3x and logs loudly on total failure -- swallowing the
+            # exception here is safe ONLY because halt_now() already did
+            # that logging (robot_radio.robot.halt); the old code sent
+            # "X" once and silently swallowed any failure outright, which
+            # is exactly the "halt that silently failed is indistinguishable
+            # from one that worked" defect this helper exists to close.
+            # Then wait for firmware to confirm stop (SAFETY_STOP or
+            # LOG:X) before returning -- avoids closing the port while
+            # motors are still running.
             try:
-                self._conn.send_fast("X")
+                halt_now(self)
             except Exception:
                 pass
             deadline = time.time() + 0.5
@@ -103,16 +111,16 @@ class Cutebot(Robot):
             time.sleep(0.1)
         return self.read_encoders()
 
-    def speed_for_time(self, left: int, right: int, ms: int) -> tuple[int, int]:  # [mm/s]
-        """Blocking: drive at speed for ms milliseconds. Returns final encoder (mm)."""
-        cmd = f"T{_sign(left)}{_sign(right)}{_sign(ms)}"
-        return self._send_and_wait_enc(cmd, ms + 2000)
+    def speed_for_time(self, left: int, right: int, duration: int) -> tuple[int, int]:  # [mm/s] [mm/s] [ms]
+        """Blocking: drive at speed for duration milliseconds. Returns final encoder (mm)."""
+        cmd = f"T{_sign(left)}{_sign(right)}{_sign(duration)}"
+        return self._send_and_wait_enc(cmd, duration + 2000)
 
-    def speed_for_distance(self, left: int, right: int, mm: int) -> tuple[int, int]:  # [mm/s]
+    def speed_for_distance(self, left: int, right: int, distance: int) -> tuple[int, int]:  # [mm/s] [mm/s] [mm]
         """Blocking: drive at speed until distance. Returns final encoder (mm)."""
-        cmd = f"D{_sign(left)}{_sign(right)}{_sign(mm)}"
+        cmd = f"D{_sign(left)}{_sign(right)}{_sign(distance)}"
         min_speed = max(abs(left), abs(right), 1)
-        timeout = int(mm / min_speed * 1000) + 3000
+        timeout = int(distance / min_speed * 1000) + 3000
         return self._send_and_wait_enc(cmd, min(timeout, 8000))
 
     def go_to(self, x: int, y: int,  # [mm]
@@ -177,7 +185,6 @@ class Cutebot(Robot):
         l_tenths = 0 if left is None else int(round(left * 10))
         r_tenths = 0 if right is None else int(round(right * 10))
         cmd = f"ROT{_sign(l_tenths)}{_sign(r_tenths)}{_sign(speed)}"
-        left_enc, right_enc = robot.read_encoders()
 
         return self._conn.send(cmd, read_timeout=300)
 
@@ -228,6 +235,16 @@ class Cutebot(Robot):
         return actual_l, actual_r, outcome
 
     def stop(self) -> None:
+        self._conn.send_fast("X")
+
+    def estop(self) -> None:
+        """Halt now. Cutebot's compact wire protocol has no separate
+        planned-vs-panic stop the way NezhaProtocol's stop()/estop() split
+        does -- "X" already halts immediately with no queue to preempt --
+        so this sends the exact same command as stop(). It exists as its
+        own method purely so callers (robot_radio.robot.halt.halt_now())
+        can treat every Robot polymorphically without special-casing this
+        platform."""
         self._conn.send_fast("X")
 
     def grip(self, angle: int) -> None:

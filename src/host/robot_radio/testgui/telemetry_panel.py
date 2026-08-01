@@ -43,7 +43,17 @@ from __future__ import annotations
 
 import math
 import re
+import time
 from typing import Any
+
+# [s] how long update_frame() may go uncalled before the staleness banner
+# fires -- a dead link (radio out of range, robot powered off, GUI stuck on
+# a disconnected transport) must not keep showing the last-received values
+# as if they were still fresh.
+_STALE_AFTER_S = 3.0
+# [ms] staleness-banner poll interval -- independent of frame arrival rate,
+# since the whole point is to notice frames NOT arriving.
+_STALE_POLL_INTERVAL_MS = 500
 
 # Leading transport markers on a formatted log line: a run of direction /
 # relay-prefix characters (``>`` ``<`` ``#``) and whitespace before the wire
@@ -369,6 +379,17 @@ def build_telemetry_panel(recorder: "Any" = None) -> "tuple[Any, Any]":
     title.setFont(tfont)
     grid.addWidget(title, 0, 0, 1, 3)
 
+    # Staleness banner (128-009): hidden while frames keep arriving; shown
+    # the moment they stop, so a dead link renders as an obvious warning
+    # instead of the last-received values sitting there looking fresh.
+    stale_banner = QLabel("")
+    stale_banner.setObjectName("telemetry_stale_banner")
+    stale_banner.setStyleSheet(
+        "background-color: #c62828; color: white; font-weight: bold; "
+        "padding: 2px 6px; border-radius: 3px;")
+    stale_banner.setVisible(False)
+    grid.addWidget(stale_banner, 0, 1, 1, 2, Qt.AlignmentFlag.AlignRight)
+
     # (label text, value objectName, wants-arrow, arrow objectName)
     rows = [
         ("time", "tlm_val_time", False, None),
@@ -448,9 +469,24 @@ def build_telemetry_panel(recorder: "Any" = None) -> "tuple[Any, Any]":
         def __init__(self) -> None:
             self._values = value_labels
             self._arrows = arrows
+            self._last_frame_time: float | None = None
+
+        def _check_staleness(self) -> None:
+            """Poll callback (QTimer-driven): show/hide the banner based on
+            how long it's been since the last ``update_frame()`` call."""
+            if self._last_frame_time is None:
+                return  # no frame ever received yet -- nothing to call stale
+            age = time.monotonic() - self._last_frame_time
+            if age >= _STALE_AFTER_S:
+                stale_banner.setText(f"no frames in {age:.0f}s")
+                stale_banner.setVisible(True)
+            else:
+                stale_banner.setVisible(False)
 
         def update_frame(self, frame: "Any") -> None:
             """Update every read-out from *frame* (Qt main thread only)."""
+            self._last_frame_time = time.monotonic()
+            stale_banner.setVisible(False)
             self._values["tlm_val_time"].setText(fmt_time(getattr(frame, "t", None)))
             self._values["tlm_val_seq"].setText(fmt_seq(getattr(frame, "seq", None)))
             self._values["tlm_val_enc"].setText(fmt_enc(getattr(frame, "enc", None)))
@@ -488,4 +524,9 @@ def build_telemetry_panel(recorder: "Any" = None) -> "tuple[Any, Any]":
         # directly; there is no longer a separate TelemetrySecondary-driven
         # refresh path for this panel.
 
-    return panel, _TelemetryPanelController()
+    controller = _TelemetryPanelController()
+    stale_timer = QTimer(panel)
+    stale_timer.timeout.connect(controller._check_staleness)
+    stale_timer.start(_STALE_POLL_INTERVAL_MS)
+
+    return panel, controller

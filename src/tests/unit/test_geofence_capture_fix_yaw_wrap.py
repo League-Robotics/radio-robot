@@ -7,7 +7,7 @@ just above +pi and just below -pi) has a true mean heading near +-pi, but a
 linear median of the raw values can land near 0 -- roughly 180 degrees wrong.
 
 127-003 moved `Geofence` into `robot_radio.field.geofence` and fixed this in
-transit to use the circular mean `testkit/camera.read_camera_pose` already
+transit to use the circular mean `testgui/transport.read_camera_pose` already
 implements: `atan2(mean(sin(yaw)), mean(cos(yaw)))`. x/y keep their original
 per-axis median (unchanged).
 

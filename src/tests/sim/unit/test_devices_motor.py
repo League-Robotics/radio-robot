@@ -13,9 +13,9 @@ assert it exits 0.
 
 125-003: ``devices/velocity_pid.cpp`` is no longer compiled into this
 harness — ``Devices::NezhaMotor``'s embedded velocity PID was deleted
-outright (relocated to ``Motion::WheelVelocityPid``,
-``src/motion/wheel_velocity_pid.cpp`` — see ``app_drive_harness.cpp``'s own
-header for the harness that now exercises it).
+outright (relocated to a motion-local wheel-velocity PID class, itself
+deleted outright by 128-015 -- App::Drive holds no controller of its own;
+see ``src/motion/DESIGN.md``'s "wheel control generations" note).
 
 Migrated by sprint 108 ticket 009 off the deleted ``src/firm/devices/
 i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see

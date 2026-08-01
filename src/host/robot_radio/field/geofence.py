@@ -8,7 +8,7 @@ be the only definition, reached by `otos_calibration_bench.py` through a
 grown its own `captureFixWithRetry` wrapper around `Geofence.captureFix`.
 Moved verbatim (behavior unchanged) except one deliberate fix: `captureFix`'s
 yaw averaging used to be a linear median of raw yaw, which is wrap-unsafe
-near +-pi; it now uses the circular mean `testkit/camera.read_camera_pose`
+near +-pi; it now uses the circular mean `testgui/transport.read_camera_pose`
 already implements (`atan2(mean(sin), mean(cos))`). The per-axis median for
 x/y is unchanged.
 
@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import math
 import time
+
+from robot_radio.robot.halt import halt_now
 
 PLAYFIELD_LIGHTS_URL = "http://192.168.1.122/rpc/Switch.GetStatus?id=0"
 
@@ -76,24 +78,23 @@ class Geofence:
         # stop() is a PLANNED stop that would wait behind whatever is
         # already queued and coast the robot the rest of the way off the
         # field (measured on hardware 2026-07-29: 39.8cm of travel on a
-        # 40cm leg before a stop() sent mid-leg took effect).
-        halt_error: Exception | None = None
-        for _ in range(3):
-            try:
-                self._proto.estop()
-                halt_error = None
-                break
-            except Exception as exc:
-                halt_error = exc
-            time.sleep(0.05)
-        if halt_error is not None:
+        # 40cm leg before a stop() sent mid-leg took effect). Delegates to
+        # the shared halt_now() (128-001, robot_radio.robot.halt) -- the
+        # same retry-three-times-then-raise-loud idiom every other "halt
+        # now" call site in this tree now uses, so there is exactly one
+        # halt implementation to audit. This method's own remaining job is
+        # to wrap the outcome in a GeofenceViolation: check() always
+        # raises one on a breach, win or lose on the halt itself.
+        try:
+            halt_now(self._proto, log=print)
+        except Exception as exc:
             # A halt that silently failed is indistinguishable from one
             # that worked -- exactly what let the robot drive off the
             # table before this was caught by hand. Surface it.
             raise GeofenceViolation(
                 f"{why} -- AND estop() failed on all 3 attempts, last "
-                f"error: {halt_error!r} -- ROBOT MAY STILL BE MOVING"
-            ) from halt_error
+                f"error: {exc!r} -- ROBOT MAY STILL BE MOVING"
+            ) from exc
         raise GeofenceViolation(why)
 
     def check(self) -> None:
@@ -124,7 +125,7 @@ class Geofence:
 
         x/y use a per-axis median (unchanged). yaw uses the circular mean
         (atan2(mean(sin), mean(cos))), matching
-        `testkit/camera.read_camera_pose` -- a linear median of raw yaw is
+        `testgui/transport.read_camera_pose` -- a linear median of raw yaw is
         wrap-unsafe near +-pi (127-003 fix)."""
         xs: "list[float]" = []
         ys: "list[float]" = []
@@ -157,6 +158,23 @@ class Geofence:
             pass
 
 
+def _fetchPlayfieldLightsStatus() -> "tuple[dict | None, Exception | None]":
+    """Shared Shelly status fetch for `checkPlayfieldLights()`/
+    `_playfieldLightsOn()` (previously duplicated in both). Returns
+    `(status, None)` on success, or `(None, exc)` if the relay could not be
+    reached (a different network problem, not this module's to diagnose) --
+    callers decide how loudly to warn."""
+    import json
+    import urllib.error
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(PLAYFIELD_LIGHTS_URL, timeout=2.0) as resp:
+            return json.loads(resp.read()), None
+    except (urllib.error.URLError, OSError, ValueError) as exc:
+        return None, exc
+
+
 def checkPlayfieldLights() -> None:
     """Preflight: FAIL loudly if the playfield room lights (Shelly Plus 1,
     192.168.1.122 -- same relay as the bench room, `.claude/rules/
@@ -169,14 +187,8 @@ def checkPlayfieldLights() -> None:
     Non-fatal if the relay itself is unreachable (a different network
     problem, not this script's to diagnose) -- warns and continues.
     """
-    import json
-    import urllib.error
-    import urllib.request
-
-    try:
-        with urllib.request.urlopen(PLAYFIELD_LIGHTS_URL, timeout=2.0) as resp:
-            status = json.loads(resp.read())
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    status, exc = _fetchPlayfieldLightsStatus()
+    if status is None:
         print(f"WARNING: could not reach the playfield lights relay "
               f"({PLAYFIELD_LIGHTS_URL}): {exc!r} -- continuing without "
               f"checking. If tags vanish, suspect the lights first.")
@@ -195,17 +207,11 @@ def _playfieldLightsOn() -> "bool | None":  # None if the relay could not be rea
     (`checkPlayfieldLights()`'s own URL) -- returns True/False, or None if
     the relay is unreachable (a different network problem, not this
     module's to diagnose)."""
-    import json
-    import urllib.error
-    import urllib.request
-
-    try:
-        with urllib.request.urlopen(PLAYFIELD_LIGHTS_URL, timeout=2.0) as resp:
-            status = json.loads(resp.read())
-        return bool(status.get("output"))
-    except (urllib.error.URLError, OSError, ValueError) as exc:
+    status, exc = _fetchPlayfieldLightsStatus()
+    if status is None:
         print(f"  WARNING: could not reach the playfield lights relay: {exc!r}")
         return None
+    return bool(status.get("output"))
 
 
 def _turnPlayfieldLightsOn() -> None:

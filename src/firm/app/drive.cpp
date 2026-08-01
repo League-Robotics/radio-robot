@@ -28,13 +28,6 @@ void Drive::estop() {
   // alone -- it describes something that really happened.
 }
 
-void Drive::setDuty(float left, float right) {
-  targetLeft_ = left;
-  targetRight_ = right;
-}
-
-void Drive::stop() { estop(); }
-
 bool Drive::takeCompletion(uint32_t* moveId) {
   if (!completionPending_) return false;
   completionPending_ = false;

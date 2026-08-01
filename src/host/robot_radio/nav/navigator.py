@@ -181,6 +181,12 @@ class Navigator:
             ``{"success": False, "elapsed": float, "reason": str}`` on failure,
             or ``{"error": str}`` on exception.
         """
+        raise NotImplementedError(
+            "dead since the v5 wire cutover: NezhaProtocol.drive()/go_to() "
+            "were deleted (104-002). The replacement is pathplan.gotoWorld/"
+            "followPath (sprint 127). Tracked: clasi/issues/"
+            "nav-goto-stack-is-dead-gate-it-loudly-then-rebuild-or-delete.md")
+
         if not self._robot.is_connected():
             return {"error": "Not connected. Call connect first."}
 
@@ -269,6 +275,12 @@ class Navigator:
             ``{"success": False, "reason": str, "waypoints_completed": int,
             "elapsed": float}`` on failure.
         """
+        raise NotImplementedError(
+            "dead since the v5 wire cutover: NezhaProtocol.drive()/go_to() "
+            "were deleted (104-002). The replacement is pathplan.gotoWorld/"
+            "followPath (sprint 127). Tracked: clasi/issues/"
+            "nav-goto-stack-is-dead-gate-it-loudly-then-rebuild-or-delete.md")
+
         if not self._robot.is_connected():
             return {"error": "Not connected. Call connect first."}
 
@@ -328,6 +340,12 @@ class Navigator:
     def visit_tags(self, tag_ids, camera_index=3, robot_tag=1,
                    per_tag_timeout=15.0) -> dict[str, Any]:
         """Visit a list of tags in sequence. Returns results for each tag."""
+        raise NotImplementedError(
+            "dead since the v5 wire cutover: NezhaProtocol.drive()/go_to() "
+            "were deleted (104-002). The replacement is pathplan.gotoWorld/"
+            "followPath (sprint 127). Tracked: clasi/issues/"
+            "nav-goto-stack-is-dead-gate-it-loudly-then-rebuild-or-delete.md")
+
         if not self._robot.is_connected():
             return {"error": "Not connected. Call connect first."}
 

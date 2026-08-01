@@ -51,6 +51,7 @@ from robot_radio.calibration.helpers import (
     resolve_save_path as _resolve_save_path_fn,
     save_config as _save_config_fn,
 )
+from robot_radio.robot.halt import halt_now
 
 _PROJECT_ROOT = Path(__file__).parent.parent.parent
 
@@ -500,8 +501,10 @@ def cmd_calibrate_distance(args) -> None:
         print("\nInterrupted.", file=sys.stderr)
     finally:
         try:
-            proto.stop()
+            halt_now(proto)
         except Exception:
+            # halt_now already logged ROBOT MAY STILL BE MOVING; the
+            # operator has been told -- which is the entire point.
             pass
         if dc is not None:
             try:
@@ -911,8 +914,10 @@ def cmd_calibrate_turns(args) -> None:
         except Exception:
             pass
         try:
-            proto.stop()
+            halt_now(proto)
         except Exception:
+            # halt_now already logged ROBOT MAY STILL BE MOVING; the
+            # operator has been told -- which is the entire point.
             pass
         if dc is not None:
             try:

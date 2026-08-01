@@ -236,9 +236,12 @@ void Planner::stageTrim(float dt) {
 }
 
 // M4 duty output stage: this tick's staged velocity targets vs the
-// filtered measured wheel velocities -> per-wheel duty. Runs on every
-// tick() exit path so the duty outputs always mirror the velocity
-// outputs; inert (0) at the default all-zero gains.
+// filtered measured wheel velocities -> per-wheel duty. PARKED from the
+// live tick as of 128-015 (sprint 128 Decision 2) -- tick() no longer
+// calls this automatically; it runs only when a caller invokes it
+// explicitly (planner.h's own doc comment on the public declaration has
+// the full rationale and the ctest call sites that keep it exercised).
+// Inert (0, and never written) unless called.
 //
 // Rest damping: an exactly-zero target with the wheel already near rest
 // is a hard stop, not a trim problem -- the integral is reset (and held
@@ -477,7 +480,6 @@ TickResult Planner::tick(const Types::RobotState& state) {
   if (!active_.occupied) activateNext(now);
   if (!active_.occupied) {
     drainToZero(dt);
-    stageDuty(dt);
     stageTrim(dt);
     return result;
   }
@@ -676,7 +678,6 @@ TickResult Planner::tick(const Types::RobotState& state) {
     activateNext(now);
     if (!active_.occupied) {
       drainToZero(dt);
-      stageDuty(dt);
       stageTrim(dt);
       return result;
     }
@@ -685,7 +686,6 @@ TickResult Planner::tick(const Types::RobotState& state) {
   // Re-measure: a same-tick hand-off above swapped the active Move, and
   // `remaining` is measured against ITS baseline and axis.
   planActive(now, dt, done ? measure(now) : measured);
-  stageDuty(dt);
   stageTrim(dt);
   return result;
 }
@@ -1028,8 +1028,9 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
     // to rest on the clock; Distance/Angle-bounded Wheels Moves (the wire
     // protocol's other arms) ramp and HOLD -- their completion is the
     // standard measured-threshold test in tick(), and the post-completion
-    // drain ramps down (the pre-integration MoveQueue semantics: wheels
-    // Moves are direct wheel commands, not profiled landings).
+    // drain ramps down (the pre-Planner-integration semantics carried
+    // forward: wheels Moves are direct wheel commands, not profiled
+    // landings).
     const float ticksLeft =
         m.kind == Move::Kind::Time ? (m.threshold - elapsed) / period
                                    : 1.0e9f;
@@ -1401,15 +1402,20 @@ void Planner::update(Types::RobotState& state) const {
   state.command.v_x = 0.5f * (stagedLeft + stagedRight);
   state.command.omega = (stagedRight - stagedLeft) / limits_.trackWidth;
 
+  // NOTE (128-016, robot-state-pose-needs-exactly-one-writer.md): this
+  // block used to also write state.pose.* from pose_ (PoseTracker, this
+  // class's own internal working estimate, OTOS-blended whenever
+  // limits_.headingOtosWeight > 0) -- a SECOND writer of RobotState::pose
+  // alongside Motion::Odometry::integrate()/App::RobotLoop::publishPose(),
+  // ordering-dependent on which ran last a given cycle. Deleted: Odometry
+  // is now pose's ONE writer (robot_state.h's own Pose section doc
+  // comment). pose_ remains this class's own internal working estimate --
+  // still fed into state.estimate.body just below -- and bodyVelocity/
+  // omegaBody stay live for that same assignment; they are simply no
+  // longer ALSO pushed onto state.pose here.
   const float bodyVelocity = 0.5f * (left_.velocity() + right_.velocity());
   const float omegaBody =
       (right_.velocity() - left_.velocity()) / limits_.trackWidth;
-  state.pose.x = pose_.x();
-  state.pose.y = pose_.y();
-  state.pose.heading = pose_.heading();
-  state.pose.v_x = bodyVelocity;
-  state.pose.v_y = 0.0f;
-  state.pose.omega = omegaBody;
 
   state.estimate.wheelLeft = {left_.basisPosition(), left_.velocity(),
                               left_.basisTime(), left_.valid()};

@@ -1,8 +1,20 @@
 // planner_duty_scenarios_test.cpp -- the CO-LOCATED one-loop duty
 // topology against the MEASURED plant (duty_plant.h): sense -> estimate ->
 // plan -> WheelPid -> duty, one cycle, duty applied to the plant the same
-// interval it was computed -- the structure the on-robot integration will
-// run (sense/plan/act within one 50 ms cycle, zero transport in the loop).
+// interval it was computed -- the structure a future duty-sink cutover
+// would run (sense/plan/act within one 50 ms cycle, zero transport in the
+// loop).
+//
+// 128-015: Planner::tick() no longer calls stageDuty() automatically (the
+// duty stage is PARKED from the live tick -- App::Drive actuates from
+// Types::RobotState::Wheel::cmdVelocity, WheelTrim's output, never from
+// commandedDutyLeft/Right(); see src/motion/DESIGN.md's "wheel control
+// generations" note and planner.h's own doc comment on stageDuty()). This
+// file drives the duty stage EXPLICITLY -- cycle() below calls
+// planner.stageDuty(dt) itself, right where tick() used to call it
+// internally -- so these scenarios keep exercising the exact same control
+// law and stay a live, standing proof it still works, decoupled from
+// whether production wires it up.
 //
 // "Solid motion" gates (stakeholder 2026-07-26): every Move completes AND
 // settles; distance error small and bounded on a lagging, quantized,
@@ -56,14 +68,16 @@ PlannerLimits dutyLimits() {
   return limits;
 }
 
-// One co-located cycle: stamp, tick (compute), update (save), then the
-// plant integrates THIS tick's duty over the interval and publishes the
-// samples the next tick will see.
+// One co-located cycle: stamp, tick (compute), update (save), stageDuty
+// (128-015: explicit now that tick() no longer calls it -- see this
+// file's own header), then the plant integrates THIS tick's duty over the
+// interval and publishes the samples the next tick will see.
 TickResult cycle(Planner& planner, Types::RobotState& state,
                  DutyPlant& plant, uint32_t& now) {
   state.time.cycleStart = now;
   const TickResult result = planner.tick(state);
   planner.update(state);
+  planner.stageDuty(kPeriod * 0.001f);
   now += static_cast<uint32_t>(kPeriod);
   plant.step(state, planner.commandedDutyLeft(),
              planner.commandedDutyRight(), kPeriod * 0.001f, now);

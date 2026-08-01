@@ -60,9 +60,6 @@ _APP_SOURCES = [
     # reference to -- so this graph must link it.
     _SOURCE_DIR / "app" / "configurator.cpp",
     _SOURCE_DIR / "app" / "telemetry.cpp",
-    # 116-006 (MOVE protocol cutover): App::MoveQueue replaces the deleted
-    # App::Deadman.
-    _REPO_ROOT / "src" / "motion" / "move_queue.cpp",
     # Planner integration (2026-07-26): the on-robot Motion::Planner now
     # drives the loop -- its library core joins every RobotLoop-linking
     # dependency graph.
@@ -75,17 +72,12 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "drive.cpp",
     _REPO_ROOT / "src" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
-    # 117 ticket 003: App::StateEstimator, threaded through RobotLoop's/
-    # SimHarness's own constructors alongside moveQueue/preamble.
-    _REPO_ROOT / "src" / "motion" / "state_estimator.cpp",
 ]
-_MOTION_SOURCES = [
-    _REPO_ROOT / "src" / "motion" / "stop_condition.cpp",
-    _REPO_ROOT / "src" / "motion" / "velocity_shaper.cpp",
-    # 125-003: relocated from devices/velocity_pid.cpp -- App::Drive's
-    # interim Motion::WheelVelocityPid instances this sprint.
-    _REPO_ROOT / "src" / "motion" / "wheel_velocity_pid.cpp",
-]
+# 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
+# entry here) is gone outright -- zero instantiations; App::Drive holds no
+# controller of its own (open-loop duty from calibrated speed, drive.h's
+# own header). See src/motion/DESIGN.md's "wheel control generations" note.
+_MOTION_SOURCES = []
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
     _SOURCE_DIR / "devices" / "nezha_motor.cpp",

@@ -566,17 +566,14 @@ def _disconnect_sim(qapp, window) -> None:
 
 @_requires_sim_lib
 @pytest.mark.xfail(
-    reason="097: goto_btn (the WORLD-ABSOLUTE camera-closed-loop GOTO, "
-           "distinct from the COMMANDS schema's own 'G' row -- see "
+    reason="goto_btn (the WORLD-ABSOLUTE camera-closed-loop GOTO -- see "
            "__main__.py's goto_btn docstring comment) stays permanently "
            "disabled -- its pursuit loop needs SI to re-anchor the "
-           "robot's pose to camera truth every iteration, and SI still "
-           "has no binary arm (binary_bridge.py's _POSE_RESET_VERBS, "
-           "genuinely deferred to sprint 098's fused pose). G itself now "
-           "has a binary arm (un-gated, this ticket) as an open-loop "
-           "single-leg segment -- see legacy_translate.segment_for_"
-           "goto_relative() -- but that does not help this closed-loop "
-           "pursuit loop's own SI dependency.",
+           "robot's pose to camera truth every iteration, and neither SI "
+           "nor G has a binary-plane arm on the current wire (128-004: "
+           "see testgui/binary_bridge.py's own module docstring for the "
+           "full accounting; genuinely deferred to sprint 098's fused "
+           "pose for SI specifically).",
     strict=False,
 )
 def test_goto_button_converges_against_real_sim_and_reenables_button(

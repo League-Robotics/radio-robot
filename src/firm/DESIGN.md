@@ -14,13 +14,16 @@ and exchanges COBS+CRC-framed protobuf-style messages with a host over
 USB serial and the micro:bit radio (sprint 123's COBS+CRC framing,
 further cut over by sprint 124's protocol v5 uniform packet grammar —
 see §4 below). NOTE: this file predates and was not updated for sprint
-122's motion-library extraction (`docs/design/design.md` §2/§5) — its
-module list and dependency diagram below still describe the pre-122 shape
+122's motion-library extraction, sprint 125–127's `Motion::Planner`
+integration, or sprint 128's deletion of the resulting dead `Motion::
+WheelSink`/`Motion::MoveQueue`/`Motion::StopCondition`/`Motion::
+VelocityShaper` generation (`docs/design/design.md` §2/§5) — its module
+list and dependency diagram below still describe the pre-122 shape
 (`App::MoveQueue`/`App::Odometry`/`App::StateEstimator`,
 `src/firm/kinematics/`, a small `src/firm/motion/`); `docs/design/design.md`
-is the current, reconciled source for that restructuring. Only this
-file's wire-framing content (§4) is kept current — updated again for
-sprint 124 ticket 014's protocol v5 doc pass.
+is the current, reconciled source for all of that restructuring. Only
+this file's wire-framing content (§4) is kept current — updated again
+for sprint 124 ticket 014's protocol v5 doc pass.
 
 It is the **plant** end of the host/robot split — the host side is
 [`src/host`](../host/DESIGN.md). The host plans motion (currently just

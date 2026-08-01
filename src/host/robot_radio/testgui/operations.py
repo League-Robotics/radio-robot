@@ -14,7 +14,9 @@ Sync Pose from Camera                                          Read tag-100 from
 Zero Encoders                                                  Send ``ZERO enc`` -- GATED
                                                                (097): ZERO has no binary arm
                                                                until sprint 098
-STOP                                                           Send ``STOP``
+STOP                                                           ``transport.halt()`` (estop) --
+                                                               128-003: no longer the dead
+                                                               ``"STOP"`` wire string
 Clear Traces                                                   Call ``clear_traces_cb`` hook
 Refresh Playfield                                              Read cam-3 frame + calib from
                                                                daemon; deskew via daemon H;
@@ -555,30 +557,41 @@ class OpsController:
             self._log(f"[ERROR] Zero Encoders: {exc}")
 
     def on_stop(self) -> None:
-        """Full-system halt: cancel workers, stop motors, and stop telemetry.
+        """Full-system halt: cancel workers, estop motors, and stop telemetry.
 
-        A single wire ``STOP`` is not enough on its own:
+        A cancelled worker is not enough on its own:
 
         1. A running GOTO/tour worker re-issues ``SI``/``G``/tour steps every
-           poll cycle, so a lone STOP is overwritten within milliseconds — and
-           the worker never aborts the firmware's *in-flight* move by itself.
-           ``stop_motion_cb`` cancels AND joins the worker thread first, so
-           nothing re-drives the robot and the transport is no longer touched
-           from the worker thread.
-        2. ``STOP`` halts the motors / aborts the active motion goal.
-        3. ``STREAM 0`` stops telemetry — otherwise the firmware keeps emitting
+           poll cycle, so a halt alone would be overwritten within
+           milliseconds — and the worker never aborts the firmware's
+           *in-flight* move by itself. ``stop_motion_cb`` cancels AND joins
+           the worker thread first, so nothing re-drives the robot and the
+           transport is no longer touched from the worker thread.
+        2. ``transport.halt()`` halts the motors / aborts the active motion
+           goal AND flushes the planner's pending queue, in the same wire
+           cycle (estop semantics — see ``Transport.halt()``'s own
+           docstring).
+        3. Telemetry is switched off directly via ``transport.protocol``
+           where that surface exists — otherwise the firmware keeps emitting
            TLM after everything else has stopped (the robot "won't stop").
 
-        Steps 2–3 use ``command`` (synchronous, ordered) now that the worker
-        thread is joined, so there is no concurrent transport access.
-
-        097: sends the bare ``STOP`` verb, not the legacy ``DEV DT STOP`` --
-        the text plane's ``DEV`` debug command family has no binary arm and
-        never will (it is not part of sprint 098's scope either; the
-        transport translates it to a no-op, see ``binary_bridge.py``), while
-        ``STOP`` is one of the 6-verb text rump AND has its own binary
-        ``Stop{}`` oneof arm (``envelope.proto``) -- it is the one verb that
-        was ALWAYS guaranteed to keep working across this migration.
+        128-003 (testgui-stop-paths-must-halt-through-the-transport-not-
+        the-dead-bridge.md): steps 2-3 used to send the wire strings
+        ``"STOP"``/``"STREAM 0"`` through ``transport.command()``, which on
+        ``_HardwareTransport`` routes into ``binary_bridge.
+        translate_command()`` — an unconditional dead stub (the module its
+        verb-translation table used to dispatch through was deleted
+        wholesale, 107-003) that returns an ``ERR`` reply without ever
+        touching the wire, while this method logged
+        ``"[INFO] STOP sent"`` regardless — a robot on real hardware kept
+        driving. ``"STOP"`` also mapped to the PLANNED stop even when the
+        stub DID work (queues behind whatever ``Move`` is already in
+        flight — measured 39.8cm/5.9s to take effect mid-leg on hardware),
+        never the halt-now ``estop()`` a STOP button must mean. Both defects
+        are closed by routing through ``transport.halt()`` directly instead
+        of the dead text-verb translation layer, and by never logging
+        success on faith — a raised halt failure is now a loud ``[ERROR]``,
+        not silence.
         """
         # 1. Cancel GOTO / tour workers BEFORE any wire command so nothing
         #    re-drives the robot afterwards.  Joins the worker thread; safe if
@@ -594,24 +607,36 @@ class OpsController:
             self._log("[WARN] STOP: not connected")
             return
 
-        # 2. Halt motors / abort the active motion goal.
+        # 2. Halt-now (estop): clears the active Move AND the planner queue.
+        #    Never log success on faith -- a raised failure must be loud.
         try:
-            transport.command("STOP", read_timeout=300)
-            self._log("[INFO] STOP sent")
+            transport.halt()
+            self._log("[INFO] estop sent -- motion halted")
         except Exception as exc:
-            self._log(f"[ERROR] STOP: {exc}")
+            self._log(f"[ERROR] HALT FAILED -- ROBOT MAY STILL BE MOVING: {exc}")
 
-        # 3. Stop telemetry so the firmware stops streaming TLM, and reflect the
-        #    toggle in the UI.  Best-effort — a STREAM-0 failure must not mask
-        #    the motor STOP above.
-        try:
-            transport.command("STREAM 0", read_timeout=300)
-            self._stream_on = False
-            self._stream_btn.setChecked(False)  # type: ignore[attr-defined]
-            self._stream_btn.setText("STREAM: off")  # type: ignore[attr-defined]
-            self._log("[INFO] STREAM 0 sent (telemetry stopped)")
-        except Exception as exc:
-            self._log(f"[ERROR] STOP: STREAM 0 failed: {exc}")
+        # 3. Stop telemetry directly via the protocol so the firmware stops
+        #    streaming TLM, and reflect the toggle in the UI. Best-effort —
+        #    an unavailable/failed telemetry-off must not mask the halt
+        #    above, which is the actually safety-critical step. (128-004
+        #    separately gave STREAM itself a live direct-call translation in
+        #    binary_bridge.py, so ``on_stream_toggled()`` below now works on
+        #    hardware too -- but THIS call stays a direct ``proto.tlmOff()``
+        #    rather than routing through ``transport.command("STREAM 0")``,
+        #    since on_stop()'s own halt step must not depend on
+        #    binary_bridge at all.)
+        proto = getattr(transport, "protocol", None)
+        if proto is not None and hasattr(proto, "tlmOff"):
+            try:
+                proto.tlmOff()
+                self._stream_on = False
+                self._stream_btn.setChecked(False)  # type: ignore[attr-defined]
+                self._stream_btn.setText("STREAM: off")  # type: ignore[attr-defined]
+                self._log("[INFO] telemetry off (TLM:OFF sent)")
+            except Exception as exc:
+                self._log(f"[ERROR] STOP: TLM:OFF failed: {exc}")
+        else:
+            self._log("[WARN] STOP: telemetry-off not available for this transport")
 
     def on_clear_traces(self) -> None:
         """Clear all trace polylines (no transport command)."""

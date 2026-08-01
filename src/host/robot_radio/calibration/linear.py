@@ -273,8 +273,8 @@ def calibrate_distance(
         try:
             ser.write_line("STOP")
             time.sleep(0.2)
-        except Exception:
-            pass
+        except Exception as exc:  # legacy text-plane handshake, no estop() equivalent here
+            print(f"  WARNING: failed to send STOP on exit: {exc!r}")
 
     # Statistics
     print("\n" + "=" * 60)

@@ -1092,7 +1092,7 @@ class SimLoop:
     # ------------------------------------------------------------------
 
     def step(self, cycles: int = 1) -> None:
-        """Advance the sim ``cycles`` cycles (50ms sim-time each) on the
+        """Advance the sim ``cycles`` cycles (40ms sim-time each) on the
         CALLING thread. Only safe to call directly when no tick thread is
         running (``connect(start_tick_thread=False)``) -- otherwise this
         races the tick thread's own ``sim_step()`` calls against the same

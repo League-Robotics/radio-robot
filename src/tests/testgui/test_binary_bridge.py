@@ -1,6 +1,8 @@
-"""src/tests/testgui/test_binary_bridge.py — 107-004: rewritten for the current
-"launch-unblock" degraded-mode reality (was written for 097/100-007's fully
-wired R/TURN/G translation, which no longer exists on this wire).
+"""src/tests/testgui/test_binary_bridge.py — 128-004: rewritten for
+``binary_bridge.py``'s gutted shape (the dead ``_LEGACY_TRANSLATION_AVAILABLE``
+gate and everything behind it are deleted; only ``OI``/``OL``/``OA``/``SET``/
+``STREAM`` still have a live binary-plane translation, each a direct call to
+a live ``NezhaProtocol`` method).
 
 Qt-free — no QApplication, no sim lib, no PySide6 required. Exercises
 ``robot_radio.testgui.binary_bridge`` directly against a fake connection
@@ -9,45 +11,31 @@ pattern for ``io/proxy.py``'s ProtocolBridge — this file is the TestGUI
 bridge's own equivalent, a module that test file's own fixtures do not
 reach).
 
-What changed from the 097/100-007 version of this file
---------------------------------------------------------
-This file (dropped from ``pyproject.toml``'s ``testpaths`` at sprint 102
-ticket 005 along with the rest of ``src/tests/testgui/``) went stale against TWO
-independent, later changes it never saw:
+What changed at 128-004
+------------------------
+``legacy_render``/``legacy_verbs`` (deleted wholesale by commit ``129cbcb3``,
+104-002) are no longer imported or referenced at all -- there is no
+``_LEGACY_TRANSLATION_AVAILABLE`` gate, no ``render``/``legacy_verbs`` module
+attribute, and no ``_LEGACY_UNAVAILABLE_REPLY`` constant. Every verb without
+a live direct-call translation (``S``/``T``/``D``/``R``/``TURN``/``RT``/
+``G``, ``GET``, ``SNAP``, ``SI``/``ZERO``/``OZ``, ``GRIP``/``QLEN``, ``OV``/
+``OP``/``OR``, and anything unrecognized) now returns a generic
+``ERR unsupported <verb>`` reply built inline -- same "parsed, never sent,
+replies ERR" outcome as before, just without a shared fixed-string constant
+to assert equality against (tests below assert the ``ERR``/no-wire-call
+SHAPE, not an exact string). ``STREAM`` is NEW as a live direct call
+(``_handle_stream_patch()`` -> ``NezhaProtocol.tlmOn()``/``tlmOff()``,
+per ticket 003's own note) -- it moves out of the "always unsupported"
+parametrized test into its own section.
 
-1. ``binary_bridge.py``'s own "107-003 launch-unblock" (this module's own
-   header): ``legacy_render``/``legacy_verbs`` were deleted wholesale by
-   commit ``129cbcb3`` (104-002) with no replacement. ``translate_command()``
-   now short-circuits EVERY non-empty line to a single fixed
-   ``_LEGACY_UNAVAILABLE_REPLY`` string — no envelope is ever built or sent,
-   regardless of verb. The old ``R``/``TURN``/``G``-un-gating assertions
-   (each expecting a real ``segment`` envelope on the wire) test dead code
-   that can no longer be reached; ``GRIP``/``QLEN``/pose-reset/OTOS-device
-   verbs used to render distinguishable ``"unsupported"``/``"nodev"`` codes,
-   but now render the SAME fixed unavailable-reply string as everything
-   else, since dispatch never gets far enough to distinguish them.
-2. ``envelope_pb2``'s own schema shrank independently, underneath
-   ``binary_bridge.py``: ``ReplyEnvelope``'s ``body`` oneof is down to
-   exactly ``{ok, err, tlm}`` (``id``/``echo``/``helptext`` no longer
-   exist as fields at all — constructing ``reply.id``/``reply.echo`` now
-   raises ``AttributeError``), and ``CommandEnvelope``'s ``cmd`` oneof is
-   down to ``{config, stop, move}`` (``drive``/``segment``/``replace`` are
-   gone; 116-001's MOVE protocol cutover later swapped the interim
-   ``twist`` arm this note originally described for ``move`` — see
-   ``test_command_oneof_no_longer_has_drive_segment_replace``).
-   ``render_log_line()``'s ``id``/``echo``/``helptext`` branches were
-   already unreachable for a second, independent reason even before
-   accounting for (1) above (``render`` being ``None``): those oneof arms
-   cannot be constructed any more, so nothing can ever set ``which`` to
-   those values. This file now builds replies only from the oneof arms that
-   still exist.
-
-Both facts are locked in below (``test_legacy_translation_is_unavailable``,
-``test_reply_oneof_no_longer_has_id_echo_helptext``) so a future restoration
-of either is a deliberate, visible test change — not a silent regression
-nobody notices a second time (see
-``clasi/issues/binary-bridge-segment-replace-arms-deleted.md``, referenced
-by this module's own docstring, for the filed follow-up).
+``envelope_pb2``'s own schema is unchanged by this ticket: ``ReplyEnvelope``'s
+``body`` oneof is ``{ok, err, tlm}`` (``id``/``echo``/``helptext`` do not
+exist as fields), and ``CommandEnvelope``'s ``cmd`` oneof is ``{config, stop,
+move}`` plus ``wheels``/``estop`` (``drive``/``segment``/``replace``/the
+interim ``twist`` arm are all gone). ``render_log_line()``'s rendering is
+unconditional ``text_format`` now (128-004 deleted the dead
+``if render is not None`` branch it never actually took), so the schema
+lock-in test below still matters for the same reason it always did.
 
 Run with::
 
@@ -132,20 +120,9 @@ def proto():
 
 
 # ---------------------------------------------------------------------------
-# translate_command() — launch-unblock degraded mode (see module docstring):
-# every non-empty verb short-circuits to the same fixed reply, no wire call.
+# translate_command() — verbs with no live binary-plane translation: a
+# generic "ERR unsupported <verb>" reply, no wire call, no ack wait.
 # ---------------------------------------------------------------------------
-
-
-def test_legacy_translation_is_unavailable():
-    """Locks in the launch-unblock precondition this whole file tests against
-    — if a future sprint restores ``legacy_render``/``legacy_verbs``, this
-    assertion fails LOUDLY (not the silent-drift this file itself is a
-    correction for), pointing straight at this file needing a rewrite back
-    toward the pre-launch-unblock behavior."""
-    assert binary_bridge._LEGACY_TRANSLATION_AVAILABLE is False
-    assert binary_bridge.render is None
-    assert binary_bridge.legacy_verbs is None
 
 
 @pytest.mark.parametrize("line", [
@@ -155,7 +132,6 @@ def test_legacy_translation_is_unavailable():
     "TURN 9000 eps=300",
     "G 300 400 150",
     "GET rotSlip",
-    "STREAM 50",
     "SNAP",
     "GRIP",
     "QLEN",
@@ -165,16 +141,17 @@ def test_legacy_translation_is_unavailable():
     "OP",
     "BOGUSVERB 1 2 3",
 ])
-def test_every_verb_short_circuits_to_the_fixed_unavailable_reply(proto, line):
-    """No verb-specific dispatch survives the launch-unblock guard — every
-    non-empty line, supported-looking or not, gets the SAME fixed reply and
-    NOTHING is sent on the wire (parsing the line at all is itself
-    ``legacy_verbs``' job — see ``translate_command()``'s own docstring)."""
+def test_unsupported_verbs_get_a_generic_err_reply_no_wire_call(proto, line):
+    """No verb-specific dispatch exists for any of these — every one gets a
+    generic ``ERR unsupported <verb>`` reply and NOTHING is sent on the wire
+    (see ``translate_command()``'s own docstring for the full unsupported
+    list and why)."""
     nezha, conn = proto
 
     reply_line = binary_bridge.translate_command(nezha, line)
 
-    assert reply_line == binary_bridge._LEGACY_UNAVAILABLE_REPLY
+    verb = line.split()[0]
+    assert reply_line.startswith(f"ERR unsupported {verb}")
     assert conn.envelope_calls == []
 
 
@@ -280,17 +257,90 @@ def test_ol_nak_ack_renders_err(proto):
     assert reply.startswith("ERR nak")
 
 
-def test_ov_op_or_still_render_unavailable_reply_unchanged(proto):
-    """OV/OP/OR have no direct-patch-send equivalent this ticket -- they
-    fall through to the SAME launch-unblock short-circuit every other
-    non-OL/OA/OI verb hits (no envelope sent)."""
+def test_ov_op_or_still_render_unsupported_reply_unchanged(proto):
+    """OV/OP/OR have no direct-patch-send equivalent -- they fall through to
+    the SAME generic unsupported reply every other non-OL/OA/OI/SET/STREAM
+    verb hits (no envelope sent)."""
     nezha, conn = proto
 
     for verb in ("OV 0 0 0", "OP", "OR"):
         reply = binary_bridge.translate_command(nezha, verb)
-        assert reply == binary_bridge._LEGACY_UNAVAILABLE_REPLY
+        assert reply.startswith(f"ERR unsupported {verb.split()[0]}")
 
     assert conn.envelope_calls == []
+
+
+# ---------------------------------------------------------------------------
+# STREAM direct call (128-004, per ticket 003's own note) -- calls
+# NezhaProtocol.tlmOn()/tlmOff() directly. tlmOn()/tlmOff() are fire-and-
+# forget send_fast() wrappers (no ack), so these tests assert on the fake
+# connection's own send_fast()-observable call, not envelope_calls.
+# ---------------------------------------------------------------------------
+
+
+class _FakeConnStream(_FakeConn):
+    """Extends ``_FakeConn`` with the ``send()``/``send_fast()`` cleartext
+    surface ``NezhaProtocol.tlmOn()``/``tlmOff()`` actually call (a plain
+    text-plane line, not a binary envelope)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fast_sends: list[str] = []
+
+    def send_fast(self, cmd: str) -> None:
+        self.fast_sends.append(cmd)
+
+
+@pytest.fixture
+def stream_proto():
+    conn = _FakeConnStream()
+    return NezhaProtocol(conn), conn
+
+
+def test_stream_nonzero_period_calls_tlm_on(stream_proto):
+    nezha, conn = stream_proto
+
+    reply = binary_bridge.translate_command(nezha, "STREAM 50")
+
+    assert reply == "OK stream period=50"
+    assert conn.fast_sends == ["TLM:ON"]
+    assert conn.envelope_calls == []
+
+
+def test_stream_zero_period_calls_tlm_off(stream_proto):
+    nezha, conn = stream_proto
+
+    reply = binary_bridge.translate_command(nezha, "STREAM 0")
+
+    assert reply == "OK stream period=0"
+    assert conn.fast_sends == ["TLM:OFF"]
+
+
+def test_stream_negative_period_calls_tlm_off(stream_proto):
+    nezha, conn = stream_proto
+
+    reply = binary_bridge.translate_command(nezha, "STREAM -5")
+
+    assert reply == "OK stream period=0"
+    assert conn.fast_sends == ["TLM:OFF"]
+
+
+def test_stream_no_period_is_badarg_no_wire_call(stream_proto):
+    nezha, conn = stream_proto
+
+    reply = binary_bridge.translate_command(nezha, "STREAM")
+
+    assert reply == "ERR badarg period"
+    assert conn.fast_sends == []
+
+
+def test_stream_non_numeric_period_is_badarg_no_wire_call(stream_proto):
+    nezha, conn = stream_proto
+
+    reply = binary_bridge.translate_command(nezha, "STREAM soon")
+
+    assert reply == "ERR badarg period"
+    assert conn.fast_sends == []
 
 
 # ---------------------------------------------------------------------------

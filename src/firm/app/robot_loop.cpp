@@ -47,7 +47,7 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
                       Comms& comms, Telemetry& tlm, Drive& drive,
                       Configurator& configurator, Motion::Odometry& odom,
                       Motion::Planner& planner, Preamble& preamble,
-                      Motion::StateEstimator& stateEstimator, const Devices::Clock& clock,
+                      const Devices::Clock& clock,
                       Devices::Sleeper& sleeper)
     : bus_(bus),
       motorL_(motorL),
@@ -62,7 +62,6 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
       odom_(odom),
       planner_(planner),
       preamble_(preamble),
-      stateEstimator_(stateEstimator),
       clock_(clock),
       sleeper_(sleeper) {}
 
@@ -353,6 +352,12 @@ void RobotLoop::boot() {
   // this line never loses its first Move. Emitted after the banner so a
   // fresh listener gets identity first, then permission.
   comms_.sendReady();
+  // state_.health.ready (128-012): the one genuinely loop-owned fact
+  // Comms::updateStatus()'s STATUS projection answers -- "we are past
+  // boot()" -- published onto the blackboard here, exactly once, rather
+  // than hard-coded `true` at the projection call site (robot_state.h's
+  // own doc comment on Health::ready).
+  state_.health.ready = true;
 }
 
 // --- cycle() steps ---
@@ -499,8 +504,8 @@ void RobotLoop::cycle() {
   drive_.tick(state_.wheelLeft.cmdVelocity, state_.wheelRight.cmdVelocity);
 
   motorL_.requestSample();  // brick latches ONE pending read per select
-  runAndWait(kSettle, [&] { 
-    comms_.pump(state_.time.cycleStart); 
+  runAndWait(kSettle, [&] {
+    comms_.pump(state_.time.cycleStart);
   });
   motorL_.tick(clock_.nowMicros());  // collect L
 
@@ -533,59 +538,47 @@ void RobotLoop::cycle() {
     publishLineColor(tickedLine);
     publishPose();
     publishHealth();
-    stateEstimator_.update(state_, static_cast<uint32_t>(nowUs / 1000));  // [us] -> [ms]
     publishTiming(cycleStartUs);
 
     tlm_.update(state_);
 
-    // TLM: command surface (Part 4, telemetry-emit-policy-rebuild-spec.md):
-    // Comms parsed a `TLM`/`TLM:...` line's argument and staged the
-    // result; Telemetry never parses wire text, so RobotLoop is the one
-    // that turns a recognized mode token into a Telemetry::setMode() call,
-    // at the same consume point the pre-Part-4 bare-TLM request used to be
-    // read from alone.
+    // TLM: command surface (Part 4, telemetry-emit-policy-rebuild-spec.md;
+    // 128-012 moved the mode-change switch and the "is this a force-a-frame
+    // request" answer into Telemetry::applyAction() -- see that method's
+    // own doc comment for the dependency-direction choice). Comms parsed a
+    // `TLM`/`TLM:...` line's argument and staged the result; Telemetry
+    // never parses wire text, so RobotLoop is still the one that hands
+    // Comms's staged action across, at the same consume point the
+    // pre-128-012 inline switch used to read from.
     const Comms::TlmAction tlmAction = comms_.takeTlmAction();
-    switch (tlmAction) {
-      case Comms::TlmAction::kSetOff:  tlm_.setMode(TlmMode::kOff);  break;
-      case Comms::TlmAction::kSetAuto: tlm_.setMode(TlmMode::kAuto); break;
-      case Comms::TlmAction::kSetOn:   tlm_.setMode(TlmMode::kOn);   break;
-      case Comms::TlmAction::kNone:
-      case Comms::TlmAction::kFrame:
-      case Comms::TlmAction::kUnrecognized:
-      default:
-        break;  // no mode change
-    }
+    const bool forceFrame = tlm_.applyAction(tlmAction);
 
     // A bare `TLM`/`TLM:NOW` line is a request for one frame NOW -- force
     // past the mode-gated unsolicited check (issue Part 3, reason 1), since
     // "nothing is happening" is exactly the state someone asking is trying
     // to observe. Still subject to the cadence gate, so a request storm
     // cannot outrun the wire.
-    tlm_.emit(state_.time.cycleStart, /*force=*/tlmAction == Comms::TlmAction::kFrame);
+    tlm_.emit(state_.time.cycleStart, forceFrame);
 
-    // Refresh what STATUS answers from. Sourced from the SAME state_ the
-    // telemetry projection just used, so the queryable line and the wire
-    // frame can never disagree -- STATUS is a second VIEW of the state, not
-    // a second copy of it. Cheap enough to do unconditionally; it must run
-    // even when the idle gate suppressed the frame above, since answering
-    // STATUS on a parked robot is precisely the case it exists for. tlmMode
-    // is read AFTER the switch above, so a mode change this cycle is
-    // already reflected -- sendTlmReply() below relies on that ordering.
-    Comms::Status status;
-    status.ready = true;  // past boot(): the loop is dispatching commands
-    status.active = state_.command.moveActive;
-    status.wheelLeftConnected = state_.wheelLeft.connected;
-    status.wheelRightConnected = state_.wheelRight.connected;
-    status.otosPresent = state_.otos.present;
-    status.wedged = state_.health.wedgeLatch;
-    status.flags = tlm_.flags();
-    status.tlmMode = static_cast<uint8_t>(tlm_.mode());
-    comms_.setStatus(status);
+    // Refresh what STATUS answers from (128-012, Comms::updateStatus() --
+    // see its own doc comment for the full field-by-field contract).
+    // Sourced from the SAME state_ the telemetry projection just used, so
+    // the queryable line and the wire frame can never disagree -- STATUS is
+    // a second VIEW of the state, not a second copy of it. Cheap enough to
+    // run unconditionally; it must run even when the idle gate suppressed
+    // the frame above, since answering STATUS on a parked robot is
+    // precisely the case it exists for. LOAD-BEARING ORDER: called AFTER
+    // tlm_.applyAction() above, so a same-cycle mode change is already
+    // reflected in tlm_.mode() -- sendTlmReply() below relies on that.
+    comms_.updateStatus(state_, tlm_);
 
     // TLM: mode-change / garbage reply (Part 4): the STATUS line for a
     // recognized ON/AUTO/OFF (now reporting the mode applied above), or the
     // HELP line for an unrecognized `TLM:<data>` argument. No-op for
     // kNone/kFrame -- see Comms::sendTlmReply()'s own doc comment.
+    // LOAD-BEARING ORDER: called AFTER comms_.updateStatus() above, so its
+    // STATUS reply reads Comms's own status_ snapshot already carrying the
+    // NEW mode.
     comms_.sendTlmReply(tlmAction);
 
     // Both deciders tick AFTER emit: their completion acks ride the NEXT

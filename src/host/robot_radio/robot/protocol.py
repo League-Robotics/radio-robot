@@ -399,7 +399,7 @@ class TLMFrame:
     ``OtosReading``, both ``# [ms] behind TLMFrame.t``), a caller can
     recover that reading's own approximate HOST-clock capture instant —
     ``recvTime - age / 1000.0`` — the frame-age extrapolation pattern
-    ``src/motion/planner/bench/hil_drive.py``'s ``ingestTelemetry()``
+    ``src/tests/bench/hil_drive.py``'s ``ingestTelemetry()``
     already uses (there, entirely within the ROBOT's own clock via
     ``t - age``; here, anchored onto the HOST's clock so it can be compared
     against a camera fix's own host-clock capture time). Populated ONLY by

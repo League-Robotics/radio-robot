@@ -285,14 +285,16 @@ float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->driveTargetVelRight(
 // Velocity-PID enable/disable (stakeholder 2026-07-18, TestGUI "PID"
 // checkbox next to the Test buttons) -- 125-003: NOW A NO-OP. The velocity
 // PID this used to toggle on/off (Devices::NezhaMotor::setPidEnabled()) no
-// longer exists on the Motor interface at all (Decision 2, sprint.md --
-// PID is a control decision, not hardware protection, and relocated to
-// Motion::WheelVelocityPid). This C ABI export is kept (not deleted) purely
-// so host/robot_radio/io/sim_loop.py's ctypes symbol lookup at import time
-// does not break -- it has no effect on firmware behavior until a later
-// ticket exposes an equivalent enable/disable on whatever surface actually
-// owns the relocated PID (App::Drive's own interim instances this sprint,
-// Motion::MoveQueue's eventually).
+// longer exists on the Motor interface at all (Decision 2, sprint.md -- PID
+// is a control decision, not hardware protection, and relocated to a
+// motion-local wheel-velocity PID class -- itself deleted outright by
+// 128-015, zero instantiations; App::Drive holds no controller of its own,
+// see src/motion/DESIGN.md's "wheel control generations" note). This C ABI
+// export is kept (not deleted) purely so host/robot_radio/io/sim_loop.py's
+// ctypes symbol lookup at import time does not break -- it has no effect on
+// firmware behavior; the one duty-stage controller that still exists
+// (Motion::Planner's own, parked from the live tick by 128-015) has no
+// enable/disable surface either.
 void sim_set_pid_enabled(SimHandle, int) {}
 
 // ---- Stepping ----

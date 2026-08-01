@@ -32,11 +32,10 @@
 
 #include "devices/motor.h"
 #include "firm/types/robot_state.h"
-#include "motion/wheel_sink.h"
 
 namespace App {
 
-class Drive : public Motion::WheelSink {
+class Drive {
  public:
   // left/right -- the two drive-wheel NezhaMotor leaves, in BodyKinematics'
   // own L/R convention. trackWidth -- [mm], BodyKinematics::inverse()/
@@ -121,15 +120,6 @@ class Drive : public Motion::WheelSink {
   // planner's own update() is left as the single writer. Must therefore run
   // AFTER Motion::Planner::update() in the cycle.
   void update(Types::RobotState& state, uint32_t now);  // [ms]
-
-  // --- Motion::WheelSink (legacy boundary) ---
-  // The velocity-sink interface Motion::MoveQueue drives. RobotLoop no
-  // longer routes anything through it -- the live path is command()/tick()/
-  // update() above -- but the interface is still implemented so a MoveQueue
-  // -era harness keeps compiling. setDuty() stages targets with no deadline
-  // and no ownership claim; nothing in the live loop calls either method.
-  void setDuty(float left, float right) override;  // [mm/s] [mm/s] velocity targets
-  void stop() override;                            // == estop()
 
   // Last-staged velocity targets (test observability; the blackboard's own
   // copy is written by update()).

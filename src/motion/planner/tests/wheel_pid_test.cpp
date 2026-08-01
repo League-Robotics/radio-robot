@@ -1,8 +1,10 @@
 // wheel_pid_test.cpp -- unit tests for the M4 duty output stage
 // (wheel_pid.h): fail-closed zero gains, feedforward mapping, closed-loop
 // tracking against a lagging first-order plant (must beat open-loop kff
-// under plant-gain error), anti-windup bounds, and the planner-level
-// wiring (duty mirrors the staged velocity targets every tick).
+// under plant-gain error), anti-windup bounds, and (128-015: EXPLICITLY
+// invoked -- Planner::tick() no longer calls stageDuty() automatically,
+// see planner.h's own doc comment on the method) the planner-level wiring
+// (duty mirrors the staged velocity targets whenever stageDuty() runs).
 #include <cmath>
 #include <cstdio>
 
@@ -82,7 +84,15 @@ void testAntiWindup() {
   CHECK(duty <= 0.2f + 0.3f + 1e-3f);  // kff term + at most the clamp
 }
 
-// Planner wiring: duty outputs live on every tick and go quiet on stop().
+// Planner wiring: duty outputs mirror the staged velocity command whenever
+// stageDuty() runs, and go quiet on stop(). 128-015: stageDuty() is called
+// EXPLICITLY here, right after TestPlanner::cycle()'s own tick()/update()
+// -- that shared helper does not call it, and neither does Planner::tick()
+// any more (see planner.h's own doc comment) -- so this test keeps proving
+// the duty stage's own correctness without paying its cost in the live
+// loop.
+constexpr float kDutyStageDt = 0.05f;  // [s], matches TestPlanner::cycle()'s 50.0f ms
+
 void testPlannerDutyStage() {
   Motion::PlannerLimits limits = TestPlanner::benchLimits();
   limits.velKff = 0.002f;
@@ -105,6 +115,7 @@ void testPlannerDutyStage() {
   bool sawDuty = false;
   for (int i = 0; i < 200; ++i) {
     TestPlanner::cycle(planner, state, plant, now, 50.0f);
+    planner.stageDuty(kDutyStageDt);
     if (planner.commandedDutyLeft() > 0.05f) sawDuty = true;
     // Duty must track the sign/scale of the staged velocity command.
     if (state.wheelLeft.cmdVelocity > 50.0f) {

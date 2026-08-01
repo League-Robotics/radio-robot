@@ -45,15 +45,25 @@ firmware). Check there before re-deriving comms or hardware behavior.
 
 The firmware is split into two layers (sprint 122, stakeholder directive
 2026-07-24): a hardened **firmware base** (`src/firm`) — buses, devices,
-the velocity PID, the wire, the loop schedule — meant to eventually
-freeze and move to its own repository (`git subtree split`); and a
-**motion library** (`src/motion`, a sibling tree, not a child of
-`src/firm`) — twist decomposition, queueing, shaping, estimation, and
-odometry — still under active development, with its own standalone,
-Python-free `motion_tests` build. The two communicate through one narrow
-boundary interface, `Motion::WheelSink` (`src/motion/wheel_sink.h`): a
-velocity sink (`setWheels()`/`stop()`) the base implements
-(`App::Drive`) and the motion library drives (`Motion::MoveQueue`). See
+the wire, the loop schedule — meant to eventually freeze and move to its
+own repository (`git subtree split`); and a **motion library**
+(`src/motion`, a sibling tree, not a child of `src/firm`) — twist
+decomposition, shaping, estimation, odometry, and (125-003) the
+closed-loop velocity PID (`Motion::WheelVelocityPid`, relocated out of
+the base since encoder freshness bounds its effective update rate at or
+below the loop rate regardless of where it runs) — still under active
+development, with its own standalone, Python-free `motion_tests` build
+plus `src/motion/planner/`'s own standalone `planner_tests` build. The
+two communicate through `Types::RobotState::Wheel::cmdVelocity`
+(`src/firm/types/robot_state.h`): whichever subsystem currently owns
+motion — `Motion::Planner` (`src/motion/planner/`) for a queued Move,
+`App::Drive` for WHEELS teleop — writes this cycle's commanded wheel
+speed directly onto that shared blackboard field, and `App::RobotLoop::
+cycle()` reads it back for actuation. (Sprint 128 ticket 014 deleted the
+122-era `Motion::WheelSink` boundary INTERFACE — `Motion::MoveQueue`,
+`Motion::StopCondition`, and `Motion::VelocityShaper` alongside it — as
+dead code with zero callers; `Motion::Planner` had already superseded
+that whole generation path without ever routing through it.) See
 [`docs/design/design.md`](docs/design/design.md) §2/§5 for the
 system-level split and [`src/motion/DESIGN.md`](src/motion/DESIGN.md)
 for the motion library's own current orientation — `src/motion` is real,

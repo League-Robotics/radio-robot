@@ -133,13 +133,12 @@ namespace App {
 //                                    Declared, not yet wired. Named "Event"
 //                                    but classified STATE here -- see this
 //                                    section's own header note.
-//   bit 16 (kFlagFaultShapingDisabled) -- a MOVE is active AND BOTH
-//                                    ShaperLimits axes (linear, angular)
-//                                    are disabled (App::MoveQueue::
-//                                    shapingDisabled(), mirroring
-//                                    shapeAndStage()'s own early-return
-//                                    gate, move_queue.cpp) -- the loud
-//                                    off-state for the silent-off
+//   bit 16 (kFlagFaultShapingDisabled) -- a MOVE is active AND the
+//                                    planner's own shaper is not
+//                                    configured (RobotLoop::
+//                                    publishMoveResult(): planner_.active()
+//                                    && !planner_.shaperConfigured()) --
+//                                    the loud off-state for the silent-off
 //                                    shaping/anticipation config boundary
 //                                    (119 ticket 001,
 //                                    kill-the-silent-off-shaping-config-
@@ -355,9 +354,10 @@ class Telemetry {
   // the bits whose defining condition genuinely cannot be known at
   // update() time:
   //   - kFlagFaultMoveTimeout/kFlagFaultShapingDisabled -- both depend on
-  //     Motion::MoveQueue::tick()'s own per-cycle outcome, which is not
-  //     known yet at update()/emit() time: tick() must stay positioned
-  //     AFTER update()/emit() every cycle (protocol-v4 §7.2 -- a
+  //     Motion::Planner::tick()'s own per-cycle outcome (its
+  //     Motion::TickResult return value plus planner_.shaperConfigured()),
+  //     which is not known yet at update()/emit() time: tick() must stay
+  //     positioned AFTER update()/emit() every cycle (protocol-v4 §7.2 -- a
   //     completion ack staged by tick() must not be visible before the
   //     NEXT cycle's own emit() call, and the same "rides the next frame"
   //     timing applies to these two fault bits, bench-verified by
@@ -365,8 +365,9 @@ class Telemetry {
   //     must already read live via flags() by the time cycle() returns on
   //     the exact cycle tick() ends/toggles them, well before that value
   //     would otherwise reach update()'s next call). RobotLoop::cycle()
-  //     calls this immediately after moveQueue_.tick(), the same position
-  //     the pre-124-009 code called tlm_.setFlag() from directly.
+  //     calls this (via publishMoveResult()) immediately after
+  //     planner_.tick(), the same position the pre-124-009 code called
+  //     tlm_.setFlag() from directly.
   // Mechanically identical to the private setFlag() update() uses
   // internally (a level-set OR/AND-NOT bit mutation) -- only the name and
   // caller differ, so `grep setFlag src/firm/app/robot_loop.cpp` (SUC-004's
@@ -383,6 +384,43 @@ class Telemetry {
   // a prior session's TLM:ON/TLM:OFF.
   void setMode(TlmMode mode) { mode_ = mode; }
   TlmMode mode() const { return mode_; }
+
+  // applyAction -- absorbs the TLM command-surface's mode-change switch
+  // (128-012: previously RobotLoop::cycle()'s own inline switch over
+  // Comms::TlmAction) AND the "should THIS cycle's emit() be forced"
+  // answer (issue Part 3, reason 1: a bare TLM/TLM:NOW line -- action ==
+  // kFrame -- forces one frame NOW, past the mode-gated unsolicited check,
+  // since "nothing is happening" is exactly the state someone asking is
+  // trying to observe). kSetOff/kSetAuto/kSetOn call setMode(); every
+  // other action (kNone/kFrame/kUnrecognized) leaves mode_ untouched.
+  //
+  // Dependency-direction choice (this ticket's own acceptance criteria
+  // call this out explicitly, not left ambiguous): Telemetry takes
+  // Comms::TlmAction BY VALUE here rather than (a) the enum moving to a
+  // shared/telemetry-owned header, or (b) Telemetry exposing three mode
+  // setters + requestFrame() for Comms/RobotLoop to call individually.
+  // comms.h is already an unconditional #include of this header (see the
+  // file header's own "Send path" note -- Telemetry holds a Comms&), so
+  // accepting Comms::TlmAction as a parameter type adds no NEW edge to the
+  // dependency graph, only a second use of the edge that already exists;
+  // option (b) was rejected because it would re-scatter the switch's arms
+  // across two call sites (RobotLoop choosing which setter to call is the
+  // same "another module's policy job in the loop" defect this ticket
+  // exists to remove) for no offsetting benefit.
+  //
+  // Returns the force-frame answer rather than latching a pending request
+  // internally and dropping emit()'s own `force` parameter (the OTHER
+  // option this ticket's acceptance criteria explicitly allow): emit()'s
+  // existing force semantics -- still gated behind primaryDue(), covered
+  // by this file's own extensive, pre-existing unit coverage exercising
+  // emit(now, force) directly -- stay exactly as they are. Only WHERE the
+  // "should this cycle be forced" decision gets COMPUTED moves, from
+  // RobotLoop's own inline ternary to here; emit()'s external contract is
+  // unchanged.
+  //
+  // Call once per cycle, immediately after comms_.takeTlmAction() -- the
+  // returned bool is the very next emit() call's own `force` argument.
+  bool applyAction(Comms::TlmAction action);
 
   // ack -- pushes to the bounded ack ring (120, ADDITIVE -- see
   // kAckRingDepth's own comment below and telemetry.proto's Telemetry.acks

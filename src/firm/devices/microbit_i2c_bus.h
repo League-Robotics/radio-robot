@@ -1,10 +1,19 @@
 // microbit_i2c_bus.h — Devices::MicroBitI2CBus: the real ARM implementation
 // of Devices::I2CBus, wrapping MicroBitI2C. Holds the MicroBitI2C& member,
 // re-entrancy guard, lazy preClear/postClear clearance timers, per-device
-// stats, the transaction ring log, and the IRQ guard.
+// stats, and the transaction ring log.
 //
-// The IRQ guard defaults ON — non-negotiable (the nRF52 TWIM errata
-// NRF52I2C::waitForStop documents; see class comments below).
+// Removed full-transaction IRQ guard (128-013, SUC-003, stakeholder decision
+// 2026-07-30): the nRF52833 TWIM has a silicon errata (NRF52I2C::waitForStop
+// can stall under background interrupt load) that a prior mechanism used to
+// paper over by masking IRQs for the duration of every I2C transaction. That
+// guard cost ~7-8% inbound serial command loss (DMA RX drops bytes inside
+// the masked window) to reduce the odds of a fault now bounded a different
+// way: the mandatory `MOVE` timeout backstop and explicit wedge detection
+// (neither existed when the guard was made "non-negotiable"). Guard-off
+// measured ~0% inbound command loss. Do not reinstate this mechanism from a
+// runaway/wedge report without re-checking the current timeout/wedge
+// coverage first — see the sprint 128 ticket for the full record.
 //
 // Every device leaf (Motor, Otos, LineSensorLeaf, ColorSensorLeaf) routes
 // its bus traffic through this wrapper (held via an `I2CBus&` reference)
@@ -15,12 +24,13 @@
 //
 // Re-entrancy guard (diagnostic, NOT a lock):
 //   inUse_ is checked and set atomically via target_disable_irq() /
-//   target_enable_irq() around the flag access only (NOT around the full
-//   I2C transaction unless irqGuard_ is on). If a second call enters while
-//   the first is still in flight (e.g. an ISR-context call or a spurious
-//   re-entry), the violation counter is incremented and the address pair is
-//   captured. The transaction proceeds normally — the guard records the
-//   concurrency violation but does NOT block or skip any I2C traffic.
+//   target_enable_irq() around the flag access only (never around the full
+//   I2C transaction — see the removal note above). If a second call enters
+//   while the first is still in flight (e.g. an ISR-context call or a
+//   spurious re-entry), the violation counter is incremented and the
+//   address pair is captured. The transaction proceeds normally — the
+//   guard records the concurrency violation but does NOT block or skip any
+//   I2C traffic.
 //
 // Per-device counters:
 //   Keyed by the 7-bit device address (the address before the caller
@@ -133,15 +143,6 @@ class MicroBitI2CBus : public I2CBus {
   // Enable/disable transaction logging (off by default).
   void setLogging(bool on) { logOn_ = on; }
 
-  // IRQ-guard the FULL transaction (not just the inUse_ flag). The nRF52
-  // TWIM has a silicon errata (see NRF52I2C::waitForStop) that strikes
-  // "under higher levels of background interrupt load"; masking interrupts
-  // for the duration of each transaction removes that load. Default ON —
-  // non-negotiable (issue "Armor stays intact"). Toggle live for bench A/B
-  // against the wedge.
-  void setIrqGuard(bool on) { irqGuard_ = on; }
-  bool irqGuard() const { return irqGuard_; }
-
  private:
   // Maximum number of distinct devices tracked (including the "other"
   // bucket at index kMaxDevices-1).
@@ -189,7 +190,6 @@ class MicroBitI2CBus : public I2CBus {
   int logHead_;         // next slot to write
   uint32_t logTotal_;   // total logged (for chronological ordering)
   bool logOn_;
-  bool irqGuard_;        // mask IRQs for the full transaction (TWIM errata fix)
 
   // Append one transaction to the ring (no-op if logging off).
   void logTxn(uint16_t addr7, uint8_t rw, int len, const uint8_t* data,

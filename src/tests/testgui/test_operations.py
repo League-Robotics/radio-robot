@@ -1,18 +1,17 @@
 """src/tests/testgui/test_operations.py — headless tests for OpsController.on_stop()
 (ticket 083-002).
 
-097 update: the situation this module originally documented has fully
-reversed. Pre-097, ``operations.py``'s STOP button sent a bare ``STOP`` that
-the firmware did not register (``docs/protocol-v2.md`` only defined
-``DEV DT STOP``) -- fixed by ticket 083-002 to send ``DEV DT STOP``. Sprint
-097 gutted the firmware's text plane down to a 6-verb rump (HELP/HELLO/
-PING/ID/VER/STOP) and retired the ``DEV`` debug command family entirely (no
-binary arm was ever planned for it either) -- ``STOP`` is now the one verb
-that is ALWAYS guaranteed to work (text rump AND a binary ``Stop{}`` oneof
-arm), while ``DEV DT STOP`` is unsupported (translated to a no-op by
-``binary_bridge.py``). ``on_stop()`` now sends bare ``STOP`` again. This
-module tests ``OpsController.on_stop()`` directly (no ``QApplication``/
-PySide6 widgets needed — only fake stand-ins for the one button it touches).
+128-003 update: ``on_stop()``'s wire-STOP saga (097's "STOP is the one verb
+ALWAYS guaranteed to work") turned out to be false on hardware --
+``binary_bridge.translate_command()`` is an unconditional dead stub on
+every transport ever since ``legacy_verbs`` was deleted wholesale
+(107-003), so ``transport.command("STOP", ...)`` never touched the wire at
+all while this method logged success regardless. ``on_stop()`` now calls
+``transport.halt()`` directly (estop semantics, not the PLANNED stop
+``"STOP"`` used to map to even when the stub "worked") and logs an honest
+``[ERROR] HALT FAILED`` on a raise instead of silence. This module tests
+``OpsController.on_stop()`` directly (no ``QApplication``/PySide6 widgets
+needed — only fake stand-ins for the one button it touches).
 
 Run with::
 
@@ -68,11 +67,15 @@ class _FakeOriginButton:
 
 
 class _FakeTransport(Transport):
-    """Records every ``command()``/``send()`` line; no real IO."""
+    """Records every ``command()``/``send()`` line and every ``halt()``
+    call; no real IO. No ``.protocol`` surface (mirrors a transport with no
+    direct-protocol telemetry-off path -- ``on_stop()``'s step 3 must
+    degrade to its "not available" branch against this fake, not raise)."""
 
     def __init__(self) -> None:
         super().__init__()
         self.commands: list[str] = []
+        self.halt_calls: int = 0
 
     def connect(self) -> None:
         pass
@@ -86,6 +89,9 @@ class _FakeTransport(Transport):
     def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
         self.commands.append(line)
         return ""
+
+    def halt(self) -> None:
+        self.halt_calls += 1
 
 
 def _make_controller(transport: "Transport | None") -> tuple[OpsController, list[str], _FakeButton]:
@@ -133,16 +139,24 @@ def _make_controller_with_origin(
 # ---------------------------------------------------------------------------
 
 
-def test_on_stop_sends_stop_then_stream_0() -> None:
+def test_on_stop_calls_halt_then_reports_telemetry_off_unavailable() -> None:
+    """128-003: on_stop() no longer sends the dead "STOP"/"STREAM 0" wire
+    strings -- step 2 calls transport.halt() directly (estop semantics),
+    and step 3 (telemetry-off) degrades to an honest "not available" log
+    against this fake, which has no ``.protocol`` surface (unlike a real
+    hardware/Sim transport)."""
     transport = _FakeTransport()
     controller, logs, stream_btn = _make_controller(transport)
 
     controller.on_stop()
 
-    assert transport.commands == ["STOP", "STREAM 0"]
-    assert any("STOP sent" in line for line in logs)
-    assert stream_btn.checked is False
-    assert stream_btn.text == "STREAM: off"
+    assert transport.commands == []
+    assert transport.halt_calls == 1
+    assert any("estop sent" in line for line in logs)
+    assert any("not available" in line for line in logs)
+    # step 3 never ran (no .protocol on this fake) -- stream_btn untouched.
+    assert stream_btn.checked is None
+    assert stream_btn.text is None
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +219,7 @@ def test_origin_btn_stays_disabled_if_tour_ends_while_disconnected() -> None:
     assert origin_btn.enabled is False, "must stay disabled -- not connected"
 
 
-def test_on_stop_cancels_motion_worker_before_sending_stop() -> None:
+def test_on_stop_cancels_motion_worker_before_halting() -> None:
     transport = _FakeTransport()
     controller, logs, stream_btn = _make_controller(transport)
     call_order: list[str] = []
@@ -213,10 +227,10 @@ def test_on_stop_cancels_motion_worker_before_sending_stop() -> None:
 
     controller.on_stop()
 
-    # stop_motion_cb must run BEFORE the wire STOP is sent, so the
-    # worker thread is joined and no longer touches the transport.
+    # stop_motion_cb must run BEFORE the halt, so the worker thread is
+    # joined and no longer touches the transport.
     assert call_order == ["stop_motion_cb"]
-    assert transport.commands[0] == "STOP"
+    assert transport.halt_calls == 1
 
 
 def test_on_stop_not_connected_logs_warning_and_sends_nothing() -> None:
@@ -227,12 +241,31 @@ def test_on_stop_not_connected_logs_warning_and_sends_nothing() -> None:
     assert any("not connected" in line for line in logs)
 
 
-def test_on_stop_stop_motion_cb_exception_does_not_block_wire_stop() -> None:
-    """A raising stop_motion_cb must not prevent STOP from being sent."""
+def test_on_stop_stop_motion_cb_exception_does_not_block_halt() -> None:
+    """A raising stop_motion_cb must not prevent the halt from being sent."""
     transport = _FakeTransport()
     controller, logs, stream_btn = _make_controller(transport)
     controller.stop_motion_cb = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
 
     controller.on_stop()
 
-    assert transport.commands == ["STOP", "STREAM 0"]
+    assert transport.halt_calls == 1
+
+
+def test_on_stop_raising_halt_logs_error_not_info() -> None:
+    """A raised halt() failure must surface as a loud [ERROR] -- on_stop()
+    must never log success on faith (128-003's own core safety property)."""
+
+    class _RaisingHaltTransport(_FakeTransport):
+        def halt(self) -> None:
+            super().halt()
+            raise ConnectionError("wire timeout")
+
+    transport = _RaisingHaltTransport()
+    controller, logs, stream_btn = _make_controller(transport)
+
+    controller.on_stop()
+
+    assert transport.halt_calls == 1
+    assert any("HALT FAILED" in line and "[ERROR]" in line for line in logs)
+    assert not any("[INFO] estop sent" in line for line in logs)

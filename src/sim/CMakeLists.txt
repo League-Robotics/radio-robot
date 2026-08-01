@@ -38,30 +38,13 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 # surfaces as a link error (an unresolved symbol), not a silent omission.
 #
 # Present:
-#   app/*.cpp                 -- Comms/Drive/MoveQueue/Odometry/Preamble/
-#                                 RobotLoop/Telemetry (the single-loop
-#                                 rebuild's whole App:: graph; 116-006:
-#                                 App::MoveQueue replaces the deleted
-#                                 App::Deadman)
-#   src/motion/stop_condition.cpp -- Motion::StopCondition (116-002), the
-#                                 per-Move stop-condition object MoveQueue
-#                                 owns and drives. Moved out of SOURCE_DIR
-#                                 (122-001: src/motion is now a SIBLING of
-#                                 src/firm, not a child -- see MOTION_DIR
-#                                 above) -- linked in unchanged otherwise.
-#   src/motion/velocity_shaper.cpp -- Motion::VelocityShaper (decel-into-the-
-#                                 goal campaign), the pure per-tick
-#                                 commanded-speed shaping function MoveQueue
-#                                 calls every Continue tick. Also under
-#                                 MOTION_DIR now (122-001).
+#   app/*.cpp                 -- Comms/Drive/Odometry/Preamble/RobotLoop/
+#                                 Telemetry (the single-loop rebuild's
+#                                 whole App:: graph)
 #   devices/nezha_motor.cpp, devices/otos.cpp, devices/color_sensor.cpp,
 #   devices/line_sensor.cpp
 #                              -- the device leaves SimPlant answers wire
 #                                 transactions for
-#   src/motion/wheel_velocity_pid.cpp -- Motion::WheelVelocityPid (125-003:
-#                                 relocated from devices/velocity_pid.cpp --
-#                                 App::Drive's interim closed loop this
-#                                 sprint). Under MOTION_DIR now.
 #   messages/wire.cpp, messages/wire_runtime.cpp
 #                              -- the generated + hand-written codec
 #                                 primitives
@@ -107,32 +90,23 @@ set(APP_SOURCES
     "${SOURCE_DIR}/app/robot_loop.cpp"
     "${SOURCE_DIR}/app/telemetry.cpp"
 )
-# motion/stop_condition.cpp (116-002) -- Motion::MoveQueue (MOTION_SOURCES,
-# below) owns and drives one Motion::StopCondition per active Move; this TU
-# must link into the host lib too. motion/velocity_shaper.cpp (decel-into-
-# the-goal campaign) -- MoveQueue's own per-tick commanded-speed shaping,
-# the SAME "MoveQueue links it" reasoning as stop_condition.cpp. Both live
-# under MOTION_DIR (122-001: src/motion, a sibling of src/firm), not
-# SOURCE_DIR.
-#
-# move_queue.cpp/odometry.cpp/state_estimator.cpp (122-002, motion-library
-# extraction ticket 2): moved from SOURCE_DIR/app/ into MOTION_DIR, behind
-# the velocity-sink boundary (motion/wheel_sink.h) -- App::Drive
-# (APP_SOURCES, above) is now the one WheelSink implementation these link
-# against. The OTOS-perception half odometry.cpp used to also define
+# odometry.cpp (122-002, motion-library extraction ticket 2): lives under
+# MOTION_DIR (122-001: src/motion, a sibling of src/firm), not
+# SOURCE_DIR. The OTOS-perception half odometry.cpp used to also define
 # (applyOtosSample()) is now a private RobotLoop method (robot_loop.cpp,
-# APP_SOURCES) -- Motion::Odometry may not depend on Devices::Otos/
-# App::Telemetry::Frame.
+# APP_SOURCES) -- Motion::Odometry may not depend on Devices::Otos/App::
+# Telemetry::Frame.
+#
+# Sprint 128 ticket 014 deleted stop_condition.cpp/velocity_shaper.cpp/
+# move_queue.cpp outright (zero callers -- Motion::Planner already wrote
+# Types::RobotState::Wheel::cmdVelocity directly and RobotLoop::cycle()
+# already consumed it directly, so the WheelSink boundary interface those
+# three modules existed to drive was never actually used); ticket 016
+# deleted state_estimator.cpp outright too (Motion::StateEstimator
+# retired from the loop -- a per-cycle computation with no consumer);
+# none of the four are part of this list any more.
 set(MOTION_SOURCES
-    "${MOTION_DIR}/stop_condition.cpp"
-    "${MOTION_DIR}/velocity_shaper.cpp"
-    "${MOTION_DIR}/move_queue.cpp"
     "${MOTION_DIR}/odometry.cpp"
-    "${MOTION_DIR}/state_estimator.cpp"
-    # 125-003: relocated from devices/velocity_pid.cpp
-    # (Devices::MotorVelocityPid -> Motion::WheelVelocityPid) -- App::Drive
-    # (APP_SOURCES, above) holds the interim instances this sprint.
-    "${MOTION_DIR}/wheel_velocity_pid.cpp"
     # Planner integration (2026-07-26): the planner library core drives the
     # loop now -- the same files the firmware image links.
     "${MOTION_DIR}/planner/profile.cpp"
@@ -202,11 +176,11 @@ add_library(firmware_host SHARED
 # test_straight_twist.py's three additional -I flags do.
 #
 # "${REPO_ROOT}/src" (122-001): src/motion is now a SIBLING of src/firm, not
-# a child -- a qualified `#include "motion/stop_condition.h"` (the SAME
-# text these headers used when they lived under src/firm/motion/) resolves
-# via THIS root, since "motion" is a top-level dir under src/ now instead
-# of a child of SOURCE_DIR. Zero #include text churn in src/firm callers
-# (app/move_queue.h etc.) that already said `#include "motion/...h"`.
+# a child -- a qualified `#include "motion/odometry.h"` (the SAME text
+# these headers used when they lived under src/firm/motion/) resolves via
+# THIS root, since "motion" is a top-level dir under src/ now instead of a
+# child of SOURCE_DIR. Zero #include text churn in src/firm callers that
+# already said `#include "motion/...h"`.
 target_include_directories(firmware_host PRIVATE
     "${SOURCE_DIR}"
     "${SUPPORT_DIR}"

@@ -111,6 +111,16 @@ class ClockSync:
             t0: Host monotonic time in ms *before* the PING was sent.
             t1: Host monotonic time in ms *after* the pong reply arrived.
             t_robot: Robot clock stamp (ms) from ``PONG:t=<n>`` (protocol v5, 124-005).
+
+        Note: this method never updates ``self._last_sync_s`` (only
+        ``ping_burst()`` does, after its own burst completes) -- calling
+        ``record_ping()`` directly does not reset ``stale()``'s age clock.
+        It also does not tag samples with a robot-boot epoch, so
+        ``self._samples`` can silently span a robot reboot (``t_robot``
+        resets to near-zero) if the caller keeps feeding it samples across
+        one -- no live caller does this today (zero live callers, per
+        ``DESIGN.md``), but a future one should not assume the sample set
+        is single-session-clean without checking.
         """
         sample = _PingSample(t0=t0, t1=t1, t_robot=t_robot)
         self._samples.append(sample)

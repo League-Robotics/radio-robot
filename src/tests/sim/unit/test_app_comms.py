@@ -25,6 +25,10 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _TESTS_SIM_DIR = _REPO_ROOT / "src" / "tests" / "sim"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_comms_harness.cpp"
 _COMMS_SRC = _SOURCE_DIR / "app" / "comms.cpp"
+# 128-012: the harness now drives Comms::updateStatus(state, tlm) with a
+# real App::Telemetry (for its flags()/mode() -- the two Telemetry-sourced
+# STATUS fields), so telemetry.cpp joins the compile graph.
+_TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
 _WIRE_SRC = _SOURCE_DIR / "messages" / "wire.cpp"
 _WIRE_RUNTIME_SRC = _SOURCE_DIR / "messages" / "wire_runtime.cpp"
 
@@ -50,6 +54,7 @@ def test_app_comms_harness_compiles_and_passes(tmp_path):
     """Compile App::Comms + the harness (HOST_BUILD) and assert every scenario passes."""
     assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
     assert _COMMS_SRC.is_file(), f"comms.cpp missing: {_COMMS_SRC}"
+    assert _TELEMETRY_SRC.is_file(), f"telemetry.cpp missing: {_TELEMETRY_SRC}"
     assert _WIRE_SRC.is_file(), f"wire.cpp missing (run scripts/gen_messages.py?): {_WIRE_SRC}"
     assert _WIRE_RUNTIME_SRC.is_file(), f"wire_runtime.cpp missing: {_WIRE_RUNTIME_SRC}"
     assert _SOURCE_DIR.is_dir(), f"src/firm/ tree missing: {_SOURCE_DIR}"
@@ -66,12 +71,19 @@ def test_app_comms_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            # 128-012: comms.h now #includes "firm/types/robot_state.h"
+            # (Comms::updateStatus()'s Types::RobotState& parameter) --
+            # matches test_app_telemetry.py's own extra -I for the same
+            # header.
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-I",
             str(_TESTS_SIM_DIR),
             "-o",
             str(binary),
             str(_HARNESS_SRC),
             str(_COMMS_SRC),
+            str(_TELEMETRY_SRC),
             str(_WIRE_SRC),
             str(_WIRE_RUNTIME_SRC),
         ],

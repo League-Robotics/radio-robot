@@ -34,6 +34,8 @@ Requires the compiled ``src/sim/build/libfirmware_host.{dylib,so}``
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from robot_radio.testgui.transport import _SimConfigConn, _sim_lib_path
@@ -41,6 +43,15 @@ from robot_radio.testgui.transport import _SimConfigConn, _sim_lib_path
 _TRACK_WIDTH = 128.0  # [mm]
 _TRUE_X = 1000.0      # [mm]
 _RAW_ERROR_LINEAR = 0.05  # 5% over-report -- a plausible mis-calibration
+
+# 128-003 baseline fix: sprint 114's sim fails closed and refuses MOTION
+# (twist/move) until it has received a complete configuration (114-001/
+# 002/003) -- a bare connect() with no configure_from_robot() call, as this
+# fixture used to do, emits zero TLM frames. Same fixture-config path
+# test_sim_loop.py's own `loop` fixture, test_turn_error_characterization.py's
+# `_make_sweep_loop()`, and test_tour_closure_gate.py's `_make_loop()` use.
+# test_otos_calibration_convergence.py -> testgui -> tests -> src -> repo root
+_ACTIVE_ROBOT_JSON = Path(__file__).resolve().parents[3] / "data" / "robots" / "tovez_nocal.json"
 
 # Steps enough sim cycles (50ms each) to clear Otos::tick()'s own
 # kReadPeriod (20ms/1 cycle) rate limit and land at least one fresh burst.
@@ -61,10 +72,12 @@ def sim_loop():
     if not lib_path.exists():
         pytest.skip(f"sim lib not built -- run `python build.py` (missing {lib_path})")
 
+    from robot_radio.config.robot_config import load_robot_config
     from robot_radio.io.sim_loop import SimLoop
 
     loop = SimLoop(track_width=_TRACK_WIDTH, lib_path=lib_path)
     loop.connect(start_tick_thread=False)
+    loop.configure_from_robot(load_robot_config(_ACTIVE_ROBOT_JSON))
     try:
         yield loop
     finally:
@@ -137,9 +150,22 @@ def test_otos_calibration_push_converges_pose_via_the_real_config_path(sim_loop)
     assert ack is not None, "OtosConfigPatch ack never arrived"
     assert ack.ok, f"OtosConfigPatch was NAK'd: err_code={ack.err_code}"
 
-    reading = _latest_otos_reading(sim_loop)
-    assert reading is not None, "expected a fresh otos= reading after calibration"
-    calibrated_x = reading[0]  # [mm]
+    # 128-003 baseline fix: TlmMode defaults to kAuto (telemetry.h) --
+    # unsolicited frames only flow during "activity" (kFlagActive, or
+    # recently-moved) OR while the just-pushed config's ack is still being
+    # delivered (pendingAckDeliveries(), honored in every mode regardless
+    # of unsolicited gating). This session never moves (set_true_pose()
+    # sets ground truth directly, not via a Move), so once the ack above
+    # finishes its bounded delivery window, a SEPARATE further step+drain
+    # call observes zero frames -- there is no ongoing activity left to
+    # keep emitting (confirmed empirically: a bare 3rd step+drain here
+    # returns 0 frames). Every primary TLM frame carries pose/otos
+    # together, so the ack-delivery frames already drained above carry a
+    # fresh, post-config otos= reading too -- read the calibrated value
+    # from THAT batch instead of stepping again into telemetry silence.
+    otos_frames = [f for f in frames if f.otos is not None]
+    assert otos_frames, "expected a fresh otos= reading in the ack-delivery frames"
+    calibrated_x = otos_frames[-1].otos[0]  # [mm]
 
     assert calibrated_x == pytest.approx(_TRUE_X, abs=_TRUE_X * 0.02), (
         f"calibrated OTOS x should converge back to truth (~{_TRUE_X:.0f}mm), got {calibrated_x}mm"

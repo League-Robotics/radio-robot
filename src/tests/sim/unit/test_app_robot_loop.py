@@ -45,19 +45,11 @@ _ROBOT_LOOP_SRC = _SOURCE_DIR / "app" / "robot_loop.cpp"
 _PREAMBLE_SRC = _SOURCE_DIR / "app" / "preamble.cpp"
 _COMMS_SRC = _SOURCE_DIR / "app" / "comms.cpp"
 _TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
-# 116-006 (MOVE protocol cutover): App::MoveQueue + Motion::StopCondition
-# replace the deleted App::Deadman.
-_MOVE_QUEUE_SRC = _REPO_ROOT / "src" / "motion" / "move_queue.cpp"
-_STOP_CONDITION_SRC = _REPO_ROOT / "src" / "motion" / "stop_condition.cpp"
-_VELOCITY_SHAPER_SRC = _REPO_ROOT / "src" / "motion" / "velocity_shaper.cpp"
 _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 # 122-002: App::applyOtosSample() split out of odometry.cpp (now
 # Motion::Odometry, src/motion/) into this new base-side file --
 # robot_loop.cpp's own applyOtosSample() call needs it linked in.
 _ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"
-# 117 ticket 003: App::StateEstimator, threaded through RobotLoop's own
-# constructor alongside MoveQueue/Preamble.
-_STATE_ESTIMATOR_SRC = _REPO_ROOT / "src" / "motion" / "state_estimator.cpp"
 # 115-005 (gut S1): heading_source.cpp/pilot.cpp/motion/executor.cpp/
 # motion/jerk_trajectory.cpp/vendor/ruckig are all DELETED along with the
 # rest of the motion stack -- robot_loop.h no longer includes app/pilot.h
@@ -65,9 +57,6 @@ _STATE_ESTIMATOR_SRC = _REPO_ROOT / "src" / "motion" / "state_estimator.cpp"
 # those sources are compiled into this harness any more.
 
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
-# 125-003: relocated from devices/velocity_pid.cpp -- App::Drive's interim
-# Motion::WheelVelocityPid instances this sprint.
-_VELOCITY_PID_SRC = _REPO_ROOT / "src" / "motion" / "wheel_velocity_pid.cpp"
 _OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
 _COLOR_SENSOR_SRC = _SOURCE_DIR / "devices" / "color_sensor.cpp"
 _LINE_SENSOR_SRC = _SOURCE_DIR / "devices" / "line_sensor.cpp"
@@ -164,14 +153,9 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
         _PREAMBLE_SRC,
         _COMMS_SRC,
         _TELEMETRY_SRC,
-        _MOVE_QUEUE_SRC,
-        _STOP_CONDITION_SRC,
-        _VELOCITY_SHAPER_SRC,
         _DRIVE_SRC,
         _ODOMETRY_SRC,
-        _STATE_ESTIMATOR_SRC,
         _NEZHA_MOTOR_SRC,
-        _VELOCITY_PID_SRC,
         _OTOS_SRC,
         _COLOR_SENSOR_SRC,
         _LINE_SENSOR_SRC,

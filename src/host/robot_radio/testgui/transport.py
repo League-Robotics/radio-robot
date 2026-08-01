@@ -78,13 +78,12 @@ SimTransport()
     substitute) -- so ``send()``/``command()`` on this class cannot route an
     arbitrary text-v2 verb through ``binary_bridge.translate_command()`` the
     way ``_HardwareTransport`` does; SimTransport never touches
-    ``binary_bridge`` at all (that module's ``translate_command()`` /
-    ``segment``/``replace`` builders stay real-hardware-only -- see
-    ``clasi/issues/binary-bridge-segment-replace-arms-deleted.md``).  A
-    ``send()``/``command()`` call is accepted, logged, and is a no-op
-    (returns ``""`` for ``command()``) -- driving the sim for real happens
-    exclusively through ``.protocol``'s ``twist()``/``stop()`` surface (a
-    tour, or ``KeyboardDriver``'s direct twist calls).
+    ``binary_bridge`` at all (128-004: that module is real-hardware-only --
+    see its own module docstring for the current direct-call-helper
+    surface).  A ``send()``/``command()`` call is accepted, logged, and is a
+    no-op (returns ``""`` for ``command()``) -- driving the sim for real
+    happens exclusively through ``.protocol``'s ``twist()``/``stop()``
+    surface (a tour, or ``KeyboardDriver``'s direct twist calls).
 
     Unit conversion: sim true-pose is (x, y, h) in (mm, mm, rad); on_truth receives
     (x_cm, y_cm, yaw_rad) — x and y are divided by 10; heading is passed
@@ -158,6 +157,7 @@ from robot_radio.testgui import sim_prefs
 
 if TYPE_CHECKING:
     from robot_radio.config.robot_config import RobotConfig
+    from robot_radio.field.playfield import Playfield
 
 _log = logging.getLogger(__name__)
 
@@ -499,6 +499,83 @@ def _relay_probe_banner(port: str, timeout_s: float = 2.0) -> "str | None":
                 pass
 
 
+def read_camera_pose(
+    playfield: "Playfield",
+    tag_id: int = _CAMERA_TAG_ID,
+    n: int = 5,
+    timeout: float = 4.0,
+) -> TruthPose:
+    """Return averaged robot world pose (x_cm, y_cm, yaw_rad) from camera tags.
+
+    Polls the aprilcam daemon for tag readings via the Playfield interface,
+    averaging linearly for x and y and circularly for yaw (to handle angle
+    wrap-around). Relocated here (128-010) from the deleted
+    ``robot_radio.testkit.camera`` module — ``_HardwareTransport._truth_loop``
+    below is this function's only live caller.
+
+    The world heading is the (circular-mean) tag orientation directly — the
+    daemon already reports it in the world frame (0 = east, CCW+), and that
+    orientation IS the robot's forward heading:
+        world_yaw = atan2(mean(sin(tag_yaw)), mean(cos(tag_yaw)))
+
+    Parameters
+    ----------
+    playfield:
+        Open Playfield that provides daemon access via ``get_tag()``.
+    tag_id:
+        AprilTag ID to read.  Default is the robot tag (``_CAMERA_TAG_ID``).
+    n:
+        Number of valid readings to collect before returning.
+    timeout:
+        Maximum seconds to wait for n readings.
+
+    Returns
+    -------
+    tuple[float, float, float]
+        (x_cm, y_cm, yaw_rad) in world (A1-centred, y-up, CCW+) coordinates.
+
+    Raises
+    ------
+    RuntimeError
+        If no tag readings were obtained within the timeout.
+    """
+    xs: list[float] = []
+    ys: list[float] = []
+    sin_yaws: list[float] = []
+    cos_yaws: list[float] = []
+
+    deadline = time.monotonic() + timeout
+
+    while time.monotonic() < deadline and len(xs) < n:
+        try:
+            tag = playfield.get_tag(tag_id)
+        except Exception:
+            time.sleep(0.05)
+            continue
+
+        if tag is not None:
+            xs.append(tag.x)
+            ys.append(tag.y)
+            sin_yaws.append(math.sin(tag.yaw))
+            cos_yaws.append(math.cos(tag.yaw))
+        else:
+            time.sleep(0.05)
+
+    if not xs:
+        raise RuntimeError(
+            f"read_camera_pose: no readings for tag {tag_id} within {timeout:.1f}s"
+        )
+
+    n_got = len(xs)
+    x_cm = sum(xs) / n_got
+    y_cm = sum(ys) / n_got
+    mean_sin = sum(sin_yaws) / n_got
+    mean_cos = sum(cos_yaws) / n_got
+    yaw_rad = math.atan2(mean_sin, mean_cos)
+
+    return (x_cm, y_cm, yaw_rad)
+
+
 # ---------------------------------------------------------------------------
 # Transport ABC
 # ---------------------------------------------------------------------------
@@ -575,6 +652,38 @@ class Transport(abc.ABC):
 
         Must block until all threads have exited (or timed out).  Must
         not raise even if already disconnected.
+        """
+
+    # ------------------------------------------------------------------
+    # Halt-now (128-003, testgui-stop-paths-must-halt-through-the-
+    # transport-not-the-dead-bridge.md)
+    # ------------------------------------------------------------------
+
+    @abc.abstractmethod
+    def halt(self) -> None:
+        """Halt the robot NOW -- estop semantics, never the PLANNED stop.
+
+        Clears the active Move AND the planner's pending queue in the
+        SAME cycle (``NezhaProtocol.estop()``'s own docstring). This is
+        distinct from the wire verb ``STOP`` / ``NezhaProtocol.stop()``,
+        which enqueues behind whatever ``Move`` is already in flight and
+        only takes effect once it is that stop's own turn -- measured on
+        hardware 2026-07-29: a mid-leg planned stop let the robot travel
+        the ENTIRE remaining leg (39.8cm, 5.9s) before taking effect,
+        vs. 2.9cm/0.10s for estop() (see
+        ``.claude/rules/playfield-testing.md``'s Halting section).
+
+        MUST raise on failure -- never return normally having silently
+        failed to halt. Every call site that means "halt the robot right
+        now" (the STOP button, a pre-teleport safety halt) must surface a
+        raised failure loudly (e.g. an ``[ERROR] HALT FAILED`` log line),
+        never swallow it on faith that the call "probably" worked -- a
+        halt that silently failed is indistinguishable from one that
+        succeeded, which is the exact defect this method exists to close
+        (previously ``on_stop()`` sent the string ``"STOP"`` through
+        ``binary_bridge.translate_command()``, an unconditional dead stub
+        that returns an error reply without ever touching the wire, while
+        logging ``"[INFO] STOP sent"`` regardless).
         """
 
     # ------------------------------------------------------------------
@@ -818,6 +927,29 @@ class _HardwareTransport(Transport):
         """
         return self._proto
 
+    # ------------------------------------------------------------------
+    # Halt-now (128-003)
+    # ------------------------------------------------------------------
+
+    def halt(self) -> None:
+        """Halt-now for real hardware: ``NezhaProtocol.estop()`` -- see
+        ``Transport.halt()``'s own docstring for the estop-vs-planned-stop
+        distinction this exists to enforce.
+
+        Raises ``ConnectionError`` if not connected; otherwise propagates
+        whatever ``estop()`` itself raises (a wire timeout, a link drop
+        mid-send). Never logs on its own -- callers (``operations.py``'s
+        ``on_stop()``, ``__main__.py``'s ``_safe_stop()``/``_set_origin()``)
+        own the honest success/failure log line, matching every other
+        halt call site in this tree
+        (``robot_radio.robot.halt.halt_now()``'s own "log, then raise"
+        idiom) without this method retrying or double-logging on top of
+        the caller's own report.
+        """
+        if self._proto is None:
+            raise ConnectionError("Transport is not connected")
+        self._proto.estop()
+
     def suspend_telemetry_reader(self) -> None:
         """Pause ``_reader_loop()``'s drain of the shared binary TLM queue.
 
@@ -988,12 +1120,11 @@ class _HardwareTransport(Transport):
         testgui-motion-paths-dead-after-move-cutover fix: ``D``/``RT``/
         ``SEG 0 <cdeg>`` are intercepted by ``_dispatch_managed_move()``
         BEFORE ``binary_bridge.translate_command()`` ever sees them -- that
-        module's own dispatch is a permanent dead stub (``legacy_render``/
-        ``legacy_verbs`` were deleted wholesale, see its own module
-        docstring) that sends nothing for ANY verb, including these. Every
-        other line still routes through ``translate_command()`` unchanged
-        (kept as the fallback for genuinely legacy verbs -- it now just
-        never actually translates any of them).
+        module's own dispatch sends nothing for these three regardless (see
+        its own module docstring: only ``OI``/``OL``/``OA``/``SET``/
+        ``STREAM`` have a live binary-plane translation at all, 128-004).
+        Every other line still routes through ``translate_command()``
+        unchanged.
 
         The reply string is discarded here (fire-and-forget contract),
         matching the ``send_fast()`` pre-migration behavior's "no reply
@@ -1282,7 +1413,6 @@ class _HardwareTransport(Transport):
                     continue
 
             try:
-                from robot_radio.testkit.camera import read_camera_pose
                 pose = read_camera_pose(playfield, tag_id=_CAMERA_TAG_ID, n=3, timeout=1.5)
                 self._deliver_truth(pose)
             except RuntimeError:
@@ -1418,9 +1548,10 @@ _SIM_READY_TIMEOUT_S = 5.0
 # Sim-mode config path (109-002, Architecture Revision 1): SET/GET-shaped
 # host needs route through typed ConfigDelta patches with REAL firmware
 # consumers, constructed via the SAME NezhaProtocol.config()/wait_for_ack()
-# hardware transports already use -- never through binary_bridge.
-# translate_command() (a universal dead stub on every transport since
-# legacy_render/legacy_verbs were deleted, see Architecture Revision 1).
+# hardware transports already use -- never through SimTransport's own
+# separate binary_bridge.translate_command() path (SimTransport never
+# touches binary_bridge.py at all, live or dead -- see this module's own
+# class docstring).
 # ---------------------------------------------------------------------------
 
 # The ConfigDelta patch kinds RobotLoop::handleConfig() applies live
@@ -1526,6 +1657,25 @@ class SimTransport(Transport):
         it straight to ``planner.tour.run_tour()``.
         """
         return self._loop
+
+    # ------------------------------------------------------------------
+    # Halt-now (128-003)
+    # ------------------------------------------------------------------
+
+    def halt(self) -> None:
+        """Halt-now for the sim backend: ``SimLoop.stop()`` -- despite its
+        name, already sends ESTOP on the sim ABI, not a planned stop (see
+        ``SimLoop.stop()``'s own docstring: "``sim_inject_stop`` is
+        retargeted at ESTOP ... every existing caller of this entry point
+        means 'halt the drivetrain now'"). This method exists so callers
+        never branch on backend type -- ``transport.halt()`` means the
+        same thing on both Sim and hardware.
+
+        Raises ``ConnectionError`` if not connected.
+        """
+        if self._loop is None:
+            raise ConnectionError("SimTransport is not connected")
+        self._loop.stop()
 
     def firmware_version(self) -> "str | None":
         """Version compiled into the loaded sim library, or None if not
@@ -1712,15 +1862,13 @@ class SimTransport(Transport):
     # ``SimLoop`` has no generic wire/config-channel simulation surface for
     # an arbitrary text-v2 line to translate onto the way
     # ``binary_bridge.translate_command()`` does for real hardware (and
-    # neither method calls into that module -- SimTransport's own call
-    # graph never reaches binary_bridge's segment/replace builders; see
-    # this class's module-docstring entry and
-    # clasi/issues/binary-bridge-segment-replace-arms-deleted.md). This
-    # follow-up fix (TestGUI Sim command-surface) routes the handful of
+    # neither method calls into that module -- SimTransport never touches
+    # binary_bridge.py at all; see this class's own module-docstring entry).
+    # This follow-up fix (TestGUI Sim command-surface) routes the handful of
     # wire verbs the GUI's OWN buttons actually send through command()/
     # send() -- STOP/X, the Turn buttons' "SEG 0 <cdeg>" pivots, the
-    # COMMANDS panel's "D <l> <r> <mm>"/"RT <cdeg>" direct-motion rows, and
-    # the pose-reset verbs _set_origin() sends (SI/OZ/ZERO enc) -- onto
+    # Managed panel's "D <l> <r> <mm>"/"RT <cdeg>" direct-motion presets,
+    # and the pose-reset verbs _set_origin() sends (SI/OZ/ZERO enc) -- onto
     # ``self._loop`` so Sim mode's direct buttons are no longer silent.
     # Every other verb (S/T/R/TURN/G, and anything else) still has no sim
     # backing -- accepted-and-logged, just with a short message instead of

@@ -42,13 +42,28 @@
 #include <cstdint>
 
 #include "devices/device_config.h"
-#include "motion/wheel_velocity_pid.h"
 
 namespace TestSim {
 class SimHarness;
 }  // namespace TestSim
 
 namespace TestSupport {
+
+// Gains -- a plain kff/kp/ki/iMax carrier for benchTestGains() below, local
+// to this test-tree-only header. 128-015: this used to be the motion
+// library's own Motion::Gains (wheel_velocity_pid.h, the interim closed-
+// loop velocity-PID class App::Drive briefly held) -- that class is deleted
+// outright (zero instantiations; App::Drive holds no controller of its own,
+// drive.h's own header), so this struct is redeclared here, scoped to what
+// configureSimForBenchTest() below actually forwards to
+// Motion::Planner::applyVelGains(kff, kp, ki, iMax) -- no kaw field, since
+// nothing here ever reads one.
+struct Gains {
+  float kff = 0.0f;
+  float kp = 0.0f;
+  float ki = 0.0f;
+  float iMax = 0.0f;
+};
 
 // benchTestMotorConfig -- byte-for-byte the deleted
 // TestSim::SimHarness::makeMotorConfig(uint32_t port) body (see that
@@ -65,26 +80,28 @@ namespace TestSupport {
 // 125-003: velFiltAlpha/velGains are DELETED from Devices::MotorConfig (the
 // velocity PID they fed relocated off the motor entirely) -- see
 // benchTestGains() below for the SAME kp/kff tuning, now pushed onto
-// App::Drive's own interim Motion::WheelVelocityPid instead.
+// Motion::Planner's own duty stage instead (128-015: the interim class this
+// used to name, briefly held by App::Drive, is deleted outright -- App::
+// Drive holds no controller of its own).
 Devices::MotorConfig benchTestMotorConfig(uint32_t port);
 
 // benchTestGains -- 125-003: the kp/kff half of the pre-125-003
-// benchTestMotorConfig()'s own velGains, relocated here as a
-// Motion::Gains (App::Drive's interim closed loop takes gains in this
-// shape, not Devices::Gains -- see drive.h's own header). SAME values,
-// SAME rationale (see bench_test_config.cpp's own comment at this
-// function's body) -- port-independent (both wheels share identical
-// tuning in every pre-125-003 caller of this file).
-Motion::Gains benchTestGains();
+// benchTestMotorConfig()'s own velGains, relocated here as this header's own
+// Gains struct (see its doc comment for why it is declared here rather than
+// reused from the motion library). SAME values, SAME rationale (see
+// bench_test_config.cpp's own comment at this function's body) --
+// port-independent (both wheels share identical tuning in every pre-125-003
+// caller of this file).
+Gains benchTestGains();
 
 // configureSimForBenchTest -- convenience wrapper: pushes
 // benchTestMotorConfig(1)/benchTestMotorConfig(2) via sim.configureMotor()
-// for both ports, PLUS (125-003) benchTestGains() onto sim.drive()'s own
-// interim gains for both sides (115-006: the benchTestPlannerConfig()/
-// configurePlanner() half is gone -- see this file's own header). This is
-// the ONE call every pre-existing (and any new) src/tests/sim/** harness
-// adds right after constructing a bare TestSim::SimHarness and before its
-// first injectTwist()/step()/boot() call, to restore byte-for-byte the same
+// for both ports, PLUS (125-003) benchTestGains() onto Motion::Planner's own
+// duty-stage gains (115-006: the benchTestPlannerConfig()/configurePlanner()
+// half is gone -- see this file's own header). This is the ONE call every
+// pre-existing (and any new) src/tests/sim/** harness adds right after
+// constructing a bare TestSim::SimHarness and before its first
+// injectTwist()/step()/boot() call, to restore byte-for-byte the same
 // "always already configured" behavior SimHarness's own constructor used to
 // provide unconditionally -- now explicit, test-tree-only, and opt-in.
 void configureSimForBenchTest(TestSim::SimHarness& sim);

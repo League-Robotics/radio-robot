@@ -70,9 +70,13 @@ error).
 campaign) -- the four exceptions to the paragraph above. Orphaned by
 115-003 alongside every other `motion_limits_for_config()` field, they are
 the four of that list this campaign's `shaper_config_for_config()` (below)
-reads back into a NEW consumer (`Config::ShaperBootConfig` ->
-`Motion::VelocityShaper` / `App::MoveQueue`, not the deleted planner) --
-see that function's own docstring. `alpha_max`/`alpha_decel` are genuinely
+reads back into `Config::ShaperBootConfig`. That consumer (a
+velocity-shaping stage this campaign added) was itself deleted as dead
+code in sprint 128 ticket 014 -- `Config::ShaperBootConfig` is currently
+unread by anything (`Motion::Planner` uses its own hand-baked
+`Motion::PlannerLimits`, not this struct); kept declared since removing
+it is a schema change outside that ticket's scope. See that function's
+own docstring. `alpha_max`/`alpha_decel` are genuinely
 new fields this campaign added to the schema/every robot JSON (a_max/
 a_decel's own angular sibling; no `msg::PlannerConfig` predecessor existed
 for either) -- `yaw_jerk_max` already existed as `j_max`'s own angular
@@ -444,9 +448,11 @@ def estimator_config_for_config(cfg: dict):
     The turn-prediction campaign's own former fourth field (a boot-time
     anticipation-lead constant) is DELETED (118 ticket 004,
     land-at-zero-completion-delete-stop-lead.md) -- the anticipation
-    mechanism it fed no longer exists (see App::MoveQueue::tick()'s own
-    doc comment for the land-at-zero completion predicate that replaces
-    it), so this generator no longer reads (or requires) that key.
+    mechanism it fed no longer exists (see
+    docs/design/history/land-at-zero-margin-derivation.md for the
+    land-at-zero completion predicate that replaced it, itself deleted as
+    dead code in sprint 128 ticket 014), so this generator no longer reads
+    (or requires) that key.
     """
     heading_otos = _require(cfg, "estimator", "weight_heading_otos")
     omega_otos = _require(cfg, "estimator", "weight_omega_otos")
@@ -457,27 +463,27 @@ def estimator_config_for_config(cfg: dict):
 def shaper_config_for_config(cfg: dict):
     """Return (a_max, a_decel, alpha_max, alpha_decel, j_max, yaw_jerk_max)
     for Config::ShaperBootConfig (decel-into-the-goal campaign) --
-    Motion::VelocityShaper's own accel/decel/jerk magnitude ceilings,
-    consumed by App::MoveQueue to taper the commanded speed toward each
-    Move's own stop threshold instead of holding a constant speed until
-    Motion::StopCondition fires.
+    accel/decel/jerk magnitude ceilings originally consumed by a
+    velocity-shaping stage this campaign added. That consumer was deleted
+    as dead code in sprint 128 ticket 014 (zero callers, superseded by
+    Motion::Planner's own hand-baked PlannerLimits) -- Config::
+    ShaperBootConfig is currently unread by anything; kept declared since
+    removing it is a boot-config schema change outside that ticket's
+    scope.
 
     a_max/a_decel/j_max/yaw_jerk_max are READ AGAIN here -- this module's
     own docstring explains why all four were dead ("unread") data since
-    115-003's motion-stack excision and why this campaign resurrects them
-    into a DIFFERENT consumer than the deleted planner. alpha_max/
-    alpha_decel are new fields (a_max/a_decel's own angular sibling) --
-    yaw_jerk_max already existed as j_max's own angular sibling, so no new
-    field was needed there.
+    115-003's motion-stack excision and why this campaign resurrected them
+    into a (now also deleted) consumer. alpha_max/alpha_decel are new
+    fields (a_max/a_decel's own angular sibling) -- yaw_jerk_max already
+    existed as j_max's own angular sibling, so no new field was needed
+    there.
 
     All six REQUIRED, same fail-closed posture as every other field this
     generator bakes (sprint 114 config-as-truth, extended here) -- a robot
     JSON missing any one of them fails codegen loudly rather than shipping
-    a boot image where App::ShaperLimits silently disables shaping on that
-    axis (see App::ShaperLimits's own "0 == disabled" doc comment,
-    app/move_queue.h) -- a build should refuse an incomplete shaping
-    calibration the same way it already refuses an incomplete velocity-PID
-    or OTOS calibration, not silently ship an unshaped robot.
+    an incomplete calibration silently, the same way it already refuses an
+    incomplete velocity-PID or OTOS calibration.
     """
     a_max = _require(cfg, "control", "a_max")
     a_decel = _require(cfg, "control", "a_decel")
@@ -747,15 +753,17 @@ ShaperBootConfig defaultShaperConfig() {{
     // JSON's control.a_max/a_decel/alpha_max/alpha_decel/j_max/
     // yaw_jerk_max (data/robots/robot_config.schema.json). a_max/a_decel/
     // j_max/yaw_jerk_max are the deleted msg::PlannerConfig's own former
-    // fields, orphaned by 115-003 and read again here into a NEW consumer
-    // (Motion::VelocityShaper); alpha_max/alpha_decel are new (a_max/
-    // a_decel's own angular sibling -- yaw_jerk_max already covered the
-    // angular jerk slot). NOT a live SET/wire surface itself -- see
-    // App::MoveQueue's own setShaperLimits()/EstimatorConfigPatch's
-    // a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max fields
-    // (config.proto) for the separate, volatile live-tuning path (mirrors
-    // OtosBootConfig/EstimatorBootConfig's own "boot bake vs. live
-    // ConfigPatch" split).
+    // fields, orphaned by 115-003 and read again here into a velocity-
+    // shaping consumer that has SINCE ALSO been deleted, as dead code, in
+    // sprint 128 ticket 014 (zero callers, superseded by Motion::Planner's
+    // own hand-baked PlannerLimits) -- this whole struct is currently
+    // unread by anything; alpha_max/alpha_decel are new (a_max/a_decel's
+    // own angular sibling -- yaw_jerk_max already covered the angular
+    // jerk slot). NOT a live SET/wire surface itself -- see
+    // EstimatorConfigPatch's a_max/a_decel/alpha_max/alpha_decel/j_max/
+    // yaw_jerk_max fields (config.proto) for the separate, volatile
+    // live-tuning path (mirrors OtosBootConfig/EstimatorBootConfig's own
+    // "boot bake vs. live ConfigPatch" split).
     ShaperBootConfig cfg;
     cfg.aMax = {_f(shaper_a_max)};                  // [mm/s^2]
     cfg.aDecel = {_f(shaper_a_decel)};               // [mm/s^2]

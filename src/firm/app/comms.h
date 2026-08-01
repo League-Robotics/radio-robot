@@ -31,6 +31,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "firm/types/robot_state.h"
 #include "messages/commands.h"
 #include "messages/envelope.h"
 #include "messages/wire.h"
@@ -41,6 +42,16 @@ class Radio;
 #endif
 
 namespace App {
+
+// Forward-declared, not #included: telemetry.h already #includes this
+// header (its own file header's "Send path" section -- Telemetry holds a
+// Comms&), so the reverse edge (comms.h -> telemetry.h) would be a genuine
+// include cycle. Comms::updateStatus() below needs only a `const
+// Telemetry&` reference type, which a forward declaration supplies; the
+// definition (comms.cpp) includes telemetry.h itself, where there is no
+// cycle -- see updateStatus()'s own doc comment for why Comms takes this
+// as a parameter rather than holding a Telemetry& member.
+class Telemetry;
 
 // kCobsDelimiter -- protocol v5's wire delimiter (issue §2): COBS is now
 // keyed on 0x0A ('\n'), not 0x00. Every WireRuntime::cobsEncode()/
@@ -276,6 +287,37 @@ class Comms {
   // Refresh the snapshot STATUS answers from. Called once per cycle by
   // RobotLoop; cheap enough to be unconditional.
   void setStatus(const Status& status) { status_ = status; }
+
+  // updateStatus -- the STATUS projection (128-012: absorbed from
+  // RobotLoop::cycle()'s previous inline field-by-field assembly, the same
+  // shape of problem Telemetry::update() already solves for its own wire
+  // frame). Reads `state` (the loop's own per-cycle blackboard) for every
+  // field except the two Telemetry owns (`flags`/`tlmMode`), which are read
+  // straight off `tlm` -- an explicit parameter, not a stored Telemetry&
+  // member (Comms holds no Telemetry& anywhere else either, matching this
+  // file's own boundary note: "outside -- deciding what a decoded command
+  // DOES"). This is the dependency-direction choice this ticket's own
+  // acceptance criteria call out: the alternative (publish flags/tlmMode
+  // onto Types::RobotState during Telemetry::update() so this method reads
+  // one source) was rejected because RobotState is a dependency-free,
+  // cross-tree-shared struct (robot_state.h's own file header) and
+  // flags/tlmMode are wire-projection artifacts, not per-cycle robot
+  // dynamics -- adding them there would blur that boundary for a
+  // one-caller convenience. `state.health.ready` is the one genuinely
+  // loop-owned fact (RobotLoop::boot()'s own "past this point the loop
+  // dispatches commands" bit, now published onto the blackboard instead of
+  // hard-coded `true` at this projection site -- see robot_state.h's own
+  // doc comment on Health::ready).
+  //
+  // Call exactly once per cycle, UNCONDITIONALLY -- even when the idle gate
+  // suppressed this cycle's telemetry frame, since answering STATUS on a
+  // parked robot is precisely the case STATUS exists for -- and AFTER
+  // Telemetry::applyAction() has applied any same-cycle mode change
+  // (`tlm.mode()` is read live here), but BEFORE sendTlmReply(), whose
+  // STATUS/HELP reply must report the mode just applied this cycle, not
+  // last cycle's. Both ordering constraints are load-bearing; see
+  // RobotLoop::cycle()'s own comment at the call site.
+  void updateStatus(const Types::RobotState& state, const Telemetry& tlm);
 
   // TlmAction -- the parsed effect of one `TLM`/`TLM:...` line (Part 4's
   // command surface, telemetry-emit-policy-rebuild-spec.md). Comms parses

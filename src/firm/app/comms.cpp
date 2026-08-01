@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "app/telemetry.h"
 #include "messages/wire_runtime.h"
 #include "types/version_generated.h"
 
@@ -566,6 +567,23 @@ void Comms::sendReady() {
   // grammar, exactly like HELLO/PING inbound.
   serialLink_.sendReliable("READY");
   radioLink_.sendReliable("READY");
+}
+
+// updateStatus -- see comms.h's own doc comment for the full contract
+// (dependency direction, call-order constraints). A plain field-by-field
+// projection, same idiom as Telemetry::update()'s own frame assembly --
+// every field copied straight across, nothing derived here.
+void Comms::updateStatus(const Types::RobotState& state, const Telemetry& tlm) {
+  Status status;
+  status.ready = state.health.ready;
+  status.active = state.command.moveActive;
+  status.wheelLeftConnected = state.wheelLeft.connected;
+  status.wheelRightConnected = state.wheelRight.connected;
+  status.otosPresent = state.otos.present;
+  status.wedged = state.health.wedgeLatch;
+  status.flags = tlm.flags();
+  status.tlmMode = static_cast<uint8_t>(tlm.mode());
+  status_ = status;
 }
 
 }  // namespace App

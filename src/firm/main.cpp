@@ -26,10 +26,8 @@
 #include "devices/motor_armor.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
-#include "motion/move_queue.h"
 #include "motion/planner/planner.h"
 #include "motion/odometry.h"
-#include "motion/state_estimator.h"
 #include "types/version_generated.h"
 
 static MicroBit uBit;
@@ -68,31 +66,25 @@ Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
 }
 
 // toMotionGains -- DELETED (command-ingestion-...-two-stops.md §4). It fed
-// App::Drive's interim Motion::WheelVelocityPid pair, which is gone: Drive
-// is open-loop duty from calibrated speed and holds no controller at all
+// App::Drive's interim per-wheel closed-loop velocity-PID pair, which is
+// gone (128-015 deleted that class outright, zero instantiations -- see
+// src/motion/DESIGN.md's "wheel control generations" note): Drive is
+// open-loop duty from calibrated speed and holds no controller at all
 // (drive.h's own file header). The boot JSON's vel_gains reach the one
 // controller that still exists -- Motion::Planner's duty stage -- through
 // App::Configurator's pid.* wire keys, not through this seeding path.
 
 
-Motion::FusionWeights toFusionWeights(const Config::EstimatorBootConfig& src) {
-  Motion::FusionWeights weights;
-  weights.headingOtos = src.headingOtos;
-  weights.omegaOtos = src.omegaOtos;
-  weights.staleness = src.staleness;
-  return weights;
-}
-
-Motion::ShaperLimits toShaperLimits(const Config::ShaperBootConfig& src) {
-  Motion::ShaperLimits limits;
-  limits.aMax = src.aMax;
-  limits.aDecel = src.aDecel;
-  limits.alphaMax = src.alphaMax;
-  limits.alphaDecel = src.alphaDecel;
-  limits.jMax = src.jMax;
-  limits.yawJerkMax = src.yawJerkMax;
-  return limits;
-}
+// toFusionWeights() -- DELETED (128-016,
+// robot-state-pose-needs-exactly-one-writer.md): its one consumer,
+// Motion::StateEstimator's constructor, is gone (a per-cycle computation
+// with no consumer -- its own former header said so). Config::
+// EstimatorBootConfig/Config::defaultEstimatorConfig() themselves are
+// UNTOUCHED here (out of this ticket's scope -- see boot_config.h's own
+// doc comment): they still bake fail-closed fusion-weight defaults from
+// each robot JSON for a future estimator rebuild
+// (clasi/issues/estimator-v2-otos-fusion-sim-first.md) to read; this
+// file simply no longer has anywhere to feed the result.
 
 // The boot tag: the DAY of the version's date field, then the build number.
 // "0.20260726.1" -> "261" (day 26, build 1).
@@ -198,9 +190,6 @@ int main() {
 
   static Devices::MicroBitI2CBus bus(uBit.i2c);
 
-
-  bus.setIrqGuard(false); // We dont need the irq guard any more. 
-
   msg::MotorConfig motorConfigs[Config::kMotorConfigCount];
   Config::defaultMotorConfigs(motorConfigs);
   msg::DrivetrainConfig drivetrainConfig = Config::defaultDrivetrainConfig();
@@ -305,12 +294,9 @@ int main() {
   Devices::Otos& otos = realOtos;
 #endif
 
-  Config::EstimatorBootConfig estimatorBootConfig = Config::defaultEstimatorConfig();
-  static Motion::StateEstimator stateEstimator(toFusionWeights(estimatorBootConfig));
-
-
-  // Planner integration (2026-07-26): the on-robot Motion::Planner replaces
-  // Motion::MoveQueue as the loop's motion decider. Limits assembled from
+  // Planner integration (2026-07-26): the on-robot Motion::Planner is the
+  // loop's motion decider, writing Types::RobotState::Wheel::cmdVelocity
+  // directly (robot_state.h's own field doc). Limits assembled from
   // the SAME boot-config sources the old stack used: shaper keys ->
   // profile ceilings, vel_gains -> the planner's own duty-stage PID,
   // vel_filt_alpha -> the planner's velocity-filter weight. controlPeriod
@@ -397,8 +383,12 @@ int main() {
     // VELOCITY-DOMAIN TRIM (wheel_trim.h) -- the closed loop that actually
     // reaches the wheels. The loop's one actuation contract is a wheel
     // VELOCITY (RobotState::Wheel::cmdVelocity), which App::Drive converts
-    // through its measured per-wheel per-direction map; the duty-stage
-    // gains above are computed every tick and DISCARDED.
+    // through its measured per-wheel per-direction map. The duty-stage
+    // gains above configure Planner::stageDuty() -- PARKED as of 128-015:
+    // Planner::tick() no longer calls it at all (it used to run every
+    // cycle and its output was DISCARDED here regardless, since nothing on
+    // this robot ever read commandedDutyLeft/Right()) -- see
+    // src/motion/DESIGN.md's "wheel control generations" note.
     //
     // COMMISSIONING VALUES, to be raised on the stand rather than trusted:
     //   trimKp is DIMENSIONLESS (mm/s of trim per mm/s of error). The sim
@@ -437,11 +427,11 @@ int main() {
   // App::Configurator owns the CONFIG lifecycle and the persisted-tuning
   // store (command-ingestion-...-two-stops.md §6); RobotLoop routes to it.
   static App::Configurator configurator(drive, motorL, motorR, otos, planner,
-                                        stateEstimator, &tuningStore);
+                                        &tuningStore);
 
   static App::RobotLoop robotLoop(bus, motorL, motorR, otos, color, line,
                                    comms, tlm, drive, configurator, odom,
-                                   planner, preamble, stateEstimator, clock,
+                                   planner, preamble, clock,
                                    sleeper);
 
   // Turn calibration from the robot JSON. Degrees on the wire/JSON side (what

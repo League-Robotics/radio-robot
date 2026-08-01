@@ -23,7 +23,7 @@ sets, matched to what each half of the harness needs:
     integration sim/unit harness compiles (mirrors
     ``test_sim_harness_configure.py``'s own source list).
 
-Mirrors ``test_motion_stop_condition.py``'s shape: compile with the system
+Mirrors every other sim/unit harness's shape: compile with the system
 C++ compiler, run the resulting binary, assert it exits 0. Collected under
 ``src/tests/sim/unit/`` -- already within ``pyproject.toml``'s
 ``testpaths = ["src/tests/sim"]``, no configuration change needed.
@@ -65,7 +65,6 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "comms.cpp",
     _SOURCE_DIR / "app" / "configurator.cpp",
     _SOURCE_DIR / "app" / "telemetry.cpp",
-    _REPO_ROOT / "src" / "motion" / "move_queue.cpp",
     _MOTION_PLANNER_DIR / "profile.cpp",
     _MOTION_PLANNER_DIR / "estimation.cpp",
     _MOTION_PLANNER_DIR / "wheel_pid.cpp",
@@ -75,13 +74,12 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "drive.cpp",
     _REPO_ROOT / "src" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
-    _REPO_ROOT / "src" / "motion" / "state_estimator.cpp",
 ]
-_MOTION_SOURCES = [
-    _REPO_ROOT / "src" / "motion" / "stop_condition.cpp",
-    _REPO_ROOT / "src" / "motion" / "velocity_shaper.cpp",
-    _REPO_ROOT / "src" / "motion" / "wheel_velocity_pid.cpp",
-]
+# 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
+# entry here) is gone outright -- zero instantiations; App::Drive holds no
+# controller of its own (open-loop duty from calibrated speed, drive.h's
+# own header). See src/motion/DESIGN.md's "wheel control generations" note.
+_MOTION_SOURCES = []
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
     _SOURCE_DIR / "devices" / "nezha_motor.cpp",

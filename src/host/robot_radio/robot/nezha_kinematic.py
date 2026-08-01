@@ -63,14 +63,14 @@ class NezhaKinematic(NezhaState):
     ) -> None:
         super().__init__(proto)
         self._kinematics = DifferentialDriveKinematics(trackwidth)
-        self._trackwidth_m = trackwidth / 1000.0
+        self._trackwidth = trackwidth / 1000.0  # [m] WPILib wants metres, not mm
         self._wheel_diameter = wheel_diameter  # stored but not needed currently
 
         self._odometry = DifferentialDriveOdometry(Rotation2d(0), 0.0, 0.0)
         self._prev_encoders: tuple[int, int] = (0, 0)
         # Cumulative encoder offset applied at anchor() so we can pass running totals
         # to WPILib (which expects cumulative distances) while resetting pose origin.
-        self._encoder_offset_m: tuple[float, float] = (0.0, 0.0)
+        self._encoder_offset: tuple[float, float] = (0.0, 0.0)  # [m]
         self._velocity: float = 0.0
         self._angular_velocity: float = 0.0
 
@@ -118,12 +118,12 @@ class NezhaKinematic(NezhaState):
             dt = self.dt_s
 
         # Cumulative mm → cumulative metres relative to last anchor
-        left_total_m = enc[0] / 1000.0 - self._encoder_offset_m[0]
-        right_total_m = enc[1] / 1000.0 - self._encoder_offset_m[1]
+        left_total = enc[0] / 1000.0 - self._encoder_offset[0]  # [m]
+        right_total = enc[1] / 1000.0 - self._encoder_offset[1]  # [m]
 
         # Encoder delta for velocity computation
-        left_delta_m = (enc[0] - self._prev_encoders[0]) / 1000.0
-        right_delta_m = (enc[1] - self._prev_encoders[1]) / 1000.0
+        left_delta = (enc[0] - self._prev_encoders[0]) / 1000.0  # [m]
+        right_delta = (enc[1] - self._prev_encoders[1]) / 1000.0  # [m]
         self._prev_encoders = enc
 
         # NezhaState stores the TLM pose heading as centi-degrees in
@@ -131,12 +131,12 @@ class NezhaKinematic(NezhaState):
         # CCW-positive radians conversion (cdeg / 18000 * pi). WPILib
         # Rotation2d needs CCW-positive radians.
         heading = Rotation2d(heading_rad)
-        self._odometry.update(heading, left_total_m, right_total_m)
+        self._odometry.update(heading, left_total, right_total)
 
         if dt > 0:
-            self._velocity = (left_delta_m + right_delta_m) / (2.0 * dt)
+            self._velocity = (left_delta + right_delta) / (2.0 * dt)
             # CCW-positive angular velocity, matching WPILib convention
-            omega_ccw = (right_delta_m - left_delta_m) / (self._trackwidth_m * dt)
+            omega_ccw = (right_delta - left_delta) / (self._trackwidth * dt)
             self._angular_velocity = omega_ccw
 
     # ------------------------------------------------------------------
@@ -184,7 +184,7 @@ class NezhaKinematic(NezhaState):
         # Record the current raw encoder total as the zero-point for this
         # odometry session; _update_odometry subtracts this offset so that
         # WPILib always receives distances relative to the anchor point.
-        self._encoder_offset_m = (enc[0] / 1000.0, enc[1] / 1000.0)
+        self._encoder_offset = (enc[0] / 1000.0, enc[1] / 1000.0)  # [m]
 
     # ------------------------------------------------------------------
     # Public pose properties

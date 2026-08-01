@@ -424,14 +424,16 @@ def test_send_starts_completion_poll_without_waiting_for_enqueue_ack(transport):
 
 
 # ---------------------------------------------------------------------------
-# Unrecognized verbs still fall through to binary_bridge's legacy stub
+# Unrecognized verbs still fall through to binary_bridge's generic
+# unsupported reply (128-004: the dead legacy-translation stub is gone;
+# ``S`` has no binary-plane arm on the current wire either way).
 # ---------------------------------------------------------------------------
 
 
-def test_unrecognized_verb_falls_through_to_legacy_stub(transport):
+def test_unrecognized_verb_falls_through_to_unsupported_reply(transport):
     reply = transport.command("S 200 200", read_timeout=500)
 
-    assert reply == binary_bridge._LEGACY_UNAVAILABLE_REPLY
+    assert reply.startswith("ERR unsupported S")
     assert transport._conn.sent == []
 
 

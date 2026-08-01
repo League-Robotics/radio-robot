@@ -249,6 +249,45 @@ class TestPanelWiring:
         finally:
             widget.deleteLater()
 
+    def test_stale_banner_hidden_until_frames_stop(self, qapp, monkeypatch):
+        """128-009: a dead link (no update_frame() calls) must show a "no
+        frames in Ns" banner rather than let the last-received values sit
+        there looking fresh forever."""
+        import time as time_mod
+
+        from PySide6.QtWidgets import QLabel
+
+        from robot_radio.testgui import telemetry_panel
+        from robot_radio.testgui.telemetry_panel import build_telemetry_panel
+        from robot_radio.robot.protocol import TLMFrame
+
+        widget, ctrl = build_telemetry_panel()
+        try:
+            banner = widget.findChild(QLabel, "telemetry_stale_banner")
+            assert banner is not None
+            # The panel widget is never .show()n in this offscreen test, so
+            # isVisible() (which also checks ancestor on-screen state) would
+            # always read False -- isVisibleTo() checks the banner's own
+            # explicit show/hide state relative to its parent instead.
+            assert banner.isVisibleTo(widget) is False  # nothing received yet
+
+            fake_now = 1_000.0
+            monkeypatch.setattr(time_mod, "monotonic", lambda: fake_now)
+            ctrl.update_frame(TLMFrame(t=1))
+            assert banner.isVisibleTo(widget) is False  # frame just arrived
+
+            # Advance past the staleness threshold without another frame.
+            fake_now += telemetry_panel._STALE_AFTER_S + 0.5
+            ctrl._check_staleness()
+            assert banner.isVisibleTo(widget) is True
+            assert "no frames in" in banner.text()
+
+            # A fresh frame clears it immediately.
+            ctrl.update_frame(TLMFrame(t=2))
+            assert banner.isVisibleTo(widget) is False
+        finally:
+            widget.deleteLater()
+
     def test_window_has_panel_and_filters_console(self, qapp):
         from PySide6.QtWidgets import QPlainTextEdit, QWidget
 

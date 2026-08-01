@@ -220,6 +220,20 @@ counted and cooperatively waited out rather than allowed to proceed
 early, but a nonzero count means the loop's own schedule, not this class,
 has a timing defect.
 
+**(Removed, 128-013) The full-transaction IRQ guard.** A separate, now-
+deleted mechanism used to mask IRQs for the duration of an entire
+`write()`/`read()` transaction (not just the `inUse_` flag
+check-and-set) as a second line of defense against the same TWIM
+errata — `MicroBitI2CBus::setIrqGuard()`/`irqGuard()`. It cost ~7-8%
+inbound serial command loss (DMA RX drops bytes inside the masked
+window) to reduce the odds of a fault that is now bounded a different
+way: the mandatory `MOVE` timeout backstop and explicit wedge detection
+(neither existed when the guard was made "non-negotiable"). Guard-off
+measured ~0% inbound command loss (stakeholder decision 2026-07-30).
+The per-device clearance wait described above and the `inUse_`
+re-entrancy flag are unrelated mechanisms and were not touched by this
+removal.
+
 **`present()`/`connected()` and detection as a state machine.** Detection
 for the color and line sensors is not a fire-once `begin()` the way
 `NezhaMotor`'s and `Otos`'s is — the color sensor in particular needs its
@@ -292,9 +306,10 @@ safe to run while the wheel is actually moving.
 
 **(Historical, pre-125-003) The velocity control law — a reduced PI with
 back-calculation anti-windup.** This subsection describes the control law
-that used to be embedded here, before 125-003 relocated it wholesale to
-the motion library (`Motion::WheelVelocityPid`, `src/motion/
-wheel_velocity_pid.h`) — kept for history, not current architecture.
+that used to be embedded here, before 125-003 relocated it wholesale to a
+standalone class in the motion library — itself later deleted outright
+(128-015, zero instantiations; see `src/motion/DESIGN.md`'s "wheel control
+generations" note) — kept for history, not current architecture.
 The control law is a discrete PI (+ feedforward, `Gains::kff`) with
 back-calculation anti-windup against `Gains::iMax`, plus one integrator
 behavior worth calling out: the integrator is *frozen* (left unchanged)
@@ -311,7 +326,7 @@ too, not just the integrator (2026-07-22 bench fix, refined same day).**
 The deadband freeze above only ever silenced the *integral* term —
 `compute()` still computed and returned `kp * err` for an in-deadband
 target, including the literal `target == 0.0f` case `Drive::stop()`/an
-emptied `MoveQueue` produce at rest. Since `err = target - measured`, an
+emptied Move queue produce at rest. Since `err = target - measured`, an
 exact-zero target's own "error" is just whatever residual/noisy
 `measured` velocity the plant happens to report that tick, and
 `writeShapedDuty()` (`nezha_motor.cpp`) boosts that noise-driven nonzero

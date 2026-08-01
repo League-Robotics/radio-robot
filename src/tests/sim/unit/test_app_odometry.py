@@ -12,9 +12,9 @@ Mirrors ``test_app_drive.py``'s exact shape: compile with the system C++
 compiler, run the resulting binary, assert it exits 0.
 
 125-003: ``devices/velocity_pid.cpp`` is no longer a NezhaMotor link
-dependency (its embedded PID was deleted outright, relocated to
-``Motion::WheelVelocityPid`` -- this harness doesn't touch App::Drive, so
-it needs neither).
+dependency (its embedded PID was deleted outright, relocated to a
+motion-local wheel-velocity PID class that 128-015 later deleted -- this
+harness doesn't touch App::Drive, so it needs neither).
 
 Migrated by sprint 108 ticket 009 off the deleted ``src/firm/devices/
 i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see

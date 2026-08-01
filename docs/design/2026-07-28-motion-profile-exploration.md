@@ -108,7 +108,7 @@ reproduces (below).
 
 ## Sim reproduces it — iteration no longer needs hardware
 
-`src/motion/planner/bench/square_tour_velocity.py` drives the real planner
+`src/tests/bench/square_tour_velocity.py` (relocated 128-010) drives the real planner
 through ctypes against a simulated plant, logs commanded AND measured per
 tick, and closes at 19.70 mm against hardware's 18.6 mm. Its shared library
 was stale (missing `plannerEstop`); rebuild with

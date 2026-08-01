@@ -29,6 +29,12 @@ issues:
 
 # Sprint 128: Complexity reduction: delete dead code, unburden the robot loop, fix bit rot
 
+> **Executing this sprint? Read [`EXECUTION.md`](EXECUTION.md) FIRST.** This
+> sprint runs in a separate clone, not the main checkout; its `.clasi`
+> database is forked, so ticket status moves differently; and the test
+> baseline is RED with six known pre-existing failures. None of that is
+> guessable from this file.
+
 ## Goals
 
 Collect and close out every issue from the 2026-07-30 craftsmanship review

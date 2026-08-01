@@ -167,6 +167,28 @@ void Telemetry::update(const Types::RobotState& state) {
   }
 }
 
+// applyAction -- see telemetry.h's own doc comment for the full contract
+// (dependency-direction choice, why emit()'s `force` parameter survives).
+bool Telemetry::applyAction(Comms::TlmAction action) {
+  switch (action) {
+    case Comms::TlmAction::kSetOff:
+      setMode(TlmMode::kOff);
+      break;
+    case Comms::TlmAction::kSetAuto:
+      setMode(TlmMode::kAuto);
+      break;
+    case Comms::TlmAction::kSetOn:
+      setMode(TlmMode::kOn);
+      break;
+    case Comms::TlmAction::kNone:
+    case Comms::TlmAction::kFrame:
+    case Comms::TlmAction::kUnrecognized:
+    default:
+      break;  // no mode change
+  }
+  return action == Comms::TlmAction::kFrame;
+}
+
 void Telemetry::ack(uint32_t corrId, uint32_t errCode) {
   pushAckRing(corrId, errCode);
 }

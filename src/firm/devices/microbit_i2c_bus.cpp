@@ -22,8 +22,7 @@ MicroBitI2CBus::MicroBitI2CBus(MicroBitI2C& bus)
       deviceCount_(0),
       logHead_(0),
       logTotal_(0),
-      logOn_(false),
-      irqGuard_(true) {
+      logOn_(false) {
   for (int i = 0; i < kMaxDevices; ++i) {
     devices_[i].addr = 0;
     devices_[i].txnCount = 0;
@@ -64,12 +63,9 @@ int MicroBitI2CBus::write(uint16_t address, uint8_t* data, int len,
   if (preDeadline > entryDeadline) entryDeadline = preDeadline;
   waitForClearance(entryDeadline);
 
-  const bool guard = irqGuard_;
-
-  // Always mask IRQs for the flag check-and-set. When irqGuard_ is on we
-  // KEEP them masked through the whole bus_ transaction (nRF52 TWIM errata
-  // fix — see microbit_i2c_bus.h / NRF52I2C::waitForStop); when off, we
-  // re-enable before the transaction (original narrow-guard behaviour).
+  // Mask IRQs for the flag check-and-set only — NOT for the full bus_
+  // transaction (the full-transaction IRQ guard was removed, 128-013; see
+  // microbit_i2c_bus.h's removal note).
   target_disable_irq();
   bool alreadyInUse = inUse_;
   if (alreadyInUse) {
@@ -80,14 +76,13 @@ int MicroBitI2CBus::write(uint16_t address, uint8_t* data, int len,
     inUse_ = true;
     inFlightAddr_ = static_cast<uint16_t>(address);
   }
-  if (!guard) target_enable_irq();
+  target_enable_irq();
 
   int status = bus_.write(address, data, len, repeated);
 
   if (!alreadyInUse) {
     inUse_ = false;
   }
-  if (guard) target_enable_irq();
 
   record(addr7, status);
   logTxn(addr7, 0, len, data, status);
@@ -109,8 +104,7 @@ int MicroBitI2CBus::read(uint16_t address, uint8_t* data, int len,
   if (preDeadline > entryDeadline) entryDeadline = preDeadline;
   waitForClearance(entryDeadline);
 
-  const bool guard = irqGuard_;
-
+  // Mask IRQs for the flag check-and-set only — see write()'s comment above.
   target_disable_irq();
   bool alreadyInUse = inUse_;
   if (alreadyInUse) {
@@ -121,14 +115,13 @@ int MicroBitI2CBus::read(uint16_t address, uint8_t* data, int len,
     inUse_ = true;
     inFlightAddr_ = static_cast<uint16_t>(address);
   }
-  if (!guard) target_enable_irq();
+  target_enable_irq();
 
   int status = bus_.read(address, data, len, repeated);
 
   if (!alreadyInUse) {
     inUse_ = false;
   }
-  if (guard) target_enable_irq();
 
   record(addr7, status);
   logTxn(addr7, 1, len, data, status);

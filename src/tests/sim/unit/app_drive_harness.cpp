@@ -5,22 +5,17 @@
 // stop() zeroes both targets within one cycle of the next
 // NezhaMotor::tick().
 //
-// 125-003 (sprint 125 Decision 2, "protection vs. control" -- see
-// sprint.md): Devices::NezhaMotor's embedded velocity PID is DELETED --
-// App::Drive itself now holds the INTERIM closed loop (two
-// Motion::WheelVelocityPid instances, drive.h's own header) that converts
-// the staged mm/s target into real duty before calling
-// Devices::Motor::setDuty(). This harness's own scenarios are updated
-// in-place (not deleted): they still isolate "did Drive's staged target
-// reach appliedDuty() through a KNOWN deterministic computation" from the
-// PID's own convergence behavior, exactly as before -- only WHERE that
-// computation runs changed (App::Drive::tick() instead of
-// NezhaMotor::tick()). kp=0/ki=0 (this harness's own gains, applied via
-// Drive::applyGainsLeft/Right()) isolates the feedforward-only term
-// (rawDuty == kff * target), which is independent of both `dt` and the
-// plant's `measured` velocity -- so this harness's assertions are
-// numerically IDENTICAL to their pre-125-003 values, despite the
-// relocation.
+// 128-015: App::Drive has no controller of its own at all -- duty is open
+// loop from calibrated speed (drive.h's own file header); the interim,
+// per-125-003 closed loop this file's header used to describe (two
+// motion-local wheel-velocity-PID instances inside Drive) never survived
+// past 122-002/125-002's own reshaping of Drive into a bare duty sink, and
+// that PID class itself (a fully separate, zero-instantiation class from
+// Motion::WheelPid/Planner::stageDuty()) is deleted outright this ticket --
+// see src/motion/DESIGN.md's "wheel control generations" note. This
+// harness's scenarios still isolate "did Drive's staged target reach
+// appliedDuty() through a KNOWN deterministic computation," now simply
+// Drive's own open-loop calibration (setDutyPerSpeed()) rather than a PID.
 //
 // 122-002 (motion-library extraction, ticket 2): App::Drive shrank to a bare
 // wheel-target sink -- setDuty()/stop()/tick() only, implementing
@@ -35,15 +30,15 @@
 // "v_left"/"v_right" in the scenario names/locals below still describe what
 // these values ARE today (raw mm/s velocities staged under the duty-shaped
 // name), not yet real duty at the Drive::setDuty() boundary -- Drive's own
-// interim closed loop (this file's own header) is what turns them into real
-// duty before they reach the Motor leaves.
+// open-loop calibration is what turns them into real duty before they
+// reach the Motor leaves.
 //
 // Mirrors devices_motor_harness.cpp's own NezhaMotor-scripting helpers
 // (scriptEncoderRequestCollect/baseNezhaConfig) -- duplicated here per this
 // codebase's established per-harness-file fixture convention.
 // Compiled by test_app_drive.py with -DHOST_BUILD against drive.cpp,
-// nezha_motor.cpp, wheel_velocity_pid.cpp (src/motion/), sim_plant.cpp,
-// {wheel,otos}_plant.cpp, body_kinematics.cpp.
+// nezha_motor.cpp, sim_plant.cpp, {wheel,otos}_plant.cpp,
+// body_kinematics.cpp.
 //
 // Migrated by sprint 108 ticket 009 off the deleted src/firm/devices/
 // i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket 001 reduced
@@ -59,7 +54,6 @@
 #include "app/drive.h"
 #include "devices/device_config.h"
 #include "devices/nezha_motor.h"
-#include "motion/wheel_velocity_pid.h"
 #include "scripted_i2c_hook.h"
 #include "sim_plant.h"
 
@@ -129,20 +123,6 @@ Devices::MotorConfig baseNezhaConfig(uint32_t port) {
   cfg.fwdSign = 1;
   cfg.wheelTravelCalib = 1.0f;
   return cfg;
-}
-
-// kp=0, ki=0 isolates App::Drive's interim PID's proportional/integral term
-// to a single deterministic linear relation (rawDuty == kff * target, see
-// this file's own header) so this harness can predict appliedDuty() exactly
-// from Drive's staged target without simulating multi-cycle convergence.
-Motion::Gains ffOnlyGains() {
-  Motion::Gains gains;
-  gains.kp = 0.0f;
-  gains.ki = 0.0f;
-  gains.kff = 0.002f;
-  gains.iMax = 1.0f;
-  gains.kaw = 2.0f;
-  return gains;
 }
 
 // Primes a fresh leaf at position 0 (one request->collect cycle at nowUs=0)

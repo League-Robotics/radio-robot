@@ -114,8 +114,10 @@ in which file is which) is in
   `config/robot_config.py`, the same JSON the firmware bakes at build
   time.
 - **Consumes AprilCam** — `field/`, `media/`, and camera-dependent
-  `testkit/`/`testgui/` modules use `aprilcam.client.control.DaemonControl`;
-  no firmware wire dependency.
+  `testgui/` modules use `aprilcam.client.control.DaemonControl`; no
+  firmware wire dependency. (`testkit/` is deleted, 128-010 — its one
+  camera consumer, `read_camera_pose`, is now part of
+  `testgui/transport.py`.)
 - **Is exercised by** [`src/tests`](../tests/DESIGN.md)'s `unit/` and
   `testgui/` categories, which import this package directly.
 

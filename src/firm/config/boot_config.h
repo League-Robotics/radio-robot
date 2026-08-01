@@ -100,11 +100,13 @@ OtosBootConfig defaultOtosBootConfig();
 // the derivation).
 //
 // The turn-prediction campaign's own boot-time anticipation-lead field
-// (formerly declared here, App::MoveQueue's own former stop-condition
-// time-lead) -- DELETED (118 ticket 004, land-at-zero-completion-delete-
-// stop-lead.md): the anticipation mechanism it fed no longer exists (see
-// move_queue.h's own tick() doc comment for the land-at-zero completion
-// predicate that replaces it) -- there is no lead value left to bake.
+// (formerly declared here, feeding a now-deleted per-Move stop-condition
+// time-lead mechanism) -- DELETED (118 ticket 004, land-at-zero-
+// completion-delete-stop-lead.md): the anticipation mechanism it fed no
+// longer exists (see docs/design/history/land-at-zero-margin-derivation.md
+// for the land-at-zero completion predicate that replaced it, itself
+// deleted as dead code in sprint 128 ticket 014) -- there is no lead
+// value left to bake.
 struct EstimatorBootConfig {
   float headingOtos = 0.0f;  // [0..1] blend weight: body heading vs OTOS heading
   float omegaOtos = 0.0f;    // [0..1] blend weight: body omega vs OTOS omega
@@ -119,46 +121,42 @@ EstimatorBootConfig defaultEstimatorConfig();
 // ShaperBootConfig (decel-into-the-goal campaign, follow-on to
 // clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md's own
 // "Option 1... remains the path to closing that residual further") —
-// Motion::VelocityShaper's own accel/decel magnitude ceilings, baked from
-// the robot JSON's `control.a_max`/`control.a_decel`/`control.alpha_max`/
-// `control.alpha_decel` (data/robots/robot_config.schema.json).
-// Field-for-field mirror of App::ShaperLimits (app/move_queue.h), declared
-// independently here for the SAME reason EstimatorBootConfig/FusionWeights
-// stay independently declared: config/ may depend only on messages/
-// (docs/design/design.md §5's dependency diagram), never on app/. main.cpp
-// converts this into an App::ShaperLimits at the one composition-root
-// place both types are visible, the same toFusionWeights()/
-// toDeviceMotorConfig() pattern.
+// accel/decel/jerk magnitude ceilings, baked from the robot JSON's
+// `control.a_max`/`control.a_decel`/`control.alpha_max`/
+// `control.alpha_decel` (data/robots/robot_config.schema.json). These
+// fields originally fed a velocity-shaping consumer that was itself
+// deleted in sprint 128 ticket 014 as dead code (zero callers,
+// superseded by Motion::Planner's own PlannerLimits) -- this struct and
+// its generator (gen_boot_config.py) are themselves currently unread by
+// any live consumer (main.cpp constructs Motion::PlannerLimits from its
+// own plant-validated constants, not from this struct); kept declared
+// here rather than deleted outright since removing it is a boot-config
+// schema change outside this ticket's scope, not a src/firm/src/motion
+// code-boundary one.
 //
 // aMax/aDecel/jMax/yawJerkMax are NOT new fields — they are the deleted
 // msg::PlannerConfig's own `a_max`/`a_decel`/`j_max`/`yaw_jerk_max`,
 // orphaned dead data since 115-003's motion-stack excision
 // (gen_boot_config.py's own module docstring used to document all four as
-// "unread by this generator"); this campaign reads them again, into a NEW
-// consumer (Motion::VelocityShaper/App::MoveQueue) rather than the deleted
-// planner. alphaMax/alphaDecel ARE new (a_max/a_decel's own angular
-// sibling — no msg::PlannerConfig predecessor existed for either); yaw_
-// jerk_max already existed as j_max's own angular sibling, so no NEW
-// angular jerk field was needed the way alphaMax/alphaDecel were for
-// accel/decel.
+// "unread by this generator"). alphaMax/alphaDecel ARE new (a_max/
+// a_decel's own angular sibling — no msg::PlannerConfig predecessor
+// existed for either); yaw_jerk_max already existed as j_max's own
+// angular sibling, so no NEW angular jerk field was needed the way
+// alphaMax/alphaDecel were for accel/decel.
 //
 // jMax/yawJerkMax (jerk-limited S-curve stage, 2026-07-22 stakeholder
-// correction on top of this struct's own first accel-limited pass):
-// Motion::VelocityShaper's own jerk magnitude ceilings — how fast the
-// commanded ACCELERATION itself may change, bounding the S-curve's own
-// "corners" (see velocity_shaper.h's own file header for the full jerk-
-// limited algorithm). `j_max`/`yaw_jerk_max` already existed as REQUIRED,
-// unread `control.*` keys in every robot JSON since sprint 114 (098-001) —
-// this campaign is the first consumer.
+// correction on top of this struct's own first accel-limited pass): how
+// fast the commanded ACCELERATION itself may change, bounding the
+// S-curve's own "corners". `j_max`/`yaw_jerk_max` already existed as
+// REQUIRED, unread `control.*` keys in every robot JSON since sprint 114
+// (098-001).
 //
 // REQUIRED (config-as-truth, sprint 114's own fail-closed posture,
 // extended here): a robot JSON missing any of the six `control.a_max`/
 // `a_decel`/`alpha_max`/`alpha_decel`/`j_max`/`yaw_jerk_max` keys fails
 // codegen loudly (same MissingRobotConfigKeyError gen_boot_config.py's own
 // `_require()` already raises for every other REQUIRED field) rather than
-// silently shipping an unshaped (or zero-shaped, which would refuse to
-// move at all — see App::ShaperLimits's own "0 == disabled" doc comment,
-// move_queue.h) boot image.
+// silently shipping an unshaped boot image.
 struct ShaperBootConfig {
   float aMax = 0.0f;         // [mm/s^2] linear accel-ramp ceiling
   float aDecel = 0.0f;       // [mm/s^2] linear decel-taper ceiling

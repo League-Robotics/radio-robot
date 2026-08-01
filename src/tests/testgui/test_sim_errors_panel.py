@@ -426,54 +426,15 @@ class TestSimErrorsApplyButton:
         from robot_radio.testgui import operations, sim_prefs
         import robot_radio.testgui.transport as transport_module
 
+        from ._fake_sim_transport import make_fake_connected_sim_transport_class
+
         monkeypatch.setattr(sim_prefs, "_PREFS_PATH", tmp_path / "missing.json")
         monkeypatch.setattr(
             sim_prefs, "save_sim_error_profile", lambda profile: None
         )
 
         applied: list[dict] = []
-
-        class FakeConnectedSimTransport(transport_module.Transport):
-            """Fake whose class name is 'SimTransport' (duck-typed by
-            operations.is_sim_transport) and that never touches real hardware
-            or the ctypes sim.
-            """
-
-            def __init__(self) -> None:
-                super().__init__()
-                self._connected = False
-
-            def connect(self) -> None:
-                self._connected = True
-
-            def disconnect(self) -> None:
-                self._connected = False
-
-            def send(self, line: str) -> None:
-                pass
-
-            def command(self, line: str, read_timeout: int = 200) -> str:  # [ms]
-                return "OK"
-
-            def apply_error_profile(self, profile: dict) -> None:
-                applied.append(profile)
-
-            def firmware_version(self) -> "str | None":
-                # 111-002: _on_connect() (__main__.py) unconditionally calls
-                # transport.firmware_version() on every isinstance(transport,
-                # SimTransport) connect (commit 67792cab, "add firmware
-                # version retrieval to SimTransport") to show the loaded sim
-                # lib's own version -- the real SimTransport.firmware_version()
-                # this fake stands in for. An AttributeError here (this
-                # method absent) aborted _on_connect() before it reached
-                # `_state["transport"] = transport`, so the Apply button
-                # handler below found no connected transport and never
-                # called apply_error_profile() at all -- the actual prior
-                # failure mode, not a missing button wiring.
-                return "test-fake"
-
-        FakeConnectedSimTransport.__name__ = "SimTransport"
-        FakeConnectedSimTransport.__qualname__ = "SimTransport"
+        FakeConnectedSimTransport = make_fake_connected_sim_transport_class(applied)
 
         # Sanity: operations.is_sim_transport must recognize it by class name.
         assert operations.is_sim_transport(FakeConnectedSimTransport())

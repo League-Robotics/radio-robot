@@ -43,6 +43,7 @@ Config
 
 from __future__ import annotations
 
+import logging
 import math
 import time
 from typing import Any, Generator
@@ -51,6 +52,8 @@ from robot_radio.nav.pose import Pose
 from robot_radio.robot.robot import Robot
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame, ParsedResponse, parse_response
 from robot_radio.robot.robot_state import RobotState
+
+_log = logging.getLogger(__name__)
 
 
 class RobotNotFoundError(ConnectionError):
@@ -228,7 +231,7 @@ class Nezha(Robot):
         except GeneratorExit:
             pass
 
-    def speed_for_time(self, left: int, right: int, ms: int) -> tuple[int, int]:  # [mm/s]
+    def speed_for_time(self, left: int, right: int, duration: int) -> tuple[int, int]:  # [mm/s] [mm/s] [ms]
         """Blocking timed drive (T command). Returns final encoder totals (mm).
 
         Waits for EVT done T or a conservative host-side timeout.
@@ -237,17 +240,17 @@ class Nezha(Robot):
             return 0 if v == 0 else max(self.MIN_SPEED, abs(v)) * (1 if v > 0 else -1)
 
         l, r = _clamp(left), _clamp(right)
-        self._proto.timed(l, r, ms)
-        self._proto.wait_for_evt_done("T", ms + 2000)  # outcome unused; discard reason
+        self._proto.timed(l, r, duration)
+        self._proto.wait_for_evt_done("T", duration + 2000)  # outcome unused; discard reason
         return self.encoders
 
-    def speed_for_distance(self, left: int, right: int, mm: int) -> tuple[int, int]:  # [mm/s]
+    def speed_for_distance(self, left: int, right: int, distance: int) -> tuple[int, int]:  # [mm/s] [mm/s] [mm]
         """Blocking distance drive (D command). Returns final encoder totals (mm)."""
         def _clamp(v: int) -> int:
             return 0 if v == 0 else max(self.MIN_SPEED, abs(v)) * (1 if v > 0 else -1)
 
         l, r = _clamp(left), _clamp(right)
-        remaining = abs(int(mm))  # [mm]
+        remaining = abs(int(distance))  # [mm]
         if remaining == 0:
             return self.encoders
 
@@ -261,6 +264,15 @@ class Nezha(Robot):
 
             outcome, _ = self._proto.wait_for_evt_done("D", timeout=6000)
             if outcome == "timeout":
+                # Pre-104-002 text-plane D/EVT-done path; NezhaProtocol.distance()/
+                # wait_for_evt_done() (called above) were deleted by that ticket's
+                # dead-arm sweep (protocol.py's own module docstring), so this
+                # branch is unreachable in the current binary-only P4 firmware --
+                # it would AttributeError before ever reaching this stop() call.
+                # Left as a sequenced stop-then-raise (not a halt-now context)
+                # rather than rewritten, since fixing this dead text-plane path is
+                # out of this ticket's scope (128-001 is the repl/halt sweep, not
+                # a Nezha-class dead-code pass).
                 self._proto.stop()
                 raise TimeoutError(
                     f"Distance hop timed out: target={hop}mm at speeds {l},{r}"
@@ -554,8 +566,9 @@ class Nezha(Robot):
             try:
                 self._proto._conn.send_fast("STOP")
                 self._proto.stream(0)
-            except Exception:
-                pass
+            except Exception:  # legacy text-plane teardown, no estop() equivalent here
+                _log.warning("speed(): failed to send STOP/STREAM 0 on GeneratorExit",
+                             exc_info=True)
 
     def send_drive(self, left: int, right: int) -> None:  # [mm/s]
         """Fire-and-forget S keepalive for manual control loops."""
