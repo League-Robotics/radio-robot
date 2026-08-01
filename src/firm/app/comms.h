@@ -3,22 +3,16 @@
 // binary-frame armor/dearmor layer between the two transports (serial +
 // radio) and decoded msg::CommandEnvelope / msg::ReplyEnvelope.
 //
-// 124-005 (protocol v5 Part A, "framing grammar cutover" -- issue
-// protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md §1-§4):
-// replaces the old two-heuristic text/binary demux (a transport-level
-// guess about which of two incompatible framings a completed line was)
-// with ONE uniform grammar in both directions: every line, text or binary,
-// is `<COMMAND>[':' <data>]'\n'`. The transport delivers a bare,
-// `\n`-terminated line (COBS is now keyed on 0x0A -- see wire_runtime.h
-// item 8 -- so a binary frame's own bytes never contain a literal 0x0A,
-// making the terminator genuinely unconditional); Comms parses the
-// `<COMMAND>` prefix, looks it up in the generated command registry
+// ONE uniform grammar in both directions: every line, text or binary, is
+// `<COMMAND>[':' <data>]'\n'`. The transport delivers a bare,
+// `\n`-terminated line (COBS is keyed on 0x0A -- see wire_runtime.h item 8
+// -- so a binary frame's own bytes never contain a literal 0x0A, making
+// the terminator genuinely unconditional); Comms parses the `<COMMAND>`
+// prefix, looks it up in the generated command registry
 // (messages/commands.h's kVerbTable[]), and THAT lookup's `binary` flag --
 // not anything about the data's own bytes -- is the sole decision of how
-// `<data>` is read. Supersedes 123-002's "*B"+base64 armor and 123-006's
-// exact-match text-command recognizer alike; both are gone, not
-// deprecated. See wire_runtime.h's own file header (123-001/124-003) for
-// the COBS/CRC primitives this file is built on.
+// `<data>` is read. See wire_runtime.h's own file header for the COBS/CRC
+// primitives this file is built on.
 //
 // Boundary: inside -- the grammar parse/emit, CRC-over-command-and-payload
 // composition, dispatch of text vs. binary by registry lookup, the
@@ -53,11 +47,10 @@ namespace App {
 // as a parameter rather than holding a Telemetry& member.
 class Telemetry;
 
-// kCobsDelimiter -- protocol v5's wire delimiter (issue §2): COBS is now
-// keyed on 0x0A ('\n'), not 0x00. Every WireRuntime::cobsEncode()/
-// cobsDecode() call in this file passes this explicitly rather than
-// relying on that function's own 0x00 default (which stays 0x00 for the
-// pre-124 callers WireRuntime.h documents, e.g. wire_differential_harness).
+// kCobsDelimiter -- the wire delimiter: COBS is keyed on 0x0A ('\n'), not
+// 0x00. Every WireRuntime::cobsEncode()/cobsDecode() call in this file
+// passes this explicitly rather than relying on that function's own 0x00
+// default (which other callers, e.g. wire_differential_harness, still use).
 constexpr uint8_t kCobsDelimiter = 0x0A;
 
 // Transport -- the abstract non-blocking line-in/line-out seam Comms is
@@ -76,14 +69,13 @@ class Transport {
   // raw bytes otherwise. `\r` is NOT stripped here -- under one uniform
   // rule `\r` is legal binary content, so an unconditional strip would be
   // a bug; Comms strips a trailing `\r` only for a line it has already
-  // classified as cleartext (124-005, issue §7). Never partially delivers
-  // a line.
+  // classified as cleartext. Never partially delivers a line.
   virtual bool readLine(char* buf, uint16_t cap, uint16_t* outLen) = 0;
 
   // Async, drop-on-full send -- `data`/`len` is the COMPLETE wire line
   // content this call must emit, MINUS the trailing `\n` terminator (the
-  // concrete transport appends that itself, converged to a single `\n`
-  // for both text and binary payloads -- issue §7). For a binary reply
+  // concrete transport appends that itself -- one `\n` terminator for
+  // both text and binary payloads). For a binary reply
   // this is `<COMMAND>':'<COBS+CRC bytes>`; Comms::sendReply() (a
   // high-cadence caller) uses this so a full serial buffer never stalls
   // the loop.
@@ -92,9 +84,7 @@ class Transport {
   // Bounded-wait, must-not-drop send -- ALWAYS a cleartext reply line
   // (NUL-terminated ASCII, e.g. `banner_`/`"PONG:t=<ms>"`); used for the
   // HELLO/PING/ID/VER text-exception replies (rare, one-off). The
-  // concrete transport appends a single trailing `\n` (NOT `\r\n` --
-  // issue §7: `sendReliable()`'s old `"\r\n"` is retired along with the
-  // rest of the two-terminator split).
+  // concrete transport appends a single trailing `\n` (NOT `\r\n`).
   virtual void sendReliable(const char* msg) = 0;
 };
 
@@ -133,12 +123,11 @@ class RadioTransport : public Transport {
 
 // kMaxEnvelopeBytes -- the larger of the two generated per-direction
 // budgets (msg::wire::kCommandEnvelopeMaxEncodedSize (55) /
-// kReplyEnvelopeMaxEncodedSize (194, up from 185 pre-123-004 -- ticket
-// 004's cycle_busy/cycle_period primary-frame migration)) -- one raw-byte
-// scratch buffer, reused sequentially for an incoming decode or an
-// outgoing encode (never overlapping within a single call). Computed by
-// the constexpr expression itself so a future schema regeneration that
-// changes either constant updates this one automatically.
+// kReplyEnvelopeMaxEncodedSize (194)) -- one raw-byte scratch buffer,
+// reused sequentially for an incoming decode or an outgoing encode (never
+// overlapping within a single call). Computed by the constexpr expression
+// itself so a future schema regeneration that changes either constant
+// updates this one automatically.
 constexpr uint16_t kMaxEnvelopeBytes =
     (msg::wire::kCommandEnvelopeMaxEncodedSize > msg::wire::kReplyEnvelopeMaxEncodedSize)
         ? msg::wire::kCommandEnvelopeMaxEncodedSize
@@ -147,34 +136,26 @@ constexpr uint16_t kMaxEnvelopeBytes =
 // kMaxCrcPayloadBytes -- kMaxEnvelopeBytes + 2 (the CRC-16 appended AFTER
 // the schema payload, per the CRC-then-COBS composition -- see comms.cpp's
 // sendReply()/decodeBinaryFrame() for the exact byte layout). This is the
-// buffer the COBS encode/decode step itself operates on. Unaffected by
-// 124-005's command prefix -- the prefix lives OUTSIDE the COBS region (see
-// crcOverScope()'s own doc comment, comms.cpp) -- so this is unchanged from
-// 123-004.
+// buffer the COBS encode/decode step itself operates on. The command
+// prefix lives OUTSIDE the COBS region (see crcOverScope()'s own doc
+// comment, comms.cpp), so it does not affect this constant.
 constexpr uint16_t kMaxCrcPayloadBytes = kMaxEnvelopeBytes + 2;  // == 196
 
-// kFramedMaxBytes -- 123-002 recompute, replacing the old base64
-// kArmoredBufSize; re-recomputed by 123-004 (kMaxEnvelopeBytes grew from
-// 185 to 194 with the cycle_busy/cycle_period primary-frame migration).
-// Worst-case COBS-encoded length of kMaxCrcPayloadBytes (196) zero-free
-// bytes: cobsEncodedMaxLength(196) = 196 + 196/254 + 1 = 197
-// (WireRuntime::cobsEncodedMaxLength()'s own documented formula, 123-001
-// completion notes). This is the size of the COBS-encoded region ALONE --
-// still 200 (3B headroom) under 124-005, same as 123-004, because the
-// ASCII command prefix is not part of this region (see kMaxLineBytes
-// below for the buffer that DOES need to grow for the prefix). The stale
-// "kFramedMaxBytes (192)" comment at com/radio.cpp was wrong since
-// 123-004 (it is, and remains, 200) -- corrected there by this ticket.
+// kFramedMaxBytes -- worst-case COBS-encoded length of kMaxCrcPayloadBytes
+// (196) zero-free bytes: cobsEncodedMaxLength(196) = 196 + 196/254 + 1 =
+// 197 (WireRuntime::cobsEncodedMaxLength()'s own documented formula). This
+// is the size of the COBS-encoded region ALONE, with 3B headroom, because
+// the ASCII command prefix is not part of this region (see kMaxLineBytes
+// below for the buffer that DOES need room for the prefix).
 constexpr uint16_t kFramedMaxBytes = 200;
 static_assert(kFramedMaxBytes >= kMaxCrcPayloadBytes + kMaxCrcPayloadBytes / 254 + 1,
               "kFramedMaxBytes must cover cobsEncodedMaxLength(kMaxCrcPayloadBytes)");
 
 // maxVerbNameLength() -- compile-time max over messages/commands.h's
-// generated kVerbTable[] name lengths (124-001's registry). A constexpr
-// function (not a hand-picked literal) so a future verb longer than
-// "CONFIG"/"DEVICE" (6 bytes) is picked up automatically the next time
-// commands.proto is regenerated, per this sprint's own "re-derive, never
-// hand-edit" convention for size constants (issue §6).
+// generated kVerbTable[] name lengths. A constexpr function (not a
+// hand-picked literal) so a future verb longer than "CONFIG"/"DEVICE"
+// (6 bytes) is picked up automatically the next time commands.proto is
+// regenerated -- re-derive, never hand-edit, size constants like this one.
 constexpr size_t maxVerbNameLength() {
   size_t maxLen = 0;
   for (uint8_t i = 0; i < msg::kVerbCount; ++i) {
@@ -185,13 +166,10 @@ constexpr size_t maxVerbNameLength() {
   return maxLen;
 }
 
-// kMaxCommandPrefixBytes -- the longest possible `<COMMAND>':'` prefix
-// (124-005, issue §6's "kFramedMaxBytes/kMaxCrcPayloadBytes need
-// re-derivation against the new worst case (longest command name +
-// separator)"): the prefix itself doesn't grow kFramedMaxBytes/
-// kMaxCrcPayloadBytes (it is outside the COBS region -- see those
-// constants' own comments above), but the WHOLE-LINE buffer below does
-// need room for it.
+// kMaxCommandPrefixBytes -- the longest possible `<COMMAND>':'` prefix:
+// the prefix itself doesn't grow kFramedMaxBytes/kMaxCrcPayloadBytes (it
+// is outside the COBS region -- see those constants' own comments above),
+// but the WHOLE-LINE buffer below does need room for it.
 constexpr uint16_t kMaxCommandPrefixBytes = static_cast<uint16_t>(maxVerbNameLength() + 1);  // name + ':'
 
 // kMaxLineBytes -- Comms's own inbound/outbound scratch LINE buffer size:
@@ -199,8 +177,7 @@ constexpr uint16_t kMaxCommandPrefixBytes = static_cast<uint16_t>(maxVerbNameLen
 // Transport::readLine()/Transport::send() call ever needs to hold (the
 // transport's own trailing `\n` is one further byte, appended by the
 // transport itself, not counted here -- matches kFramedMaxBytes's own
-// convention of excluding the delimiter). Replaces 123-002's
-// kArmoredBufSize now that a line is prefix+frame, not frame alone.
+// convention of excluding the delimiter).
 constexpr uint16_t kMaxLineBytes = kFramedMaxBytes + kMaxCommandPrefixBytes;
 
 enum class CmdStatus : uint8_t { kNone = 0, kDecoded = 1 };
@@ -211,12 +188,11 @@ struct Cmd {
 };
 
 // kCmdRingDepth -- how many decoded commands Comms buffers between
-// ingestion and dispatch (command-ingestion-ring-buffered-comms-subsystem-
-// routing-two-stops.md §1). Before this ring, ingestion was rate-limited
-// by the control loop: pump() produced at most ONE Cmd per cycle (~21/s at
-// the measured 47 ms period) for a single dispatch site, so a burst was
-// silently lost in the transports' own buffers -- a SINGLE completed-
-// message slot on radio (com/radio.h), a linear accumulator on serial.
+// ingestion and dispatch. Without this ring, ingestion is rate-limited by
+// the control loop: pump() produces at most ONE Cmd per cycle for a
+// single dispatch site, so a burst is silently lost in the transports'
+// own buffers -- a SINGLE completed-message slot on radio (com/radio.h),
+// a linear accumulator on serial.
 //
 // Depth 12 is sized against the ack ring it feeds: RobotLoop drains the
 // whole ring in ONE cycle, pushing one ack per command into
@@ -224,27 +200,17 @@ struct Cmd {
 // but be unobservable. The two depths are therefore kept EQUAL
 // (telemetry.h's kAckRingDepth carries the matching note) -- that
 // constraint picks 12, it is not a free choice.
-// CHANGING THIS CONSTANT REQUIRES A CLEAN BUILD (`just build-clean`).
 //
-// Post-mortem of a lost day (2026-07-27): commit 5065775a changed 12 -> 6,
-// and every incremental build afterwards produced firmware that HARD
-// FAULTED at boot with what looked exactly like memory corruption (garbage
-// vtable dispatch, truncated banner). The code was fine. The build was
-// not: comms.o did not rebuild when this header changed, so its
-// compiler-emitted constructor still memset a 12-deep cmdRing_ (0x420
-// bytes) over an object every OTHER translation unit -- and the linker --
-// sized for 6 (0x210), zeroing the neighboring statics (caught by hardware
-// watchpoint: the sweep walked through main::motorL.inner_ mid-boot). A
-// clean build of the same commit at depth 6 boots and streams normally.
-// Known infra hazard on this checkout: stale incremental builds on
-// /Volumes (.clasi knowledge + the memory note of the same name); an ODR
-// split across TUs is what it looks like when it lands on a header
-// constant like this one.
-//
-// Depth kept at 12, the sprint-124 sizing (see the paragraph above:
-// kept EQUAL to kAckRingDepth so a burst that fits the command ring is
-// fully ack-observable). 6 is functionally safe if deliberately chosen --
-// but rebuild clean, and change telemetry.h's note in the same commit.
+// ERRATUM -- CHANGING THIS CONSTANT REQUIRES A CLEAN BUILD
+// (`just build-clean`). An incremental build that changes only this header
+// can silently produce firmware that HARD FAULTS at boot with symptoms
+// indistinguishable from memory corruption (garbage vtable dispatch,
+// truncated banner): if the translation unit holding cmdRing_ doesn't
+// recompile, its compiler-emitted constructor keeps memset-ing the OLD
+// depth's byte count over an object the linker sized for the NEW depth,
+// zeroing whatever statics happen to sit next to it. If this constant (or
+// telemetry.h's matching kAckRingDepth) ever changes, rebuild clean and
+// verify before trusting the result.
 constexpr uint8_t kCmdRingDepth = 12;
 
 // kPumpMaxLines -- hard bound on how many wire lines ONE pump() call
@@ -278,8 +244,8 @@ class Comms {
     // App::TlmMode member, because comms.h cannot include telemetry.h
     // (telemetry.h already includes THIS header -- see its own file
     // header): Comms holds no Telemetry& and never parses/derives the
-    // mode itself (Part 4's own boundary), it only reports whatever
-    // RobotLoop copies in here each cycle, exactly like `flags` above.
+    // mode itself, it only reports whatever RobotLoop copies in here each
+    // cycle, exactly like `flags` above.
     // Defaults to 1 (kAuto), matching Telemetry::mode_'s own default.
     uint8_t tlmMode = 1;
   };
@@ -288,26 +254,25 @@ class Comms {
   // RobotLoop; cheap enough to be unconditional.
   void setStatus(const Status& status) { status_ = status; }
 
-  // updateStatus -- the STATUS projection (128-012: absorbed from
-  // RobotLoop::cycle()'s previous inline field-by-field assembly, the same
-  // shape of problem Telemetry::update() already solves for its own wire
-  // frame). Reads `state` (the loop's own per-cycle blackboard) for every
-  // field except the two Telemetry owns (`flags`/`tlmMode`), which are read
-  // straight off `tlm` -- an explicit parameter, not a stored Telemetry&
-  // member (Comms holds no Telemetry& anywhere else either, matching this
-  // file's own boundary note: "outside -- deciding what a decoded command
-  // DOES"). This is the dependency-direction choice this ticket's own
-  // acceptance criteria call out: the alternative (publish flags/tlmMode
-  // onto Types::RobotState during Telemetry::update() so this method reads
-  // one source) was rejected because RobotState is a dependency-free,
-  // cross-tree-shared struct (robot_state.h's own file header) and
-  // flags/tlmMode are wire-projection artifacts, not per-cycle robot
-  // dynamics -- adding them there would blur that boundary for a
-  // one-caller convenience. `state.health.ready` is the one genuinely
-  // loop-owned fact (RobotLoop::boot()'s own "past this point the loop
-  // dispatches commands" bit, now published onto the blackboard instead of
-  // hard-coded `true` at this projection site -- see robot_state.h's own
-  // doc comment on Health::ready).
+  // updateStatus -- the STATUS projection, the same shape of problem
+  // Telemetry::update() already solves for its own wire frame. Reads
+  // `state` (the loop's own per-cycle blackboard) for every field except
+  // the two Telemetry owns (`flags`/`tlmMode`), which are read straight
+  // off `tlm` -- an explicit parameter, not a stored Telemetry& member
+  // (Comms holds no Telemetry& anywhere else either, matching this file's
+  // own boundary note: "outside -- deciding what a decoded command
+  // DOES"). This is a deliberate dependency-direction choice: the
+  // alternative (publish flags/tlmMode onto Types::RobotState during
+  // Telemetry::update() so this method reads one source) is rejected
+  // because RobotState is a dependency-free, cross-tree-shared struct
+  // (robot_state.h's own file header) and flags/tlmMode are
+  // wire-projection artifacts, not per-cycle robot dynamics -- adding them
+  // there would blur that boundary for a one-caller convenience.
+  // `state.health.ready` is the one genuinely loop-owned fact
+  // (RobotLoop::boot()'s own "past this point the loop dispatches
+  // commands" bit, published onto the blackboard instead of hard-coded
+  // `true` at this projection site -- see robot_state.h's own doc comment
+  // on Health::ready).
   //
   // Call exactly once per cycle, UNCONDITIONALLY -- even when the idle gate
   // suppressed this cycle's telemetry frame, since answering STATUS on a
@@ -319,22 +284,18 @@ class Comms {
   // RobotLoop::cycle()'s own comment at the call site.
   void updateStatus(const Types::RobotState& state, const Telemetry& tlm);
 
-  // TlmAction -- the parsed effect of one `TLM`/`TLM:...` line (Part 4's
-  // command surface, telemetry-emit-policy-rebuild-spec.md). Comms parses
-  // the argument (case-insensitively) and stages exactly this; Telemetry
-  // itself never parses wire text (this file's own boundary note) -- it is
-  // RobotLoop::cycle() that turns kSetOff/kSetAuto/kSetOn into a
-  // Telemetry::setMode() call and kFrame into a forced emit(), at the SAME
-  // consume point the pre-Part-4 takeTelemetryRequest() used to be read
-  // from alone (that method is replaced by takeTlmAction() below -- bare
+  // TlmAction -- the parsed effect of one `TLM`/`TLM:...` line. Comms
+  // parses the argument (case-insensitively) and stages exactly this;
+  // Telemetry itself never parses wire text (this file's own boundary
+  // note) -- it is RobotLoop::cycle() that turns kSetOff/kSetAuto/kSetOn
+  // into a Telemetry::setMode() call and kFrame into a forced emit(). Bare
   // `TLM` and `TLM:NOW` both surface as kFrame, an explicit alias, not two
-  // separate code paths).
+  // separate code paths.
   enum class TlmAction : uint8_t { kNone, kFrame, kSetOff, kSetAuto, kSetOn, kUnrecognized };
 
-  // takeTlmAction -- consume-on-read, same discipline the pre-Part-4
-  // takeTelemetryRequest() had: a burst of `TLM:` lines arriving within one
-  // cycle collapses to the LAST one's action (RobotLoop drains this once
-  // per cycle), never queued or served twice.
+  // takeTlmAction -- consume-on-read: a burst of `TLM:` lines arriving
+  // within one cycle collapses to the LAST one's action (RobotLoop drains
+  // this once per cycle), never queued or served twice.
   TlmAction takeTlmAction() {
     const TlmAction action = tlmAction_;
     tlmAction_ = TlmAction::kNone;
@@ -356,25 +317,23 @@ class Comms {
   // main.cpp's own static buffers) -- Comms does not format or own either
   // string itself, matching its own boundary ("outside: device state" --
   // see this file's header comment). `idLine` is `ID:<fields>`'s full
-  // reply content (sprint 124 architecture Decision 4: configured-robot
-  // identity -- drivetrain type + calibration-profile name/version --
-  // distinct from `banner`'s hardware identity); defaults to a
-  // grammar-conformant placeholder so a caller that genuinely has no
-  // configured-identity string to report (most host-test fixtures) still
-  // gets a well-formed `ID:` reply rather than none at all. `VER:`'s
-  // content needs no constructor parameter -- see sendVer(), comms.cpp --
-  // it reads the existing generated build-version constant directly
-  // (architecture Decision 4: zero new version-tracking infrastructure).
+  // reply content (configured-robot identity -- drivetrain type +
+  // calibration-profile name/version -- distinct from `banner`'s hardware
+  // identity); defaults to a grammar-conformant placeholder so a caller
+  // that genuinely has no configured-identity string to report (most
+  // host-test fixtures) still gets a well-formed `ID:` reply rather than
+  // none at all. `VER:`'s content needs no constructor parameter -- see
+  // sendVer(), comms.cpp -- it reads the existing generated build-version
+  // constant directly.
   Comms(Transport& serialLink, Transport& radioLink, const char* banner, const char* idLine = "ID:unknown");
 
-  // Drain BOTH transports into the command ring
-  // (command-ingestion-...-two-stops.md §1). Loops -- serial first, radio
-  // when serial has nothing -- until neither transport has another complete
-  // line or kPumpMaxLines have been consumed. REPLACES the pre-ring
-  // "at most one Transport::readLine() to serialLink_, and only if serial
-  // had nothing, at most one to radioLink_" contract: that bound made the
-  // control loop the ingestion rate limiter, which is exactly the defect
-  // this ring exists to remove.
+  // Drain BOTH transports into the command ring. Loops -- serial first,
+  // radio when serial has nothing -- until neither transport has another
+  // complete line or kPumpMaxLines have been consumed. This deliberately
+  // does NOT bound itself to "at most one Transport::readLine() to
+  // serialLink_, and only if serial had nothing, at most one to
+  // radioLink_" -- that bound would make the control loop the ingestion
+  // rate limiter, which is exactly the defect the ring exists to remove.
   //
   // Reading is deliberately NOT gated on ring space. Leaving a completed
   // line sitting in a transport only moves the loss somewhere that cannot
@@ -392,9 +351,9 @@ class Comms {
   //
   // now -- [ms], the caller's own current clock reading (RobotLoop::cycle()
   // passes its already-computed cycleStart) -- formats the PING reply's
-  // `t=<ms>` field (117, SUC-056). Comms holds no Devices::Clock&/timing
-  // collaborator of its own; every value it ever stamps onto a reply is
-  // handed in, not read from an owned clock.
+  // `t=<ms>` field. Comms holds no Devices::Clock&/timing collaborator of
+  // its own; every value it ever stamps onto a reply is handed in, not
+  // read from an owned clock.
   void pump(uint32_t now);  // [ms]
 
   // Pop the OLDEST buffered command, FIFO. Returns false (leaving `out`
@@ -415,14 +374,13 @@ class Comms {
   // Telemetry calls. No return value: encode()==0 or a COBS/CRC framing
   // failure means silently send nothing.
   //
-  // 124-005: the outbound ASCII command name (the CRC's scope-extension
-  // per protocol v5's `crc = crc16(COMMAND ':' payload)` composition,
-  // issue §3, AND the wire line's own leading `<COMMAND>':'` prefix) is
-  // derived INTERNALLY from `reply.body_kind` (TLM/OK/ERR map 1:1 onto
-  // messages/commands.h's Verb::TLM/OK/ERR) -- a caller never passes one:
-  // `body_kind` already says which verb this is, and passing a second,
-  // independently-spelled name string would just be a second place the
-  // two could drift apart.
+  // The outbound ASCII command name (the CRC's scope-extension per
+  // protocol v5's `crc = crc16(COMMAND ':' payload)` composition, AND the
+  // wire line's own leading `<COMMAND>':'` prefix) is derived INTERNALLY
+  // from `reply.body_kind` (TLM/OK/ERR map 1:1 onto messages/commands.h's
+  // Verb::TLM/OK/ERR) -- a caller never passes one: `body_kind` already
+  // says which verb this is, and passing a second, independently-spelled
+  // name string would just be a second place the two could drift apart.
   void sendReply(const msg::ReplyEnvelope& reply);
 
   // Push the banner unprompted on both transports, cleartext plane.
@@ -430,7 +388,7 @@ class Comms {
   // the preamble finishes -- byte-identical both times, so a banner parser
   // needs no change. `DEVICE:NEZHA2:robot:<name>:<serial>` already
   // conforms to the v5 grammar unmodified (command `DEVICE`, cleartext
-  // data on the first ':') -- formatBanner() needs no edit (issue §8).
+  // data on the first ':') -- formatBanner() needs no edit.
   void sendBanner();
 
   // sendReady -- unsolicited "READY" line, once, when the loop will actually
@@ -446,8 +404,7 @@ class Comms {
   // Guarded out entirely unless ROBOT_DEBUG (or HOST_BUILD, which implies
   // it) -- app/debug.h's App::debugf() is this method's ONLY caller; see
   // that file's own header for the bench/Sim-only compile contract this
-  // exists to support (129-003, issue 05-dbg-debug-message-channel-for-
-  // bench-and-sim.md). `line` must already be a short, NUL-terminated,
+  // exists to support. `line` must already be a short, NUL-terminated,
   // single-line message -- app/debug.cpp's own kDebugMsgMaxBytes bounds
   // what debugf() ever passes here.
   void sendDebug(const char* line);
@@ -467,8 +424,7 @@ class Comms {
   // this. RobotLoop reads it as the App::kFaultCommsMalformed telemetry
   // fault-bit source.
   //
-  // 124-010 (relay-handshake-trips-comms-malformed.md): a line whose
-  // first byte is '#'/'!'/'?' -- the radio-relay dongle's own
+  // A line whose first byte is '#'/'!'/'?' -- the radio-relay dongle's own
   // control-plane sigils -- is dropped by dispatchLine() BEFORE reaching
   // this counter (see isRelayControlPlaneLine(), comms.cpp). This is a
   // narrow, symmetry-restoring exception, not a broadening of tolerance:
@@ -477,11 +433,11 @@ class Comms {
   uint32_t malformedCount() const { return malformedCount_; }
 
   // Diagnostic counter -- a command that decoded cleanly but arrived at a
-  // FULL command ring, and was therefore dropped without ever being routed
-  // (command-ingestion-...-two-stops.md §1). Distinct from
-  // malformedCount() in kind, not just in count: a malformed line is a
-  // wire/link problem, a dropped command is a firmware backpressure
-  // problem -- the host sent faster than one cycle's drain could route.
+  // FULL command ring, and was therefore dropped without ever being
+  // routed. Distinct from malformedCount() in kind, not just in count: a
+  // malformed line is a wire/link problem, a dropped command is a firmware
+  // backpressure problem -- the host sent faster than one cycle's drain
+  // could route.
   // RobotLoop publishes it in health telemetry beside commsMalformedCount
   // (kFlagFaultCommandsDropped).
   uint32_t commandsDroppedCount() const { return commandsDroppedCount_; }
@@ -505,15 +461,15 @@ class Comms {
   void pushCommand(const Cmd& cmd);
 
   // Parses `<COMMAND>[':' <data>]` out of one already-`\n`-delimited wire
-  // line (124-005, issue §1) and dispatches by the registry's `binary`
-  // flag -- the SOLE discriminator; nothing about `data`'s own bytes is
-  // ever inspected. Unrecognized `<COMMAND>` -> malformedCount_++, EXCEPT
-  // a leaked relay control-plane line ('#'/'!'/'?' first byte, 124-010) --
-  // dropped uncounted, before the registry lookup even runs.
+  // line and dispatches by the registry's `binary` flag -- the SOLE
+  // discriminator; nothing about `data`'s own bytes is ever inspected.
+  // Unrecognized `<COMMAND>` -> malformedCount_++, EXCEPT a leaked relay
+  // control-plane line ('#'/'!'/'?' first byte) -- dropped uncounted,
+  // before the registry lookup even runs.
   void dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& out, uint32_t now);  // [ms]
 
   // Cleartext command dispatch (HELLO/PING/ID/VER, the only inbound
-  // cleartext verbs -- issue §8). Any other cleartext verb arriving
+  // cleartext verbs). Any other cleartext verb arriving
   // inbound (e.g. a stray DEVICE/PONG) -> malformedCount_++, matching a
   // binary verb with no valid frame.
   void dispatchCleartext(msg::Verb verb, Transport& t, uint32_t now);  // [ms]

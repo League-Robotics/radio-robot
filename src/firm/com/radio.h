@@ -17,20 +17,17 @@
  * Only one Radio instance may call begin(). _instance is a static singleton
  * pointer used by the static ISR callback.
  *
- * 124-005 (protocol v5 Part A, "framing grammar cutover"): fragment
- * reassembly (`onData`) was ALREADY binary-clean (raw memcpy, no
- * byte-level interpretation) and stays that way. What changes here is the
- * trailing-byte convention: `send()` and the former `sendText()` (deleted
- * -- see below) converge on ONE terminator, a trailing '\n' (0x0A), for
- * EVERY outbound line, text or binary (issue §7). This is safe because
- * COBS is now keyed on 0x0A (wire_runtime.h item 8, 124-003): a binary
- * line's own bytes never contain a literal 0x0A, so '\n' is a genuine,
- * unconditional terminator -- there is no more text-vs-binary distinction
- * for `poll()` to make at this layer at all (App::Comms decides that from
- * the parsed `<COMMAND>` prefix once it has a complete line -- see
- * comms.h's own file header). `poll()` simply strips the trailing '\n' off
- * the reassembled message. No dependency on `app/`, per this directory's
- * own "com/ has no dependency on app/, messages/, or any wire-schema type"
+ * Fragment reassembly (`onData`) is binary-clean (raw memcpy, no
+ * byte-level interpretation). `send()` uses ONE terminator, a trailing
+ * '\n' (0x0A), for EVERY outbound line, text or binary. This is safe
+ * because COBS is keyed on 0x0A (wire_runtime.h item 8): a binary line's
+ * own bytes never contain a literal 0x0A, so '\n' is a genuine,
+ * unconditional terminator -- there is no text-vs-binary distinction for
+ * `poll()` to make at this layer at all (App::Comms decides that from the
+ * parsed `<COMMAND>` prefix once it has a complete line -- see comms.h's
+ * own file header). `poll()` simply strips the trailing '\n' off the
+ * reassembled message. No dependency on `app/`, per this directory's own
+ * "com/ has no dependency on app/, messages/, or any wire-schema type"
  * invariant (com/DESIGN.md).
  */
 class Radio {
@@ -62,10 +59,8 @@ public:
 
     // Fragment a wire line into RAW250 frames and transmit each one,
     // appending a trailing '\n' (0x0A) delimiter as the FINAL payload byte
-    // -- the ONE terminator every outbound line uses, text or binary
-    // (124-005, issue §7: converges what were two separate methods,
-    // `send()` (trailing 0x00) and `sendText()` (trailing '\n'), pre-124).
-    // Safe for binary content because COBS is now keyed on 0x0A
+    // -- the ONE terminator every outbound line uses, text or binary.
+    // Safe for binary content because COBS is keyed on 0x0A
     // (wire_runtime.h item 8): `data`/`len` never contains a literal 0x0A
     // by construction (App::Transport::send()'s own contract), so this
     // appended '\n' is unambiguous. RadioRelay §5 framing alone delimits a

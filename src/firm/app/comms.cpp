@@ -47,17 +47,16 @@ void RadioTransport::sendReliable(const char* msg) { radio_.send(reinterpret_cas
 
 namespace {
 
-// crcOverScope() -- the CRC-scope composition protocol v5 needs (124-003/
-// 124-005, issue §3): `crc16(COMMAND ':' payload)` when a command name is
-// given, `crc16(payload)` alone (byte-identical to protocol v4's CRC) when
-// it is not. Threads WireRuntime's incremental crcInit()/crcUpdate() so the
-// command bytes and the payload bytes -- two ranges that are never
-// adjacent in memory -- are never concatenated into a scratch buffer just
-// to hash them together. This composition (the ':' separator, "empty
-// command means no scope extension") is protocol grammar, which is
-// Comms's boundary, not WireRuntime's (see messages/DESIGN.md's
-// three-layer split) -- WireRuntime only supplies the generic incremental
-// primitive.
+// crcOverScope() -- the CRC-scope composition protocol v5 needs:
+// `crc16(COMMAND ':' payload)` when a command name is given, `crc16(payload)`
+// alone when it is not. Threads WireRuntime's incremental crcInit()/
+// crcUpdate() so the command bytes and the payload bytes -- two ranges
+// that are never adjacent in memory -- are never concatenated into a
+// scratch buffer just to hash them together. This composition (the ':'
+// separator, "empty command means no scope extension") is protocol
+// grammar, which is Comms's boundary, not WireRuntime's (see
+// messages/DESIGN.md's three-layer split) -- WireRuntime only supplies
+// the generic incremental primitive.
 uint16_t crcOverScope(const uint8_t* command, size_t commandLen, const uint8_t* payload, size_t payloadLen) {
   uint16_t crc = WireRuntime::crcInit();
   if (commandLen > 0) {
@@ -68,35 +67,32 @@ uint16_t crcOverScope(const uint8_t* command, size_t commandLen, const uint8_t* 
   return WireRuntime::crcUpdate(crc, payload, payloadLen);
 }
 
-// isRelayControlPlaneLine() -- 124-010 (relay-handshake-trips-comms-
-// malformed.md): true if `line`'s first byte is one of the radio-relay
-// dongle's own control-plane sigils -- '#' (a status/comment reply, e.g.
-// "# entering data plane"), '!' (a dongle command, e.g. "!MODE RAW250"),
-// or '?' (the dongle's own config query). host/robot_radio/io/
+// isRelayControlPlaneLine() -- true if `line`'s first byte is one of the
+// radio-relay dongle's own control-plane sigils -- '#' (a status/comment
+// reply, e.g. "# entering data plane"), '!' (a dongle command, e.g. "!MODE
+// RAW250"), or '?' (the dongle's own config query). host/robot_radio/io/
 // serial_conn.py's `_relay_handshake()`/`_banner_classify()` are the only
 // callers that ever write bytes shaped like this, always addressed to the
 // RELAY's own control-plane parser, never intended for the robot. On a
 // fresh relay connect a fragment of that handshake traffic can reach the
 // robot's `radioLink_` before (or at the exact moment of) the dongle
-// committing to transparent RAW250 pass-through -- see the ticket's
-// closing notes for the root-cause analysis. No registered v5 verb name
-// (messages/commands.h's `kVerbTable[]`) starts with any of these three
-// bytes, so recognizing and dropping such a line here can never mask a
-// genuine unrecognized command; it only tolerates exactly the shape of
-// noise the relay's own control plane is known to emit. Mirrors the
-// tolerance `host/robot_radio/io/serial_conn.py`'s own
-// `_handle_wire_line()` already has for '#' lines -- this ticket extends
-// the same idea to the robot's own firmware side, which had none.
+// committing to transparent RAW250 pass-through. No registered v5 verb
+// name (messages/commands.h's `kVerbTable[]`) starts with any of these
+// three bytes, so recognizing and dropping such a line here can never
+// mask a genuine unrecognized command; it only tolerates exactly the
+// shape of noise the relay's own control plane is known to emit. Mirrors
+// the tolerance `host/robot_radio/io/serial_conn.py`'s own
+// `_handle_wire_line()` already has for '#' lines.
 bool isRelayControlPlaneLine(const char* line, uint16_t lineLen) {
   if (lineLen == 0) return false;
   const char first = line[0];
   return first == '#' || first == '!' || first == '?';
 }
 
-// findVerb() -- registry lookup (124-001's messages/commands.h::
-// kVerbTable[]) by exact-length ASCII name match. The SOLE discriminator
-// for how a wire line's data is read (issue §1) -- returns nullptr for
-// any name not in the closed set, which callers count as malformed.
+// findVerb() -- registry lookup (messages/commands.h::kVerbTable[]) by
+// exact-length ASCII name match. The SOLE discriminator for how a wire
+// line's data is read -- returns nullptr for any name not in the closed
+// set, which callers count as malformed.
 const msg::VerbEntry* findVerb(const char* name, uint16_t nameLen) {
   for (uint8_t i = 0; i < msg::kVerbCount; ++i) {
     const msg::VerbEntry& entry = msg::kVerbTable[i];
@@ -118,14 +114,14 @@ const char* verbName(msg::Verb verb) {
   return nullptr;
 }
 
-// classifyTlmArg() -- Part 4's case-insensitive cleartext token match for
-// `TLM:<data>` (telemetry-emit-policy-rebuild-spec.md). A real binary
-// telemetry frame only ever travels robot->host (this file's own
-// dispatchLine() doc comment on the TLM verb), so an inbound `TLM:` line's
-// data is ALWAYS one of these cleartext tokens, never a COBS+CRC binary
-// body -- safe to strip a single trailing '\r' before comparing, the same
-// allowance dispatchLine()'s no-colon branch already makes for a raw
-// terminal's "\r\n" (issue Part 8 criterion 15, human-typed TLM:ON).
+// classifyTlmArg() -- case-insensitive cleartext token match for
+// `TLM:<data>`. A real binary telemetry frame only ever travels
+// robot->host (this file's own dispatchLine() doc comment on the TLM
+// verb), so an inbound `TLM:` line's data is ALWAYS one of these
+// cleartext tokens, never a COBS+CRC binary body -- safe to strip a
+// single trailing '\r' before comparing, the same allowance
+// dispatchLine()'s no-colon branch already makes for a raw terminal's
+// "\r\n" (human-typed TLM:ON).
 App::Comms::TlmAction classifyTlmArg(const uint8_t* data, uint16_t len) {
   if (len > 0 && data[len - 1] == '\r') --len;
 
@@ -220,13 +216,12 @@ bool Comms::takeCommand(Cmd& out) {
 }
 
 void Comms::dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& out, uint32_t now) {
-  // 124-010 (relay-handshake-trips-comms-malformed.md): drop a leaked
-  // relay control-plane line BEFORE the registry lookup, uncounted --
-  // see isRelayControlPlaneLine()'s own doc comment above for why this
-  // cannot mask a genuine malformed command.
+  // Drop a leaked relay control-plane line BEFORE the registry lookup,
+  // uncounted -- see isRelayControlPlaneLine()'s own doc comment above
+  // for why this cannot mask a genuine malformed command.
   if (isRelayControlPlaneLine(line, lineLen)) return;
 
-  // Uniform packet grammar (124-005, issue §1): `<COMMAND>[':' <data>]` --
+  // Uniform packet grammar: `<COMMAND>[':' <data>]` --
   // the FIRST ':' ends the command; every later byte (including further
   // ':' bytes) is data. Whether that data is cleartext or binary is a
   // property of the COMMAND (the registry lookup below), decided BEFORE
@@ -253,10 +248,10 @@ void Comms::dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& 
     // carries a ':'-prefixed COBS body, even an empty one. A single
     // trailing '\r' here is therefore always line-ending noise (a raw
     // terminal sending "\r\n"), never binary content -- safe to strip
-    // BEFORE the registry lookup, unlike data after a ':' (issue §7:
-    // "strip \r only for cleartext commands, which the parsed prefix
-    // already identifies" -- for the no-':' shape the prefix IS the
-    // whole line, so this is that same rule, not an exception to it).
+    // BEFORE the registry lookup, unlike data after a ':' -- strip \r only
+    // for cleartext commands, which the parsed prefix already identifies;
+    // for the no-':' shape the prefix IS the whole line, so this is that
+    // same rule, not an exception to it.
     if (cmdLen > 0 && cmdPtr[cmdLen - 1] == '\r') --cmdLen;
   }
 
@@ -266,9 +261,9 @@ void Comms::dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& 
     return;
   }
 
-  // TLM's whole inbound surface (Part 4, telemetry-emit-policy-rebuild-
-  // spec.md) is intercepted HERE, before the registry's `binary` flag is
-  // even consulted: a real binary telemetry frame only ever travels
+  // TLM's whole inbound surface is intercepted HERE, before the
+  // registry's `binary` flag is even consulted: a real binary telemetry
+  // frame only ever travels
   // robot->host, so an inbound, robot-ward `TLM`/`TLM:<data>` line is
   // NEVER a COBS+CRC frame to dearmor -- it is always one of the cleartext
   // control tokens below. Bare `TLM` (no ':', no body -- same property the
@@ -301,30 +296,27 @@ void Comms::dispatchCleartext(msg::Verb verb, Transport& t, uint32_t now) {
       t.sendReliable(banner_);
       return;
     case msg::Verb::PING: {
-      // t=<ms> is the robot's own clock at reply-formatting time (117,
-      // SUC-056) -- activates the host's ClockSync (min-RTT offset + skew
-      // fit). Integer formatting only: newlib-nano has no printf float
-      // support, but `now` is already an integer, so this is a non-issue,
-      // not a workaround. `PONG:t=<ms>` replaces pre-124 "OK pong t=<ms>"
-      // (issue §4 -- the reply plane adopts the SAME grammar; a reply
-      // verb echoing its command verb is unambiguous because link
-      // direction is known, exactly like HELLO -> DEVICE:).
+      // t=<ms> is the robot's own clock at reply-formatting time --
+      // activates the host's ClockSync (min-RTT offset + skew fit).
+      // Integer formatting only: newlib-nano has no printf float support,
+      // but `now` is already an integer, so this is a non-issue, not a
+      // workaround. A reply verb (`PONG:`) echoing its command verb
+      // (`PING`) is unambiguous because link direction is known, exactly
+      // like HELLO -> DEVICE:.
       char pong[32];
       std::snprintf(pong, sizeof(pong), "PONG:t=%lu", static_cast<unsigned long>(now));
       t.sendReliable(pong);
       return;
     }
     case msg::Verb::ID:
-      // idLine_ -- caller-owned, preformatted "ID:<fields>" (architecture
-      // Decision 4: configured-robot identity -- see comms.h's own
-      // constructor doc comment).
+      // idLine_ -- caller-owned, preformatted "ID:<fields>" (configured-
+      // robot identity -- see comms.h's own constructor doc comment).
       t.sendReliable(idLine_);
       return;
     case msg::Verb::VER:
-      // Reads the existing generated build-version constant directly
-      // (architecture Decision 4: zero new version-tracking
-      // infrastructure) -- adjacent string-literal concatenation, no
-      // runtime formatting at all.
+      // Reads the existing generated build-version constant directly --
+      // adjacent string-literal concatenation, no runtime formatting at
+      // all.
       t.sendReliable("VER:" FIRMWARE_VERSION_STR);
       return;
     case msg::Verb::STATUS:
@@ -344,13 +336,12 @@ void Comms::dispatchCleartext(msg::Verb verb, Transport& t, uint32_t now) {
 
 void Comms::decodeBinaryFrame(const uint8_t* command, size_t commandLen, const uint8_t* data, uint16_t dataLen,
                                Cmd& out) {
-  // Reverse of sendReply()'s CRC-then-COBS composition (123-001 completion
-  // notes, pinned exactly so firmware and host agree byte-for-byte): 1)
-  // COBS-decode (delimiter kCobsDelimiter, 124-005) the received frame
-  // bytes back into (schema payload + CRC) combined bytes, 2) split off
-  // the trailing 2-byte CRC, 3) verify it against the leading payload
-  // bytes (CRC-scoped over `command` too, per 124-003/124-005 -- see
-  // crcOverScope() above), 4) only then hand the payload to
+  // Reverse of sendReply()'s CRC-then-COBS composition (pinned exactly so
+  // firmware and host agree byte-for-byte): 1) COBS-decode (delimiter
+  // kCobsDelimiter) the received frame bytes back into (schema payload +
+  // CRC) combined bytes, 2) split off the trailing 2-byte CRC, 3) verify
+  // it against the leading payload bytes (CRC-scoped over `command` too --
+  // see crcOverScope() above), 4) only then hand the payload to
   // msg::wire::decode(). Every step fails cleanly (malformedCount_++,
   // out left untouched) on any malformed/corrupt input -- no partial state
   // ever reaches `out` (see pump()'s own doc comment). `data`==nullptr/
@@ -413,15 +404,14 @@ void Comms::sendReply(const msg::ReplyEnvelope& reply) {
     return;
   }
 
-  // CRC-then-COBS composition (123-001 completion notes -- NOT
-  // COBS-then-append-CRC, which would risk emitting a literal delimiter
-  // byte if the CRC bytes happen to contain one, breaking the delimiter
-  // property): append the 2-byte CRC-16/CCITT-FALSE (little-endian) to
-  // the schema-encoded payload, THEN COBS-encode (kCobsDelimiter,
-  // 124-005) the combined bytes. The CRC itself is scoped over `name`
-  // too (124-003/124-005 -- crcOverScope() above), so the wire layout
-  // here is unchanged: the CRC still covers only `rawBuf`/`combined`'s
-  // own bytes on the wire, and `name` never enters the COBS input.
+  // CRC-then-COBS composition -- NOT COBS-then-append-CRC, which would
+  // risk emitting a literal delimiter byte if the CRC bytes happen to
+  // contain one, breaking the delimiter property: append the 2-byte
+  // CRC-16/CCITT-FALSE (little-endian) to the schema-encoded payload,
+  // THEN COBS-encode (kCobsDelimiter) the combined bytes. The CRC itself
+  // is scoped over `name` too (crcOverScope() above), so the CRC still
+  // covers only `rawBuf`/`combined`'s own bytes on the wire, and `name`
+  // never enters the COBS input.
   uint8_t combined[kMaxCrcPayloadBytes];
   std::memcpy(combined, rawBuf, n);
   size_t combinedLen = n;
@@ -436,10 +426,10 @@ void Comms::sendReply(const msg::ReplyEnvelope& reply) {
     return;  // unreachable in practice -- cobsOut is sized to the worst case
   }
 
-  // Build the full wire LINE content, `<NAME>':'<COBS bytes>` (124-005,
-  // issue §1/§4 -- the reply plane uses the SAME grammar as the command
-  // plane) -- the transport appends only the trailing '\n' terminator
-  // itself (Transport::send()'s own doc comment, comms.h).
+  // Build the full wire LINE content, `<NAME>':'<COBS bytes>` (the reply
+  // plane uses the SAME grammar as the command plane) -- the transport
+  // appends only the trailing '\n' terminator itself (Transport::send()'s
+  // own doc comment, comms.h).
   uint8_t line[kMaxLineBytes];
   if (nameLen + 1 + cobsLen > sizeof(line)) {
     return;  // unreachable in practice -- kMaxLineBytes covers the worst case
@@ -467,10 +457,10 @@ void Comms::sendBanner() {
 // sendReady -- the unsolicited "the loop will now accept commands" line.
 //
 // Emitted once, from RobotLoop::boot()'s tail. A host cannot infer this from
-// PING: comms_.pump() runs inside boot()'s probe loop (123-006), so PONG
-// answers throughout a boot window in which every Move is correctly rejected
-// with ERR_NOT_CONFIGURED (rejectDuringBoot, 125-001). See commands.proto's
-// READY row for the measurement that motivated this.
+// PING: comms_.pump() runs inside boot()'s probe loop, so PONG answers
+// throughout a boot window in which every Move is correctly rejected with
+// ERR_NOT_CONFIGURED (rejectDuringBoot). See commands.proto's READY row
+// for the measurement that motivated this.
 // sendStatus -- the queryable state line, "STATUS:k=v:k=v...".
 //
 // Answers from the snapshot RobotLoop refreshes each cycle, so it costs one
@@ -481,7 +471,7 @@ void Comms::sendBanner() {
 // and unambiguous to both a person and a parser. `flags` is hex because it
 // is a bit field and every reader of it wants bits, not a decimal.
 void Comms::sendStatus(Transport& t) {
-  // tlm= (Part 4): the current TlmMode, spelled the same way the `TLM:`
+  // tlm=: the current TlmMode, spelled the same way the `TLM:`
   // command surface itself is spelled -- lowercase, since every other
   // STATUS field is lowercase and this one is meant to be read by both a
   // human at a terminal and a host parser. status_.tlmMode is the raw
@@ -516,12 +506,11 @@ void Comms::sendStatus(Transport& t) {
 //
 // Binary verbs are skipped: they need a COBS+CRC frame and cannot be typed,
 // so listing them would advertise commands a human cannot use -- EXCEPT
-// TLM (Part 4, telemetry-emit-policy-rebuild-spec.md): the registry still
-// marks it `binary` (a real TLM frame travels robot->host as one), but an
-// INBOUND TLM line is always this ticket's cleartext control surface
-// (dispatchLine()'s own doc comment on the TLM verb) -- a human CAN type
-// it, so it is listed here too, with its own argument grammar in place of
-// the bare verb name.
+// TLM: the registry still marks it `binary` (a real TLM frame travels
+// robot->host as one), but an INBOUND TLM line is always a cleartext
+// control surface (dispatchLine()'s own doc comment on the TLM verb) -- a
+// human CAN type it, so it is listed here too, with its own argument
+// grammar in place of the bare verb name.
 void Comms::sendHelp(Transport& t) {
   char line[192];
   std::size_t n = 0;

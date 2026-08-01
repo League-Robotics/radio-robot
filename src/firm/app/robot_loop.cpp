@@ -122,10 +122,8 @@ void RobotLoop::routeCommand(const Cmd& cmd) {
 }
 
 // Every MOVE goes to the planner, twist or wheels-velocity, whatever its
-// stop condition. Before this change a wheels-velocity MOVE was diverted
-// into Drive, which has no odometry and therefore ran a DISTANCE-stopped
-// wheels move (what the TestGUI's `D <l> <r> <mm>` path sends) all the way
-// to its timeout backstop instead of stopping on the odometer.
+// stop condition -- never diverted to Drive, which has no odometry and so
+// cannot honor a DISTANCE/ANGLE stop condition.
 void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
   if (!configured_) {
     tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
@@ -334,8 +332,8 @@ void RobotLoop::boot() {
     // NOT forced. Forcing here pushed one frame per probe pass -- a ~5s
     // flood on every reset, ahead of the DEVICE banner and READY.
     //
-    // Under the three-mode emit predicate (issue Part 3: mode_ defaults
-    // kAuto, everMoved_ is still false, no motion is possible before the
+    // Under the three-mode emit predicate (mode_ defaults kAuto,
+    // everMoved_ is still false, no motion is possible before the
     // preamble even finishes) this emits nothing on its own -- a silent
     // host sees zero binary bytes during boot. A host that DOES transmit
     // during boot still gets served: a bare TLM request forces one frame
@@ -352,7 +350,7 @@ void RobotLoop::boot() {
   // this line never loses its first Move. Emitted after the banner so a
   // fresh listener gets identity first, then permission.
   comms_.sendReady();
-  // state_.health.ready (128-012): the one genuinely loop-owned fact
+  // state_.health.ready: the one genuinely loop-owned fact
   // Comms::updateStatus()'s STATUS projection answers -- "we are past
   // boot()" -- published onto the blackboard here, exactly once, rather
   // than hard-coded `true` at the projection call site (robot_state.h's
@@ -394,7 +392,7 @@ void RobotLoop::publishWheels() {
   publishWheel(motorL_, state_.wheelLeft, positionEpochLeft_, clampedL);
   publishWheel(motorR_, state_.wheelRight, positionEpochRight_, clampedR);
   state_.health.wedgeLatch = motorL_.wedged() || motorR_.wedged();
-  // 129-002: per-wheel, GATED stall visibility -- wedgeSuspect(), not
+  // Per-wheel, GATED stall visibility -- wedgeSuspect(), not
   // wedged()/wedgeLatch above. wedgeSuspect() requires |appliedDuty()|
   // above the motion-threshold deadband as well as the stuck-position
   // read, so it stays false on an idle parked robot (unlike wedged(),
@@ -551,27 +549,25 @@ void RobotLoop::cycle() {
 
     tlm_.update(state_);
 
-    // TLM: command surface (Part 4, telemetry-emit-policy-rebuild-spec.md;
-    // 128-012 moved the mode-change switch and the "is this a force-a-frame
-    // request" answer into Telemetry::applyAction() -- see that method's
-    // own doc comment for the dependency-direction choice). Comms parsed a
-    // `TLM`/`TLM:...` line's argument and staged the result; Telemetry
-    // never parses wire text, so RobotLoop is still the one that hands
-    // Comms's staged action across, at the same consume point the
-    // pre-128-012 inline switch used to read from.
+    // TLM: command surface. The mode-change switch and the "is this a
+    // force-a-frame request" answer live in Telemetry::applyAction() --
+    // see that method's own doc comment for the dependency-direction
+    // choice. Comms parses a `TLM`/`TLM:...` line's argument and stages
+    // the result; Telemetry never parses wire text, so RobotLoop is the
+    // one that hands Comms's staged action across.
     const Comms::TlmAction tlmAction = comms_.takeTlmAction();
     const bool forceFrame = tlm_.applyAction(tlmAction);
 
     // A bare `TLM`/`TLM:NOW` line is a request for one frame NOW -- force
-    // past the mode-gated unsolicited check (issue Part 3, reason 1), since
-    // "nothing is happening" is exactly the state someone asking is trying
-    // to observe. Still subject to the cadence gate, so a request storm
-    // cannot outrun the wire.
+    // past the mode-gated unsolicited check, since "nothing is happening"
+    // is exactly the state someone asking is trying to observe. Still
+    // subject to the cadence gate, so a request storm cannot outrun the
+    // wire.
     tlm_.emit(state_.time.cycleStart, forceFrame);
 
-    // Refresh what STATUS answers from (128-012, Comms::updateStatus() --
-    // see its own doc comment for the full field-by-field contract).
-    // Sourced from the SAME state_ the telemetry projection just used, so
+    // Refresh what STATUS answers from (Comms::updateStatus() -- see its
+    // own doc comment for the full field-by-field contract). Sourced from
+    // the SAME state_ the telemetry projection just used, so
     // the queryable line and the wire frame can never disagree -- STATUS is
     // a second VIEW of the state, not a second copy of it. Cheap enough to
     // run unconditionally; it must run even when the idle gate suppressed
@@ -581,7 +577,7 @@ void RobotLoop::cycle() {
     // reflected in tlm_.mode() -- sendTlmReply() below relies on that.
     comms_.updateStatus(state_, tlm_);
 
-    // TLM: mode-change / garbage reply (Part 4): the STATUS line for a
+    // TLM: mode-change / garbage reply -- the STATUS line for a
     // recognized ON/AUTO/OFF (now reporting the mode applied above), or the
     // HELP line for an unrecognized `TLM:<data>` argument. No-op for
     // kNone/kFrame -- see Comms::sendTlmReply()'s own doc comment.

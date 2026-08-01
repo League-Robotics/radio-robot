@@ -1,10 +1,7 @@
 // debug.h -- App's bench/Sim-only debug message channel (DBG=18,
-// protos/commands.proto). Landed early in sprint 129 because tickets 006
-// (duty sweep) and 007 (adaptive calibration) want it for bench
-// diagnostics -- issue 05-dbg-debug-message-channel-for-bench-and-sim.md.
-// Stakeholder, 2026-07-31: "Can we add another response field so that you
-// can send debug messages? ... Let's go make a DBG. It only needs to get
-// compiled in when you're on the bench or in SIM."
+// protos/commands.proto). Bench diagnostics for duty-sweep and adaptive
+// calibration work that needs to see internal state without a full
+// telemetry decode.
 //
 // Compile gate: everything below is a REAL, callable API only when
 // ROBOT_DEBUG is defined (a bench firmware build's own opt-in CMake
@@ -13,8 +10,7 @@
 // always have it, per src/sim/CMakeLists.txt's `-DHOST_BUILD=1`). The
 // shipped ARM release build defines neither, so debugf()/DBG_EVERY()/
 // DBG_MILLI() are inline no-ops there instead -- zero flash cost, zero
-// wire traffic (129-003 acceptance: "ARM release build: DBG compiles out
-// entirely"). The same macro gates App::Comms::sendDebug() (comms.h/.cpp,
+// wire traffic. The same macro gates App::Comms::sendDebug() (comms.h/.cpp,
 // this module's ONLY caller into App::Comms) and debug.cpp's own function
 // bodies, so there is never a mismatch between what this header declares
 // and what debug.cpp defines.

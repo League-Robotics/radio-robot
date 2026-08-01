@@ -205,8 +205,8 @@ class MicroBitI2CBus : public I2CBus {
   // this single point.
   static uint64_t clockUs();
 
-  // waitForClearance — write()/read()'s entry-side clearance wait (103-002,
-  // M1 fix). If entryDeadline is still in the future, bumps
+  // waitForClearance — write()/read()'s entry-side clearance wait. If
+  // entryDeadline is still in the future, bumps
   // clearanceSafetyNetCount_ and waits out the shortfall WITHOUT spinning:
   // sleeps via fiber_sleep() — the same cooperative primitive clock.h's
   // Sleeper wraps, rounded up to whole milliseconds (fiber_sleep() reliably

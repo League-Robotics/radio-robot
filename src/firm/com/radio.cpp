@@ -32,10 +32,7 @@ int Radio::setChannel(int channel) {
 }
 
 // Reassemble §5 fragments in place. Runs in the radio datagram ISR context.
-// Binary-clean by construction (raw memcpy, no byte-level interpretation) --
-// unchanged since 123-002; 124-005 only changed the trailing-byte
-// CONVENTION (every sender now appends a single '\n', converged from the
-// old 0x00-binary/'\n'-text split) and poll()'s own demux of it.
+// Binary-clean by construction (raw memcpy, no byte-level interpretation).
 void Radio::onData(MicroBitEvent) {
     Radio* self = _instance;
     if (!self) return;
@@ -78,9 +75,9 @@ void Radio::onData(MicroBitEvent) {
 bool Radio::poll(char* buf, uint16_t cap, uint16_t* outLen) {
     if (!_msgReady) return false;
 
-    // 124-005: UNCONDITIONAL terminator -- every sender (send(), the sole
-    // outbound path now) appends exactly one trailing '\n'; strip it here.
-    // No '\r' stripping -- a binary line may legitimately carry 0x0D as
+    // UNCONDITIONAL terminator -- every sender (send(), the sole outbound
+    // path) appends exactly one trailing '\n'; strip it here. No '\r'
+    // stripping -- a binary line may legitimately carry 0x0D as
     // content; App::Comms::dispatchLine() strips a trailing '\r' only once
     // it has classified the line as cleartext (see this class's own file
     // header).
@@ -97,11 +94,10 @@ bool Radio::poll(char* buf, uint16_t cap, uint16_t* outLen) {
 }
 
 // Shared fragmentation body -- `payload[0..payloadLen)` already carries its
-// own trailing '\n' delimiter (124-005: the one terminator every outbound
-// line uses now, appended by send() itself -- the former sendText() this
-// comment used to also credit is deleted, see this file's own header) as
-// its LAST byte; this function only knows about RAW250 fragment framing,
-// never about what the trailing byte means.
+// own trailing '\n' delimiter (the one terminator every outbound line
+// uses, appended by send() itself) as its LAST byte; this function only
+// knows about RAW250 fragment framing, never about what the trailing
+// byte means.
 void Radio::sendFragmented(const uint8_t* payload, int payloadLen) {
     int off = 0;
     bool first = true;
@@ -131,9 +127,9 @@ void Radio::send(const uint8_t* data, uint16_t len) {
     // `data`/`len` is the full wire LINE content (a command-prefixed COBS
     // body, or a cleartext reply -- App::Comms builds either shape the
     // same way before handing it here) + a single trailing '\n' delimiter
-    // -- the ONE terminator every outbound line uses now (124-005, issue
-    // §7 -- see this class's own file header). Payload buffer generously
-    // covers App::kMaxLineBytes (207) + 1 delimiter with headroom;
+    // -- the ONE terminator every outbound line uses (see this class's
+    // own file header). Payload buffer generously covers
+    // App::kMaxLineBytes (207) + 1 delimiter with headroom;
     // truncates (rather than overflows) on an over-length caller,
     // mirroring SerialPort::send()'s own defensive truncation.
     uint8_t payload[256];

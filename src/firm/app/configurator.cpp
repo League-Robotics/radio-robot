@@ -1,8 +1,5 @@
 // configurator.cpp -- App::Configurator implementation. See configurator.h
-// for the module's boundary. Every merge/applier/persistence body here
-// moved verbatim out of App::RobotLoop (command-ingestion-ring-buffered-
-// comms-subsystem-routing-two-stops.md §6); the behavior is unchanged, only
-// its owner is.
+// for the module's boundary.
 #include "app/configurator.h"
 
 namespace App {
@@ -29,16 +26,6 @@ void mergeOtosPatch(msg::OtosConfigPatch& slot,
   if (incoming.offset_y.has) slot.offset_y = incoming.offset_y;
   if (incoming.offset_yaw.has) slot.offset_yaw = incoming.offset_yaw;
 }
-
-// mergeEstimatorPatch -- DELETED (128-016,
-// robot-state-pose-needs-exactly-one-writer.md): fed
-// Motion::StateEstimator::FusionWeights, and that class is gone (a
-// per-cycle computation with no consumer -- its own former header said
-// so). The ESTIMATOR patch_kind's weight_heading_otos/weight_omega_otos/
-// staleness_ms wire fields are still ACCEPTED (see apply()'s ESTIMATOR
-// branch below) but now land nowhere -- only that branch's shaper-ceiling
-// fields (a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max) still
-// reach a live consumer (Motion::Planner::applyShaperLimits()).
 
 }  // namespace
 
@@ -69,10 +56,8 @@ uint32_t Configurator::apply(const msg::CommandEnvelope& env) {
     const msg::EstimatorConfigPatch& patch = config.patch.estimator;
 
     // weight_heading_otos/weight_omega_otos/staleness_ms: accepted on the
-    // wire, applied nowhere (128-016 -- see this file's own top-of-file
-    // comment; Motion::StateEstimator, their only former consumer, is
-    // deleted). Only the shaper-ceiling fields below still reach a live
-    // consumer.
+    // wire, applied nowhere -- there is no live consumer for them. Only
+    // the shaper-ceiling fields below still reach a live consumer.
 
     // Shaper wire keys retarget the planner's live profile ceilings. Read
     // the planner's current limits, merge the present fields onto them, and

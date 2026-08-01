@@ -6,19 +6,6 @@
 // `#include "messages/..."` or `#include "config/..."`). Every type below
 // is, like device_types.h's, a plain aggregate — default-constructible, no
 // virtuals/pointers/user-declared special member functions.
-//
-// 125-003 (sprint 125 Decision 2): `Gains`/`Opt<T>` and MotorConfig's three
-// PID-related fields (the gain set, the EMA smoothing coefficient, and the
-// integrator-freeze deadband) are DELETED — the closed-loop velocity
-// control law they fed relocated to the motion library (its own
-// motion-local gain-set type, per the isolation invariant that motion may
-// not depend on devices/), and that relocated class was itself deleted
-// outright by 128-015 (zero instantiations -- App::Drive holds no
-// controller of its own; see src/motion/DESIGN.md's "wheel control
-// generations" note).
-// `Devices::Motor::applyTravelCalib(float)` replaced the old gain-apply
-// method — the one field this leaf still live-applies — so `Opt<T>`'s one
-// remaining caller is gone too.
 #pragma once
 
 #include <cstdint>

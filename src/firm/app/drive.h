@@ -1,13 +1,9 @@
 // drive.h -- App::Drive: the wheel-drive subsystem and the owner of the
 // WHEELS command's whole lifecycle. Two responsibilities, and only two:
 //
-//   1. The bounded wheel command (command-ingestion-ring-buffered-comms-
-//      subsystem-routing-two-stops.md §4). `WHEELS` is the dumb teleop
-//      primitive -- a per-wheel velocity pair held for a fixed duration --
-//      and Drive owns its targets, its deadline, and its completion event.
-//      Before this change those four pieces of state lived as loose members
-//      on App::RobotLoop and were overwritten in place by each arriving
-//      command, so a superseded command never completed and never acked.
+//   1. The bounded wheel command. `WHEELS` is the dumb teleop primitive --
+//      a per-wheel velocity pair held for a fixed duration -- and Drive
+//      owns its targets, its deadline, and its completion event.
 //   2. Actuation: commanded wheel SPEED -> motor duty, via the per-wheel
 //      open-loop calibration and the crawl shaper, then the leaf writes.
 //
@@ -54,9 +50,8 @@ class Drive {
   // telemetry twist, and Drive is where it has always been constructed.
   Drive(Devices::Motor& left, Devices::Motor& right, float trackWidth);
 
-  // Install this robot's own wheel calibration
-  // (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
-  // §6). Drive carries NO calibration defaults, so this MUST be called --
+  // Install this robot's own wheel calibration. Drive carries NO
+  // calibration defaults, so this MUST be called --
   // by the composition root, from Config::defaultDriveConfig() -- before
   // any motion is commanded; until it is, tick() writes nothing (see
   // calibrated() below). dutyPerSpeed* is the inverse of the measured plant
@@ -199,11 +194,11 @@ class Drive {
   uint8_t stopEnforceCountdown_ = 0;
 
   // 30 cycles at RobotLoop::kCycle(40ms) == 1.2s -- comfortably past the
-  // <=0.15s stop-observed bound this ticket's own bench acceptance
-  // requires, without holding the re-assertion open indefinitely (App
-  // cannot reference App::RobotLoop::kCycle directly here without a layer
-  // cycle, so this is a plain literal, same as NezhaMotor's own
-  // kMinWriteIntervalUs comment coupling).
+  // <=0.15s measured stop-observed bound, without holding the
+  // re-assertion open indefinitely (App cannot reference
+  // App::RobotLoop::kCycle directly here without a layer cycle, so this
+  // is a plain literal, same as NezhaMotor's own kMinWriteIntervalUs
+  // comment coupling).
   static constexpr uint8_t kStopEnforceTicks = 30;
 
   // Wheel-at-rest threshold for the unconditional half of the re-assertion

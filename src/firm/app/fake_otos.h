@@ -5,14 +5,12 @@
 // macro appears); the loop holds a plain `Devices::Otos&` and neither knows
 // nor cares which implementation it drives.
 //
-// This replaces the old call-site `#ifdef FAKE_OTOS` branch +
-// Devices::Otos::feedSyntheticSample() seam (120-002): the synthesis that
-// used to be pushed into the real leaf every cycle now lives here, pulled by
-// this class's own tick(). Because a fake needs App:: context (the
-// Odometry pose and the wheel Motors' velocities), it lives in app/ rather
-// than devices/ -- the devices/ isolation invariant forbids that leaf layer
-// from depending on App::Odometry, which is exactly why the interface
-// (Devices::Otos) is the seam and this concrete fake sits above it.
+// The synthesis is pulled by this class's own tick(), not pushed into the
+// real leaf. Because a fake needs App:: context (the Odometry pose and
+// the wheel Motors' velocities), it lives in app/ rather than devices/ --
+// the devices/ isolation invariant forbids that leaf layer from depending
+// on App::Odometry, which is exactly why the interface (Devices::Otos) is
+// the seam and this concrete fake sits above it.
 //
 // tick() synthesizes:
 //   - pose x/y/heading   <- the just-integrated Odometry pose (odom_)

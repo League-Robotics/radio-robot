@@ -118,9 +118,9 @@ float Drive::crawlDuty(float duty, float& carry) const {
 // drive.h's own header) -- neither condition applies there (mode_ is
 // already Active, past boot), and the write is worth repeating.
 void Drive::tick(float speedLeft, float speedRight) {
-  // Fail closed (command-ingestion-...-two-stops.md §6): with no calibration
-  // installed there is no honest speed->duty conversion to make, so write
-  // nothing at all rather than guess. A robot whose JSON is missing the
+  // Fail closed: with no calibration installed there is no honest
+  // speed->duty conversion to make, so write nothing at all rather than
+  // guess. A robot whose JSON is missing the
   // calibration never gets here -- codegen fails first -- so reaching this
   // return means a composition root that skipped setDutyPerSpeed(), and
   // standing still is the right answer to that.

@@ -35,7 +35,7 @@ RealOtos::RealOtos(I2CBus& bus, const OtosConfig& config)
 void RealOtos::begin()
 {
     uint8_t id = readReg8(kRegProductId);
-    lastProbeId_ = id;   // [101-001] captured for ODIAG bench triage
+    lastProbeId_ = id;   // captured for ODIAG bench triage
     initialized_ = (id == kExpectedProductId);
     connected_ = initialized_;
     if (!initialized_) return;

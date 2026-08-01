@@ -199,12 +199,10 @@ void MicroBitTuningStore::save(uint32_t version, const Blob& blob) {
 }
 
 void MicroBitTuningStore::wipe() {
-  // Whole-store erase (SUC-003: "the entire store is wiped" on a version
-  // mismatch) -- codal::KeyValueStorage::wipe() erases EVERY key in the
-  // store, including com/radio_channel.h's own persisted radio channel.
-  // Accepted, not a bug: sprint.md's own SUC-003 flow states "the entire
-  // store is wiped," not "our own keys only," and a version bump is rare
-  // (a reflash) -- a radio-channel re-pick after one is a minor, visible
+  // Whole-store erase: codal::KeyValueStorage::wipe() erases EVERY key in
+  // the store, including com/radio_channel.h's own persisted radio
+  // channel. Accepted, not a bug -- a version bump is rare (a reflash),
+  // and a radio-channel re-pick after one is a minor, visible
   // inconvenience, not the silent-drift hazard a misapplied stale tuning
   // patch would be.
   storage_.wipe();

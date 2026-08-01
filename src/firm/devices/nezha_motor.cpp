@@ -82,11 +82,11 @@ int32_t decodeRawEncoder(const uint8_t resp[4]) {
 }
 }  // namespace
 
-// REVISION 1 (114-001, motor.h): the constructor now delegates entirely to
-// reconfigure() -- mode_'s own member initializer (Mode::None) applies
-// before this constructor body runs, so the guard below always succeeds at
-// construction time. Do not keep a duplicate copy of the substitution logic
-// here; reconfigure() is the one place it lives.
+// The constructor delegates entirely to reconfigure() -- mode_'s own
+// member initializer (Mode::None) applies before this constructor body
+// runs, so the guard below always succeeds at construction time. Do not
+// keep a duplicate copy of the substitution logic here; reconfigure() is
+// the one place it lives.
 NezhaMotor::NezhaMotor(I2CBus& bus, const MotorConfig& config)
     : bus_(bus)
 {
@@ -95,8 +95,8 @@ NezhaMotor::NezhaMotor(I2CBus& bus, const MotorConfig& config)
     (void)reconfigure(config);
 }
 
-// reconfigure -- REVISION 1 (114-001, motor.h): guarded, post-construction,
-// whole-config replacement. Refuses (returns false, leaves config_
+// reconfigure -- guarded, post-construction, whole-config replacement
+// (see motor.h). Refuses (returns false, leaves config_
 // unchanged) unless this motor has never yet been commanded (mode_ ==
 // Mode::None) or is independently verified at rest (measured velocity below
 // kReconfigureRestVelocity AND nothing currently applied to the bus). On
@@ -116,11 +116,11 @@ bool NezhaMotor::reconfigure(const MotorConfig& config)
         // value (25) when unconfigured (zero-initialized).
         config_.slewRate = kDefaultSlewRate;
     }
-    // Write-shaping fields (folded from the old MotorArmor base): required,
-    // config-as-truth as of sprint 114 ticket 003 -- no more code-side ship-
-    // default substitution here. gen_boot_config.py always emits real values
-    // (data/robots/*.json's control.reversal_dwell_ms/output_deadband); an
-    // explicit 0 is still a valid off-configuration for both.
+    // Write-shaping fields: required, config-as-truth -- no code-side
+    // ship-default substitution here. gen_boot_config.py always emits real
+    // values (data/robots/*.json's control.reversal_dwell_ms/
+    // output_deadband); an explicit 0 is still a valid off-configuration
+    // for both.
     reversalDwell_ = config.reversalDwell;
     outputDeadband_ = config.outputDeadband;
     return true;
@@ -157,11 +157,9 @@ void NezhaMotor::setNeutral(Neutral mode)
     mode_ = Mode::Neutral;
 }
 
-// applyTravelCalib -- 125-003 (nezha_motor.h's own header): narrowed from
-// the pre-125-003 applyGains(Gains, Opt<float>). Plain field mutation --
-// tick()'s own position() conversion reads config_.wheelTravelCalib fresh
-// on its very next call, so this takes effect on the SAME boot with no
-// reflash.
+// applyTravelCalib -- plain field mutation -- tick()'s own position()
+// conversion reads config_.wheelTravelCalib fresh on its very next call,
+// so this takes effect on the SAME boot with no reflash.
 void NezhaMotor::applyTravelCalib(float travelCalib)
 {
     config_.wheelTravelCalib = travelCalib;
@@ -182,8 +180,8 @@ float NezhaMotor::appliedDuty() const
 
 // ---------------------------------------------------------------------------
 // tick() — see nezha_motor.h's class-level comment for the 2-step contract
-// (the old base-armor steps — reset dispatch, wedge detector, rest
-// tracking — now live in the MotorArmor DECORATOR's own tick()).
+// (reset dispatch, wedge detection, and rest tracking live in the
+// MotorArmor DECORATOR's own tick()).
 // ---------------------------------------------------------------------------
 void NezhaMotor::tick(uint64_t nowUs)
 {
@@ -199,13 +197,11 @@ void NezhaMotor::tick(uint64_t nowUs)
 
     // Per-TICK elapsed time from this leaf's own us time seam (nowUs), NOT
     // the ms derivation above -- a ms-only clock's +/-1ms quantization
-    // would inject noise into a us-scale dt. 125-003: this is now a NAIVE
-    // per-tick difference quotient -- the freshness gate that used to key
-    // this computation off the LAST FRESH sample (rather than this tick's
-    // own dt) is DELETED, not relocated -- and the characterization
-    // (docs/design/encoder-refresh-characterization.md) says that is
-    // CORRECT on the clean schedule: the register is live, every tick's
-    // collect is fresh, and per-tick dt is the honest denominator.
+    // would inject noise into a us-scale dt. This is a NAIVE per-tick
+    // difference quotient, and the characterization (docs/design/
+    // encoder-refresh-characterization.md) says that is CORRECT on the
+    // clean schedule: the register is live, every tick's collect is
+    // fresh, and per-tick dt is the honest denominator.
     if (hasLastTick_) {
         float elapsedTime = static_cast<float>(nowUs - lastTickUs_) / 1e6f;   // [s]
         if (elapsedTime > 0.0f) {
@@ -250,8 +246,7 @@ void NezhaMotor::tick(uint64_t nowUs)
 // docs/knowledge/2026-07-04-encoder-wedge.md), and near-zero dither would
 // request such flips every tick without the deadband.
 //
-// TWO distinct cases (sprint 114 ticket 005,
-// deadband-compensation-small-commands-must-produce-real-motion.md):
+// TWO distinct cases:
 //   - duty == 0.0f EXACTLY: a genuine "stop"/"on target" command. Immediate,
 //     unclamped, cancels any dwell in progress, even mid-dwell. NOT
 //     boosted -- boosting an intentional zero would make the robot buzz
@@ -346,7 +341,7 @@ void NezhaMotor::writeRawDuty(float duty)
 
     // Write-rate limit -- bus hygiene only. Stop is the only throttle
     // exemption. 35ms == App::RobotLoop::kCycle(40ms) minus a 5ms jitter
-    // margin (118 ticket 003): comfortably inside one real cycle even under
+    // margin: comfortably inside one real cycle even under
     // microbit timer jitter, without doubling to a second cycle's worth of
     // headroom (Devices cannot reference App::RobotLoop::kCycle directly --
     // App -> Devices is the one allowed layering direction -- so the two
