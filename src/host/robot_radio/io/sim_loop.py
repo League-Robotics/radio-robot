@@ -473,6 +473,12 @@ class SimLoop:
         # drain_debug_lines(); this exists for a caller that wants
         # immediate delivery the way on_telemetry already offers for TLM.
         self.on_debug: "Callable[[str], None] | None" = None
+        # Non-DBG cleartext observer (system-test recorder): today's
+        # sim_drain_debug() C export filters drainReliable() down to DBG:
+        # lines only, so with a stock library this never fires; a library
+        # built with that filter removed delivers READY/STATUS/PONG/DEVICE
+        # replies here. Same exception-proof dispatch contract as on_debug.
+        self.on_cleartext: "Callable[[str], None] | None" = None
 
         self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
@@ -1622,6 +1628,18 @@ class SimLoop:
             if not line_bytes:
                 continue
             text = line_bytes.decode("utf-8", "ignore")
+
+            # Route non-DBG cleartext (READY/STATUS/PONG/...) to its own
+            # observer instead of the DBG queue -- keeps
+            # drain_debug_lines()'s DBG-only contract intact whether or not
+            # the loaded library still filters at the C level.
+            if not text.startswith("DBG:"):
+                if self.on_cleartext is not None:
+                    try:
+                        self.on_cleartext(text)
+                    except Exception:
+                        pass
+                continue
 
             if self._debug_queue.full():
                 try:
