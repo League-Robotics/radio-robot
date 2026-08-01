@@ -50,9 +50,6 @@ _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 # Motion::Odometry, src/motion/) into this new base-side file --
 # robot_loop.cpp's own applyOtosSample() call needs it linked in.
 _ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"
-# 117 ticket 003: App::StateEstimator, threaded through RobotLoop's own
-# constructor alongside MoveQueue/Preamble.
-_STATE_ESTIMATOR_SRC = _REPO_ROOT / "src" / "motion" / "state_estimator.cpp"
 # 115-005 (gut S1): heading_source.cpp/pilot.cpp/motion/executor.cpp/
 # motion/jerk_trajectory.cpp/vendor/ruckig are all DELETED along with the
 # rest of the motion stack -- robot_loop.h no longer includes app/pilot.h
@@ -158,7 +155,6 @@ def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
         _TELEMETRY_SRC,
         _DRIVE_SRC,
         _ODOMETRY_SRC,
-        _STATE_ESTIMATOR_SRC,
         _NEZHA_MOTOR_SRC,
         _OTOS_SRC,
         _COLOR_SENSOR_SRC,

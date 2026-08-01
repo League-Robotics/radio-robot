@@ -12,8 +12,14 @@
 //      (flash is written only when the serialized blob actually differs).
 //   3. Pushing values into the subsystems that OWN them: motor gains and
 //      per-wheel calibration -> App::Drive and the two Devices::Motor
-//      leaves, estimator weights and shaper ceilings -> Motion::Planner /
-//      Motion::StateEstimator, OTOS scalars and offsets -> the OTOS leaf.
+//      leaves, shaper ceilings -> Motion::Planner, OTOS scalars and
+//      offsets -> the OTOS leaf. The ESTIMATOR patch's own
+//      weight_heading_otos/weight_omega_otos/staleness_ms fields are
+//      accepted on the wire but land nowhere (128-016,
+//      robot-state-pose-needs-exactly-one-writer.md): they used to feed
+//      Motion::StateEstimator, deleted this ticket as a per-cycle
+//      computation with no consumer -- see apply()'s own ESTIMATOR-branch
+//      comment.
 //
 // Named `Configurator`, not `Config`, because `Config::` is already a
 // namespace in this tree (config/persisted_tuning.h) -- a class of that
@@ -32,7 +38,6 @@
 #include "devices/otos.h"
 #include "messages/envelope.h"
 #include "motion/planner/planner.h"
-#include "motion/state_estimator.h"
 
 namespace App {
 
@@ -43,7 +48,6 @@ class Configurator {
   // roots): persistence disabled, everything else unchanged.
   Configurator(Drive& drive, Devices::Motor& motorL, Devices::Motor& motorR,
                Devices::Otos& otos, Motion::Planner& planner,
-               Motion::StateEstimator& stateEstimator,
                Config::TuningStore* tuningStore = nullptr);
 
   // Apply one decoded CONFIG command. Returns the msg::ErrCode to ack with
@@ -69,7 +73,6 @@ class Configurator {
   Devices::Motor& motorR_;
   Devices::Otos& otos_;
   Motion::Planner& planner_;
-  Motion::StateEstimator& stateEstimator_;
 
   // Persisted live-tuning: cumulative merge of every tuned field, plus the
   // last blob actually written (change-detection baseline).

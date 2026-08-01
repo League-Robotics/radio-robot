@@ -69,9 +69,6 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "drive.cpp",
     _REPO_ROOT / "src" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
-    # 117 ticket 003: App::StateEstimator, threaded through RobotLoop's/
-    # SimHarness's own constructors alongside moveQueue/preamble.
-    _REPO_ROOT / "src" / "motion" / "state_estimator.cpp",
 ]
 # 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
 # entry here) is gone outright -- zero instantiations; App::Drive holds no

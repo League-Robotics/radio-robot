@@ -90,22 +90,23 @@ set(APP_SOURCES
     "${SOURCE_DIR}/app/robot_loop.cpp"
     "${SOURCE_DIR}/app/telemetry.cpp"
 )
-# odometry.cpp/state_estimator.cpp (122-002, motion-library extraction
-# ticket 2): live under MOTION_DIR (122-001: src/motion, a sibling of
-# src/firm), not SOURCE_DIR. The OTOS-perception half odometry.cpp used to
-# also define (applyOtosSample()) is now a private RobotLoop method
-# (robot_loop.cpp, APP_SOURCES) -- Motion::Odometry may not depend on
-# Devices::Otos/App::Telemetry::Frame.
+# odometry.cpp (122-002, motion-library extraction ticket 2): lives under
+# MOTION_DIR (122-001: src/motion, a sibling of src/firm), not
+# SOURCE_DIR. The OTOS-perception half odometry.cpp used to also define
+# (applyOtosSample()) is now a private RobotLoop method (robot_loop.cpp,
+# APP_SOURCES) -- Motion::Odometry may not depend on Devices::Otos/App::
+# Telemetry::Frame.
 #
 # Sprint 128 ticket 014 deleted stop_condition.cpp/velocity_shaper.cpp/
 # move_queue.cpp outright (zero callers -- Motion::Planner already wrote
 # Types::RobotState::Wheel::cmdVelocity directly and RobotLoop::cycle()
 # already consumed it directly, so the WheelSink boundary interface those
-# three modules existed to drive was never actually used); they are no
-# longer part of this list.
+# three modules existed to drive was never actually used); ticket 016
+# deleted state_estimator.cpp outright too (Motion::StateEstimator
+# retired from the loop -- a per-cycle computation with no consumer);
+# none of the four are part of this list any more.
 set(MOTION_SOURCES
     "${MOTION_DIR}/odometry.cpp"
-    "${MOTION_DIR}/state_estimator.cpp"
     # Planner integration (2026-07-26): the planner library core drives the
     # loop now -- the same files the firmware image links.
     "${MOTION_DIR}/planner/profile.cpp"

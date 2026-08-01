@@ -48,6 +48,23 @@ foreach(test_name IN LISTS PLANNER_TESTS)
   add_test(NAME ${test_name} COMMAND ${test_name})
 endforeach()
 
+# pose_ownership_test (128-016, SUC-002): the ONLY test in this suite that
+# needs Motion::Odometry (RobotState::pose's sole writer, post-128-016) --
+# not part of the `planner` library above, so this target adds
+# odometry.cpp/body_kinematics.cpp directly rather than widening every
+# sibling test's link graph.
+add_executable(pose_ownership_test tests/pose_ownership_test.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../odometry.cpp
+  ${CMAKE_CURRENT_SOURCE_DIR}/../body_kinematics.cpp)
+target_link_libraries(pose_ownership_test PRIVATE planner)
+# odometry.cpp/body_kinematics.cpp use the qualified #include "motion/..."
+# spelling every other src/motion consumer uses (root CMakeLists.txt,
+# src/sim/CMakeLists.txt) -- src/ (two levels up from this file), not
+# src/motion, is the include root that resolves it.
+target_include_directories(pose_ownership_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+add_test(NAME pose_ownership_test COMMAND pose_ownership_test)
+list(APPEND PLANNER_TESTS pose_ownership_test)
+
 add_custom_target(planner_tests
   COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
   DEPENDS ${PLANNER_TESTS}

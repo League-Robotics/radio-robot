@@ -1402,15 +1402,20 @@ void Planner::update(Types::RobotState& state) const {
   state.command.v_x = 0.5f * (stagedLeft + stagedRight);
   state.command.omega = (stagedRight - stagedLeft) / limits_.trackWidth;
 
+  // NOTE (128-016, robot-state-pose-needs-exactly-one-writer.md): this
+  // block used to also write state.pose.* from pose_ (PoseTracker, this
+  // class's own internal working estimate, OTOS-blended whenever
+  // limits_.headingOtosWeight > 0) -- a SECOND writer of RobotState::pose
+  // alongside Motion::Odometry::integrate()/App::RobotLoop::publishPose(),
+  // ordering-dependent on which ran last a given cycle. Deleted: Odometry
+  // is now pose's ONE writer (robot_state.h's own Pose section doc
+  // comment). pose_ remains this class's own internal working estimate --
+  // still fed into state.estimate.body just below -- and bodyVelocity/
+  // omegaBody stay live for that same assignment; they are simply no
+  // longer ALSO pushed onto state.pose here.
   const float bodyVelocity = 0.5f * (left_.velocity() + right_.velocity());
   const float omegaBody =
       (right_.velocity() - left_.velocity()) / limits_.trackWidth;
-  state.pose.x = pose_.x();
-  state.pose.y = pose_.y();
-  state.pose.heading = pose_.heading();
-  state.pose.v_x = bodyVelocity;
-  state.pose.v_y = 0.0f;
-  state.pose.omega = omegaBody;
 
   state.estimate.wheelLeft = {left_.basisPosition(), left_.velocity(),
                               left_.basisTime(), left_.valid()};

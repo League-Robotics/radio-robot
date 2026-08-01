@@ -53,14 +53,15 @@ set(MOTION_DIR "${CMAKE_SOURCE_DIR}")
 # deleted the zero-instantiation wheel_velocity_pid.{h,cpp} (125-003's
 # relocated closed-loop velocity control law -- superseded before it ever
 # had a caller; see src/motion/DESIGN.md's "wheel control generations"
-# note). What's left: body_kinematics (twist<->wheel conversion), odometry
-# (dead-reckoning integration), and state_estimator (ZOH prediction / OTOS
-# blend).
+# note). Ticket 016 deleted state_estimator.{h,cpp} outright (Motion::
+# StateEstimator retired from the loop, robot-state-pose-needs-exactly-
+# one-writer.md -- a per-cycle computation with no consumer). What's
+# left: body_kinematics (twist<->wheel conversion) and odometry
+# (dead-reckoning integration, RobotState::pose's sole writer).
 # ---------------------------------------------------------------------------
 add_library(motion STATIC
     "${MOTION_DIR}/body_kinematics.cpp"
     "${MOTION_DIR}/odometry.cpp"
-    "${MOTION_DIR}/state_estimator.cpp"
 )
 
 # "${REPO_ROOT}/src" resolves this tree's own qualified `#include
@@ -84,17 +85,17 @@ enable_testing()
 # (motion_stop_condition_tests, motion_velocity_shaper_tests,
 # motion_move_queue_chained_tests) along with the MoveQueue-generation
 # code they exercised -- there is currently no standalone (non-pytest,
-# non-ctypes) harness for the four modules that remain in the `motion`
-# library above (body_kinematics/odometry/state_estimator are exercised
-# today through the pytest ctypes harnesses under src/tests/sim/unit/ --
-# app_odometry_harness.cpp/app_state_estimator_harness.cpp -- not through
-# this CMake project). `motion_tests` therefore currently runs ctest over
-# zero registered tests (a valid, if trivial, green result) rather than
-# being removed outright: SUC-001's own "fast, Python-free iteration loop"
-# contract for this tree is a real, live requirement even though there is
-# nothing in THIS ticket's scope to attach it to (this ticket authorizes
-# no new tests) -- a future ticket adding standalone coverage for any of
-# the three remaining modules has this target ready to attach to.
+# non-ctypes) harness for the modules that remain in the `motion`
+# library above (body_kinematics/odometry are exercised today through the
+# pytest ctypes harness under src/tests/sim/unit/ --
+# app_odometry_harness.cpp -- not through this CMake project).
+# `motion_tests` therefore currently runs ctest over zero registered tests
+# (a valid, if trivial, green result) rather than being removed outright:
+# SUC-001's own "fast, Python-free iteration loop" contract for this tree
+# is a real, live requirement even though there is nothing in THIS
+# ticket's scope to attach it to (this ticket authorizes no new tests) --
+# a future ticket adding standalone coverage for either remaining module
+# has this target ready to attach to.
 add_custom_target(motion_tests
     COMMAND ${CMAKE_CTEST_COMMAND} --output-on-failure
     WORKING_DIRECTORY ${CMAKE_BINARY_DIR}

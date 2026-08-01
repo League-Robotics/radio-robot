@@ -1,9 +1,11 @@
 ---
 id: '016'
 title: 'Firmware: RobotState::pose single writer; retire StateEstimator from the loop'
-status: open
-use-cases: [SUC-002]
-depends-on: ['014']
+status: done
+use-cases:
+- SUC-002
+depends-on:
+- '014'
 github-issue: ''
 issue: robot-state-pose-needs-exactly-one-writer.md
 completes_issue: true
@@ -54,44 +56,44 @@ work — confirm it's current before re-editing here, don't clobber it).
 
 ## Acceptance Criteria
 
-- [ ] The `state.pose.*` write block in `Planner::update()`
+- [x] The `state.pose.*` write block in `Planner::update()`
       (`planner.cpp:1247-1252`) is deleted. `PoseTracker` remains the
       planner's internal working estimate; it is NOT wired to write
       `RobotState::pose` — if the wire ever needs `PoseTracker`'s output,
       that is future work through the existing `state.estimate` section,
       never by overwriting `pose`.
-- [ ] `Motion::Odometry::integrate()` (via `publishPose()`) is confirmed
+- [x] `Motion::Odometry::integrate()` (via `publishPose()`) is confirmed
       as `state.pose`'s ONE remaining writer.
-- [ ] The every-cycle `stateEstimator_.update(state_, ...)` call is
+- [x] The every-cycle `stateEstimator_.update(state_, ...)` call is
       removed from `RobotLoop::cycle()`/`tick()`.
-- [ ] `state_estimator.{h,cpp}` are deleted (per the settled decision
+- [x] `state_estimator.{h,cpp}` are deleted (per the settled decision
       above), along with their entries in all four build source lists.
-- [ ] `robot_state.h`'s `pose` field comment is fixed: writer is
+- [x] `robot_state.h`'s `pose` field comment is fixed: writer is
       `Motion::Odometry::integrate()`, "never OTOS-blended" now stays
       TRUE once the planner's write is removed.
-- [ ] `robot_state.h`'s `cmdVelocity` writer comment names both writers
+- [x] `robot_state.h`'s `cmdVelocity` writer comment names both writers
       and the ownership-switch mechanism, mirroring the existing accurate
       `Command.mode`/`moveActive` treatment — coordinate with ticket 014,
       which may have already written this comment as part of its own
       boundary documentation; do not produce a conflicting second edit.
-- [ ] `src/motion/DESIGN.md`'s estimator roster is updated: `Odometry` =
+- [x] `src/motion/DESIGN.md`'s estimator roster is updated: `Odometry` =
       telemetry trip odometer (the one remaining pose writer);
       `PoseTracker` = the planner's internal working estimate (the one
       that actually drives the robot, never wired to `RobotState::pose`);
       `StateEstimator` = deleted, no replacement in this tree (a future
       estimator rebuild is separate, tracked work, not part of this
       ticket).
-- [ ] `grep -n "state.pose" src/motion/planner/planner.cpp` shows reads
+- [x] `grep -n "state.pose" src/motion/planner/planner.cpp` shows reads
       only.
-- [ ] `grep -rn "stateEstimator_\." src/firm/app/` returns nothing.
-- [ ] A firmware test asserts a full cycle leaves `state.pose` equal to
+- [x] `grep -rn "stateEstimator_\." src/firm/app/` returns nothing.
+- [x] A firmware test asserts a full cycle leaves `state.pose` equal to
       `Odometry`'s integration even with `headingOtosWeight > 0`
       configured (this is the regression guard for the exact hazard this
       ticket closes — a nonzero weight must no longer make telemetry
       silently flip pose sources).
-- [ ] `just build-clean` + `motion_tests` + planner ctest suite +
+- [x] `just build-clean` + `motion_tests` + planner ctest suite +
       firmware pytest tiers pass.
-- [ ] Bench: telemetry `pose` on the stand matches pre-change values for
+- [x] Bench: telemetry `pose` on the stand matches pre-change values for
       the standard smoke moves — the change removes an unread write, so
       drift here means something was live: stop and investigate. (Per
       this sprint's Test Strategy, the full hardware bench pass happens

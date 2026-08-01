@@ -92,7 +92,6 @@ inline Motion::PlannerLimits simPlannerLimits(float trackWidth) {  // [mm]
 
 }  // namespace TestSim
 #include "motion/odometry.h"
-#include "motion/state_estimator.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
 #include "wire_test_codec.h"
@@ -130,23 +129,15 @@ class SimHarness {
         // default to 0 before their first tick()), same value the
         // pre-122-002 constructor read internally.
         odom_(trackWidth, armorL_.position(), armorR_.position()),
-        // Default-constructed, not sourced from Config::
-        // defaultEstimatorConfig() -- that generated config lives outside
-        // the sim CMake target (bakes in the active robot JSON at ARM
-        // build time; src/sim/CMakeLists.txt's own "Absent (deliberately)"
-        // note). Behaviorally equivalent (FusionWeights{}'s defaults match
-        // every robot JSON's committed estimator weights). Kept solely for
-        // robotLoop_'s own stateEstimator_.update() call.
-        stateEstimator_(),
         planner_(simPlannerLimits(trackWidth)),
         preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
         // App::Configurator owns the CONFIG lifecycle (configurator.h).
         // No TuningStore: persistence is disabled in the sim, exactly as
         // the pre-Configurator RobotLoop's own null tuningStore was.
-        configurator_(drive_, armorL_, armorR_, otos_, planner_, stateEstimator_),
+        configurator_(drive_, armorL_, armorR_, otos_, planner_),
         robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,
                    drive_, configurator_, odom_, planner_, preamble_,
-                   stateEstimator_, clock_, sleeper_) {
+                   clock_, sleeper_) {
     // No self-configuration -- motorL_/motorR_ stay at their default
     // Devices::MotorConfig{} (all-zero), matching a real, not-yet-booted
     // composition root. A caller MUST call configureMotor() for BOTH ports
@@ -371,10 +362,6 @@ class SimHarness {
   App::Drive& drive() { return drive_; }
   Motion::Planner& planner() { return planner_; }
 
-  // Exposes the owned Motion::StateEstimator; a test needing non-default
-  // fusion weights calls stateEstimator().setWeights(...) directly.
-  Motion::StateEstimator& stateEstimator() { return stateEstimator_; }
-
   // Concrete TestSim::SimClock&, not Devices::Clock& -- callers need the
   // setMicros()/advanceMicros() stepping surface only the concrete fake
   // exposes.
@@ -440,7 +427,6 @@ class SimHarness {
   App::Telemetry tlm_;
   App::Drive drive_;
   Motion::Odometry odom_;
-  Motion::StateEstimator stateEstimator_;  // default-constructed, see ctor initializer list's own comment above
   // Planner integration (2026-07-26): the sim drives the REAL on-robot
   // planner, constructed with bench-plausible limits (simPlannerLimits()).
   // (public accessor: planner(), below with the other accessors)

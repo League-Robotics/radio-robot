@@ -28,7 +28,6 @@
 #include "devices/otos.h"
 #include "motion/planner/planner.h"
 #include "motion/odometry.h"
-#include "motion/state_estimator.h"
 #include "types/version_generated.h"
 
 static MicroBit uBit;
@@ -76,13 +75,16 @@ Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
 // App::Configurator's pid.* wire keys, not through this seeding path.
 
 
-Motion::FusionWeights toFusionWeights(const Config::EstimatorBootConfig& src) {
-  Motion::FusionWeights weights;
-  weights.headingOtos = src.headingOtos;
-  weights.omegaOtos = src.omegaOtos;
-  weights.staleness = src.staleness;
-  return weights;
-}
+// toFusionWeights() -- DELETED (128-016,
+// robot-state-pose-needs-exactly-one-writer.md): its one consumer,
+// Motion::StateEstimator's constructor, is gone (a per-cycle computation
+// with no consumer -- its own former header said so). Config::
+// EstimatorBootConfig/Config::defaultEstimatorConfig() themselves are
+// UNTOUCHED here (out of this ticket's scope -- see boot_config.h's own
+// doc comment): they still bake fail-closed fusion-weight defaults from
+// each robot JSON for a future estimator rebuild
+// (clasi/issues/estimator-v2-otos-fusion-sim-first.md) to read; this
+// file simply no longer has anywhere to feed the result.
 
 // The boot tag: the DAY of the version's date field, then the build number.
 // "0.20260726.1" -> "261" (day 26, build 1).
@@ -292,10 +294,6 @@ int main() {
   Devices::Otos& otos = realOtos;
 #endif
 
-  Config::EstimatorBootConfig estimatorBootConfig = Config::defaultEstimatorConfig();
-  static Motion::StateEstimator stateEstimator(toFusionWeights(estimatorBootConfig));
-
-
   // Planner integration (2026-07-26): the on-robot Motion::Planner is the
   // loop's motion decider, writing Types::RobotState::Wheel::cmdVelocity
   // directly (robot_state.h's own field doc). Limits assembled from
@@ -429,11 +427,11 @@ int main() {
   // App::Configurator owns the CONFIG lifecycle and the persisted-tuning
   // store (command-ingestion-...-two-stops.md §6); RobotLoop routes to it.
   static App::Configurator configurator(drive, motorL, motorR, otos, planner,
-                                        stateEstimator, &tuningStore);
+                                        &tuningStore);
 
   static App::RobotLoop robotLoop(bus, motorL, motorR, otos, color, line,
                                    comms, tlm, drive, configurator, odom,
-                                   planner, preamble, stateEstimator, clock,
+                                   planner, preamble, clock,
                                    sleeper);
 
   // Turn calibration from the robot JSON. Degrees on the wire/JSON side (what

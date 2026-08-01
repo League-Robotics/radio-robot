@@ -128,8 +128,10 @@ experiment, which had been tracked only in project memory, not in an
 issue — the interleaved order restored here is the one this file's §2/§4
 already described); and `moveQueue_.tick()` — the stop decision — moves
 from the R-settle block into the trailing pace block, evaluated AFTER
-`applyOtosSample()`/`odom_.integrate()`/`stateEstimator_.update()` rather
-than before them, so a MOVE's completion decision reads odometry
+`applyOtosSample()`/`odom_.integrate()`/`StateEstimator::update()` (the
+last of these deleted by 128 ticket 016, a per-cycle computation with no
+consumer — named here for its historical position in the schedule only)
+rather than before them, so a MOVE's completion decision reads odometry
 integrated in the SAME cycle, not the previous one (closes a full cycle
 of avoidable heading/distance staleness the `stop_lead_ms` anticipation
 constant had been partly compensating for — see the turn-execution review
@@ -725,19 +727,21 @@ branch + the deleted `Devices::Otos::feedSyntheticSample()`). See
 `RealOtos` split and [`app/fake_otos.h`](fake_otos.h) for the fake.
 
 **Predict-to-now estimation (`RobotLoop`'s `StateEstimator::update()`
-call, 117; 124-009 threads `state_` directly).** Runs once per cycle from
-the trailing `kPace` block, immediately after `state_.pose` is staged and
-the Otos call site above has run (120 ticket 002 reordered which of the
-two stages first — see that paragraph above — `update()`'s own position
-in the schedule, relative to both being done, is unchanged).
-`stateEstimator_.update(state_, now)` reads `state_.wheelLeft`/
+call, 117; 124-009 threads `state_` directly) — DELETED, 128 ticket 016
+(robot-state-pose-needs-exactly-one-writer.md): a per-cycle computation
+with no consumer. Kept below as dated history only.** Ran once per cycle
+from the trailing `kPace` block, immediately after `state_.pose` was
+staged and the Otos call site above had run (120 ticket 002 reordered
+which of the two stages first — see that paragraph above — `update()`'s
+own position in the schedule, relative to both being done, was
+unchanged). `StateEstimator::update(state_, now)` read `state_.wheelLeft`/
 `state_.wheelRight` (position, velocity, their own `sampleTime`) to
 refresh each wheel's peer `WheelEstimate` basis, and `state_.pose`
 (already fused by `Odometry`/`BodyKinematics::forward()` earlier the same
 cycle) plus `state_.otos` (when `present`) to refresh the body peer's
 `BodyEstimate` basis via the v1 complementary blend. `Types::RobotState`
-IS `Motion::StateEstimator::Input` (ticket 007's alias) — no hand-copied
-intermediate struct exists any more. Pure computation over already-staged
+WAS `Motion::StateEstimator::Input` (ticket 007's alias) — no hand-copied
+intermediate struct existed any more, by the end. Pure computation over already-staged
 data — no I2C access, no sleep, bounded work, same posture
 `Odometry::integrate()` and the Otos call site above already keep in this
 same block.

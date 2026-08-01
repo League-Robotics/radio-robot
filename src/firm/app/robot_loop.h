@@ -37,7 +37,6 @@
 #include "firm/types/robot_state.h"
 #include "motion/odometry.h"
 #include "motion/planner/planner.h"
-#include "motion/state_estimator.h"
 
 namespace App {
 
@@ -58,7 +57,6 @@ class RobotLoop {
             Comms& comms, Telemetry& tlm, Drive& drive,
             Configurator& configurator, Motion::Odometry& odom,
             Motion::Planner& planner, Preamble& preamble,
-            Motion::StateEstimator& stateEstimator,
             const Devices::Clock& clock, Devices::Sleeper& sleeper);
 
   [[noreturn]] void run();
@@ -155,7 +153,6 @@ class RobotLoop {
   Motion::Odometry& odom_;
   Motion::Planner& planner_;
   Preamble& preamble_;
-  Motion::StateEstimator& stateEstimator_;
   const Devices::Clock& clock_;
   Devices::Sleeper& sleeper_;
 

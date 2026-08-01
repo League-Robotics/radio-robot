@@ -47,7 +47,7 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
                       Comms& comms, Telemetry& tlm, Drive& drive,
                       Configurator& configurator, Motion::Odometry& odom,
                       Motion::Planner& planner, Preamble& preamble,
-                      Motion::StateEstimator& stateEstimator, const Devices::Clock& clock,
+                      const Devices::Clock& clock,
                       Devices::Sleeper& sleeper)
     : bus_(bus),
       motorL_(motorL),
@@ -62,7 +62,6 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
       odom_(odom),
       planner_(planner),
       preamble_(preamble),
-      stateEstimator_(stateEstimator),
       clock_(clock),
       sleeper_(sleeper) {}
 
@@ -539,7 +538,6 @@ void RobotLoop::cycle() {
     publishLineColor(tickedLine);
     publishPose();
     publishHealth();
-    stateEstimator_.update(state_, static_cast<uint32_t>(nowUs / 1000));  // [us] -> [ms]
     publishTiming(cycleStartUs);
 
     tlm_.update(state_);

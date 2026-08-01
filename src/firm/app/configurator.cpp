@@ -30,27 +30,27 @@ void mergeOtosPatch(msg::OtosConfigPatch& slot,
   if (incoming.offset_yaw.has) slot.offset_yaw = incoming.offset_yaw;
 }
 
-// Estimator patches are never persisted; reboot reverts to baked defaults.
-void mergeEstimatorPatch(Motion::FusionWeights& weights,
-                         const msg::EstimatorConfigPatch& patch) {
-  if (patch.weight_heading_otos.has) weights.headingOtos = patch.weight_heading_otos.val;
-  if (patch.weight_omega_otos.has) weights.omegaOtos = patch.weight_omega_otos.val;
-  if (patch.staleness_ms.has) weights.staleness = static_cast<uint32_t>(patch.staleness_ms.val);
-}
+// mergeEstimatorPatch -- DELETED (128-016,
+// robot-state-pose-needs-exactly-one-writer.md): fed
+// Motion::StateEstimator::FusionWeights, and that class is gone (a
+// per-cycle computation with no consumer -- its own former header said
+// so). The ESTIMATOR patch_kind's weight_heading_otos/weight_omega_otos/
+// staleness_ms wire fields are still ACCEPTED (see apply()'s ESTIMATOR
+// branch below) but now land nowhere -- only that branch's shaper-ceiling
+// fields (a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max) still
+// reach a live consumer (Motion::Planner::applyShaperLimits()).
 
 }  // namespace
 
 Configurator::Configurator(Drive& drive, Devices::Motor& motorL,
                            Devices::Motor& motorR, Devices::Otos& otos,
                            Motion::Planner& planner,
-                           Motion::StateEstimator& stateEstimator,
                            Config::TuningStore* tuningStore)
     : drive_(drive),
       motorL_(motorL),
       motorR_(motorR),
       otos_(otos),
       planner_(planner),
-      stateEstimator_(stateEstimator),
       tuningStore_(tuningStore) {}
 
 uint32_t Configurator::apply(const msg::CommandEnvelope& env) {
@@ -68,9 +68,11 @@ uint32_t Configurator::apply(const msg::CommandEnvelope& env) {
   if (config.patch_kind == msg::ConfigDelta::PatchKind::ESTIMATOR) {
     const msg::EstimatorConfigPatch& patch = config.patch.estimator;
 
-    Motion::FusionWeights weights = stateEstimator_.weights();
-    mergeEstimatorPatch(weights, patch);
-    stateEstimator_.setWeights(weights);
+    // weight_heading_otos/weight_omega_otos/staleness_ms: accepted on the
+    // wire, applied nowhere (128-016 -- see this file's own top-of-file
+    // comment; Motion::StateEstimator, their only former consumer, is
+    // deleted). Only the shaper-ceiling fields below still reach a live
+    // consumer.
 
     // Shaper wire keys retarget the planner's live profile ceilings. Read
     // the planner's current limits, merge the present fields onto them, and

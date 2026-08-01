@@ -21,10 +21,13 @@
 // `RobotState::Wheel::cmdVelocity` itself (this file, below), THE
 // documented base<->motion actuation boundary (sprint 128 ticket 014 --
 // cmdVelocity's own field comment carries the deleted-interface history
-// this crossing used to go through). `Motion::StateEstimator` is the first real
-// consumer on the motion side (state_estimator.h now `#include`s this file
-// in place of its own former private `Input` struct -- see that file's own
-// header for the crossing's rationale).
+// this crossing used to go through). `Motion::Planner` (planner.h) is the
+// live consumer on the motion side today, `#include`-ing this file
+// directly. `Motion::StateEstimator` was an earlier real consumer on this
+// same crossing (state_estimator.h used to `#include` this file in place
+// of its own former private `Input` struct) -- deleted sprint 128 ticket
+// 016 (robot-state-pose-needs-exactly-one-writer.md) as a per-cycle
+// computation with no consumer.
 //
 // Float-typed, throughout: RobotState holds values in the units the
 // odometry/estimator/PID actually compute in (mm, mm/s, rad, rad/s, ...).
@@ -197,7 +200,21 @@ struct RobotState {
   // (BodyKinematics::forward() over both wheels' current velocities,
   // today computed inline in RobotLoop's own kPace block). Encoder-only --
   // never OTOS-blended (that blend lives one level up, in `estimate`
-  // below).
+  // below). Odometry is the SOLE writer -- no other subsystem may assign
+  // into this section.
+  //   - History (128-016, robot-state-pose-needs-exactly-one-writer.md):
+  //     Motion::Planner::update() used to ALSO write this section, from
+  //     its own internal `PoseTracker` (`pose_`, still live as the
+  //     planner's own working estimate, just no longer pushed here) --
+  //     OTOS-blended whenever the planner's `headingOtosWeight` config
+  //     was nonzero, ordering-dependent on which of Odometry/Planner ran
+  //     last a given cycle within RobotLoop::cycle()'s kPace block. The
+  //     "never OTOS-blended" claim above was therefore aspirational, not
+  //     actually true, until that second write was deleted. If a future
+  //     caller needs PoseTracker's own OTOS-fused output on the wire, it
+  //     belongs in `estimate` below (Motion::StateEstimator's own former
+  //     home, now vacant -- see that section's own doc comment), never
+  //     by writing here again.
   struct Pose {
     float x = 0.0f;        // [mm]
     float y = 0.0f;        // [mm]
@@ -207,25 +224,32 @@ struct RobotState {
     float omega = 0.0f;    // [rad/s] signed
   } pose;
 
-  // --- Estimate --- writer: Motion::StateEstimator::update(). ZOH BASES,
-  // not snapshots: each nested estimate carries value(s) + velocity +
-  // basisTime + valid, so "predict to time t" is a pure free function over
-  // just this section (Motion::StateEstimator::wheelAt()/bodyAt() today;
-  // a caller holding a COPIED RobotState gets the same extrapolation for
-  // free, no live StateEstimator instance needed). Mirrors
+  // --- Estimate --- writer: Motion::Planner::update() (its own
+  // WheelChannel/PoseTracker basis readings, written verbatim into this
+  // section every tick -- planner.cpp's own state.estimate.* assignments
+  // at the end of update()). ZOH BASES, not snapshots: each nested
+  // estimate carries value(s) + velocity + basisTime + valid, so "predict
+  // to time t" is a pure free function over just this section. Mirrors
   // Motion::WheelPeer/BodyPeer/Innovations field-for-field (125-002:
-  // Motion::StateEstimator's own private peer-basis structs were renamed
-  // WheelEstimate -> WheelPeer / BodyEstimate -> BodyPeer to free the
-  // `WheelEstimate` name for a retooled actuation-observer boundary struct
-  // that briefly lived in a since-deleted motion-boundary interface (sprint
-  // 128 ticket 014 -- see cmdVelocity's own field comment above for that
-  // deletion's history) -- a DIFFERENT concept from this ZOH peer-basis
-  // reading; the name is simply free again today, not reserved for
-  // anything) -- those become the CANONICAL shape
-  // once ticket 009 threads this section
-  // through in place of StateEstimator's own private members; today they
-  // remain two independently-valid copies (this ticket lands the type,
-  // not the wiring).
+  // Motion::StateEstimator's own former private peer-basis structs were
+  // renamed WheelEstimate -> WheelPeer / BodyEstimate -> BodyPeer to free
+  // the `WheelEstimate` name for a retooled actuation-observer boundary
+  // struct that briefly lived in a since-deleted motion-boundary
+  // interface (sprint 128 ticket 014 -- see cmdVelocity's own field
+  // comment above for that deletion's history) -- a DIFFERENT concept
+  // from this ZOH peer-basis reading; the name is simply free again
+  // today, not reserved for anything).
+  //   - History (128-016, robot-state-pose-needs-exactly-one-writer.md):
+  //     this section's doc comment used to attribute the write to
+  //     Motion::StateEstimator::update() -- ticket 009's own original
+  //     plan for this section, which never actually landed that way:
+  //     StateEstimator::update() took RobotState by const reference
+  //     (read-only input) and held its own PRIVATE peer basis, never
+  //     writing back into this section at all -- Motion::Planner::
+  //     update() was the section's real writer the whole time, through
+  //     its own WheelChannel/PoseTracker bases. Motion::StateEstimator
+  //     itself is deleted this ticket: a per-cycle computation with no
+  //     consumer (its own former header said so).
   struct WheelEstimate {
     float distance = 0.0f;   // [mm] traveled distance at basisTime (matches Wheel::position)
     float velocity = 0.0f;   // [mm/s] signed, held constant across ZOH extrapolation
