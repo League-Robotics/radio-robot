@@ -3,7 +3,7 @@ id: '011'
 title: Comment reduction sweep across src/firm (comment-only, clean-build verified)
 status: open
 use-cases: [SUC-009]
-depends-on: ['001', '002', '003', '006', '007', '009', '010']
+depends-on: ['001', '002', '003', '009', '010']
 github-issue: ''
 issue: 01-reduce-to-minimum-useful-comments-across-src-firm.md
 completes_issue: true

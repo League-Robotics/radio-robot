@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: 'Wheel-frozen fault flag: telemetry bits + host decode'
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 depends-on:

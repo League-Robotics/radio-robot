@@ -10,12 +10,9 @@ issues:
 - 01-reduce-to-minimum-useful-comments-across-src-firm.md
 - 02-move-hard-coded-values-to-configuration.md
 - 03-main-cpp-constants-move-to-robot-config.md
-- 04-continuous-duty-per-speed-calibration.md
 - 05-dbg-debug-message-channel-for-bench-and-sim.md
-- 06-duty-per-speed-and-wheel-gain-disagree-with-the-plant.md
 - 07-estop-did-not-stop-write-on-change-vs-latching-brick.md
 - wheel-frozen-fault-flag-in-telemetry.md
-- bench-duty-readers-see-zero-after-stageduty-park.md
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
@@ -1011,12 +1008,12 @@ single-issue auto-link does not fire).
 | 003 | DBG debug message channel (bench/Sim only), exception-proof host handler | 05 | — |
 | ~~004~~ | ~~TestGUI unmanaged drive~~ — WITHDRAWN 2026-08-01, issue returned to pool (TestGUI owned by another agent) | — | — |
 | ~~005~~ | ~~TestGUI host dead-reckoner~~ — WITHDRAWN 2026-08-01, issue returned to pool (TestGUI owned by another agent) | — | — |
-| 006 | Plant-gain reconciliation: identity wheel correction, duty_sweep.py, reconcile vel_kff; fix zero-reading bench duty tools | 06, bench-duty-readers-see-zero-after-stageduty-park | 001 |
-| 007 | Drive-owned adaptive duty-per-speed trim (gainTrim): slow asymmetric learner, RAM-only, telemetry-projected | 04 | 006 |
-| 008 | Host-side bake action (CLI, not GUI): fold learned gainTrim into duty_per_speed config | 04 | 007 |
-| 009 | Config consolidation: main.cpp PlannerLimits → data/robots/*.json planner block | 03, 02 | 007 |
+| ~~006~~ | ~~Plant-gain reconciliation~~ — WITHDRAWN 2026-08-01, issues returned to pool (duty/calibration line being revised) | — | — |
+| ~~007~~ | ~~Drive-owned adaptive duty-per-speed trim~~ — WITHDRAWN 2026-08-01, issue 04 returned to pool for substantial revision | — | — |
+| ~~008~~ | ~~Host-side bake action~~ — WITHDRAWN 2026-08-01 (nothing left to bake once 007 was pulled) | — | — |
+| 009 | Config consolidation: main.cpp PlannerLimits → data/robots/*.json planner block | 03, 02 | — |
 | 010 | Config consolidation: sweep remaining hard-coded values across src/firm and src/host | 02 | 009 |
-| 011 | Comment reduction sweep across src/firm (comment-only, clean-build verified) | 01 | 001, 002, 003, 006, 007, 009, 010 |
+| 011 | Comment reduction sweep across src/firm (comment-only, clean-build verified) | 01 | 001, 002, 003, 009, 010 |
 
 Tickets execute serially in the order listed above. 001→002 avoids two
 tickets' diffs colliding in `nezha_motor.{h,cpp}` and gives 002 something

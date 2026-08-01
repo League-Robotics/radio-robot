@@ -4,7 +4,7 @@ title: "Config consolidation: main.cpp PlannerLimits \u2192 data/robots/*.json p
   \ block"
 status: open
 use-cases: [SUC-008]
-depends-on: ['007']
+depends-on: []
 github-issue: ''
 issue:
 - 03-main-cpp-constants-move-to-robot-config.md
