@@ -220,13 +220,13 @@ Related: [`otos-sampled-only-at-rest-not-integrated-during-motion.md`](otos-samp
 (the planned stops are where an at-rest OTOS fix would be taken).
 
 **Extended by (2026-07-31):**
-[`minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md`](minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md)
+[`minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md`](system-test-minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md)
 — the concrete mechanism for this charter: tour files (a text version of the
 protocol), the one `systest.py` program, the per-run JSONL dataset every
 analysis runs on, `DBG` fault-injection wire commands, in-tour `EXPECT`
 assertions over the record stream, and `CAMFIX` camera position validation.
 
-[`tests-outside-the-system-test-taxonomy-and-tiers.md`](tests-outside-the-system-test-taxonomy-and-tiers.md)
+[`tests-outside-the-system-test-taxonomy-and-tiers.md`](system-test-tests-outside-the-system-test-taxonomy-and-tiers.md)
 — the keep-list for everything that legitimately remains outside the system
 test (wire robustness, protocol races, link gates, safety latency,
 characterization tools), each classified sim/bench/playfield. Answers this

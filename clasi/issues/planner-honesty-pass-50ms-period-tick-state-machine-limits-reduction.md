@@ -134,7 +134,7 @@ if grouping suggests passing sub-structs.
 - [`unify-sim-and-robot-composition-roots.md`](unify-sim-and-robot-composition-roots.md)
   — the one-period constant is that issue's item 4; this issue settles the
   value at 50.
-- [`minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md`](minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md)
+- [`minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md`](system-test-minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md)
   — the `cycle_period` golden is what catches a future period regression.
 - `src/motion/DESIGN.md` §6 — the duty-vs-trim open question this issue
   closes (answer: WheelTrim is the law; duty stage deleted).

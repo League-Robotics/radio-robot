@@ -306,7 +306,7 @@ rows 1–7 are calibration/population values, not live-tunable.
 - [`planner-honesty-pass-50ms-period-tick-state-machine-limits-reduction.md`](planner-honesty-pass-50ms-period-tick-state-machine-limits-reduction.md)
   — deletes the duty stage this issue's history references; coordinate the
   trim-gain reshape (Phase 3 note above).
-- [`tests-outside-the-system-test-taxonomy-and-tiers.md`](tests-outside-the-system-test-taxonomy-and-tiers.md)
+- [`tests-outside-the-system-test-taxonomy-and-tiers.md`](system-test-tests-outside-the-system-test-taxonomy-and-tiers.md)
   — the load experiment is a characterization tool by that issue's
   taxonomy (it produces calibration data, not a standing verdict); its
   script belongs in `src/tools/`.

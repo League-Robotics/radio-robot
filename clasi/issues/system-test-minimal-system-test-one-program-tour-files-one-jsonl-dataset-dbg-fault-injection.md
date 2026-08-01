@@ -17,7 +17,7 @@ commands** sent down to the firmware/sim for fault injection (wedge an
 encoder, etc.).
 
 This issue **extends** the umbrella charter
-[`square-tour-is-the-one-system-test-sim-bench-playfield.md`](square-tour-is-the-one-system-test-sim-bench-playfield.md)
+[`square-tour-is-the-one-system-test-sim-bench-playfield.md`](system-test-square-tour-is-the-one-system-test-sim-bench-playfield.md)
 (2026-07-28: one system test, three tiers, square with two planned stops on
 opposite legs, closure gate, circle gated behind closure, golden traces
 one-signal-per-image). That issue remains the charter — the what and why;
@@ -376,7 +376,7 @@ stakeholder-approved, committed with a why.
 
 ## Related
 
-- [`square-tour-is-the-one-system-test-sim-bench-playfield.md`](square-tour-is-the-one-system-test-sim-bench-playfield.md)
+- [`square-tour-is-the-one-system-test-sim-bench-playfield.md`](system-test-square-tour-is-the-one-system-test-sim-bench-playfield.md)
   — the umbrella charter this issue implements (three tiers, golden-trace
   process rules, deletion list).
 - [`unify-sim-and-robot-composition-roots.md`](unify-sim-and-robot-composition-roots.md)

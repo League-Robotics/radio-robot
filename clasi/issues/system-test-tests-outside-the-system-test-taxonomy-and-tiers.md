@@ -8,7 +8,7 @@ extends: square-tour-is-the-one-system-test-sim-bench-playfield.md
 ## Description
 
 The tour-based system test
-([`minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md`](minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md))
+([`minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md`](system-test-minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md))
 absorbs most end-to-end coverage. This issue enumerates **every standing test
 that exists outside it** — a deliberately minimal set, each entry naming the
 single invariant it proves and the venue it runs at (sim / bench /
@@ -172,10 +172,10 @@ Move notes:
 
 ## Related
 
-- [`square-tour-is-the-one-system-test-sim-bench-playfield.md`](square-tour-is-the-one-system-test-sim-bench-playfield.md)
+- [`square-tour-is-the-one-system-test-sim-bench-playfield.md`](system-test-square-tour-is-the-one-system-test-sim-bench-playfield.md)
   — the charter; its open question 6 ("what coverage genuinely dies") is
   answered by these lists.
-- [`minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md`](minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md)
+- [`minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md`](system-test-minimal-system-test-one-program-tour-files-one-jsonl-dataset-dbg-fault-injection.md)
   — Layer 3's mechanism; its `at=<s>` extension would let the estop-latency
   check become a tour line.
 - [`unify-sim-and-robot-composition-roots.md`](unify-sim-and-robot-composition-roots.md)
