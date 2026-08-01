@@ -2,6 +2,8 @@
 status: pending
 ---
 
+NOTE: THis is tied to clasi/issues/line-sensor-dead-parity-tick-cycle-count-never-increments.md
+
 # Sensors subsystem should own the line/color tick flip-flop
 
 ## Description
