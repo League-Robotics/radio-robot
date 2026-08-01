@@ -42,5 +42,5 @@ Also note the managed path calls `suspend_telemetry_reader()` during tours,
 which is a *separate* consumption story and has not been checked for the same
 symptom.
 
-Related: [[unmanaged-drive-lease-expiry-and-terminal-pivot]],
+Related: [[testgui-unmanaged-drive-lease-expiry-and-terminal-pivot]],
 [[trace-baselines-only-refreshed-while-appending]]

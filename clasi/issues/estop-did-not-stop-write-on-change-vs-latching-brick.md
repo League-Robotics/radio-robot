@@ -60,4 +60,4 @@ that rule is now only true again once this fix is back in.
 - Add a firmware unit test: a motor whose write is dropped still re-asserts zero
   on the next tick while velocity is nonzero.
 
-Related: [[unmanaged-drive-lease-expiry-and-terminal-pivot]]
+Related: [[testgui-unmanaged-drive-lease-expiry-and-terminal-pivot]]

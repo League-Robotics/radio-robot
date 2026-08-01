@@ -66,7 +66,7 @@ never refitted.
 2. Open-loop duty sweep (0.10 -> 0.60), measure steady-state speed **per wheel**,
    fit `duty_per_speed` per wheel from the measured line. This also finally
    quantifies the left/right mismatch as a measurement rather than an inference
-   — see [[unmanaged-drive-lease-expiry-and-terminal-pivot]], where a ~12 mm/s
+   — see [[testgui-unmanaged-drive-lease-expiry-and-terminal-pivot]], where a ~12 mm/s
    L/R difference under identical commands bent every straight leg.
 3. Reconcile `vel_kff` to the measured gain, or record in the file why it is
    deliberately below it.

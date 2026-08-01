@@ -167,7 +167,7 @@ Flash persistence and host write-back (both deliberately deferred); deleting the
 
 - [[duty-per-speed-and-wheel-gain-disagree-with-the-plant]] — the measurement
   and error decomposition this issue acts on
-- [[unmanaged-drive-lease-expiry-and-terminal-pivot]] — the L/R mismatch that
+- [[testgui-unmanaged-drive-lease-expiry-and-terminal-pivot]] — the L/R mismatch that
   per-wheel adaptation should absorb
 - [[estop-did-not-stop-write-on-change-vs-latching-brick]] — critical, unrelated
   but must land before any further bench driving

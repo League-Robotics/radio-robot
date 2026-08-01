@@ -42,7 +42,7 @@ of Pose. Keeping the two independent is the point: the gap between them is the
 diagnostic (geometry mismatch, estimator divergence, a wheel slipping while
 counts keep incrementing). That only carries information once the host uses the
 same effective geometry the firmware does — see
-[[host-dead-reckoner-used-raw-not-effective-trackwidth]].
+[[testgui-host-dead-reckoner-used-raw-not-effective-trackwidth]].
 
 ## 3. A row exists only once its source has produced a point
 
