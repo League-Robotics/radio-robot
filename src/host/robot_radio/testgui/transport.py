@@ -16,17 +16,6 @@ Transport (ABC)
         send(line)           — fire-and-forget (no reply read).
         command(line, read_timeout) — send and collect reply lines joined as str.
 
-    Keepalive (sprint 065, ticket 005; default no-ops, not abstract):
-        arm_keepalive()    — arm the ambient host "+" keepalive for an
-            open-ended (S/VW/R) motion session. connect() no longer arms it
-            automatically; the caller that owns the motion session (e.g.
-            KeyboardDriver) is responsible. Hardware backends
-            (_HardwareTransport) delegate to SerialConnection.start_keepalive();
-            SimTransport uses the inherited no-op default (no real serial
-            link, no ambient-keepalive concept).
-        disarm_keepalive() — disarm it (hardware backends delegate to
-            SerialConnection.stop_keepalive()).
-
     Callbacks (set before connect()):
         on_telemetry: Callable[[TLMFrame], None] | None
             Called from the reader thread for every parsed TLM line.
@@ -883,24 +872,6 @@ class Transport(abc.ABC):
     # ambient-keepalive concept -- its watchdog behavior is exercised
     # directly via ``sim_command()`` (tickets 002/003).
 
-    def arm_keepalive(self) -> None:
-        """Arm the ambient host keepalive for an open-ended motion session.
-
-        No-op by default.  Hardware backends override this to start the
-        underlying ``SerialConnection``'s background ``+`` keepalive thread.
-        """
-
-    def disarm_keepalive(self) -> None:
-        """Disarm the ambient host keepalive.
-
-        No-op by default.  Hardware backends override this to stop the
-        underlying ``SerialConnection``'s background ``+`` keepalive thread.
-        """
-
-    # ------------------------------------------------------------------
-    # Internal helpers shared across hardware backends
-    # ------------------------------------------------------------------
-
     def _log(self, text: str) -> None:
         """Deliver a timestamped text entry to the log callback."""
         if self.on_log:
@@ -1523,20 +1494,6 @@ class _HardwareTransport(Transport):
 
     # ------------------------------------------------------------------
     # Keepalive arm/disarm
-    # ------------------------------------------------------------------
-
-    def arm_keepalive(self) -> None:
-        """Start the underlying ``SerialConnection``'s ``+`` keepalive thread."""
-        if self._conn is not None:
-            self._conn.start_keepalive()
-
-    def disarm_keepalive(self) -> None:
-        """Stop the underlying ``SerialConnection``'s ``+`` keepalive thread."""
-        if self._conn is not None:
-            self._conn.stop_keepalive()
-
-    # ------------------------------------------------------------------
-    # Background threads
     # ------------------------------------------------------------------
 
     def _reader_loop(self) -> None:
