@@ -228,7 +228,7 @@ PlannerBootConfig defaultPlannerLimits() {
     cfg.settleRestOmega = 0.16f;          // [rad/s]
     cfg.settleEpsilonLinear = 4.0f;  // [mm]
     cfg.settleEpsilonAngular = 0.035f;  // [rad]
-    cfg.headingHoldGain = 2.0f;  // [1/s]
+    cfg.headingHoldGain = 0.0f;  // [1/s]
 
     cfg.decelPlanFraction = 0.4f;  // [1]
     return cfg;
