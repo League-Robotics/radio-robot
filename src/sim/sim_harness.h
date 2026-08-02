@@ -3,10 +3,22 @@
 // Supersedes tests/sim/support/sim_api.{h,cpp} (TestSim::SimApi + its
 // DutyPredictor) -- full history: src/sim/DESIGN.md. THIN composition root
 // -- no simulation logic (SimPlant/WheelPlant/OtosPlant), no firmware
-// dispatch logic (App::RobotLoop, unmodified). Modeled on how
-// src/firm/main.cpp constructs the same graph, substituting only the
-// I2CBus& slot: main.cpp passes a Devices::MicroBitI2CBus, this class
-// passes a TestSim::SimPlant.
+// dispatch logic (App::RobotLoop, unmodified). 130-002 (unify-sim-and-
+// robot-composition-roots.md): the whole App::/Motion:: graph is now built
+// by the SAME App::composeRobot() (src/firm/app/boot_wiring.h) src/firm/
+// main.cpp calls -- this class constructs the ONE leaf that differs
+// (TestSim::SimPlant, in the Devices::I2CBus& slot main.cpp fills with a
+// real Devices::MicroBitI2CBus) and hands everything else to that shared
+// function. Before this ticket, this file hand-wired its own independent
+// copy of the graph (simPlannerLimits()'s own hand-picked literals), which
+// had already drifted from main.cpp's boot values once -- the wheel-trim
+// gains booted at their fail-closed all-zero default in every sim session
+// while live on every hardware session. That class of drift is now
+// structurally impossible: this class calls composeRobot(), the graph is
+// identical by construction, and the only two deliberately-different
+// values (trackWidth, controlPeriod/actuationDelay) are explicit,
+// commented BootOverrides passed at this file's own composeRobot() call
+// site below -- never silent.
 //
 // The one invariant that matters: tick the plant BEFORE the loop reads it,
 // every cycle -- step(n) calls plant_.tick(dt) FIRST, then robotLoop_.
@@ -31,68 +43,12 @@
 #include <string>
 #include <vector>
 
-#include "app/comms.h"
-#include "app/configurator.h"
-#include "app/debug.h"
-#include "app/drive.h"
-#include "app/preamble.h"
+#include "app/boot_wiring.h"
 #include "app/robot_loop.h"
-#include "app/telemetry.h"
-#include "devices/color_sensor.h"
 #include "devices/device_config.h"
-#include "devices/line_sensor.h"
-#include "devices/motor_armor.h"
-#include "devices/nezha_motor.h"
-#include "devices/otos.h"
 #include "fake_transport.h"
-#include "motion/planner/planner.h"
-
-namespace TestSim {
-
-// Bench-plausible planner limits for the sim harness -- mirrors main.cpp's
-// boot assembly (shaper ceilings, vel gains, one-cycle actuation delay)
-// with the plant-agnostic defaults tests relied on pre-integration.
-inline Motion::PlannerLimits simPlannerLimits(float trackWidth) {  // [mm]
-  Motion::PlannerLimits limits;
-  limits.vMax = 600.0f;
-  // Effectively UNSHAPED (matching the pre-integration sim, which ran
-  // with ShaperLimits{} = shaping off): the profile commits cruise in one
-  // step and the exact terminal landing still holds -- scenario suites
-  // assert instant-commit staging semantics. Shaped-profile behavior has
-  // its own dedicated coverage in src/motion/planner/tests/.
-  limits.aMax = 1.0e6f;
-  limits.aDecel = 1.0e6f;
-  limits.omegaMax = 8.0f;
-  limits.alphaMax = 1.0e5f;
-  limits.alphaDecel = 1.0e5f;
-  limits.trackWidth = trackWidth;
-  limits.controlPeriod = 40.0f;   // [ms] RobotLoop::kCycle
-  limits.actuationDelay = 40.0f;  // [ms] one-cycle staging
-  limits.velocityFilterWeight = 1.0f;
-  limits.requireSettle = false;   // scenario tests assert profile-complete
-  // Rest floors are a per-robot NOISE property: the sim plant's encoder
-  // quantum (0.1 mm) over its ~19 ms sample interval reads +-5.3 mm/s of
-  // pure flicker at true rest, so the floor must sit ABOVE that or the
-  // planner's rest damping chases quantum noise forever (measured: idle
-  // duty twitching +-0.02, true pose jiggling, GUI settle never quiet).
-  limits.settleRestVelocity = 8.0f;  // [mm/s]
-  limits.settleRestOmega = 0.13f;    // [rad/s] 2*floor/trackWidth
-  // Mirror MotorArmor's default write-suppression deadband so the sim's
-  // duty plane exercises the same stiction floor the hardware needs
-  // (PlannerLimits::dutyFloor).
-  limits.dutyFloor = 0.03f;
-  limits.headingHoldGain = 0.0f;
-  limits.velKff = 0.002f;   // sim plant's own nominal inverse gain
-  limits.velKp = 0.0016f;
-  limits.velKi = 0.005f;
-  limits.velIMax = 0.3f;
-  limits.velKaff = 0.0f;
-  limits.velIAccelGate = 1.0e9f;
-  return limits;
-}
-
-}  // namespace TestSim
 #include "motion/odometry.h"
+#include "motion/planner/planner.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
 #include "wire_test_codec.h"
@@ -102,66 +58,70 @@ namespace TestSim {
 class SimHarness {
  public:
   // trackWidth: [mm] -- passed to BOTH the SimPlant's own OtosPlant and the
-  // real App::Drive/App::Odometry instances constructed here, so the
-  // simulated OTOS chip and firmware's own odometry describe the same
+  // real App::Drive/App::Odometry instances App::composeRobot() constructs
+  // (via a BootOverrides -- see this constructor's own comment below), so
+  // the simulated OTOS chip and firmware's own odometry describe the same
   // wheelbase. Defaults to TestSim::kDefaultTrackWidth (SimPlant's own).
   explicit SimHarness(float trackWidth = kDefaultTrackWidth)
       : plant_(trackWidth),
-        motorL_(plant_, Devices::MotorConfig{}),
-        motorR_(plant_, Devices::MotorConfig{}),
-        // PARITY: the sim composes the motor stack exactly as
-        // src/firm/main.cpp does -- bare NezhaMotor wrapped in the
-        // MotorArmor decorator, the ARMOR handed to the app graph. The only
-        // sim/production difference is what answers on the I2C bus.
-        armorL_(motorL_),
-        armorR_(motorR_),
-        otos_(plant_, Devices::OtosConfig{}),
-        color_(plant_, Devices::ColorConfig{}),
-        line_(plant_, Devices::LineConfig{}),
-        comms_(serialLink_, radioLink_, "DEVICE:NEZHA2:sim:sim_harness:1"),
-        // 124-009: Telemetry no longer holds direct Transport& references
-        // (those existed only for TelemetrySecondary's own
-        // independently-armored line, now deleted) -- comms_ already owns
-        // both transports internally.
-        tlm_(comms_),
-        drive_(armorL_, armorR_, trackWidth),
-        // 122-002: Motion::Odometry no longer holds a Devices::Motor& --
-        // seed the delta baseline from each leaf's CURRENT position() (both
-        // default to 0 before their first tick()), same value the
-        // pre-122-002 constructor read internally.
-        odom_(trackWidth, armorL_.position(), armorR_.position()),
-        planner_(simPlannerLimits(trackWidth)),
-        preamble_(armorL_, armorR_, otos_, color_, line_, clock_),
-        // App::Configurator owns the CONFIG lifecycle (configurator.h).
-        // No TuningStore: persistence is disabled in the sim, exactly as
-        // the pre-Configurator RobotLoop's own null tuningStore was.
-        configurator_(drive_, armorL_, armorR_, otos_, planner_),
-        robotLoop_(plant_, armorL_, armorR_, otos_, color_, line_, comms_, tlm_,
-                   drive_, configurator_, odom_, planner_, preamble_,
-                   clock_, sleeper_) {
-    // 129-003: wires the bench/Sim-only DBG debug channel to this harness's
-    // own Comms -- HOST_BUILD is always defined for this whole library
-    // (src/sim/CMakeLists.txt's `-DHOST_BUILD=1`), so App::debugf() is
-    // always live here, matching main.cpp's own ROBOT_DEBUG-gated call.
-    App::setDebugSink(&comms_);
-
-    // App::Drive is the ONE exception to the "no self-configuration" rule
-    // below, and it is not a robot's calibration: it is THIS SIM'S OWN plant
-    // gain. TestSim::WheelPlant is a fixed synthetic plant (velocity
+        // PARITY (130-002): composeRobot() is the SAME function
+        // src/firm/main.cpp calls -- the only leaf substituted here is the
+        // bus (plant_, a TestSim::SimPlant, in main.cpp's
+        // Devices::MicroBitI2CBus slot) and the transports (FakeTransport
+        // in main.cpp's real SerialTransport/RadioTransport slots).
+        // tuningStore is null: persistence is disabled in the sim, exactly
+        // as the pre-composeRobot() RobotLoop's own null tuningStore was.
+        //
+        // THREE deliberate, explicit overrides (BootOverrides -- see its
+        // own doc comment, app/boot_wiring.h, for the full rationale each):
+        //   - trackWidth: this constructor's own fixture parameter, a
+        //     property of the calling test's scenario, not a hardware
+        //     calibration fact.
+        //   - controlPeriod/actuationDelay (kSimControlPeriod, below): the
+        //     sim's own step() advances virtual time by EXACTLY
+        //     App::RobotLoop::kCycle every call, with none of a real
+        //     board's vendor-bus-clearance overrun the robot JSON's own
+        //     baked ~47ms accounts for (PlannerBootConfig::controlPeriod's
+        //     own doc comment). Deriving both the override value AND
+        //     kCycleDtUs (below) from the SAME App::RobotLoop::kCycle
+        //     constant is what closes 130-002's own acceptance criterion
+        //     ("the sim's step dt and the planner's controlPeriod/
+        //     actuationDelay derive from the SAME constant").
+        //   - otosConfig (kIdentityOtosConfig, below): TestSim::SimPlant's
+        //     OtosPlant is already a perfect, zero-mounting-error sensor by
+        //     construction -- the robot JSON's OtosConfig corrects a REAL
+        //     chip's measured lever-arm/scale error, which has no
+        //     counterpart to correct here (found empirically: applying it
+        //     unconditionally put a 2s/150mm/s straight run's otos reading
+        //     55.8mm off true ground truth in a test that explicitly zeroes
+        //     every OTHER simulated OTOS fault knob).
+        graph_(App::composeRobot(plant_, clock_, sleeper_, serialLink_, radioLink_,
+                                 /*tuningStore=*/nullptr, "DEVICE:NEZHA2:sim:sim_harness:1",
+                                 "ID:unknown",
+                                 App::BootOverrides{&trackWidth, &kSimControlPeriod,
+                                                    &kSimControlPeriod, &kIdentityOtosConfig})) {
+    // SIM OVERRIDE: composeRobot() already installed App::Drive's
+    // calibration via installDriveCalibration() (boot through the SAME
+    // path main.cpp uses), baking Drive::kDutyPerSpeed -- the MEASURED
+    // REAL-HARDWARE gearbox constant. That is wrong for THIS plant:
+    // TestSim::WheelPlant is a fixed synthetic plant (velocity
     // kDefaultDutyVelMax at |duty| == 1), so its exact inverse is a fact
     // about the sim, not a per-robot measurement -- there is no robot JSON
-    // to fail closed against, and Drive's fail-closed gate (drive.h) would
-    // otherwise leave every caller that does not push a config with a Drive
-    // that silently refuses to write a duty. Callers that DO have a robot
-    // config still override this: SimLoop.configure_from_robot() pushes the
-    // JSON's own control.duty_per_speed_left/right through
-    // sim_configure_drive(), the same values main.cpp installs on hardware.
+    // to validate against. Override it here, explicitly, rather than
+    // silently keeping the hardware value. Callers that DO have a robot
+    // config still override this AGAIN: SimLoop.configure_from_robot()
+    // pushes the JSON's own control.duty_per_speed_left/right through
+    // sim_configure_drive(), the same values main.cpp installs on
+    // hardware.
     //
-    // setWheelCorrection() is deliberately NOT called, here or from that
-    // push: it linearizes a real gearbox (measured = gain*commanded +
-    // intercept) and this plant is already linear -- see
-    // sim_boot_config.py's drive_boot_config_for() docstring.
-    drive_.setDutyPerSpeed(1.0f / kDefaultDutyVelMax, 1.0f / kDefaultDutyVelMax);
+    // setWheelCorrection() is deliberately left at composeRobot()'s own
+    // installed value (identity: gain 1, intercept 0, from the baked
+    // DriveBootConfig defaults) rather than overridden again here: it
+    // linearizes a real gearbox (measured = gain*commanded + intercept)
+    // and this plant is already linear, so identity is the correct value
+    // for the sim too -- see sim_boot_config.py's drive_boot_config_for()
+    // docstring.
+    graph_.drive().setDutyPerSpeed(1.0f / kDefaultDutyVelMax, 1.0f / kDefaultDutyVelMax);
 
     // No further self-configuration -- motorL_/motorR_ stay at their default
     // Devices::MotorConfig{} (all-zero), matching a real, not-yet-booted
@@ -179,7 +139,7 @@ class SimHarness {
   void boot() {
     if (booted_) return;
     driveBootToDone();
-    robotLoop_.boot();
+    graph_.robotLoop().boot();
     booted_ = true;
   }
 
@@ -190,7 +150,7 @@ class SimHarness {
     for (int i = 0; i < cycles; ++i) {
       plant_.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s]
       clock_.advanceMicros(kCycleDtUs);
-      robotLoop_.cycle();
+      graph_.robotLoop().cycle();
       ++cycleCount_;
     }
   }
@@ -271,13 +231,13 @@ class SimHarness {
   void configureMotor(uint32_t port, const Devices::MotorConfig& cfg) {
     if (port == 2) {
       lastMotorConfigR_ = cfg;
-      bool applied = armorR_.reconfigure(cfg);
+      bool applied = graph_.armorRight().reconfigure(cfg);
       assert(applied && "armorR_.reconfigure() refused on a fresh SimHarness -- real bug, not expected");
       (void)applied;
       hasConfiguredMotorR_ = true;
     } else {
       lastMotorConfigL_ = cfg;
-      bool applied = armorL_.reconfigure(cfg);
+      bool applied = graph_.armorLeft().reconfigure(cfg);
       assert(applied && "armorL_.reconfigure() refused on a fresh SimHarness -- real bug, not expected");
       (void)applied;
       hasConfiguredMotorL_ = true;
@@ -297,10 +257,10 @@ class SimHarness {
   // stale nonzero COMMAND can leave.
   // Planner integration (2026-07-26): the staged wheel-velocity target
   // lives on the planner now (Drive carries duty in raw mode).
-  App::RobotLoop& robotLoop() { return robotLoop_; }
+  App::RobotLoop& robotLoop() { return graph_.robotLoop(); }
 
-  float driveTargetVelLeft() const { return robotLoop_.state().wheelLeft.cmdVelocity; }    // [mm/s] signed
-  float driveTargetVelRight() const { return robotLoop_.state().wheelRight.cmdVelocity; }  // [mm/s] signed
+  float driveTargetVelLeft() const { return graph_.robotLoop().state().wheelLeft.cmdVelocity; }    // [mm/s] signed
+  float driveTargetVelRight() const { return graph_.robotLoop().state().wheelRight.cmdVelocity; }  // [mm/s] signed
 
   // Decodes and returns every outbound line captured on the serial
   // FakeTransport since the last call (serial and radio receive an
@@ -349,7 +309,7 @@ class SimHarness {
   // Thin passthrough to App::RobotLoop's own configuration-completeness
   // gate. false immediately after construction; true only once both
   // configureMotor() calls have landed.
-  bool isConfigured() const { return robotLoop_.isConfigured(); }
+  bool isConfigured() const { return graph_.robotLoop().isConfigured(); }
 
   // The composed SimPlant -- exposes fault knobs (setDisconnected()/
   // freezePosition()/setDropoutRate()/setOtosDrift()) and the read/write
@@ -368,24 +328,25 @@ class SimHarness {
   // snap to (x,y,heading), not just the avatar.
   void setTruePose(float x, float y, float heading) {  // [mm] [mm] [rad]
     plant_.setTruePose(x, y, heading);
-    motorL_.begin();
-    motorR_.begin();
+    graph_.motorLeft().begin();
+    graph_.motorRight().begin();
     // 122-002: Motion::Odometry::reset() takes the CURRENT leaf positions
     // explicitly (both leaves already reset to 0 by begin() above, same
     // values the pre-122-002 reset() read internally at this exact point).
-    odom_.reset(x, y, heading, motorL_.position(), motorR_.position());
+    graph_.odometry().reset(x, y, heading, graph_.motorLeft().position(),
+                            graph_.motorRight().position());
   }
 
-  Devices::NezhaMotor& motorLeft() { return motorL_; }
-  Devices::NezhaMotor& motorRight() { return motorR_; }
+  Devices::NezhaMotor& motorLeft() { return graph_.motorLeft(); }
+  Devices::NezhaMotor& motorRight() { return graph_.motorRight(); }
 
   // drive -- 125-003: App::Drive now holds the interim closed-loop gains
   // (drive.h's own header) a test needs to push directly
   // (drive().applyGainsLeft()/applyGainsRight()) or read back
   // (drive().gainsLeft()/gainsRight()) -- the CONFIG-patch routing split
   // this sprint's own RobotLoop::applyMotorConfigPatch() implements.
-  App::Drive& drive() { return drive_; }
-  Motion::Planner& planner() { return planner_; }
+  App::Drive& drive() { return graph_.drive(); }
+  Motion::Planner& planner() { return graph_.planner(); }
 
   // Concrete TestSim::SimClock&, not Devices::Clock& -- callers need the
   // setMicros()/advanceMicros() stepping surface only the concrete fake
@@ -403,7 +364,11 @@ class SimHarness {
   // exactly, or every sim-tuned finding is measured on a materially
   // different control period than what ships). Pre-118 history (a
   // hand-picked 50ms that never was a deliberate fidelity choice):
-  // src/sim/DESIGN.md.
+  // src/sim/DESIGN.md. 130-002: kSimControlPeriod (the PlannerLimits
+  // controlPeriod/actuationDelay override passed to composeRobot(), this
+  // file's own constructor) derives from the SAME App::RobotLoop::kCycle
+  // constant as this -- one source, not two hand-kept literals that can
+  // drift apart silently.
   static constexpr uint32_t kCycleDtUs = App::RobotLoop::kCycle * 1000;  // [us]
   static_assert(kCycleDtUs == App::RobotLoop::kCycle * 1000,
                 "SimHarness::kCycleDtUs must equal firmware's own App::RobotLoop::kCycle "
@@ -411,6 +376,17 @@ class SimHarness {
                 "that can drift apart silently (118 ticket 003)");
 
  private:
+  // See this constructor's own composeRobot() call comment above -- the
+  // sim's genuinely-justified controlPeriod/actuationDelay override.
+  static constexpr float kSimControlPeriod = static_cast<float>(App::RobotLoop::kCycle);  // [ms]
+
+  // See this constructor's own composeRobot() call comment above -- the
+  // sim's genuinely-justified otosConfig override. Devices::OtosConfig's
+  // own default member initializers (device_config.h) ARE identity (zero
+  // offset, 1.0 scale), so a plain default-constructed instance is exactly
+  // the value this override needs.
+  static constexpr Devices::OtosConfig kIdentityOtosConfig{};
+
   // Drives App::Preamble to done() via preamble_.step() calls issued
   // OURSELVES, advancing the fake Clock between each one -- a single
   // robotLoop_.boot() call offers no opportunity to advance virtual time
@@ -418,15 +394,15 @@ class SimHarness {
   // elapsed virtual time between them.
   void driveBootToDone() {
     clock_.setMicros(0);
-    preamble_.step();  // arms Preamble's own startUs_ at 0 -- power-settle no-op
+    graph_.preamble().step();  // arms Preamble's own startUs_ at 0 -- power-settle no-op
 
     clock_.setMicros(50000);  // >= Preamble::kPowerSettle -- probing starts on the NEXT step()
 
     // 200 passes at 50ms apart is a generous bound over color_/line_'s own
     // natural worst case; if ever exceeded, done() staying false is a real
     // bug, not a slow-but-fine boot.
-    for (int i = 0; i < 200 && !preamble_.done(); ++i) {
-      preamble_.step();
+    for (int i = 0; i < 200 && !graph_.preamble().done(); ++i) {
+      graph_.preamble().step();
       clock_.advanceMicros(50000);
     }
   }
@@ -434,31 +410,14 @@ class SimHarness {
   SimPlant plant_;
   TestSim::SimClock clock_;
   TestSim::SimSleeper sleeper_;
-
-  Devices::NezhaMotor motorL_;
-  Devices::NezhaMotor motorR_;
-  // PARITY: the armor wraps each bare motor exactly as main.cpp does; the
-  // app graph below takes the ARMOR, never the bare leaf.
-  Devices::MotorArmor armorL_;
-  Devices::MotorArmor armorR_;
-  Devices::RealOtos otos_;
-  Devices::ColorSensorLeaf color_;
-  Devices::LineSensorLeaf line_;
-
   TestSupport::FakeTransport serialLink_;
   TestSupport::FakeTransport radioLink_;
 
-  App::Comms comms_;
-  App::Telemetry tlm_;
-  App::Drive drive_;
-  Motion::Odometry odom_;
-  // Planner integration (2026-07-26): the sim drives the REAL on-robot
-  // planner, constructed with bench-plausible limits (simPlannerLimits()).
-  // (public accessor: planner(), below with the other accessors)
-  Motion::Planner planner_;
-  App::Preamble preamble_;
-  App::Configurator configurator_;
-  App::RobotLoop robotLoop_;
+  // The WHOLE App::/Motion:: graph -- see this file's own header and this
+  // constructor's own comment for why this is the SAME composeRobot() call
+  // src/firm/main.cpp makes, substituting only plant_/serialLink_/
+  // radioLink_ for main.cpp's real hardware leaves.
+  App::RobotGraph graph_;
 
   bool booted_ = false;
   int cycleCount_ = 0;
@@ -479,7 +438,7 @@ class SimHarness {
   // landed, mirroring main.cpp's real boot-configure sequence. Idempotent.
   void maybeMarkConfigured() {
     if (hasConfiguredMotorL_ && hasConfiguredMotorR_) {
-      robotLoop_.markConfigured();
+      graph_.robotLoop().markConfigured();
     }
   }
 };

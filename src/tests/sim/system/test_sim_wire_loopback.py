@@ -320,13 +320,26 @@ def test_move_wheels_with_embedded_0x0a_byte_round_trips_through_real_codec():
         # embedded a 0x0A byte inside of -- proof the firmware's real
         # msg::wire::decode() recovered the bit-exact float, not a
         # corrupted neighbor.
+        #
+        # Tolerance widened 0.5 -> 1.0 mm/s (130-002, unify-sim-and-robot-
+        # composition-roots.md): _configure() pushes tovez_nocal.json's REAL
+        # calibration through configure_from_robot(), and the sim now boots
+        # Motion::WheelTrim's velocity-domain trim gains LIVE from that same
+        # config (composeRobot() closes the exact gap that used to leave
+        # trim fail-closed at all-zero in every sim session). cmdVelocity IS
+        # the trim-corrected value (planner.h), so a genuinely-live trim
+        # legitimately settles with a small (<1 mm/s, measured ~0.82) offset
+        # around the commanded setpoint instead of landing on it exactly --
+        # not a codec defect. The embedded-0x0A byte-exactness this test
+        # actually guards is proved by the enqueue ack + encoder-advance
+        # checks below, which do not depend on trim's settled value.
         cmd_vel_left = float(loop._lib.sim_cmd_vel_left(loop._handle))
         cmd_vel_right = float(loop._lib.sim_cmd_vel_right(loop._handle))
-        assert cmd_vel_left == pytest.approx(v, abs=0.5), (
+        assert cmd_vel_left == pytest.approx(v, abs=1.0), (
             f"left wheel PID setpoint {cmd_vel_left} != commanded {v} -- "
             "the embedded-0x0A velocity did not decode correctly"
         )
-        assert cmd_vel_right == pytest.approx(v, abs=0.5), (
+        assert cmd_vel_right == pytest.approx(v, abs=1.0), (
             f"right wheel PID setpoint {cmd_vel_right} != commanded {v} -- "
             "the embedded-0x0A velocity did not decode correctly"
         )

@@ -1,23 +1,18 @@
-"""src/tests/sim/unit/test_sim_harness_configure.py -- ticket 113-002's own
-acceptance proof: TestSim::SimHarness::configureMotor() is a purely ADDITIVE
-config-load surface (SUC-001/SUC-002/SUC-005), plus the motor-only
-configuration-completeness gate (isConfigured()) it drives.
+"""src/tests/sim/system/test_composition_root_parity.py -- 130-002's own
+acceptance proof (unify-sim-and-robot-composition-roots.md, SUC-003): sim
+and hardware construct IDENTICAL Motion::PlannerLimits values by default,
+except the three explicitly documented BootOverrides (trackWidth,
+controlPeriod/actuationDelay, otosConfig -- see app/boot_wiring.h's own
+header for the full rationale on each).
 
-REWRITTEN by 115-006 (gut S1 sim lockstep): configurePlanner()/
-plannerConfig() and the setYawRateMax() sim-only hook are gone --
-Motion::Executor/App::Pilot/App::HeadingSource (115-002's motion-stack
-excision) no longer exist for any of them to configure -- so this file's own
-compile source list drops every motion-stack dependency (app/heading_source.cpp,
-app/pilot.cpp, motion/jerk_trajectory.cpp, motion/executor.cpp, vendor/ruckig)
-the pre-gut version needed, mirroring test_app_robot_loop.py's own post-gut
-source list.
+Compiles ``composition_root_parity_harness.cpp`` together with the same
+full HOST_BUILD dependency graph every sibling ``test_*.py`` in this
+directory already compiles (SimHarness composes the real App::RobotLoop
+graph through App::composeRobot(), see sim_harness.h's own header), runs the
+resulting binary, and asserts it exits 0 -- printing its own human-readable
+field-by-field comparison.
 
-Compiles ``sim_harness_configure_harness.cpp`` together with the same full
-HOST_BUILD dependency graph every other post-gut sim/unit harness compiles
-(SimHarness composes the real App::RobotLoop graph -- see sim_harness.h's
-own header).
-
-    uv run python -m pytest src/tests/sim/unit/test_sim_harness_configure.py -v -s
+    uv run python -m pytest src/tests/sim/system/test_composition_root_parity.py -v -s
 """
 
 import pathlib
@@ -26,45 +21,26 @@ import sys
 
 import pytest
 
-# src/tests/sim/unit/test_sim_harness_configure.py -> unit -> sim -> tests -> repo root
+# src/tests/sim/system/test_composition_root_parity.py -> system -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
-_UNIT_DIR = pathlib.Path(__file__).resolve().parent
-_SUPPORT_DIR = _UNIT_DIR.parent / "support"
-_PLANT_DIR = _UNIT_DIR.parent / "plant"
+_SYSTEM_DIR = pathlib.Path(__file__).resolve().parent
+_SUPPORT_DIR = _SYSTEM_DIR.parent / "support"
+_PLANT_DIR = _SYSTEM_DIR.parent / "plant"
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
 
-_HARNESS_SRC = _UNIT_DIR / "sim_harness_configure_harness.cpp"
+_HARNESS_SRC = _SYSTEM_DIR / "composition_root_parity_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 
-# 115-006 (gut S1): heading_source.cpp/pilot.cpp/motion/executor.cpp/
-# motion/jerk_trajectory.cpp/vendor/ruckig are all DELETED along with the
-# rest of the motion stack -- sim_harness.h no longer includes app/pilot.h
-# (or transitively motion/executor.h -> vendor/ruckig) at all, so none of
-# those sources are compiled into this harness any more (mirrors
-# test_app_robot_loop.py's own identical note).
 _APP_SOURCES = [
     _SOURCE_DIR / "app" / "robot_loop.cpp",
     _SOURCE_DIR / "app" / "comms.cpp",
-    # debug.cpp (129-003): App::debugf()'s only implementation --
-    # TestSim::SimHarness's constructor always calls
-    # App::setDebugSink(&comms_) now (HOST_BUILD is defined below,
-    # so the real, non-stub setDebugSink()/debugf() are what this
-    # graph links), mirroring src/sim/CMakeLists.txt's own
-    # APP_SOURCES entry.
     _SOURCE_DIR / "app" / "debug.cpp",
-    # configurator.cpp -- App::Configurator (command-ingestion-ring-buffered-
-    # comms-subsystem-routing-two-stops.md §6): the CONFIG lifecycle moved
-    # out of RobotLoop into its own module, which RobotLoop now holds a
-    # reference to -- so this graph must link it.
     _SOURCE_DIR / "app" / "configurator.cpp",
     _SOURCE_DIR / "app" / "telemetry.cpp",
-    # Planner integration (2026-07-26): the on-robot Motion::Planner now
-    # drives the loop -- its library core joins every RobotLoop-linking
-    # dependency graph.
     _REPO_ROOT / "src" / "motion" / "planner" / "profile.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "estimation.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "wheel_pid.cpp",
@@ -75,16 +51,13 @@ _APP_SOURCES = [
     _REPO_ROOT / "src" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
     # 130-002 -- the shared composition root (App::composeRobot()/
-    # RobotGraph) sim_harness.h now boots through, plus its
-    # Config::boot_config-reading calibration helpers (the "four-source-
-    # list trap" this ticket's own note calls out).
+    # RobotGraph) sim_harness.h boots through, plus its Config::boot_config-
+    # reading calibration helpers (App::bootPlannerLimits()/
+    # effectiveTrackWidth(), which this harness ALSO calls directly to
+    # compute the hardware-equivalent value to diff against).
     _SOURCE_DIR / "app" / "boot_wiring.cpp",
     _SOURCE_DIR / "app" / "boot_calibration.cpp",
 ]
-# 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
-# entry here) is gone outright -- zero instantiations; App::Drive holds no
-# controller of its own (open-loop duty from calibrated speed, drive.h's
-# own header). See src/motion/DESIGN.md's "wheel control generations" note.
 _MOTION_SOURCES = []
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
@@ -93,13 +66,12 @@ _DEVICE_SOURCES = [
     _SOURCE_DIR / "devices" / "color_sensor.cpp",
     _SOURCE_DIR / "devices" / "line_sensor.cpp",
 ]
-# 114-004: robot_loop.cpp now #includes config/persisted_tuning.h and calls
-# its pure serializeSnapshot()/Config::TuningStore seam directly.
 _CONFIG_SOURCES = [
     _SOURCE_DIR / "config" / "persisted_tuning.cpp",
     # 130-002 -- both composition roots now bake the SAME robot-JSON
     # calibration by default (unify-sim-and-robot-composition-roots.md
-    # work item 2).
+    # work item 2) -- this harness's own "hardware-equivalent" computation
+    # reads this SAME generated bake.
     _SOURCE_DIR / "config" / "boot_config.cpp",
 ]
 _MESSAGE_SOURCES = [
@@ -137,16 +109,18 @@ def _all_sources():
     )
 
 
-def test_sim_harness_configure_harness_compiles_and_passes(tmp_path):
-    """Compile sim_harness_configure_harness.cpp + its full dependency graph;
-    assert every scenario passes."""
+def test_composition_root_parity(tmp_path):
+    """Compile composition_root_parity_harness.cpp + its full dependency
+    graph; assert every non-overridden PlannerLimits field matches the
+    hardware-equivalent computation, and every override is exactly the
+    documented one."""
     sources = _all_sources()
     for src in sources:
         assert src.is_file(), f"required source missing: {src}"
     assert _SOURCE_DIR.is_dir(), f"src/firm/ tree missing: {_SOURCE_DIR}"
 
     cxx = _find_cxx_compiler()
-    binary = tmp_path / "sim_harness_configure_harness"
+    binary = tmp_path / "composition_root_parity_harness"
 
     compile_result = subprocess.run(
         [
@@ -173,14 +147,14 @@ def test_sim_harness_configure_harness_compiles_and_passes(tmp_path):
         text=True,
     )
     assert compile_result.returncode == 0, (
-        "sim_harness_configure_harness.cpp / its dependencies failed to compile:\n"
+        "composition_root_parity_harness.cpp / its dependencies failed to compile:\n"
         f"stdout:\n{compile_result.stdout}\nstderr:\n{compile_result.stderr}"
     )
 
     run_result = subprocess.run([str(binary)], capture_output=True, text=True)
     print(run_result.stdout)
     assert run_result.returncode == 0, (
-        "sim_harness_configure_harness reported a scenario failure "
+        "composition_root_parity_harness reported a mismatch "
         f"(exit {run_result.returncode}):\n{run_result.stdout}\n{run_result.stderr}"
     )
 

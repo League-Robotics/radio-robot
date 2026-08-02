@@ -191,9 +191,11 @@ depend on any of this directory's own three leaves (it has its own
 kinematics/shaping/estimation code, see `planner/CMakeLists.txt`) — the
 only thing tying `planner/` to the rest of this tree is that both halves
 write into the SAME `Types::RobotState` blackboard, from the base's own
-composition root (`main.cpp`/`src/sim/sim_harness.h`), never from one
-motion-library module calling into another across the `planner/`
-boundary.
+composition root -- `App::composeRobot()`/`App::RobotGraph`
+(`src/firm/app/boot_wiring.h`), the ONE function both `main.cpp` and
+`src/sim/sim_harness.h` call (130-002, unify-sim-and-robot-composition-
+roots.md) -- never from one motion-library module calling into another
+across the `planner/` boundary.
 
 **The actuation boundary (`Types::RobotState::Wheel::cmdVelocity`).**
 Whichever subsystem currently owns motion — `Motion::Planner` for a Move,

@@ -73,6 +73,39 @@ void configureSimForBenchTest(TestSim::SimHarness& sim) {
     // plant (1/kDefaultDutyVelMax).
     sim.drive().setDutyPerSpeed(g.kff, g.kff);
   }
+  // SIM OVERRIDE (130-002, unify-sim-and-robot-composition-roots.md): the
+  // sim now boots its shaper ceilings through the SAME composeRobot() path
+  // hardware does (App::RobotGraph), which bakes the REAL robot JSON's
+  // measured ramp/jerk ceilings (aMax 300 mm/s^2, alphaMax 6 rad/s^2, etc)
+  // -- replacing the OLD sim-only TestSim::simPlannerLimits() literals,
+  // which were "effectively UNSHAPED" (aMax 1e6) on purpose: every
+  // sim/system harness that calls configureSimForBenchTest() tests
+  // queue/stop-condition/protocol mechanics (chaining, replace, ESTOP/STOP,
+  // ERR_FULL, ...) against a FIXED, hand-counted cycle budget that assumes
+  // a commanded velocity lands in the wheel's target in ONE step -- not
+  // motion-shaping fidelity, which has its own dedicated coverage in
+  // src/motion/planner/tests/. Restore the historical unshaped ceilings
+  // here, explicitly, so those fixed-cycle-count assertions keep meaning
+  // what they always meant -- never let the real shaping in via silence.
+  sim.planner().applyShaperLimits(/*aMax=*/1.0e6f, /*aDecel=*/1.0e6f, /*alphaMax=*/1.0e5f,
+                                  /*alphaDecel=*/1.0e5f, /*jerkMax=*/0.0f, /*yawJerkMax=*/0.0f);
+  // SIM OVERRIDE (130-002): composeRobot() also boots Motion::WheelTrim's
+  // velocity-domain trim gains LIVE now (the exact gap unify-sim-and-robot-
+  // composition-roots.md's own item 1 documents -- these used to boot at
+  // their fail-closed all-zero default in every sim session while live on
+  // every hardware session). Types::RobotState::Wheel::cmdVelocity IS the
+  // trim-corrected value (Motion::Planner::stageTrim()/update(), planner.h),
+  // so a genuinely-live trim now makes driveTargetVelLeft()/Right() read a
+  // small, transient, CORRECT trim correction around the profiled target
+  // instead of landing on it exactly -- these harnesses' fixed-tolerance
+  // "target is committed" checks were written back when trim was always
+  // zero. Trim's own convergence/correctness has dedicated coverage
+  // elsewhere (wheel-speed-controller-moves-into-drive.md's tickets,
+  // motion/planner/tests/) -- zero it here, explicitly, rather than let it
+  // silently change what a fixed ±1 mm/s tolerance means in a harness that
+  // is testing queue/stop-condition/protocol mechanics, not trim.
+  sim.planner().applyTrimGains(/*kp=*/0.0f, /*ki=*/0.0f, /*iMax=*/0.0f, /*kaff=*/0.0f,
+                               /*trimMax=*/0.0f);
 }
 
 }  // namespace TestSupport

@@ -791,8 +791,11 @@ same block.
   `updateTlm()` + `emit()`. This is deliberate — treat a one-cycle
   staleness on those fields as normal, not a bug.
 - **Devices isolation still applies inside `app/`:** wire-plane `msg::*`
-  types are converted to/from `Devices::*` types only in `main.cpp`
-  (outside this directory); no app module should reach around that.
+  types are converted to/from `Devices::*` types only in `app/boot_
+  calibration.cpp`'s `toDeviceMotorConfig()` (130-002 relocated this out of
+  `main.cpp` alongside the rest of the composition root's boot-calibration
+  conversions — see `app/boot_wiring.h`'s own header); no other app module
+  should reach around that.
 - **Line/color are now sampled in steady state (115-005), OTOS is not the
   only one any more.** The previous version of this note said the
   opposite — `Preamble` detects presence at boot; `updateLineColor()` (§2

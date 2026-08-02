@@ -1,8 +1,9 @@
 ---
 id: '002'
 title: Unify sim and robot composition roots
-status: open
-use-cases: [SUC-003]
+status: done
+use-cases:
+- SUC-003
 depends-on: []
 github-issue: ''
 issue: unify-sim-and-robot-composition-roots.md
@@ -41,31 +42,57 @@ converts the sim side to match.
 
 ## Acceptance Criteria
 
-- [ ] `SimHarness` boots through `bootPlannerLimits()`/
+- [x] `SimHarness` boots through `bootPlannerLimits()`/
       `installShaperLimits()`/`installRotationCalibration()`/
       `installDriveCalibration()` instead of its own `simPlannerLimits()`
       literals; any genuinely-different sim value is an explicit,
       commented override at the sim call site — never silent.
-- [ ] `boot_config.cpp` is linked into the host lib; both roots bake the
+      (`src/sim/sim_harness.h`'s constructor calls `App::composeRobot()`,
+      which calls all four internally; three explicit `BootOverrides` —
+      trackWidth, controlPeriod/actuationDelay, otosConfig — are commented
+      at the sim's own call site, plus a post-construction `setDutyPerSpeed()`
+      override for the sim's own linear plant gain.)
+- [x] `boot_config.cpp` is linked into the host lib; both roots bake the
       same robot-JSON calibration by default.
-- [ ] A shared `composeRobot()` exists in `app/`; `main.cpp` and
+      (`src/sim/CMakeLists.txt`'s `CONFIG_SOURCES`; verified by
+      `test_composition_root_parity.py`.)
+- [x] A shared `composeRobot()` exists in `app/`; `main.cpp` and
       `SimHarness` are thin (~20-line) shells parameterized only by leaf
       implementations (real I2C bus vs. `SimPlant`).
-- [ ] `boot_wiring.cpp` is added to `src/sim/CMakeLists.txt` AND every
+      (`src/firm/app/boot_wiring.{h,cpp}`: `App::composeRobot()`/
+      `App::RobotGraph`; `main.cpp`'s own body is now one `composeRobot()`
+      call plus hardware-only leaf construction.)
+- [x] `boot_wiring.cpp` is added to `src/sim/CMakeLists.txt` AND every
       pytest `_APP_SOURCES` list under `src/tests/sim/` (the known
       four-source-list trap) — verified by a clean host build with no
       link errors.
-- [ ] The sim's step dt and the planner's `controlPeriod`/
+      (10 pytest files updated alongside `src/sim/CMakeLists.txt`; clean
+      `cmake --build src/sim/build` and `just build-clean` both pass.)
+- [x] The sim's step dt and the planner's `controlPeriod`/
       `actuationDelay` derive from the SAME constant (still 40 ms this
       ticket; ticket 007 changes the value later).
-- [ ] The 12 known sim-behavior test failures from adopting real
+      (`SimHarness::kSimControlPeriod` and `kCycleDtUs` both derive from
+      `App::RobotLoop::kCycle`.)
+- [x] The 12 known sim-behavior test failures from adopting real
       shaping/trim/heading-hold/dutyFloor defaults are triaged: each
       gets either a documented per-test override
       (`planner().applyShaperLimits()` etc.) or an updated, justified
       expectation — none silently skipped or xfailed without comment.
-- [ ] A parity check (automated test or documented manual comparison)
+      (10 failures found beyond the 2 known pre-existing (`test_clock_sync_
+      activation`/`test_fake_transport`): a genuine OTOS-config parity gap
+      (fixed via a third `BootOverrides` field, `otosConfig`); shaper/trim
+      overrides added to `bench_test_config.cpp`'s `configureSimForBenchTest()`
+      for protocol/queue-testing harnesses; a widened tolerance in
+      `test_sim_wire_loopback.py` with a dated comment; two rotation-
+      calibration tests `xfail`'d with a full explanation and a fresh
+      follow-on issue, `clasi/issues/rotation-calibration-vs-live-heading-
+      hold-gain.md`.)
+- [x] A parity check (automated test or documented manual comparison)
       confirms sim and hardware construct identical `PlannerLimits`/
       drive-calibration values by default.
+      (`src/tests/sim/system/composition_root_parity_harness.cpp` +
+      `test_composition_root_parity.py`: field-by-field comparison,
+      passing.)
 
 ## Testing
 
