@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: resolved
 priority: high
 sprint: '130'
 tickets:
@@ -155,3 +155,44 @@ a path documented as open loop, not a bug fix.
 The "Wheel speed — commanded vs actual" chart plots only *actual* L/R; the
 commanded series is never drawn. The one comparison that would settle this at a
 glance is missing from the graph.
+
+## Evidence (2026-08-02, ticket 130-006, tovez, firmware v0.20260801.18)
+
+**RESOLVED as originally scoped** — the three-constants-disagreeing root
+cause this issue opened with is fixed (ab303ee3, 2026-07-31: `wheel_gain`
+held at identity, `Drive::kDutyPerSpeed` baked from a real saturation +
+linear-fit measurement) and this ticket's own bench session confirms
+Stage C (bias trim, ticket 004/005) genuinely closes the residual GIVEN
+TIME: a continuous 90s hold at cmd 150mm/s converged both wheels to
+within ~5mm/s of the target (bias settling at +14.0mm/s right / -3 to
+-5mm/s left, both inside the ±23.8mm/s clamp — see
+`src/tests/bench/bias_convergence_150.png`).
+
+The "Acceptance spec for the +500 button" section above (agreed
+2026-07-31) was re-verified end to end against real hardware, full
+script/data at `src/tests/bench/wheel_controller_ab_bench.{py,csv,png}`:
+
+| # | criterion | measured (shipped Stage B=0 gains) | verdict |
+|---|---|---|---|
+| 1 | rise to cruise <=0.3s | 0.59s | **FAIL** |
+| 2 | flat plateau at 150mm/s | reached (~140-150mm/s band) | PASS |
+| 3 | ripple <=±10mm/s | L 24.3 / R 22.5mm/s | **FAIL** |
+| 4 | \|vL-vR\|<=10mm/s through cruise | 20.9mm/s | **FAIL** |
+| 5 | taper to 90mm/s floor, neither wheel hits 0 | yes | PASS |
+| 6 | elapsed ~4s | 3.85s | PASS |
+| 7 | encoders 500±15mm, wheels within 10mm | 510/502mm, 8mm split | PASS |
+| 8 | net heading change <=3deg | — | **STAND-UNMEASURABLE** (wheels off the ground) |
+| 9 | camera-measured travel 500±25mm | — | **STAND-UNMEASURABLE** (no translation on a stand) |
+
+Criteria 1/3/4 (the fast/transient ones) fail at the shipped Stage B=0
+gains because a single ~4s button press starts from a cold bias=0 and
+Stage C's own 30s time constant cannot help in that window — that gap,
+plus a separate ~20-25% plant-gain/saturation drop measured this session
+vs. ab303ee3's own baseline (unexplained, not root-caused), is split off
+into its own follow-up:
+[[plus500-transient-criteria-and-plant-gain-drift-followup]]
+(`clasi/issues/plus500-transient-criteria-and-plant-gain-drift-followup.md`).
+Resolving THIS issue on the strength of the original disagreement being
+fixed and thoroughly bench-verified, rather than holding it open
+indefinitely for a newly-discovered, more specific gap that now has its
+own tracking issue.
