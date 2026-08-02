@@ -568,6 +568,40 @@ def drive_config_for_config(cfg: dict):
     return (float(duty_left), float(duty_right), float(crawl))
 
 
+def wheel_controller_config_for_config(cfg: dict) -> dict:
+    """Return a dict of every Config::WheelControllerBootConfig field
+    (boot_config.h), keyed by its C++ field name, read from the robot
+    JSON's `control.wheel_*`/`control.wheel_pid_*`/`control.wheel_deficit_*`
+    keys (130-004, wheel-speed-controller-moves-into-drive.md Phase 2).
+
+    App::Drive's unified three-timescale wheel-speed controller: Stage
+    B's wire-tunable fast-PID gains (wheel_pid_kp/ki/i_max/kaff/max) and
+    Stage C/deficit-flag's generated-constant bounds (wheel_v_min/
+    wheel_bias_max/wheel_tau_adapt/wheel_a_steady/wheel_deficit_
+    threshold/wheel_deficit_window_ms).
+
+    All 11 REQUIRED, same fail-closed posture as every other field this
+    generator bakes: a robot JSON missing any one of them fails codegen
+    loudly. A robot JSON is free to set every one of these to 0 (both
+    stages inert) -- see WheelControllerBootConfig's own doc comment
+    (boot_config.h) for why 0 is a safe, meaningful disabled state here,
+    not a placeholder standing in for a value the code requires nonzero.
+    """
+    return {
+        "vMin": float(_require(cfg, "control", "wheel_v_min")),
+        "biasMax": float(_require(cfg, "control", "wheel_bias_max")),
+        "tauAdapt": float(_require(cfg, "control", "wheel_tau_adapt")),
+        "aSteady": float(_require(cfg, "control", "wheel_a_steady")),
+        "deficitThreshold": float(_require(cfg, "control", "wheel_deficit_threshold")),
+        "deficitWindow": float(_require(cfg, "control", "wheel_deficit_window_ms")),
+        "kp": float(_require(cfg, "control", "wheel_pid_kp")),
+        "ki": float(_require(cfg, "control", "wheel_pid_ki")),
+        "iMax": float(_require(cfg, "control", "wheel_pid_i_max")),
+        "kaff": float(_require(cfg, "control", "wheel_pid_kaff")),
+        "pidMax": float(_require(cfg, "control", "wheel_pid_max")),
+    }
+
+
 def planner_config_for_config(cfg: dict) -> dict:
     """Return a dict of every Config::PlannerBootConfig field (boot_config.h),
     keyed by its C++ field name, read from the robot JSON's `planner` block
@@ -685,6 +719,7 @@ def generate(cfg: dict, source_path: str) -> str:
         (drive_duty_per_speed_left, drive_duty_per_speed_right,
          drive_crawl_pulse) = drive_config_for_config(cfg)
         wheel_corr = wheel_correction_for_config(cfg)
+        wheel_controller = wheel_controller_config_for_config(cfg)
         planner = planner_config_for_config(cfg)
     except MissingRobotConfigKeyError as e:
         raise e.with_source(source_path) from e
@@ -880,6 +915,29 @@ DriveBootConfig defaultDriveConfig() {{
     cfg.interceptRightAccel = {_f(wheel_corr[2][1])};   // [mm/s]
     cfg.gainRightDecel = {_f(wheel_corr[3][0])};
     cfg.interceptRightDecel = {_f(wheel_corr[3][1])};   // [mm/s]
+    return cfg;
+}}
+
+WheelControllerBootConfig defaultWheelControllerConfig() {{
+    // 130-004 (wheel-speed-controller-moves-into-drive.md Phase 2) --
+    // fail-closed baked from the robot JSON's control.wheel_*/
+    // control.wheel_pid_*/control.wheel_deficit_* keys
+    // (data/robots/robot_config.schema.json). See
+    // WheelControllerBootConfig's own doc comment (config/boot_config.h)
+    // for the full field-for-field mapping and why 0 is a safe,
+    // meaningful "this stage is disabled" value here.
+    WheelControllerBootConfig cfg;
+    cfg.vMin = {_f(wheel_controller["vMin"])};                        // [mm/s]
+    cfg.biasMax = {_f(wheel_controller["biasMax"])};                  // [mm/s]
+    cfg.tauAdapt = {_f(wheel_controller["tauAdapt"])};                // [s]
+    cfg.aSteady = {_f(wheel_controller["aSteady"])};                  // [mm/s^2]
+    cfg.deficitThreshold = {_f(wheel_controller["deficitThreshold"])};  // [mm/s]
+    cfg.deficitWindow = {_f(wheel_controller["deficitWindow"])};      // [ms]
+    cfg.kp = {_f(wheel_controller["kp"])};        // [1]
+    cfg.ki = {_f(wheel_controller["ki"])};        // [1/s]
+    cfg.iMax = {_f(wheel_controller["iMax"])};    // [mm/s]
+    cfg.kaff = {_f(wheel_controller["kaff"])};    // [s]
+    cfg.pidMax = {_f(wheel_controller["pidMax"])};  // [mm/s]
     return cfg;
 }}
 

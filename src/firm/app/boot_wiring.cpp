@@ -36,6 +36,7 @@ RobotGraph::Resolved RobotGraph::resolve(const BootOverrides& overrides) {
       overrides.trackWidth ? *overrides.trackWidth : effectiveTrackWidth(r.drivetrainConfig);
 
   r.driveConfig = Config::defaultDriveConfig();
+  r.wheelControllerConfig = Config::defaultWheelControllerConfig();
 
   // PlannerLimits below is the plant-validated tuning baked from the
   // active robot JSON's own `planner` section (see bootPlannerLimits()'s
@@ -100,6 +101,7 @@ RobotGraph::RobotGraph(Devices::I2CBus& bus, const Devices::Clock& clock, Device
   // already exist).
   installShaperLimits(planner_, resolved_.plannerLimits);
   installDriveCalibration(drive_, resolved_.driveConfig);
+  installWheelController(drive_, resolved_.wheelControllerConfig);
   installRotationCalibration(robotLoop_, resolved_.drivetrainConfig);
 }
 

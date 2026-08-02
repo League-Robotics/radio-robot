@@ -182,6 +182,52 @@ struct DriveBootConfig {
 // above and gen_boot_config.py's drive_config_for_config().
 DriveBootConfig defaultDriveConfig();
 
+// WheelControllerBootConfig -- App::Drive's unified three-timescale
+// wheel-speed controller (130-004, wheel-speed-controller-moves-into-
+// drive.md Phase 2): Stage B's wire-tunable fast-PID gains (kp/ki/iMax/
+// kaff/pidMax) and Stage C/deficit-flag's generated-constant bounds
+// (vMin/biasMax/tauAdapt/aSteady/deficitThreshold/deficitWindow), baked
+// from the robot JSON's `control.wheel_*`/`control.wheel_pid_*`/
+// `control.wheel_deficit_*` keys (data/robots/robot_config.schema.json).
+//
+// Field-for-field mirror of App::Drive::ControlGains/AdaptationBounds
+// (src/firm/app/drive.h) -- NOT reused directly, same reasoning as every
+// other BootConfig struct here (config/ may depend only on messages/,
+// never on app/, docs/design/design.md §5's dependency diagram).
+// App::installWheelController() (boot_calibration.{h,cpp}) converts this
+// into the two App::Drive setter calls.
+//
+// REQUIRED, same fail-closed posture as every other struct here: a robot
+// JSON missing any of the 11 keys fails codegen loudly. Every field's
+// "0 = off" meaning is App::Drive's OWN documented convention (see
+// ControlGains/AdaptationBounds' own doc comments, drive.h), not
+// something this struct enforces itself -- a robot JSON is free to ship
+// every one of these at 0 (both stages inert, Stage A's existing
+// conversion map keeps working unmodified), which is exactly what
+// togov.json/tovez_nocal.json do today (no population characterization /
+// the no-calibration profile, respectively).
+struct WheelControllerBootConfig {
+  // Stage C / deficit-flag policy (generated constants).
+  float vMin = 0.0f;              // [mm/s] speed floor
+  float biasMax = 0.0f;           // [mm/s] Stage C trim authority clamp
+  float tauAdapt = 0.0f;          // [s] Stage C adaptation time constant; <=0 disables
+  float aSteady = 0.0f;           // [mm/s^2] steady-state gate
+  float deficitThreshold = 0.0f;  // [mm/s] deficit-flag error threshold
+  float deficitWindow = 0.0f;     // [ms] deficit-flag sustain window
+
+  // Stage B (wire-tunable gains).
+  float kp = 0.0f;      // [1] dimensionless proportional gain
+  float ki = 0.0f;      // [1/s] integral gain
+  float iMax = 0.0f;    // [mm/s] integrator clamp
+  float kaff = 0.0f;    // [s] accel feedforward
+  float pidMax = 0.0f;  // [mm/s] total fast-loop authority clamp
+};
+
+// The boot WheelControllerBootConfig default -- see that struct's own
+// doc comment above and gen_boot_config.py's
+// wheel_controller_config_for_config().
+WheelControllerBootConfig defaultWheelControllerConfig();
+
 // PlannerBootConfig -- Motion::Planner's full tuning surface (profile
 // ceilings, loop timing, settle/rest, duty-stage PID, trim loop), baked
 // from the active robot JSON's `planner` block

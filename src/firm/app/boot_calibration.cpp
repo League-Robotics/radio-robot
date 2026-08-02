@@ -107,4 +107,23 @@ void installDriveCalibration(Drive& drive, const Config::DriveBootConfig& driveC
   drive.setCrawlPulse(driveConfig.crawlPulse);
 }
 
+void installWheelController(Drive& drive, const Config::WheelControllerBootConfig& config) {
+  Drive::ControlGains gains;
+  gains.kp = config.kp;
+  gains.ki = config.ki;
+  gains.iMax = config.iMax;
+  gains.kaff = config.kaff;
+  gains.pidMax = config.pidMax;
+  drive.setControlGains(gains);
+
+  Drive::AdaptationBounds bounds;
+  bounds.vMin = config.vMin;
+  bounds.biasMax = config.biasMax;
+  bounds.tauAdapt = config.tauAdapt;
+  bounds.aSteady = config.aSteady;
+  bounds.deficitThreshold = config.deficitThreshold;
+  bounds.deficitWindow = config.deficitWindow;
+  drive.setAdaptationBounds(bounds);
+}
+
 }  // namespace App

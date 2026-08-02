@@ -274,6 +274,29 @@ class ControlConfig(BaseModel):
     wheel_gain_right_decel:      Optional[float] = None
     wheel_intercept_right_decel: Optional[float] = None  # [mm/s]
 
+    # 130-004 (wheel-speed-controller-moves-into-drive.md): App::Drive's
+    # unified three-timescale wheel-speed controller -- Stage B's
+    # wire-tunable fast-PID gains (wheel_pid_*) and Stage C/deficit-flag's
+    # generated-constant bounds (wheel_v_min/wheel_bias_max/
+    # wheel_tau_adapt/wheel_a_steady/wheel_deficit_*). REQUIRED by
+    # gen_boot_config.py's wheel_controller_config_for_config(); declared
+    # here for the SAME lossless-round-trip reason as every other field
+    # in this block -- without a model field, pydantic silently drops the
+    # key at parse time. No live SET/Patch key exists for any of these
+    # (ticket 005's job, not this one) -- see
+    # config_sync_allowlist.json's own entries for these keys.
+    wheel_v_min:              Optional[float] = None  # [mm/s] speed floor
+    wheel_bias_max:           Optional[float] = None  # [mm/s] Stage C trim authority clamp
+    wheel_tau_adapt:          Optional[float] = None  # [s] Stage C adaptation time constant
+    wheel_a_steady:           Optional[float] = None  # [mm/s^2] steady-state gate
+    wheel_pid_kp:             Optional[float] = None  # [1] Stage B proportional gain
+    wheel_pid_ki:             Optional[float] = None  # [1/s] Stage B integral gain
+    wheel_pid_i_max:          Optional[float] = None  # [mm/s] Stage B integrator clamp
+    wheel_pid_kaff:           Optional[float] = None  # [s] Stage B accel feedforward
+    wheel_pid_max:            Optional[float] = None  # [mm/s] Stage B total authority clamp
+    wheel_deficit_threshold:  Optional[float] = None  # [mm/s] deficit-flag error threshold
+    wheel_deficit_window_ms:  Optional[float] = None  # [ms] deficit-flag sustain window
+
 
 class EstimatorConfig(BaseModel):
     """``App::StateEstimator``'s fusion weights -- mirrors the robot JSON's

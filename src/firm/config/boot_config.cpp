@@ -182,6 +182,29 @@ DriveBootConfig defaultDriveConfig() {
     return cfg;
 }
 
+WheelControllerBootConfig defaultWheelControllerConfig() {
+    // 130-004 (wheel-speed-controller-moves-into-drive.md Phase 2) --
+    // fail-closed baked from the robot JSON's control.wheel_*/
+    // control.wheel_pid_*/control.wheel_deficit_* keys
+    // (data/robots/robot_config.schema.json). See
+    // WheelControllerBootConfig's own doc comment (config/boot_config.h)
+    // for the full field-for-field mapping and why 0 is a safe,
+    // meaningful "this stage is disabled" value here.
+    WheelControllerBootConfig cfg;
+    cfg.vMin = 99.7f;                        // [mm/s]
+    cfg.biasMax = 23.8f;                  // [mm/s]
+    cfg.tauAdapt = 30.0f;                // [s]
+    cfg.aSteady = 30.0f;                  // [mm/s^2]
+    cfg.deficitThreshold = 0.0f;  // [mm/s]
+    cfg.deficitWindow = 0.0f;      // [ms]
+    cfg.kp = 0.0f;        // [1]
+    cfg.ki = 0.0f;        // [1/s]
+    cfg.iMax = 0.0f;    // [mm/s]
+    cfg.kaff = 0.0f;    // [s]
+    cfg.pidMax = 0.0f;  // [mm/s]
+    return cfg;
+}
+
 PlannerBootConfig defaultPlannerLimits() {
     // 129-009 (config consolidation) -- fail-closed baked from the robot
     // JSON's `planner` block (data/robots/robot_config.schema.json). These

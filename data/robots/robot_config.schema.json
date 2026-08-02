@@ -620,6 +620,58 @@
         },
         "_wheel_correction_note": {
           "type": "string"
+        },
+        "wheel_v_min": {
+          "type": "number",
+          "minimum": 0,
+          "description": "[mm/s] App::Drive's wheels-solid speed floor (130-004, Open Question 2): a nonzero commanded speed below this is rounded UP to this value rather than silently zeroed/refused. Population-measured (ticket 001's duty-sweep breakaway spread). 0 disables floor enforcement (an uncalibrated robot behaves exactly as before)."
+        },
+        "wheel_bias_max": {
+          "type": "number",
+          "minimum": 0,
+          "description": "[mm/s] App::Drive's Stage C trim authority clamp (130-004) -- the conversion map's ONE adapted parameter (`bias`) is clamped to +-this. Population-measured (ticket 001's intercept spread). 0 disables Stage C adaptation outright."
+        },
+        "wheel_tau_adapt": {
+          "type": "number",
+          "minimum": 0,
+          "description": "[s] App::Drive's Stage C adaptation time constant (130-004) -- design choice (tens of seconds; load changes are slow), bench-verified in ticket 006. <=0 disables Stage C adaptation outright."
+        },
+        "wheel_a_steady": {
+          "type": "number",
+          "minimum": 0,
+          "description": "[mm/s^2] App::Drive's Stage B/C steady-state gate (130-004): |cmdAccel| below this counts as steady (Stage C may adapt; Stage B's integrator may integrate). Design choice. <=0 means never steady (Stage C never adapts, Stage B's integrator never engages)."
+        },
+        "wheel_pid_kp": {
+          "type": "number",
+          "description": "[1] App::Drive's Stage B fast-PID proportional gain (130-004), dimensionless: mm/s of PID output per mm/s of wheel-speed error. 0 (the fail-closed default, Open Question 4) means Stage B contributes nothing -- bench-tuned in ticket 006."
+        },
+        "wheel_pid_ki": {
+          "type": "number",
+          "description": "[1/s] App::Drive's Stage B fast-PID integral gain (130-004). 0 disables integration regardless of wheel_pid_i_max."
+        },
+        "wheel_pid_i_max": {
+          "type": "number",
+          "minimum": 0,
+          "description": "[mm/s] App::Drive's Stage B fast-PID integrator clamp (130-004); 0 disables integration."
+        },
+        "wheel_pid_kaff": {
+          "type": "number",
+          "description": "[s] App::Drive's Stage B accel feedforward (130-004) -- the plant time constant in seconds (wheel_trim.h's own convention: the FULL tau, not half). 0 while Stage B ships inert (Open Question 4)."
+        },
+        "wheel_pid_max": {
+          "type": "number",
+          "minimum": 0,
+          "description": "[mm/s] App::Drive's Stage B total fast-loop authority clamp (130-004); deliberately << wheel_bias_max (the fast loop is small-authority by design). 0 (the fail-closed default, Open Question 4) disables Stage B's output AND, since the deficit-flag policy requires a saturated PID, disables that flag too."
+        },
+        "wheel_deficit_threshold": {
+          "type": "number",
+          "minimum": 0,
+          "description": "[mm/s] App::Drive's deficit-flag policy (130-004): sustained |error| above this, while both wheel_bias_max and wheel_pid_max are saturated, flags a speed-deficit fault. 0 disables the policy outright."
+        },
+        "wheel_deficit_window_ms": {
+          "type": "number",
+          "minimum": 0,
+          "description": "[ms] App::Drive's deficit-flag policy (130-004): how long the deficit condition must sustain before the flag latches. 0 disables the policy outright."
         }
       }
     },

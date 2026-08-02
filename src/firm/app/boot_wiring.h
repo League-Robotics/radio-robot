@@ -183,6 +183,7 @@ class RobotGraph {
     Devices::LineConfig lineConfig;
     msg::DrivetrainConfig drivetrainConfig;
     Config::DriveBootConfig driveConfig;
+    Config::WheelControllerBootConfig wheelControllerConfig;
     float trackWidth = 0.0f;  // [mm]
     Motion::PlannerLimits plannerLimits;
   };

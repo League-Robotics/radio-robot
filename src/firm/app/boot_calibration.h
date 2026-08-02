@@ -95,4 +95,12 @@ void installRotationCalibration(RobotLoop& robotLoop,
 // correction, and the crawl-pulse amplitude.
 void installDriveCalibration(Drive& drive, const Config::DriveBootConfig& driveConfig);
 
+// installWheelController -- installs App::Drive's unified three-timescale
+// wheel-speed controller (130-004, wheel-speed-controller-moves-into-
+// drive.md Phase 2): Stage B's fast-PID gains and Stage C/deficit-flag's
+// adaptation bounds, both baked from the robot JSON's `control.wheel_*`
+// keys via Config::defaultWheelControllerConfig(). See that struct's own
+// doc comment (config/boot_config.h) for the field-for-field mapping.
+void installWheelController(Drive& drive, const Config::WheelControllerBootConfig& config);
+
 }  // namespace App

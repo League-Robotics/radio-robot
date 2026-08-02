@@ -342,12 +342,190 @@ void scenarioEstopReassertsStopWhileWheelsStillMoving() {
   checkTrue(right.setDutyCalls == callsAfterSettle, "same for the right leaf");
 }
 
+// ===========================================================================
+// 4-6. 130-004 (wheel-speed-controller-moves-into-drive.md Phase 2): Stage
+// C's bias adaptation -- convergence under a known plant-gain error, the
+// biasMax clamp holding against a divergent error, and bumpless (duty-
+// continuous) transfer across a bias update. All three drive App::Drive
+// directly, one cycle at a time, hand-simulating a plant with a KNOWN
+// multiplicative gain error on top of an identity Stage A calibration
+// (setDutyPerSpeed(1,1), the SAME "identity calibration: target IS duty"
+// convention scenario 1 above already establishes for this harness) --
+// duty == corrected command == cmd + bias, so the arithmetic is legible
+// without a real NezhaMotor/SimPlant round trip. state.wheelLeft.velocity
+// is hand-set each tick to `plantGain * (cmd + bias_from_previous_tick)`,
+// modeling a one-cycle-delayed plant response consistent with how every
+// other value tick() reads is "as of last cycle" (see tick()'s own doc
+// comment, drive.h). ControlGains (Stage B) stay all-zero throughout, in
+// isolation from Stage C.
+// ===========================================================================
+
+void scenarioBiasConvergesUnderKnownPlantGainError() {
+  beginScenario("Stage C: bias converges to close a known plant-gain error at cruise");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity: duty == corrected command
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.biasMax = 60.0f;    // [mm/s] comfortably above the 50 needed to close the gap
+  bounds.tauAdapt = 0.5f;    // [s] fast enough to converge within this test's tick budget
+  bounds.aSteady = 100.0f;   // [mm/s^2] cmdAccel is always 0 below -- always "steady"
+  drive.setAdaptationBounds(bounds);
+  // ControlGains left at the all-zero default -- isolates Stage C from Stage B.
+
+  const float cmd = 200.0f;      // [mm/s] commanded cruise speed
+  const float plantGain = 0.8f;  // the known error: actual = plantGain * duty
+
+  uint32_t now = 1000;
+  float measured = plantGain * cmd;  // first tick's measured value, no bias adapted yet
+  for (int i = 0; i < 400; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = cmd;
+    state.wheelLeft.velocity = measured;
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;  // 10ms old -- comfortably fresh
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;  // [us] -- dt = 0.05s
+    drive.tick(state);
+
+    // The plant's own response to the duty this tick just computed,
+    // consumed as next tick's measured velocity.
+    measured = plantGain * (cmd + drive.biasLeft());
+    now += 50;
+  }
+
+  // bias should converge to cmd*(1/plantGain - 1) = 200*(1.25-1) = 50 --
+  // the exact correction that makes plantGain*(cmd+bias) == cmd.
+  checkFloatEq(drive.biasLeft(), cmd * (1.0f / plantGain - 1.0f),
+              "bias converges to close the known plant-gain error", 2.0f);
+  checkFloatEq(measured, cmd, "measured velocity converges to the commanded cruise speed", 5.0f);
+}
+
+void scenarioBiasClampHoldsAgainstDivergentError() {
+  beginScenario("Stage C: the biasMax clamp holds against an error too large to fully close");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.biasMax = 60.0f;   // [mm/s]
+  bounds.tauAdapt = 0.2f;   // [s] deliberately fast, to reach the clamp quickly
+  bounds.aSteady = 100.0f;  // [mm/s^2]
+  drive.setAdaptationBounds(bounds);
+
+  const float cmd = 200.0f;
+  const float plantGain = 0.5f;  // needs bias=200 to fully close -- unreachable under biasMax=60
+
+  uint32_t now = 1000;
+  float measured = plantGain * cmd;
+  for (int i = 0; i < 400; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = cmd;
+    state.wheelLeft.velocity = measured;
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;
+    drive.tick(state);
+
+    checkTrue(drive.biasLeft() <= bounds.biasMax + 1e-3f,
+             "bias never exceeds +biasMax, even under a persistently divergent error");
+    measured = plantGain * (cmd + drive.biasLeft());
+    now += 50;
+  }
+  checkFloatEq(drive.biasLeft(), bounds.biasMax,
+              "bias settles PINNED at the clamp (not partway, not oscillating)", 0.5f);
+
+  // Same clamp, the other sign: a plant that over-delivers needs a
+  // NEGATIVE bias to correct, and that clamp must hold too.
+  MockMotor left2;
+  MockMotor right2;
+  App::Drive drive2(left2, right2, trackWidth);
+  drive2.setDutyPerSpeed(1.0f, 1.0f);
+  drive2.setAdaptationBounds(bounds);
+  const float overDeliverGain = 2.0f;  // needs bias=-100 to fully close -- unreachable
+  now = 1000;
+  measured = overDeliverGain * cmd;
+  for (int i = 0; i < 400; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = cmd;
+    state.wheelLeft.velocity = measured;
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;
+    drive2.tick(state);
+
+    checkTrue(drive2.biasLeft() >= -bounds.biasMax - 1e-3f,
+             "bias never exceeds -biasMax on the negative side either");
+    measured = overDeliverGain * (cmd + drive2.biasLeft());
+    now += 50;
+  }
+  checkFloatEq(drive2.biasLeft(), -bounds.biasMax,
+              "bias settles PINNED at the negative clamp", 0.5f);
+}
+
+void scenarioBumplessTransferAcrossBiasUpdate() {
+  beginScenario("Stage C: duty is continuous (bumpless) across a bias update");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.biasMax = 60.0f;
+  bounds.tauAdapt = 5.0f;   // [s] slow -- bias moves by a small amount each tick
+  bounds.aSteady = 100.0f;  // [mm/s^2]
+  drive.setAdaptationBounds(bounds);
+
+  const float cmd = 200.0f;
+  const float plantGain = 0.8f;
+
+  uint32_t now = 1000;
+  float measured = plantGain * cmd;
+  float previousDuty = 0.0f;
+  bool first = true;
+  for (int i = 0; i < 100; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = cmd;
+    state.wheelLeft.velocity = measured;
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;
+    drive.tick(state);
+
+    if (!first) {
+      checkTrue(std::fabs(left.lastDutyCmd - previousDuty) < 5.0f,
+               "duty steps by only a small amount across one tick's bias update -- no bump");
+    }
+    first = false;
+    previousDuty = left.lastDutyCmd;
+    measured = plantGain * (cmd + drive.biasLeft());
+    now += 50;
+  }
+  // The bias genuinely moved over the run (not a trivially-passing test
+  // where nothing changed at all).
+  checkTrue(drive.biasLeft() > 1.0f, "bias actually adapted over the run (not a no-op check)");
+}
+
 }  // namespace
 
 int main() {
   scenarioSetDutyStagesRawValues();
   scenarioStopZeroesBothTargetsWithinOneCycle();
   scenarioEstopReassertsStopWhileWheelsStillMoving();
+  scenarioBiasConvergesUnderKnownPlantGainError();
+  scenarioBiasClampHoldsAgainstDivergentError();
+  scenarioBumplessTransferAcrossBiasUpdate();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Drive scenarios passed\n");
