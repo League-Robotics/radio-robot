@@ -57,14 +57,23 @@ struct PlannerLimits {
   uint32_t otosStaleness = 200;       // [ms] max OTOS age still eligible to blend
   float headingOtosWeight = 0.0f;     // [0..1] complementary blend, fail-closed default
 
-  // Settle-confirm completion: when on, a Distance/Angle Move that has
-  // reached profile-complete additionally waits until it has physically
-  // ARRIVED and come to rest before the completion is reported, up to
-  // settleWindow. Off by default -- profile-complete is already exact in a
-  // zero-error plant; settle-confirm buys robustness against a lagging or
-  // overshooting real plant at the cost of a few idle cycles.
+  // Settle-confirm DEFER PATH -- DELETED by 130-008. `requireSettle` used
+  // to hold a completed Move's report back until it had physically ARRIVED
+  // and come to rest (its own `Settling` sub-state), up to `settleWindow`.
+  // Arrival completion (Planner::tick()'s `arrived` event, tested directly
+  // against settleReached()) already reports `TickResult::settled`
+  // truthfully without ever deferring the completion tick, so the defer
+  // path was a second mechanism answering a question the first one already
+  // answers. `requireSettle` is consequently unread by Motion::Planner as
+  // of this ticket. `settleWindow` is NOT dead the same way: it is still
+  // read by plannedStopWindow() as a planned stop's own bounded backstop
+  // (an unrelated use that predates settle-confirm) -- that reuse ends,
+  // and plannedStopWindow() falls back to its built-in default allowance,
+  // only when ticket 009's PlannerLimits 34->23 reshape removes the field
+  // outright. Both fields are kept here, inert or partially inert, until
+  // that reshape.
   bool requireSettle = false;
-  float settleWindow = 0.0f;  // [ms] max extra wait past profile-complete
+  float settleWindow = 0.0f;  // [ms] plannedStopWindow()'s own backstop allowance
 
   // Heading hold on Distance Moves: P gain on the UNCOMMANDED angular
   // axis, driving heading back to the Move's activation baseline. The
@@ -169,15 +178,36 @@ struct PlannerLimits {
 // Which regime the ACTIVE Move is in, folded from both wheels' StepPhase
 // (profile.h) and latched so it can never run backwards: a Move
 // accelerates, holds, then decelerates, and never accelerates again once
-// it has begun braking. The velocity trim gates its integrator on this --
-// integrating during a ramp winds up work that belongs to the
-// feedforward, and releases it as an overshoot at cruise entry.
+// it has begun braking. This is `Tracking`'s own sub-phase (MoveLifecycle,
+// below) -- a sibling of nothing at the top level.
+//
+// `Settle` (the settle-confirm closed-loop terminal creep's own phase) is
+// DELETED by 130-008 along with the defer path that gated it
+// (PlannerLimits::requireSettle's doc comment) -- it was never actually
+// assigned even before this ticket (grep-verified), so removing the
+// enumerator changes no behavior.
 enum class MovePhase : uint8_t {
   Idle,     // no active Move, or the queue is draining
   Accel,    // climbing toward cruise
   Hold,     // at cruise, command unchanged -- the only phase that integrates
   Decel,    // braking toward the landing boundary
-  Settle,   // profile complete; the closed-loop terminal creep is running
+};
+
+// The Move lifecycle Planner::tick() dispatches over (130-008,
+// planner-honesty-pass-50ms-period-tick-state-machine-limits-reduction.md
+// item 2) -- the explicit top-level state that replaces the implicit one
+// the previous `occupied`/`hasMoved`/`settling` boolean combination
+// encoded. MovePhase (above) is `Tracking`'s own sub-phase, not a sibling
+// of these. Full transition table and event definitions: Planner::tick()'s
+// own doc comment in planner.cpp.
+enum class MoveLifecycle : uint8_t {
+  Idle,       // no active Move; the staged command is already zero
+  Draining,   // no active Move; ramping the staged command toward zero
+  Breakaway,  // active Move, arrival/stall detection not yet armed (has not
+              // measurably left rest)
+  Tracking,   // active Move driving its profile -- see MovePhase for the
+              // Accel/Hold/Decel sub-phase
+  Stopping,   // an active Kind::Stop entry ramping the body to rest
 };
 
 // The per-tick completion event, returned by tick() (never written into

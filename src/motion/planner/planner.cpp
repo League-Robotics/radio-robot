@@ -25,10 +25,10 @@ namespace {
 // residual is pinned and the Move hangs to its MOVE_TIMEOUT backstop
 // (measured 2026-07-28: a 500mm leg parked 0.4mm short -- 400x the old
 // 1e-3 epsilon -- and sat 13s past arrival; other runs hit the full 30s).
-// The settle creep that exists to close exactly this gap cannot help: it
-// is gated on active_.settling, which only ever gets set when
-// PlannerLimits::requireSettle is on, and that defaults false and is not
-// baked from robot config.
+// The `arrived` event (tick()'s own doc comment) is what actually closes
+// this gap -- a Distance/Angle Move within settleEpsilonLinear/Angular AND
+// at rest completes directly, without ever needing this tight epsilon to
+// be reached at all.
 //
 // RESTORED to the original float-noise floors after the stall backstop
 // below made them the wrong tool. Widening these to 1.0 mm / 0.003 rad did
@@ -66,20 +66,23 @@ constexpr float kStallWindow = 0.5f;            // [s]
 constexpr float kStallEpsilonLinear = 0.25f;    // [mm] ~3.5 encoder quanta
 constexpr float kStallEpsilonAngular = 0.004f;  // [rad] ~3.6 heading quanta
 
-// Settle-confirm gates (PlannerLimits::requireSettle). Unlike the done
-// epsilons above these ARE physical tolerances -- "close enough to the
-// target, and stopped" for a real, lagging plant.
-// (Settle-confirm arrival tolerances moved to PlannerLimits::
-// settleEpsilonLinear/settleEpsilonAngular -- reachability depends on the
-// robot's stiction-limited minimum creep step, a per-robot property.)
-// Rest floors -- the settle gate's ONLY velocity criterion. (An earlier
+// Arrival gates (settleReached(), used directly by tick()'s `arrived`
+// event -- 130-008 deleted the settle-confirm DEFER path that used to sit
+// between profile-complete and these, but the tolerances themselves are
+// unchanged and still very much live). Unlike the done epsilons above
+// these ARE physical tolerances -- "close enough to the target, and
+// stopped" for a real, lagging plant.
+// (Arrival tolerances live in PlannerLimits::settleEpsilonLinear/
+// settleEpsilonAngular -- reachability depends on the robot's
+// stiction-limited minimum creep step, a per-robot property.)
+// Rest floors -- settleReached()'s ONLY velocity criterion. (An earlier
 // revision widened the gate to max(floor, one decel step), reasoning a
 // commanded plant one step from zero is at rest next interval -- but a
 // REAL plant with time constant tau COASTS ~v*tau past the target after
 // the command reaches zero: at alphaDecel*dt = 0.25 rad/s that admitted
 // +0.9 deg of post-settle coast per turn. The floors are sized so the
 // worst coast is within the arrival epsilons.)
-// (Rest floors moved to PlannerLimits::settleRestVelocity/settleRestOmega
+// (Rest floors live in PlannerLimits::settleRestVelocity/settleRestOmega
 // -- a per-robot noise property, not a universal constant.)
 
 float sign(float value) { return value < 0.0f ? -1.0f : 1.0f; }
@@ -253,6 +256,10 @@ void Planner::estop() {
   // The history too: after a stop there is no travel left to anticipate.
   cmdLeftPrevious_ = 0.0f;
   cmdRightPrevious_ = 0.0f;
+  // ANY -> Idle (tick()'s own doc comment): unconditional, this instant --
+  // not deferred to the next tick(), so an observer reading lifecycle()
+  // right after estop() never sees a stale active-Move state.
+  lifecycle_ = MoveLifecycle::Idle;
 }
 
 // Age the staged command by one tick. Called from the two places that
@@ -263,6 +270,83 @@ void Planner::rollCommandHistory() {
   cmdRightPrevious_ = cmdRight_;
 }
 
+// tick() -- the Move lifecycle state machine (130-008,
+// planner-honesty-pass-50ms-period-tick-state-machine-limits-reduction.md
+// item 2). Motion::MoveLifecycle (planner_types.h) is the explicit state;
+// this comment is the transition table that used to exist only as the
+// order of a chain of `if`s over interacting booleans (`occupied`,
+// `hasMoved`, `settling`).
+//
+// STATES
+//
+//   Idle       no active Move; the staged command is already zero.
+//   Draining   no active Move; ramping the staged command toward zero.
+//   Breakaway  active Move, arrival/stall detection not yet armed -- the
+//              body has not been MEASURED to have left rest.
+//   Tracking   active Move driving its profile (MovePhase sub-phase:
+//              Accel/Hold/Decel).
+//   Stopping   an active Kind::Stop entry ramping the body to rest.
+//
+// TRANSITIONS
+//
+//   Idle/Draining -> Breakaway    activateNext() pops a Distance/Angle
+//                                 Kind entry (either velocityKind).
+//   Idle/Draining -> Tracking     activateNext() pops a Kind::Time entry
+//                                 -- stall/arrival detection never applies
+//                                 to a clock-bounded Move, so there is
+//                                 nothing to break away from.
+//   Idle/Draining -> Stopping     activateNext() pops a Kind::Stop entry.
+//   Breakaway -> Tracking          the measured velocity/omega crosses OUT
+//                                 of the rest floor (settleRestVelocity/
+//                                 settleRestOmega below) -- one-way, like
+//                                 decelLatched: a Move that later coasts
+//                                 back through the floor has still left
+//                                 rest once.
+//   {Breakaway,Tracking,Stopping}
+//     -> {Breakaway,Tracking,Stopping,Draining,Idle}
+//                                 a Move COMPLETES (see EVENTS below) and
+//                                 activateNext() either finds a next
+//                                 pending entry (-> whichever active state
+//                                 its own Kind selects, per the first row
+//                                 of this table) or does not (-> Draining,
+//                                 then Idle once the drain reaches zero).
+//   ANY -> Idle                   estop(): the queue and the active Move
+//                                 are cleared and the command zeroed in
+//                                 the same call, unconditionally.
+//   ANY -> {Breakaway,Tracking,Stopping}, on the NEXT tick()
+//                                 move(..., replace=true): the active
+//                                 Move is cleared and the replacement
+//                                 queued; activateNext() on the following
+//                                 tick() activates it exactly as any other
+//                                 queued entry.
+//
+// EVENTS that complete the active Move (`done`), tested in this priority
+// order -- this replaces what used to be implicit in the order of an
+// `if`/`else if` chain:
+//
+//   1. timeout           m.timeout > 0 and elapsed >= m.timeout. Checked
+//                        first regardless of Kind: a safety backstop
+//                        always outranks the motion it is backstopping.
+//   2. stall-window       the body has been at rest, making no measured
+//      expiry            progress, for kStallWindow -- Distance/Angle
+//                        Kind only, and only once Tracking (see
+//                        `stallApplies` below).
+//   3. arrived            Distance/Angle Twist Kind, Tracking, not
+//                        handing off at speed (activeBoundary_ <= 0):
+//                        inside settleEpsilonLinear/Angular AND at rest.
+//   4. profile-complete   the Kind-specific test: Time's clock,
+//                        Distance/Angle's planned-residual epsilon
+//                        (kDoneEpsilon*), or a Kind::Stop's
+//                        drained-command-and-at-rest test.
+//
+// `TickResult::settled` is always settleReached(), evaluated truthfully
+// regardless of which event completed the Move -- 130-008 deletes the
+// settle-confirm DEFER path that used to hold a completion reached via
+// event 4 back until settled (its own `Settling` sub-state, gated on
+// PlannerLimits::requireSettle). Event 3 already answers the identical
+// question directly and completes the instant it holds, so deferring a
+// completion reached via 1/2/4 bought nothing that reporting `settled`
+// truthfully at the same tick does not.
 TickResult Planner::tick(const Types::RobotState& state) {
   TickResult result{};
   const uint32_t now = state.time.cycleStart;
@@ -294,6 +378,13 @@ TickResult Planner::tick(const Types::RobotState& state) {
 
   if (!active_.occupied) activateNext(now);
   if (!active_.occupied) {
+    // queue-empty: nothing to drive. Idle once the staged command is
+    // already at zero, Draining while it is still being ramped down --
+    // the only place either of those two states is decided, read directly
+    // off the command rather than tracked as a separate flag.
+    lifecycle_ = (cmdLeft_ == 0.0f && cmdRight_ == 0.0f)
+                     ? MoveLifecycle::Idle
+                     : MoveLifecycle::Draining;
     drainToZero(dt);
     return result;
   }
@@ -307,17 +398,20 @@ TickResult Planner::tick(const Types::RobotState& state) {
   const bool timedOut = m.timeout > 0.0f &&
                         static_cast<float>(elapsed) >= m.timeout;
 
-  // Stall backstop. Only for the two kinds whose completion is a POSITION
-  // the plant has to reach and that are meant to land at rest -- a Time
-  // Move's stop condition is the clock, and a Move handing off at speed
-  // (activeBoundary_ > 0) is not supposed to stop at all, so neither can
-  // legitimately stall. Evaluated before `done` so a stalled Move completes
-  // on the same tick it is recognised.
+  // Stall backstop + the Breakaway -> Tracking advance. Only for the two
+  // kinds whose completion is a POSITION the plant has to reach and that
+  // are meant to land at rest -- a Time Move's stop condition is the
+  // clock, and a Move handing off at speed (activeBoundary_ > 0) is not
+  // supposed to stop at all, so neither can legitimately stall or needs
+  // arrival detection armed. Evaluated before `done` so a stalled Move
+  // completes on the same tick it is recognised.
   const bool stallApplies =
       (m.kind == Move::Kind::Distance || m.kind == Move::Kind::Angle) &&
       activeBoundary_ <= 0.0f;
   bool stalled = false;
-  if (stallApplies) {
+  if (m.kind == Move::Kind::Stop) {
+    lifecycle_ = MoveLifecycle::Stopping;
+  } else if (stallApplies) {
     const bool angular = (m.kind == Move::Kind::Angle);
     const bool atRest =
         angular ? std::fabs(measured.omega) <= limits_.settleRestOmega
@@ -329,9 +423,12 @@ TickResult Planner::tick(const Types::RobotState& state) {
     // than epsilon per tick would otherwise reset the counter forever while
     // going nowhere.
     if (!atRest) {
-      active_.hasMoved = true;
+      // Left rest: arrival/stall detection is armed for the remainder of
+      // this Move. One-way, like decelLatched -- a Move that later coasts
+      // back through the rest floor has still left rest once.
+      lifecycle_ = MoveLifecycle::Tracking;
       active_.stallTicks = 0;  // moving: not stalled, wherever it is
-    } else if (!active_.hasMoved) {
+    } else if (lifecycle_ == MoveLifecycle::Breakaway) {
       // Still breaking away from the activation tick -- not a stall.
       active_.stallTicks = 0;
     } else if (active_.stallTicks > 0 &&
@@ -345,6 +442,14 @@ TickResult Planner::tick(const Types::RobotState& state) {
     stalled = dt > 0.0f && static_cast<float>(active_.stallTicks) * dt >=
                                kStallWindow;
   }
+  // else: stallApplies is false (a Kind::Time Move, or a Distance/Angle
+  // Move already handing off at speed) -- lifecycle_ is left exactly as
+  // activateNext() set it (Tracking for Kind::Time; a stale Breakaway
+  // reading is possible here for a Distance/Angle Move whose boundary
+  // turned positive before it was ever observed leaving rest, but
+  // harmless -- every consumer of "has this Move left rest" below
+  // independently re-tests activeBoundary_ <= 0.0f, so a stale Breakaway
+  // label can never suppress or admit a completion it should not).
 
   bool done = timedOut || stalled;
   // ARRIVED: a Distance/Angle Move that is inside the robot's own
@@ -365,19 +470,17 @@ TickResult Planner::tick(const Types::RobotState& state) {
   // Cannot fire early: it requires the body to be AT REST, so it is
   // unreachable at cruise. Suppressed for a Move handing off at speed
   // (activeBoundary_ > 0), which is not supposed to stop at all, and gated
-  // on hasMoved so a Move cannot complete on its own activation tick before
-  // breaking away. Residual left on the target is absorbed by the next
-  // chained Move through the cumulative baseline ledger -- exactly the
-  // mechanism src/firm/main.cpp already relies on with requireSettle off.
+  // on lifecycle_ == Tracking so a Move cannot complete on its own
+  // activation tick before breaking away. Residual left on the target is
+  // absorbed by the next chained Move through the cumulative baseline
+  // ledger -- exactly the mechanism src/firm/main.cpp already relies on.
   const bool arrived =
-      activeBoundary_ <= 0.0f && active_.hasMoved &&
+      activeBoundary_ <= 0.0f && lifecycle_ == MoveLifecycle::Tracking &&
       m.velocityKind == Move::VelocityKind::Twist &&
       (m.kind == Move::Kind::Distance || m.kind == Move::Kind::Angle) &&
       settleReached(measured, dt);
   if (!done && arrived) {
     done = true;
-  } else if (!done && active_.settling) {
-    done = true;  // profile-complete already fired; only the gate is pending
   } else if (!done) {
     switch (m.kind) {
       case Move::Kind::Time:
@@ -422,37 +525,19 @@ TickResult Planner::tick(const Types::RobotState& state) {
     }
   }
 
-  bool settled = false;
   if (done) {
-    settled = settleReached(measured, dt);
-    // Settle-confirm: hold the completion back until the body has actually
-    // arrived and stopped. Only for a Distance/Angle Move landing at rest
-    // -- a Time Move's stop condition IS the clock, and a Move handing off
-    // at speed into a same-axis successor (activeBoundary_ > 0) is not
-    // supposed to come to rest at all. A timeout aborts the motion and is
-    // never deferred.
-    const bool settleApplies =
-        limits_.requireSettle && !timedOut && activeBoundary_ <= 0.0f &&
-        (m.kind == Move::Kind::Distance || m.kind == Move::Kind::Angle) &&
-        m.velocityKind == Move::VelocityKind::Twist;
-    if (settleApplies && !settled) {
-      if (!active_.settling) {
-        active_.settling = true;
-        active_.settleStart = now;
-      }
-      const float waited = static_cast<float>(now - active_.settleStart);
-      // Past the window: complete anyway, reporting settled = false. This
-      // is NOT a timeout -- the Move's own stop condition was met, only
-      // the physical confirmation of it was not.
-      done = waited >= limits_.settleWindow;
-    }
-  }
-
-  if (done) {
+    // settleReached() is reported truthfully and unconditionally -- the
+    // settle-confirm DEFER path that used to sit here (holding a
+    // completion back until settled, up to PlannerLimits::settleWindow,
+    // via its own `Settling` sub-state) is deleted by 130-008: the
+    // `arrived` event above already tests settleReached() directly and
+    // completes the instant it holds, so deferring a completion reached
+    // via timeout/stall/profile-complete bought nothing that reporting
+    // `settled` truthfully at the same tick does not.
     result.completed = true;
     result.moveId = m.id;
     result.timedOut = timedOut;
-    result.settled = settled;
+    result.settled = settleReached(measured, dt);
     // Cumulative-baseline carry (chain-exact accounting): a normally
     // completed Twist Distance/Angle Move hands the next Move BOTH
     // cumulative baselines -- "where the boundary IS" on its own axis
@@ -491,6 +576,12 @@ TickResult Planner::tick(const Types::RobotState& state) {
     active_.occupied = false;
     activateNext(now);
     if (!active_.occupied) {
+      // queue-empty, same as the top-of-tick() case: Idle vs. Draining is
+      // read off whether the just-completed Move left a nonzero command
+      // to ramp down (Distance/Angle/Time) or was already at zero (Stop).
+      lifecycle_ = (cmdLeft_ == 0.0f && cmdRight_ == 0.0f)
+                       ? MoveLifecycle::Idle
+                       : MoveLifecycle::Draining;
       drainToZero(dt);
       return result;
     }
@@ -515,11 +606,20 @@ void Planner::activateNext(uint32_t now) {
   active_.move = next;
   active_.activationTime = now;
   active_.closingIssued = false;
-  active_.settling = false;
-  active_.settleStart = now;
   active_.stallRemaining = 0.0f;
   active_.stallTicks = 0;
-  active_.hasMoved = false;
+  // Initial lifecycle_ for this Move (tick()'s own doc comment has the
+  // full transition table): Stopping for a Kind::Stop entry, Breakaway for
+  // a Distance/Angle entry (arrival/stall detection starts disarmed --
+  // stallApplies is always true at this instant, since activeBoundary_ is
+  // reset to 0 a few lines below), Tracking for a Kind::Time entry (which
+  // stallApplies never applies to -- nothing to break away from).
+  lifecycle_ = next.kind == Move::Kind::Stop
+                   ? MoveLifecycle::Stopping
+                   : (next.kind == Move::Kind::Distance ||
+                      next.kind == Move::Kind::Angle)
+                         ? MoveLifecycle::Breakaway
+                         : MoveLifecycle::Tracking;
   active_.baselinePath =
       0.5f * (left_.basisPosition() + right_.basisPosition());
   active_.baselineHeading = pose_.heading();
@@ -785,55 +885,14 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
   const float elapsed = static_cast<float>(now - active_.activationTime);
   const float period = limits_.controlPeriod;  // [ms]
 
-  // M1 terminal-settle: once the profile has closed its sum, the final
-  // approach is a CLOSED-LOOP, BIDIRECTIONAL creep on the MEASURED
-  // residual -- the profile itself is positive-frame and legally lands
-  // with up to one decel step of residual speed, which a lagging plant
-  // coasts PAST the target (measured: +3.3 deg past a turn, from where a
-  // forward-only profile can never return). The creep is a plain P law
-  // with tight caps: it walks the residual to the arrival epsilon from
-  // EITHER side, decelerating as it converges, so the rest gate and the
-  // arrival gate become satisfiable together.
-  if (active_.settling &&
-      (m.kind == Move::Kind::Distance || m.kind == Move::Kind::Angle)) {
-    // Gain sized for convergence well inside a ~2 s window from the
-    // worst hand-off residual; safe from hunting now that the accel
-    // feedforward and filter-lag compensation are disabled during
-    // settling (they were the churn source, not the gain).
-    constexpr float kCreepGain = 2.5f;         // [1/s]
-    constexpr float kCreepMaxLinear = 35.0f;   // [mm/s]
-    constexpr float kCreepMaxAngular = 0.35f;  // [rad/s]
-    if (m.kind == Move::Kind::Distance) {
-      const float dir = sign(m.v_x);
-      const float previous = 0.5f * (cmdLeftPrevious_ + cmdRightPrevious_);
-      float v = dir * std::clamp(kCreepGain * measured.anchoredRemaining,
-                                 -kCreepMaxLinear, kCreepMaxLinear);
-      // The creep obeys the axis accel/decel limits like any other
-      // commanded motion -- a P law is not a license for command steps.
-      v = std::clamp(v, previous - limits_.aDecel * dt,
-                     previous + limits_.aMax * dt);
-      profileVelocity_ = std::fabs(v);
-      profileAccel_ = 0.0f;
-      cmdLeft_ = v;
-      cmdRight_ = v;
-      applyHeadingHold();
-    } else {
-      const float dir = sign(m.omega);
-      const float previousOmega =
-          (cmdRightPrevious_ - cmdLeftPrevious_) / limits_.trackWidth;
-      float omega =
-          dir * std::clamp(kCreepGain * measured.anchoredRemaining,
-                           -kCreepMaxAngular, kCreepMaxAngular);
-      omega = std::clamp(omega, previousOmega - limits_.alphaDecel * dt,
-                         previousOmega + limits_.alphaMax * dt);
-      profileVelocity_ = std::fabs(omega);
-      profileAccel_ = 0.0f;
-      const float halfTrack = 0.5f * limits_.trackWidth;
-      cmdLeft_ = -omega * halfTrack;
-      cmdRight_ = omega * halfTrack;
-    }
-    return;
-  }
+  // M1 terminal-settle creep (DELETED by 130-008): this used to run a
+  // closed-loop P creep on the measured residual while a completed Move
+  // sat in the deleted `Settling` sub-state, gated on
+  // PlannerLimits::requireSettle. Dead code even before this ticket --
+  // grep-verified, `active_.settling` was the ONLY thing that ever armed
+  // it, and that field is gone -- so deleting it changes no behavior for
+  // any caller (requireSettle defaulted false, and no boot config ever
+  // turned it on; see planner_types.h's own updated doc comment).
 
   if (m.velocityKind == Move::VelocityKind::Wheels) {
     // Per-wheel ramp toward the commanded pair. Time-bounded Moves taper

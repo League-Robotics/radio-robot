@@ -11,8 +11,16 @@
 //     the planner survives repeats anyway.)
 //   * the command takes effect one cycle late (actuationDelay = 50 ms).
 //
-// Plus the two features that exist for exactly this regime: settle-confirm
-// completion (M1) and heading hold on Distance Moves (M3).
+// Plus heading hold on Distance Moves (M3). Settle-confirm completion (M1,
+// PlannerLimits::requireSettle) -- the deferred-completion/creep pair this
+// tier used to test here -- is DELETED by 130-008 (planner-honesty-pass):
+// the `arrived` completion event (Planner::tick()'s own doc comment)
+// already tests settleReached() directly and completes the instant it
+// holds, so deferring a completion reached some OTHER way bought nothing
+// that reporting TickResult::settled truthfully at the same tick does not.
+// `requireSettle` is now unread by Motion::Planner (planner_types.h's own
+// updated doc comment); the six tests that used to exercise the defer/
+// creep behavior here are gone with it.
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -307,211 +315,21 @@ void testTrackingLagSensitivity() {
   }
 }
 
-// ---- item 2: settle-confirm completion (M1) ----
-
-void testSettleCoincidesInZeroErrorSim() {
-  // The gate: with a perfect plant, requiring settle must cost nothing --
-  // settle-complete and profile-complete land on the SAME tick.
-  int completionTick[2] = {-1, -1};
-  for (int variant = 0; variant < 2; ++variant) {
-    PlannerLimits limits = benchLimits();
-    limits.requireSettle = variant == 1;
-    limits.settleWindow = 1000.0f;  // [ms]
-    Planner planner(limits);
-    PerfectPlant plant;
-    CHECK(planner.move(distanceMove(20, 500.0f, kCruise), false));
-    const Outcome outcome = drive(planner, plant, limits, 400, 6);
-    completionTick[variant] = outcome.completionTick;
-    // settled is reported truthfully: variant 1 defers completion until
-    // it holds; variant 0 completes at profile-complete, one sample
-    // BEFORE the v == 0 reading can exist, so settled is honestly false
-    // there (measured-velocity-only rest gate).
-    if (variant == 1) CHECK(outcome.settled);
-    CHECK(!outcome.timedOut);
-    CHECK_NEAR(plant.positionLeft, 500.0f, 1e-3);
-  }
-  std::printf("  settle-confirm, zero-error plant: profile-complete tick %d, "
-              "settle-complete tick %d\n", completionTick[0],
-              completionTick[1]);
-  // Within ONE tick, not zero: the settle gate is measured-velocity-only
-  // (the wider "commanded is zero, so at rest next interval" gate admitted
-  // real coast on a lagging plant -- see planner.cpp's rest-floor
-  // comment), and the sample PROVING v == 0 arrives one cycle after the
-  // landing command even on a perfect plant. That one-tick defer is the
-  // discrete-sensing bound, not a regression.
-  CHECK(completionTick[1] - completionTick[0] <= 1);
-}
-
-void testSettleCoincidesOnTurnInZeroErrorSim() {
-  PlannerLimits limits = benchLimits();
-  limits.requireSettle = true;
-  limits.settleWindow = 1000.0f;  // [ms]
-  Planner planner(limits);
-  PerfectPlant plant;
-  const float quarterTurn = static_cast<float>(M_PI) * 0.5f;  // [rad]
-  CHECK(planner.move(angleMove(21, quarterTurn, kCruiseOmega), false));
-  const Outcome outcome = drive(planner, plant, limits, 400, 6, true);
-  CHECK(outcome.settled);
-  const float heading =
-      (plant.positionRight - plant.positionLeft) / limits.trackWidth;
-  CHECK_NEAR(heading, quarterTurn, 1e-5);
-}
-
-void testSettleReportsArrivalTruthfullyUnderNoiseAndLag() {
-  // The contract settle-confirm actually offers on a dirty plant is not
-  // "the Move becomes exact" -- nothing can make a velocity sink take back
-  // an overshoot. It is that `settled` MEANS something: settled = true is
-  // a promise the body is inside the arrival epsilon; settled = false says
-  // the stop condition was met but the target was not hit, which is a
-  // different fact from `timedOut` and worth its own bit.
-  struct Case {
-    float trackingLag;
-    const char* label;
-    bool expectSettled;
-  };
-  const Case cases[] = {
-      // Overshoot ~0.7 mm, inside the 1 mm epsilon: confirmed arrival.
-      {0.95f, "well-tracked", true},
-      // The settle-creep now actively walks even the sloppy plant inside
-      // the epsilon (the pre-creep behavior was an honest refusal at
-      // ~2 mm); truthfulness is enforced by the tolerance check below.
-      {0.80f, "sloppily-tracked", true},
-  };
-  for (const Case& scenario : cases) {
-    PlannerLimits limits = noisyLimits();
-    limits.requireSettle = true;
-    limits.settleWindow = 500.0f;  // [ms]
-    Planner planner(limits);
-    NoisyPlant plant = dirtyPlant();
-    plant.trackingLag = scenario.trackingLag;
-    CHECK(planner.move(distanceMove(22, 500.0f, kCruise), false));
-    const Outcome outcome = drive(planner, plant, limits, 400, 12);
-    CHECK(!outcome.timedOut);  // never a timeout -- the stop condition WAS met
-    const float traveled = 0.5f * (plant.positionLeft + plant.positionRight);
-    const float error = std::fabs(traveled - 500.0f);  // [mm]
-    std::printf("  distance 500 mm, settle-confirm, %s plant: "
-                "error %.3f mm, settled=%d\n", scenario.label, error,
-                outcome.settled ? 1 : 0);
-    CHECK(outcome.settled == scenario.expectSettled);
-    // The promise: a settled report is never off by more than the arrival
-    // epsilon plus what the sensor CANNOT resolve (one position quantum
-    // per wheel) -- the planner's own measured residual is inside the
-    // epsilon; truth can differ from it by the quantization floor.
-    if (outcome.settled) CHECK(error <= 1.0f + 0.5f);
-  }
-}
-
-void testSettleReportsTurnArrivalTruthfully() {
-  // Same contract on the angular axis. Note the epsilon there (0.005 rad)
-  // is FINER than one encoder tick reads on this track width -- a 0.5 mm
-  // quantum over a 100 mm track is 0.01 rad of heading -- so a coarse
-  // encoder alone can keep an otherwise perfect turn from confirming. That
-  // is the honest answer, and it is why item §7.3's bench measurement of
-  // the real encoder matters before this gate is trusted on hardware.
-  const float quarterTurn = static_cast<float>(M_PI) * 0.5f;  // [rad]
-  struct Case {
-    float positionQuantum;  // [mm]
-    float trackingLag;
-    bool expectSettled;
-  };
-  const Case cases[] = {
-      {0.05f, 1.0f, true},  // fine encoder, well-tracked wheel
-      // The standard dirty plant used to be unconfirmable (a 0.5 mm
-      // quantum reads 0.01 rad of heading -- coarser than the epsilon).
-      // The M1 settle-creep changed that: it actively walks the measured
-      // residual inside the epsilon from either side (verified 0.0047 rad
-      // final error here), so a truthful settled=true is now the expected
-      // outcome. The "settled is never a lie" assertion below remains the
-      // contract's teeth.
-      {0.50f, 0.8f, true},
-  };
-  for (const Case& scenario : cases) {
-    PlannerLimits limits = noisyLimits();
-    limits.requireSettle = true;
-    limits.settleWindow = 1000.0f;  // [ms]
-    Planner planner(limits);
-    NoisyPlant plant = dirtyPlant();
-    plant.positionQuantum = scenario.positionQuantum;
-    plant.trackingLag = scenario.trackingLag;
-    CHECK(planner.move(angleMove(24, quarterTurn, kCruiseOmega), false));
-    const Outcome outcome = drive(planner, plant, limits, 400, 12, true);
-    CHECK(!outcome.timedOut);
-    const float heading =
-        (plant.positionRight - plant.positionLeft) / limits.trackWidth;
-    const float error = std::fabs(heading - quarterTurn);  // [rad]
-    std::printf("  turn 90 deg, settle-confirm, quantum %.2f mm lag %.2f: "
-                "error %.5f rad, settled=%d\n", scenario.positionQuantum,
-                scenario.trackingLag, error, outcome.settled ? 1 : 0);
-    CHECK(outcome.settled == scenario.expectSettled);
-    if (outcome.settled) CHECK(error <= 0.005f);
-  }
-}
-
-void testSettleWindowExpiryReportsUnsettled() {
-  // A body that never comes to rest (unmodelled creep): the stop condition
-  // is met, the physical confirmation never is. Past the window the Move
-  // completes anyway, reporting settled = false -- and NOT timedOut, which
-  // would mean something else entirely (the safety backstop fired).
-  PlannerLimits limits = noisyLimits();
-  limits.requireSettle = true;
-  limits.settleWindow = 300.0f;  // [ms]
-  Planner planner(limits);
-  NoisyPlant plant = dirtyPlant();
-  plant.creepVelocity = 60.0f;  // [mm/s] never stops
-  Planner reference(noisyLimits());
-  NoisyPlant referencePlant = dirtyPlant();
-  referencePlant.creepVelocity = 60.0f;
-
-  CHECK(planner.move(distanceMove(23, 500.0f, kCruise), false));
-  CHECK(reference.move(distanceMove(23, 500.0f, kCruise), false));
-  const Outcome settled = drive(planner, plant, limits, 400, 2);
-  const Outcome plain = drive(reference, referencePlant, noisyLimits(), 400, 2);
-
-  CHECK(settled.completed);
-  CHECK(!settled.settled);
-  CHECK(!settled.timedOut);
-  // Held back for the whole window and no longer (one tick of slack for
-  // the tick the window is first observed to have expired).
-  const int windowTicks =
-      static_cast<int>(limits.settleWindow / limits.controlPeriod);
-  const int deferred = settled.completionTick - plain.completionTick;
-  std::printf("  settle window expiry: deferred %d ticks (window %d ticks)\n",
-              deferred, windowTicks);
-  CHECK(deferred >= windowTicks);
-  CHECK(deferred <= windowTicks + 1);
-}
-
-void testSettleDoesNotBreakTheCarryChain() {
-  // A same-axis chain hands off AT SPEED; there is nothing to settle at the
-  // boundary, so settle-confirm must not stall it (and the total stays
-  // exact on a perfect plant).
-  PlannerLimits limits = benchLimits();
-  limits.requireSettle = true;
-  limits.settleWindow = 1000.0f;  // [ms]
-  Planner planner(limits);
-  PerfectPlant plant;
-  Types::RobotState state;
-  uint32_t now = 0;
-  CHECK(planner.move(distanceMove(30, 500.0f, kCruise), false));
-  CHECK(planner.move(distanceMove(31, 300.0f, kCruise), false));
-  int completions = 0;
-  float minSpeedAfterRamp = 1e9f;  // [mm/s]
-  bool rampDone = false;
-  for (int i = 0; i < 800 && completions < 2; ++i) {
-    const TickResult r = cycle(planner, state, plant, now, kPeriod);
-    const float speed = std::fabs(state.wheelLeft.cmdVelocity);
-    if (speed >= kCruise - 1e-3f) rampDone = true;
-    if (rampDone && completions == 0) {
-      minSpeedAfterRamp = std::min(minSpeedAfterRamp, speed);
-    }
-    if (r.completed) ++completions;
-  }
-  CHECK(completions == 2);
-  for (int i = 0; i < 10; ++i) cycle(planner, state, plant, now, kPeriod);
-  CHECK_NEAR(plant.positionLeft, 800.0f, 1e-3);
-  // Still crossed at speed: the boundary was never held for a settle.
-  CHECK(minSpeedAfterRamp >= kCruise - limits.aDecel * 0.05f - 1e-3f);
-}
+// ---- item 2: settle-confirm completion (M1) -- DELETED by 130-008 ----
+//
+// The six tests that used to live here (zero-error coincidence on a
+// straight and a turn, truthful settled reporting under noise/lag on both
+// axes, settle-window expiry, and non-interference with the carry chain)
+// all exercised PlannerLimits::requireSettle's deferred-completion path
+// and the closed-loop terminal creep that only ever ran inside it. Both
+// are deleted (planner.cpp's Planner::tick()/planActive() doc comments);
+// `requireSettle` is now unread. The behavior those tests were guarding --
+// TickResult::settled reported truthfully at the tick a Move completes --
+// is still exercised (with requireSettle at its default false) by the
+// `arrived` event covered in planner_scenarios_test.cpp and by the
+// noisy/lagging cases directly above (testDistanceUnderNoiseAndLag et al.,
+// which never enabled settle-confirm and are therefore unaffected by its
+// removal).
 
 // ---- item 4: heading hold on Distance Moves (M3) ----
 
@@ -630,12 +448,6 @@ int main() {
   testChainUnderNoiseAndLag();
   testStandingRobotDoesNotDrift();
   testTrackingLagSensitivity();
-  testSettleCoincidesInZeroErrorSim();
-  testSettleCoincidesOnTurnInZeroErrorSim();
-  testSettleReportsArrivalTruthfullyUnderNoiseAndLag();
-  testSettleReportsTurnArrivalTruthfully();
-  testSettleWindowExpiryReportsUnsettled();
-  testSettleDoesNotBreakTheCarryChain();
   testHeadingHoldRecoversDisturbance();
   testHeadingHoldOffLeavesDisturbanceStanding();
   testHeadingHoldClampedToVelocityCeiling();

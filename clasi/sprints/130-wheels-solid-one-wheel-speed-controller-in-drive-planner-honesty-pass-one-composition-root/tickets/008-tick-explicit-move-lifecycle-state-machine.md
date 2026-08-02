@@ -1,9 +1,11 @@
 ---
 id: 008
 title: tick() explicit move-lifecycle state machine
-status: open
-use-cases: [SUC-004]
-depends-on: ['007']
+status: done
+use-cases:
+- SUC-004
+depends-on:
+- '007'
 github-issue: ''
 issue: planner-honesty-pass-50ms-period-tick-state-machine-limits-reduction.md
 completes_issue: true
@@ -40,18 +42,18 @@ Behavior-preserving except where the source issue says otherwise;
 
 ## Acceptance Criteria
 
-- [ ] `tick()` dispatches over an explicit lifecycle enum with one
+- [x] `tick()` dispatches over an explicit lifecycle enum with one
       visible transition table (states: `Idle`, `Draining`, `Breakaway`,
       `Tracking`, `Stopping`; `MovePhase` Accel/Hold/Decel as
       `Tracking`'s sub-phase).
-- [ ] `hasMoved`/`settling` booleans removed, replaced by state
+- [x] `hasMoved`/`settling` booleans removed, replaced by state
       identity; `decelLatched` remains a `MovePhase` latch.
-- [ ] The settle-confirm defer path and its `Settling` state are
+- [x] The settle-confirm defer path and its `Settling` state are
       deleted (arrival completion already covers it).
-- [ ] `planner_scenarios_test` and `planner_noise_test` (all ctest
+- [x] `planner_scenarios_test` and `planner_noise_test` (all ctest
       suites) green — the exactness gates are the primary behavior
       guard for this rewrite.
-- [ ] The completion-priority order (previously implicit in code order)
+- [x] The completion-priority order (previously implicit in code order)
       is documented explicitly as a transition table, not left as
       "whatever order the `if`-chain happens to check first."
 

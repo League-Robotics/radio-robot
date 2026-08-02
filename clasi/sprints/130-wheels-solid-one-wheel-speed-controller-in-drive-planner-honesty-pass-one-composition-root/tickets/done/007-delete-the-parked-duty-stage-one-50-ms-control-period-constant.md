@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: Delete the parked duty stage; one 50 ms control-period constant
-status: in-progress
+status: done
 use-cases:
 - SUC-004
 depends-on:

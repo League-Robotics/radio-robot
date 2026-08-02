@@ -13,6 +13,17 @@
 //                               Planner method that mutates Types::RobotState.
 // Moves are handed in as they arrive via move(); activation happens on the
 // next tick() (which is where current time/pose baselines live).
+//
+// tick()'s own Move lifecycle (130-008, planner-honesty-pass-50ms-period-
+// tick-state-machine-limits-reduction.md item 2) is an explicit state
+// machine, Motion::MoveLifecycle (planner_types.h): Idle -> Breakaway ->
+// Tracking -> (Idle|Draining), with Stopping as the parallel path a
+// Kind::Stop entry takes, and Draining as the transient path back to Idle
+// once the queue runs dry. Replaces the previous implicit encoding as
+// interacting `occupied`/`hasMoved`/`settling` booleans. MovePhase
+// (Accel/Hold/Decel) is `Tracking`'s own sub-phase, not a sibling state.
+// Full transition table, event definitions, and completion-priority order:
+// Planner::tick()'s own doc comment in planner.cpp.
 #pragma once
 
 #include <cstdint>
@@ -77,6 +88,12 @@ class Planner {
     return active_.occupied ? active_.phase : MovePhase::Idle;
   }
 
+  // The top-level Move lifecycle state (130-008) -- see this file's own
+  // header comment and Planner::tick()'s doc comment in planner.cpp for
+  // the full transition table. Observability (tests / telemetry
+  // derivation), same footing as phase() above.
+  MoveLifecycle lifecycle() const { return lifecycle_; }
+
   // Live-tuning entry points (the CONFIG wire arm / persisted tuning):
   // plain in-memory updates, never persisted here.
   //
@@ -130,12 +147,14 @@ class Planner {
     // instead of driven -- skipping the leg outright, which is far worse
     // than the hang being fixed. "Moved, then stopped, and stayed stopped"
     // is the condition; "has not started yet" is not.
-    bool hasMoved = false;
-    // Settle-confirm (PlannerLimits::requireSettle): profile-complete has
-    // fired and we are holding the completion back until the body has
-    // arrived and stopped, or until settleWindow expires.
-    bool settling = false;
-    uint32_t settleStart = 0;  // [ms] when profile-complete fired
+    //
+    // 130-008: this used to be its own boolean (`hasMoved`), flipped once
+    // and read directly. It is now the Planner-level `lifecycle_`'s own
+    // Breakaway->Tracking transition (see tick()'s doc comment) --
+    // `lifecycle_ != MoveLifecycle::Breakaway` is the exact replacement
+    // test, and the settle-confirm `settling`/`settleStart` pair this used
+    // to sit beside is deleted outright (dead: PlannerLimits::
+    // requireSettle no longer drives anything -- see its own doc comment).
 
     // Per-wheel plan, captured once at activation (shape.h). The profiler
     // works in SHAPE space: one scalar lambda -- the dominant wheel's own
@@ -144,9 +163,9 @@ class Planner {
     AxisLimits wheelLimits{};  // shape-space ceilings, [mm/s] and [mm/s^2]
     // How much of the Move's OWN axis quantity (body path [mm] for a
     // Distance Move, heading [rad] for an Angle Move) advances per unit of
-    // lambda. Everything outside planActive() -- the completion tests, the
-    // settle creep, activeBoundary_, profileVelocity_ -- stays in axis
-    // units; this factor is the only bridge, applied on the way in and
+    // lambda. Everything outside planActive() -- the completion tests,
+    // activeBoundary_, profileVelocity_ -- stays in axis units; this
+    // factor is the only bridge, applied on the way in and
     // undone on the way out. A straight has axisPerLambda == 1 (lambda IS
     // the body speed) and a pivot has 2/trackWidth (lambda is the wheel
     // speed, omega = lambda/halfTrack), which is exactly the half-track
@@ -248,6 +267,12 @@ class Planner {
   Move pending_[kQueueDepth]{};
   int pendingCount_ = 0;
   ActiveMove active_{};
+
+  // The top-level Move lifecycle (130-008) -- see this file's own header
+  // comment and Planner::tick()'s doc comment (planner.cpp) for the full
+  // transition table. Reset on every activateNext() and on every tick
+  // that leaves the planner with no active Move.
+  MoveLifecycle lifecycle_ = MoveLifecycle::Idle;
 
   // Positive-frame previous command on the profiled axis (the carry the
   // next tick ramps from); per-wheel carries for Wheels Moves and drain.
