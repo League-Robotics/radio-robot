@@ -300,6 +300,29 @@ rows 1–7 are calibration/population values, not live-tunable.
 5. Reconcile issue 04 (continuous duty-per-speed calibration) — one
    adaptation charter, not two (see Related).
 
+### Supply-sag note (Pybricks study, 2026-08-01/02)
+
+Pybricks expresses actuation in battery-normalized duty (duty =
+commanded_voltage / EMA-filtered measured pack voltage, tau ~0.6 s), which
+makes their motor model and gains supply-invariant. **We cannot read the
+motor pack voltage (stakeholder, 2026-08-02)**, so for us supply sag is an
+UNOBSERVABLE multiplicative (slope) disturbance on the duty→speed map —
+the one shape intercept-only adaptation structurally cannot represent.
+Consequences:
+
+- Phase 0/1 protocol: record/hold battery charge state during sweeps, or
+  sag aliases into the slope statistics. Add one Phase-1 leg: the same
+  duty sweep at fresh vs run-down charge — this measures the sag
+  magnitude and decides the response.
+- Expected verdict: ACCEPT — if session sag fits within pidMax + biasMax
+  at tour speeds, a low-battery robot runs slightly slow, the
+  speed-deficit flag says so loudly, predictability wins.
+- Parked unless the data demands it: a single COMMON-MODE slope scalar
+  estimated from persistent same-sign error on BOTH wheels across
+  multiple speeds (the shared multiplicative factor is physically the
+  supply; per-wheel intercepts are mechanics) — the estimator version of
+  Pybricks' voltmeter. Do not build this speculatively.
+
 ## Verification
 
 - Phase 1 produces the trim-vs-load dataset and chart (send the chart).
