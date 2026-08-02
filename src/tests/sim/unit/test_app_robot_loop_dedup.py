@@ -70,7 +70,6 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "telemetry.cpp",
     _MOTION_PLANNER_DIR / "profile.cpp",
     _MOTION_PLANNER_DIR / "estimation.cpp",
-    _MOTION_PLANNER_DIR / "wheel_pid.cpp",
     _MOTION_PLANNER_DIR / "shape.cpp",
     _MOTION_PLANNER_DIR / "planner.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",

@@ -324,7 +324,7 @@ void scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic() {
 //    per-file fixture-duplication convention; see the coding-standards
 //    rule's "grep-ability" rationale for why this file keeps its own
 //    copy rather than reaching into robot_loop.cpp's internals).
-//    118 (loop schedule truth) restores kSettle=kClear=4/kCycle=40/kPace=28
+//    118 (loop schedule truth) restored kSettle=kClear=4/kCycle=40/kPace=28
 //    -- 106-001's original figures -- undoing the 111-002 retarget
 //    (2026-07-19) to kSettle=kClear=0/kCycle=20/kPace=20 that commit
 //    5f5a2ba7 forced onto this schedule (zeroing kSettle/kClear made the
@@ -332,8 +332,11 @@ void scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic() {
 //    hidden inside motorL_.tick()/motorR_.tick() instead of a visible,
 //    budgeted runAndWait window -- see
 //    clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md).
-//    Whoever next changes robot_loop.cpp's timing constants must update
-//    these four to match, the same way any other duplicated-constant
+//    130-007 then raised kCycle 40 -> 50 (one 50ms control period
+//    everywhere; kSettle/kClear are unchanged at 4/4, so kPace grows to
+//    50-12=38) -- this is exactly the kind of change the note below warns
+//    about: whoever next changes robot_loop.cpp's timing constants must
+//    update these four to match, the same way any other duplicated-constant
 //    fixture in this codebase does.
 // ===========================================================================
 
@@ -361,10 +364,12 @@ void scenarioVirtualCycleTimingDiagnostic() {
   int yieldCount = sleeper.yieldCount() - yieldsBefore;
   // robot_loop.cpp's own current kSettle/kClear/kCycle/kPace (see this
   // scenario's own file-header comment above for the duplication
-  // rationale and the 118 restore note).
+  // rationale and the 118 restore note). 130-007: kCycle 40 -> 50 (one
+  // 50ms control period everywhere); kSettle/kClear are UNCHANGED at 4/4,
+  // so kPace grows from 28 to 38.
   constexpr uint32_t kSettle = 4;  // [ms] mirrors robot_loop.cpp's own kSettle
   constexpr uint32_t kClear = 4;   // [ms] mirrors robot_loop.cpp's own kClear
-  constexpr uint32_t kCycle = 40;  // [ms] mirrors robot_loop.cpp's own kCycle
+  constexpr uint32_t kCycle = 50;  // [ms] mirrors robot_loop.cpp's own kCycle
   constexpr uint32_t kWindows = 2 * kSettle + kClear;  // [ms] the 3 settle/clear blocks' own total
   constexpr uint32_t kPace = kCycle - kWindows;        // [ms] mirrors robot_loop.cpp's own kPace
   uint32_t virtualCycleMillis = kWindows + lastSleepMillis;
@@ -372,19 +377,19 @@ void scenarioVirtualCycleTimingDiagnostic() {
   checkTrue(sleepCount == 4,
             "exactly 4 Sleeper::sleepMillis() calls per cycle() (3 runAndWait blocks + final pace block)");
   checkTrue(lastSleepMillis == kPace,
-            "the final (perception+odometry+pace) block requests exactly kPace=28ms "
-            "(kCycle=40ms minus the 12ms already consumed by the 3 settle/clear windows -- "
-            "NOT a fresh, unabsorbed kCycle=40ms on top of them)");
+            "the final (perception+odometry+pace) block requests exactly kPace=38ms "
+            "(kCycle=50ms minus the 12ms already consumed by the 3 settle/clear windows -- "
+            "NOT a fresh, unabsorbed kCycle=50ms on top of them)");
   checkTrue(yieldCount == 0, "RobotLoop::cycle() never calls Sleeper::yield() directly");
   checkTrue(virtualCycleMillis == kCycle,
-            "derived total virtual schedule == 12ms (settle/clear/settle) + 28ms (pace) == 40ms == kCycle -- "
-            "proves the three windows are absorbed into the 40ms budget, not additive on top of it (118, "
-            "restoring 106-001)");
+            "derived total virtual schedule == 12ms (settle/clear/settle) + 38ms (pace) == 50ms == kCycle -- "
+            "proves the three windows are absorbed into the 50ms budget, not additive on top of it (118, "
+            "restoring 106-001; 130-007 raised the budget itself 40->50)");
 
   std::printf(
       "  TIMING: sleepCount=%d lastSleepMillis=%ums yieldCount=%d virtualCycleMillis=%ums "
-      "(== kCycle=40ms/~25Hz design target -- see this scenario's own file-header comment for the "
-      "118 restore of 106-001's original kCycle=40ms figures)\n",
+      "(== kCycle=50ms/~20Hz design target, 130-007 -- see this scenario's own file-header comment for the "
+      "118 restore of 106-001's original kSettle/kClear figures)\n",
       sleepCount, static_cast<unsigned>(lastSleepMillis), yieldCount, static_cast<unsigned>(virtualCycleMillis));
 }
 

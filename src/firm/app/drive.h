@@ -404,9 +404,9 @@ class Drive {
   // being handed to the leaves instead of being trusted after one write.
   uint8_t stopEnforceCountdown_ = 0;
 
-  // 30 cycles at RobotLoop::kCycle(40ms) == 1.2s -- comfortably past the
-  // <=0.15s measured stop-observed bound, without holding the
-  // re-assertion open indefinitely (App cannot reference
+  // 30 cycles at RobotLoop::kCycle(50ms, 130-007: was 40ms) == 1.5s --
+  // comfortably past the <=0.15s measured stop-observed bound, without
+  // holding the re-assertion open indefinitely (App cannot reference
   // App::RobotLoop::kCycle directly here without a layer cycle, so this
   // is a plain literal, same as NezhaMotor's own kMinWriteIntervalUs
   // comment coupling).

@@ -56,8 +56,8 @@ _EXPECTED_RAW = {
     "alphaDecel": 5.0,
     "jerkMax": 1500.0,
     "yawJerkMax": 30.0,
-    "controlPeriod": 47.0,
-    "actuationDelay": 47.0,
+    "controlPeriod": 50.0,   # 130-007: one 50ms control period everywhere (was 47.0)
+    "actuationDelay": 50.0,  # 130-007: one 50ms control period everywhere (was 47.0)
     "requireSettle": False,
     "settleRestVelocity": 10.0,
     "settleRestOmega": 0.16,
@@ -159,8 +159,8 @@ def test_generate_emits_default_planner_limits_byte_identical_to_pre_ticket_lite
     assert "cfg.alphaDecel = 5.0f;" in content
     assert "cfg.jerkMax = 1500.0f;" in content
     assert "cfg.yawJerkMax = 30.0f;" in content
-    assert "cfg.controlPeriod = 47.0f;" in content
-    assert "cfg.actuationDelay = 47.0f;" in content
+    assert "cfg.controlPeriod = 50.0f;" in content    # 130-007: was 47.0f
+    assert "cfg.actuationDelay = 50.0f;" in content    # 130-007: was 47.0f
     assert "cfg.requireSettle = false;" in content
     assert "cfg.settleRestVelocity = 10.0f;" in content
     assert "cfg.settleRestOmega = 0.16f;" in content

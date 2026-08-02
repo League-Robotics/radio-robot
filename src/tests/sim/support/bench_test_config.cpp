@@ -62,13 +62,14 @@ Gains benchTestGains() {
 void configureSimForBenchTest(TestSim::SimHarness& sim) {
   sim.configureMotor(1, benchTestMotorConfig(1));
   sim.configureMotor(2, benchTestMotorConfig(2));
-  // App::Drive holds no controller of its own (command-ingestion-ring-
-  // buffered-comms-subsystem-routing-two-stops.md §4: Drive is open loop
-  // from calibrated speed) -- benchTestGains() reaches the one controller
-  // that still exists, Motion::Planner's own duty stage, below.
+  // 130-007 REMOVAL NOTE: this used to also push benchTestGains() onto
+  // Motion::Planner's own M4 duty stage (sim.planner().applyVelGains(...))
+  // -- that stage is deleted outright (WheelPid/stageDuty(), reversing
+  // sprint 128 Decision 2's PARK now that App::Drive's own controller is
+  // the proven, shipped law); the call site is gone with it. Only the
+  // duty-per-speed scale below survives -- see its own comment.
   {
     const Gains g = benchTestGains();
-    sim.planner().applyVelGains(g.kff, g.kp, g.ki, g.iMax);
     // Open-loop wheel drive: kff IS the duty-per-speed scale for the sim
     // plant (1/kDefaultDutyVelMax).
     sim.drive().setDutyPerSpeed(g.kff, g.kff);

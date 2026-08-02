@@ -54,10 +54,12 @@ namespace TestSupport {
 // library's own Motion::Gains (wheel_velocity_pid.h, the interim closed-
 // loop velocity-PID class App::Drive briefly held) -- that class is deleted
 // outright (zero instantiations; App::Drive holds no controller of its own,
-// drive.h's own header), so this struct is redeclared here, scoped to what
-// configureSimForBenchTest() below actually forwards to
-// Motion::Planner::applyVelGains(kff, kp, ki, iMax) -- no kaw field, since
-// nothing here ever reads one.
+// drive.h's own header), so this struct is redeclared here. 130-007: the
+// kp/ki/iMax fields' one-time destination, Motion::Planner::applyVelGains(),
+// is deleted with the M4 duty stage -- only kff (the duty-per-speed scale
+// consumed by configureSimForBenchTest() below) still has a live consumer;
+// kp/ki/iMax are dead but kept on the struct so a future controller can
+// reuse the shape without a rename.
 struct Gains {
   float kff = 0.0f;
   float kp = 0.0f;
@@ -79,10 +81,8 @@ struct Gains {
 //
 // 125-003: velFiltAlpha/velGains are DELETED from Devices::MotorConfig (the
 // velocity PID they fed relocated off the motor entirely) -- see
-// benchTestGains() below for the SAME kp/kff tuning, now pushed onto
-// Motion::Planner's own duty stage instead (128-015: the interim class this
-// used to name, briefly held by App::Drive, is deleted outright -- App::
-// Drive holds no controller of its own).
+// benchTestGains() below for the SAME kp/kff tuning (130-007: kff is now the
+// only field with a live consumer -- see Gains's own doc comment above).
 Devices::MotorConfig benchTestMotorConfig(uint32_t port);
 
 // benchTestGains -- 125-003: the kp/kff half of the pre-125-003
@@ -96,9 +96,11 @@ Gains benchTestGains();
 
 // configureSimForBenchTest -- convenience wrapper: pushes
 // benchTestMotorConfig(1)/benchTestMotorConfig(2) via sim.configureMotor()
-// for both ports, PLUS (125-003) benchTestGains() onto Motion::Planner's own
-// duty-stage gains (115-006: the benchTestPlannerConfig()/configurePlanner()
-// half is gone -- see this file's own header). This is the ONE call every
+// for both ports, PLUS (125-003) benchTestGains().kff onto the sim plant's
+// duty-per-speed scale (115-006: the benchTestPlannerConfig()/
+// configurePlanner() half is gone; 130-007: the M4 duty-stage gains push is
+// gone too, with the stage itself -- see this file's own header and
+// bench_test_config.cpp's own removal note). This is the ONE call every
 // pre-existing (and any new) src/tests/sim/** harness adds right after
 // constructing a bare TestSim::SimHarness and before its first
 // injectTwist()/step()/boot() call, to restore byte-for-byte the same

@@ -43,7 +43,6 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "telemetry.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "profile.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "estimation.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "wheel_pid.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "shape.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "planner.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",

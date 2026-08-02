@@ -81,8 +81,14 @@ class SimHarness {
         //     sim's own step() advances virtual time by EXACTLY
         //     App::RobotLoop::kCycle every call, with none of a real
         //     board's vendor-bus-clearance overrun the robot JSON's own
-        //     baked ~47ms accounts for (PlannerBootConfig::controlPeriod's
-        //     own doc comment). Deriving both the override value AND
+        //     baked value used to account for (PlannerBootConfig::
+        //     controlPeriod's own doc comment) -- 130-007 raised kCycle
+        //     40 -> 50 so the pacer now paces exactly on budget, meaning
+        //     hardware's baked default (50ms) and this override (also
+        //     50ms, derived from the SAME kCycle) are numerically
+        //     identical today; the override stays explicit rather than
+        //     removed, since the two values remain independently
+        //     overridable by construction. Deriving both the override value AND
         //     kCycleDtUs (below) from the SAME App::RobotLoop::kCycle
         //     constant is what closes 130-002's own acceptance criterion
         //     ("the sim's step dt and the planner's controlPeriod/

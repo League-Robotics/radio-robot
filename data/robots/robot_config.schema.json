@@ -796,7 +796,7 @@
         },
         "control_period": {
           "type": "number",
-          "description": "Motion::PlannerLimits::controlPeriod [ms] -- the MEASURED loop period the planner plans against (not the nominal kCycle).",
+          "description": "Motion::PlannerLimits::controlPeriod [ms] -- the loop period the planner plans against. 130-007: one 50ms period everywhere -- App::RobotLoop::kCycle=50 is now delivered exactly (the pacer paces on budget), so this equals the nominal kCycle rather than a separately-measured overrun value.",
           "firmware": {
             "field": "controlPeriod",
             "kind": "float"

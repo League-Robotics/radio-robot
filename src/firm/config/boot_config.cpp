@@ -222,8 +222,8 @@ PlannerBootConfig defaultPlannerLimits() {
     cfg.jerkMax = 1500.0f;        // [mm/s^3]
     cfg.yawJerkMax = 30.0f;  // [rad/s^3]
 
-    cfg.controlPeriod = 47.0f;    // [ms]
-    cfg.actuationDelay = 47.0f;  // [ms]
+    cfg.controlPeriod = 50.0f;    // [ms]
+    cfg.actuationDelay = 50.0f;  // [ms]
 
     cfg.requireSettle = false;
     cfg.settleRestVelocity = 10.0f;    // [mm/s]

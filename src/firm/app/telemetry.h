@@ -254,10 +254,15 @@ constexpr uint32_t kFlagFaultWheelDeficitLeft = 1u << 21;
 constexpr uint32_t kFlagFaultWheelDeficitRight = 1u << 22;
 
 // Primary cadence target: primary period == cycle period -- the frame is
-// emitted every loop iteration. Matches robot_loop.cpp's genuine
-// 40ms/~25Hz kCycle. Callers pace against this and measure their own real
-// number; emit() does not need to hit it exactly.
-constexpr uint32_t kPrimaryPeriod = 40;  // [ms] ~25 Hz, matches robot_loop.cpp's kCycle
+// emitted every loop iteration. primaryDue() (telemetry.cpp) gates on
+// `elapsed >= kPrimaryPeriod`, a FLOOR, not an equality check -- so this
+// stays 40 unchanged after 130-007 raised robot_loop.cpp's own kCycle
+// 40 -> 50: 50ms elapsed is still >= 40ms, so the gate is satisfied every
+// single cycle exactly as it was before, and a primary frame still emits
+// every cycle (effective emission rate ~20 Hz, one per 50 ms cycle) --
+// confirmed, not just left to infer. Only bumping kPrimaryPeriod above 50
+// would change this; there is no reason to.
+constexpr uint32_t kPrimaryPeriod = 40;  // [ms] floor; robot_loop.cpp's kCycle (50ms) exceeds it every cycle
 
 // Ack ring depth. MUST match telemetry.proto's Telemetry.acks (max_count)
 // exactly -- checked by a static_assert against the generated

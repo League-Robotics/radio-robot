@@ -22,7 +22,6 @@
 #include "profile.h"
 #include "shape.h"
 #include "types/robot_state.h"
-#include "wheel_pid.h"
 
 namespace Motion {
 
@@ -68,36 +67,6 @@ class Planner {
   float commandedLeft() const { return cmdLeft_; }    // [mm/s]
   float commandedRight() const { return cmdRight_; }  // [mm/s]
 
-  // M4 duty-plane outputs (planner_types.h velK* gains; 0 while the duty
-  // stage is unconfigured). PARKED (128-015): stageDuty() below no longer
-  // runs automatically from tick(), so these reflect only the last
-  // EXPLICIT stageDuty() call (or 0.0f if none has ever run, or after
-  // estop()) -- not "this tick's" targets unless the caller just drove
-  // stageDuty() itself. See stageDuty()'s own doc comment.
-  float commandedDutyLeft() const { return dutyLeft_; }    // [-1, 1]
-  float commandedDutyRight() const { return dutyRight_; }  // [-1, 1]
-
-  // M4 duty output stage -- PARKED from the live tick (128-015, sprint 128
-  // Decision 2: the class and this method stay; only the automatic
-  // per-cycle call from tick() is removed). Its output was computed every
-  // cycle and DISCARDED either way -- App::Drive actuates from
-  // Types::RobotState::Wheel::cmdVelocity (the bare profiled command as of
-  // 130-005 -- Motion::WheelTrim/stageTrim() are deleted, the wheel-speed
-  // controller now lives entirely in App::Drive, see drive.h's own header),
-  // never from commandedDutyLeft/Right() -- so parking it is a ~21-
-  // evaluation/s timing improvement, not a behavior change. Kept PUBLIC and
-  // callable on demand (rather than
-  // deleted) for two reasons: WheelPid's own ctest tiers
-  // (wheel_pid_test.cpp's testPlannerDutyStage(),
-  // planner_duty_scenarios_test.cpp) drive it directly to keep the class's
-  // coverage warm without paying its cost in the live loop, and a future
-  // duty-sink cutover ticket (owner: whoever picks it up -- see
-  // src/motion/DESIGN.md's "wheel control generations" note) can call it
-  // from tick() again once that decision is made, with zero interface
-  // change. See planner.cpp's own doc comment on the definition for the
-  // control-law details.
-  void stageDuty(float dt);  // [s]
-
   // Which regime the active Move is in -- 130-005: no longer gates any
   // trim integrator here (Motion::WheelTrim/stageTrim() are deleted; the
   // wheel-speed controller's own fast-PID steady gate now lives in
@@ -110,7 +79,13 @@ class Planner {
 
   // Live-tuning entry points (the CONFIG wire arm / persisted tuning):
   // plain in-memory updates, never persisted here.
-  void applyVelGains(float kff, float kp, float ki, float iMax);
+  //
+  // 130-007: applyVelGains() (the M4 duty stage's own gains setter) is
+  // deleted with the stage -- the `pid.*` CONFIG wire keys it used to
+  // (silently) target were already repointed onto App::Drive's unified
+  // wheel-speed controller by ticket 005
+  // (wheel-speed-controller-moves-into-drive.md Phase 3); this deletion
+  // just removes the dead destination those keys no longer reach.
   void applyShaperLimits(float aMax, float aDecel, float alphaMax,
                          float alphaDecel, float jerkMax, float yawJerkMax);
   const PlannerLimits& limits() const { return limits_; }
@@ -269,9 +244,6 @@ class Planner {
   PlannerLimits limits_;
   WheelChannel left_, right_;
   PoseTracker pose_;
-  WheelPid pidLeft_, pidRight_;   // M4 duty stage (inert at zero gains)
-  float dutyLeft_ = 0.0f;   // [-1, 1] this tick's duty output
-  float dutyRight_ = 0.0f;  // [-1, 1]
 
   Move pending_[kQueueDepth]{};
   int pendingCount_ = 0;
@@ -288,10 +260,6 @@ class Planner {
   // latency. measure()'s anticipation needs it; nothing else does.
   float cmdLeftPrevious_ = 0.0f;   // [mm/s]
   float cmdRightPrevious_ = 0.0f;  // [mm/s]
-  // Last tick's filtered measurement -- the braking stage's actuation-lead
-  // compensation derives the measured accel from it (see stageDuty()).
-  float measuredLeftPrevious_ = 0.0f;   // [mm/s]
-  float measuredRightPrevious_ = 0.0f;  // [mm/s]
   Axis lastAxis_ = Axis::None;
   float activeBoundary_ = 0.0f;  // last planned boundary velocity, positive frame
   // The shape-space decel ceiling of the most recently active shaped Move,

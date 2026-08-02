@@ -231,8 +231,12 @@ def loadLibrary() -> ctypes.CDLL:
                                 ctypes.POINTER(TickResult)]
     lib.plannerUpdate.argtypes = [ctypes.c_void_p, ctypes.POINTER(RobotState)]
     lib.plannerStructSizes.argtypes = [ctypes.POINTER(ctypes.c_uint32)] * 4
-    lib.plannerDuty.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float),
-                                ctypes.POINTER(ctypes.c_float)]
+    # 130-007: plannerDuty() (the M4 duty stage's C API, commandedDutyLeft/
+    # Right()) is deleted with the rest of the parked duty stage --
+    # Motion::WheelPid/Planner::stageDuty() have no live callers left. The
+    # binding above it is deleted with it; the two bench scripts that used
+    # to read it (hil_drive.py's --duty mode, square_tour_sim.py) are
+    # retired/repointed -- see their own module docstrings.
     # 130-005: plannerTrim()'s signature shrank to (profiledLeft,
     # profiledRight, phase) -- Motion::WheelTrim (trim + its integrator) is
     # deleted outright; the wheel-speed controller now lives entirely in

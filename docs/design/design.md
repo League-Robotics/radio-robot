@@ -463,12 +463,18 @@ Flow of one cycle, at orientation altitude:
    and packed fixed-point sensor/pose fields (124) — through Comms. There
    is no second/secondary frame any more: `msg::TelemetrySecondary` is
    deleted outright (124), not merely unused.
-5. **Pace** — a final `runAndWait` paces the cycle to `kCycle` = 40 ms
-   (~25 Hz), matching `Telemetry::kPrimaryPeriod` so every cycle emits a
-   primary frame. (118 — restores the schedule's genuine 4ms/4ms
+5. **Pace** — a final `runAndWait` paces the cycle to `kCycle` = 50 ms
+   (~20 Hz; sprint 130 ticket 007 raised this from 40 ms — the 40ms value
+   was an overrun artifact the loop could not fit inside, measured busy
+   ~21 ms plus vendor-bus-clearance overrun drifting the delivered period
+   to ~46–48 ms; at 50 ms the pacer paces again, exactly and stably).
+   `Telemetry::kPrimaryPeriod` stays 40 ms unchanged — it gates
+   `elapsed >= kPrimaryPeriod`, a floor the 50 ms cycle still clears every
+   single iteration, so a primary frame still emits every cycle (effective
+   rate ~20 Hz). (118 — restores the schedule's genuine 4ms/4ms
    settle/clearance budget, regressed to a fictional 20ms/~50Hz by commit
-   `5f5a2ba7`; the sim's own `SimHarness::kCycleDtUs` now matches this
-   value exactly, closing the sim/firmware cadence gap — see
+   `5f5a2ba7`; the sim's own `SimHarness::kCycleDtUs` still matches
+   `kCycle` exactly, closing the sim/firmware cadence gap — see
    [`src/sim/DESIGN.md`](../../src/sim/DESIGN.md).)
 
 Boot is a separate loop: `App::Preamble` steps per-device detection (one

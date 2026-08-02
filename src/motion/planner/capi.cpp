@@ -44,13 +44,6 @@ void plannerUpdate(void* planner, Types::RobotState* state) {
   static_cast<const Motion::Planner*>(planner)->update(*state);
 }
 
-// M4 duty-plane outputs -- see Planner::commandedDutyLeft/Right().
-void plannerDuty(void* planner, float* left, float* right) {
-  const auto* p = static_cast<const Motion::Planner*>(planner);
-  *left = p->commandedDutyLeft();
-  *right = p->commandedDutyRight();
-}
-
 // Everything the bench charts need that is NOT already in RobotState: the
 // PROFILED command (state.wheel*.cmdVelocity, bit-for-bit as of 130-005 --
 // Motion::Planner no longer carries any wheel-actuation correction of its

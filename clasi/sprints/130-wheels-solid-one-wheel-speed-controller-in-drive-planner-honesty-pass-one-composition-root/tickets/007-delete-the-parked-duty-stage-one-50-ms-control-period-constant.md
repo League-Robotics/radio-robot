@@ -1,9 +1,12 @@
 ---
 id: '007'
 title: Delete the parked duty stage; one 50 ms control-period constant
-status: open
-use-cases: [SUC-004]
-depends-on: ['005', '002']
+status: in-progress
+use-cases:
+- SUC-004
+depends-on:
+- '005'
+- '002'
 github-issue: ''
 issue:
 - planner-honesty-pass-50ms-period-tick-state-machine-limits-reduction.md

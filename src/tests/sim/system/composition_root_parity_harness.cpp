@@ -106,18 +106,23 @@ int main() {
   checkFloatEq(simLimits.decelPlanFraction, hw.decelPlanFraction, "decelPlanFraction");
   checkFloatEq(simLimits.velocityFilterWeight, hw.velocityFilterWeight, "velocityFilterWeight");
 
-  beginScenario("trackWidth/controlPeriod/actuationDelay are the documented overrides -- "
-                "genuinely different from the hardware-equivalent value, and equal to the "
-                "documented sim value");
+  beginScenario("trackWidth is the one documented override still genuinely different from "
+                "the hardware-equivalent value, and equal to the documented sim value");
   checkFloatNe(hw.trackWidth, simLimits.trackWidth, "trackWidth diverges from hw (documented override)");
   checkFloatEq(simLimits.trackWidth, TestSim::kDefaultTrackWidth,
                "sim trackWidth equals TestSim::kDefaultTrackWidth (the sim's own fixture value)");
-  checkFloatNe(hw.controlPeriod, simLimits.controlPeriod,
-               "controlPeriod diverges from hw (documented override)");
+
+  beginScenario("controlPeriod/actuationDelay: still a documented, explicit BootOverride "
+                "structurally, but 130-007's one-50ms-period-everywhere change means the "
+                "hardware-baked default and the sim's kCycle-derived value are now the SAME "
+                "number by construction -- no longer a genuine divergence, and that IS the "
+                "point (one period, not two)");
+  checkFloatEq(hw.controlPeriod, simLimits.controlPeriod,
+               "controlPeriod: hw and sim now coincide (both honestly 50ms, 130-007)");
   checkFloatEq(simLimits.controlPeriod, static_cast<float>(App::RobotLoop::kCycle),
                "sim controlPeriod equals App::RobotLoop::kCycle (the sim's own delivered cycle time)");
-  checkFloatNe(hw.actuationDelay, simLimits.actuationDelay,
-               "actuationDelay diverges from hw (documented override)");
+  checkFloatEq(hw.actuationDelay, simLimits.actuationDelay,
+               "actuationDelay: hw and sim now coincide (both honestly 50ms, 130-007)");
   checkFloatEq(simLimits.actuationDelay, static_cast<float>(App::RobotLoop::kCycle),
                "sim actuationDelay equals App::RobotLoop::kCycle (the sim's own delivered cycle time)");
 

@@ -73,9 +73,13 @@ struct PlannerLimits {
   float headingHoldGain = 0.0f;  // [1/s] rad/s of correction per rad of error
 
   // M4 duty-plane output stage (issue §7.6): the per-wheel velocity->duty
-  // PID relocated into the motion library. Fail-closed: all-zero gains
-  // (the default) leave the duty outputs at 0 and every velocity-plane
-  // consumer untouched. Gains mirror the robot-JSON vel_* vocabulary.
+  // PID that used to be relocated into the motion library (Motion::WheelPid,
+  // Planner::stageDuty()) -- DELETED outright by 130-007, reversing sprint
+  // 128 Decision 2's PARK now that App::Drive's own controller (tickets
+  // 004/005) is the proven, shipped law. These fields are now unread by
+  // Motion::Planner; kept here only until ticket 009's PlannerLimits
+  // 34->23 reshape removes them (see src/motion/DESIGN.md's "wheel control
+  // generations" note and git history for WheelPid's own implementation).
   float velKff = 0.0f;   // [duty/(mm/s)] feedforward slope
   float velKp = 0.0f;    // [duty/(mm/s)] proportional
   float velKi = 0.0f;    // [duty/(mm/s)/s] integral rate
@@ -88,7 +92,7 @@ struct PlannerLimits {
   // measured cruise-entry overshoot spike was exactly that windup
   // releasing. 0 = off.
   float velKaff = 0.0f;  // [duty/(mm/s^2)]
-  float velIAccelGate = 1.0e9f;  // [mm/s^2] integral ramp gate (wheel_pid.h)
+  float velIAccelGate = 1.0e9f;  // [mm/s^2] integral ramp gate (deleted duty stage; see above)
   // Motor write-suppression deadband ([-1,1] duty): the leaf's armored
   // write forces any |duty| below this to zero before it reaches the bus,
   // so a NONZERO commanded velocity whose PID duty computes below it is a

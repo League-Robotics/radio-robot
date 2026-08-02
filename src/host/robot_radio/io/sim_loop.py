@@ -147,9 +147,10 @@ _LIB_NAME = "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmwa
 _HERE = pathlib.Path(__file__).parent
 _DEFAULT_LIB_PATH = (_HERE / "../../../../src/sim/build" / _LIB_NAME).resolve()
 
-# One sim cycle == 40ms of sim/firmware time (TestSim::SimHarness::kCycleDtUs,
+# One sim cycle == 50ms of sim/firmware time (TestSim::SimHarness::kCycleDtUs,
 # sim_harness.h -- itself derived from firmware's own App::RobotLoop::kCycle,
-# robot_loop.h; 118 ticket 003, sim-cycle-must-match-firmware-period.md).
+# robot_loop.h; 118 ticket 003, sim-cycle-must-match-firmware-period.md;
+# 130-007 raised kCycle 40ms -> 50ms, one control period everywhere).
 # Real-time (1x) tick-thread pacing advances one cycle per wall-clock tick by
 # default. This module constant is only the FALLBACK default (used before a
 # lib is ever loaded, e.g. as SimLoop.__init__'s initial value) -- connect()
@@ -157,7 +158,7 @@ _DEFAULT_LIB_PATH = (_HERE / "../../../../src/sim/build" / _LIB_NAME).resolve()
 # the LOADED library (`sim_cycle_dt_us()`) so a caller pointed at a stale or
 # differently-built .dylib/.so still paces against what that binary really
 # runs, not what this source tree currently says.
-_CYCLE_DURATION_S = 0.040  # [s]
+_CYCLE_DURATION_S = 0.050  # [s]
 
 # Telemetry queue: bounded, drop-oldest -- mirrors SerialConnection's own
 # _binary_tlm_queue policy (never let an un-drained queue grow unbounded).

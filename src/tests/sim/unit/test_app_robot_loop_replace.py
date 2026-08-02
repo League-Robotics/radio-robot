@@ -14,9 +14,9 @@ sets, matched to what each half of the harness needs:
 
   - Cases 1-5 drive a bare ``Motion::Planner`` directly
     (``src/motion/planner/planner.cpp`` + its own leaf modules --
-    profile/shape/estimation/wheel_pid (130-005: wheel_trim deleted, the
-    wheel-speed controller now lives entirely in App::Drive) -- plus the
-    test-only
+    profile/shape/estimation (130-005: wheel_trim deleted; 130-007:
+    wheel_pid/the parked M4 duty stage deleted too -- the wheel-speed
+    controller now lives entirely in App::Drive) -- plus the test-only
     zero-Python scaffolding at ``src/motion/planner/tests/test_support.h``,
     the SAME machinery ``src/motion/planner/tests/
     planner_scenarios_test.cpp``'s own ``testReplacePreempts()`` already
@@ -62,11 +62,12 @@ _BENCH_TEST_CONFIG_SRC = _SUPPORT_DIR / "bench_test_config.cpp"
 # compiles (SimHarness composes the real App::RobotLoop graph -- see
 # sim_harness.h's own header) -- needed by this file's own
 # scenarioDuplicateIdSanityNoOp(). Cases 1-5's own planner.cpp/shape.cpp/
-# profile.cpp/estimation.cpp/wheel_pid.cpp are ALREADY part of this same
-# list (Planner integration folded them into every RobotLoop-linking graph;
-# 130-005: wheel_trim.cpp deleted, the wheel-speed controller now lives
-# entirely in App::Drive) -- one combined source list serves both halves of
-# the harness with no duplication.
+# profile.cpp/estimation.cpp are ALREADY part of this same list (Planner
+# integration folded them into every RobotLoop-linking graph; 130-005:
+# wheel_trim.cpp deleted; 130-007: wheel_pid.cpp/the parked M4 duty stage
+# deleted too -- the wheel-speed controller now lives entirely in
+# App::Drive) -- one combined source list serves both halves of the
+# harness with no duplication.
 _APP_SOURCES = [
     _SOURCE_DIR / "app" / "robot_loop.cpp",
     _SOURCE_DIR / "app" / "comms.cpp",
@@ -81,7 +82,6 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "telemetry.cpp",
     _MOTION_PLANNER_DIR / "profile.cpp",
     _MOTION_PLANNER_DIR / "estimation.cpp",
-    _MOTION_PLANNER_DIR / "wheel_pid.cpp",
     _MOTION_PLANNER_DIR / "shape.cpp",
     _MOTION_PLANNER_DIR / "planner.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",
