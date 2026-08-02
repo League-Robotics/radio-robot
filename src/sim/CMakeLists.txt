@@ -140,7 +140,6 @@ set(MOTION_SOURCES
     "${MOTION_DIR}/planner/shape.cpp"
     "${MOTION_DIR}/planner/estimation.cpp"
     "${MOTION_DIR}/planner/wheel_pid.cpp"
-    "${MOTION_DIR}/planner/wheel_trim.cpp"
     "${MOTION_DIR}/planner/planner.cpp"
 )
 set(DEVICE_SOURCES

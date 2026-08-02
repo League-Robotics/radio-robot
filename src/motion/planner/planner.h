@@ -23,7 +23,6 @@
 #include "shape.h"
 #include "types/robot_state.h"
 #include "wheel_pid.h"
-#include "wheel_trim.h"
 
 namespace Motion {
 
@@ -82,10 +81,12 @@ class Planner {
   // Decision 2: the class and this method stay; only the automatic
   // per-cycle call from tick() is removed). Its output was computed every
   // cycle and DISCARDED either way -- App::Drive actuates from
-  // Types::RobotState::Wheel::cmdVelocity (WheelTrim's velocity-domain
-  // output, staged by stageTrim()/update()), never from commandedDutyLeft/
-  // Right() -- so parking it is a ~21-evaluation/s timing improvement, not
-  // a behavior change. Kept PUBLIC and callable on demand (rather than
+  // Types::RobotState::Wheel::cmdVelocity (the bare profiled command as of
+  // 130-005 -- Motion::WheelTrim/stageTrim() are deleted, the wheel-speed
+  // controller now lives entirely in App::Drive, see drive.h's own header),
+  // never from commandedDutyLeft/Right() -- so parking it is a ~21-
+  // evaluation/s timing improvement, not a behavior change. Kept PUBLIC and
+  // callable on demand (rather than
   // deleted) for two reasons: WheelPid's own ctest tiers
   // (wheel_pid_test.cpp's testPlannerDutyStage(),
   // planner_duty_scenarios_test.cpp) drive it directly to keep the class's
@@ -97,15 +98,12 @@ class Planner {
   // control-law details.
   void stageDuty(float dt);  // [s]
 
-  // Velocity-trim observability: the correction added to the profiled
-  // command this tick, and the integrator behind it. commandedLeft() +
-  // trimLeft() is exactly what update() stages as cmdVelocity.
-  float trimLeft() const { return trimLeft_; }    // [mm/s]
-  float trimRight() const { return trimRight_; }  // [mm/s]
-  float trimIntegralLeft() const { return trimControlLeft_.integral(); }
-  float trimIntegralRight() const { return trimControlRight_.integral(); }
-  // Which regime the active Move is in -- what gates the trim's integrator
-  // and what the bench charts shade behind the velocity traces.
+  // Which regime the active Move is in -- 130-005: no longer gates any
+  // trim integrator here (Motion::WheelTrim/stageTrim() are deleted; the
+  // wheel-speed controller's own fast-PID steady gate now lives in
+  // App::Drive::fastPid(), keyed off cmdAccel, not MovePhase -- see
+  // drive.h's own header) -- kept for what the bench charts still shade
+  // behind the velocity traces and for Move-lifecycle observability.
   MovePhase phase() const {
     return active_.occupied ? active_.phase : MovePhase::Idle;
   }
@@ -113,9 +111,6 @@ class Planner {
   // Live-tuning entry points (the CONFIG wire arm / persisted tuning):
   // plain in-memory updates, never persisted here.
   void applyVelGains(float kff, float kp, float ki, float iMax);
-  // Velocity-domain trim gains (wheel_trim.h). No kff by construction.
-  void applyTrimGains(float kp, float ki, float iMax, float kaff,
-                      float trimMax);
   void applyShaperLimits(float aMax, float aDecel, float alphaMax,
                          float alphaDecel, float jerkMax, float yawJerkMax);
   const PlannerLimits& limits() const { return limits_; }
@@ -190,13 +185,6 @@ class Planner {
 
   enum class Axis : uint8_t { None, Linear, Angular, Wheels };
   static Axis axisOf(const Move& m);
-
-  // The velocity-domain trim: this tick's closed-loop correction, added to
-  // the profiled command only at update() time. Runs on every tick() exit
-  // path; inert (0) at the default all-zero gains. stageDuty() (public,
-  // above) used to run alongside it here -- PARKED as of 128-015, see that
-  // method's own doc comment.
-  void stageTrim(float dt);  // [s]
 
   // The measured state the completion tests and the settle gate read,
   // computed once per tick from the freshly integrated estimate.
@@ -284,19 +272,6 @@ class Planner {
   WheelPid pidLeft_, pidRight_;   // M4 duty stage (inert at zero gains)
   float dutyLeft_ = 0.0f;   // [-1, 1] this tick's duty output
   float dutyRight_ = 0.0f;  // [-1, 1]
-  // Velocity-domain closed loop. Kept SEPARATE from cmdLeft_/cmdRight_ and
-  // summed only in update(), for two independent reasons: measure()'s ZOH
-  // anticipation computes PLANNED travel from cmdLeft_/cmdLeftPrevious_,
-  // so a trim folded into them would be counted as planned distance and
-  // corrupt the ledger; and the next tick's `previous` argument to
-  // profileStep() is the profiled velocity, so a trim inside it would make
-  // the profiler ramp from a trimmed value and break the discrete-exact
-  // accounting. The profiler plans against a command that is not exactly
-  // what is actuated -- which is correct, because the ledger is anchored
-  // to MEASURED positions and closing that gap is the trim's whole job.
-  WheelTrim trimControlLeft_, trimControlRight_;
-  float trimLeft_ = 0.0f;   // [mm/s] this tick's correction
-  float trimRight_ = 0.0f;  // [mm/s]
 
   Move pending_[kQueueDepth]{};
   int pendingCount_ = 0;

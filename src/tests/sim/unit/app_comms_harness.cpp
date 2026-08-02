@@ -31,12 +31,44 @@
 #include <string>
 
 #include "app/comms.h"
+#include "app/drive.h"
 #include "app/telemetry.h"
+#include "devices/motor.h"
 #include "firm/types/robot_state.h"
 #include "messages/envelope.h"
 #include "messages/wire.h"
 #include "messages/wire_runtime.h"
 #include "support/fake_transport.h"
+
+// StubMotor/testDrive() -- 130-005: Telemetry::update() now takes a
+// `const Drive&` for its own observability accessors; this harness never
+// ticks it. Duplicated per this codebase's established per-harness-file
+// fixture convention (see e.g. app_telemetry_harness.cpp's own identical
+// pair).
+class StubMotor : public Devices::Motor {
+ public:
+  void begin() override {}
+  void requestSample() override {}
+  void setDuty(float) override {}
+  void setNeutral(Devices::Neutral) override {}
+  void applyTravelCalib(float) override {}
+  bool reconfigure(const Devices::MotorConfig&) override { return true; }
+  void tick(uint64_t) override {}
+  float position() const override { return 0.0f; }
+  float velocity() const override { return 0.0f; }
+  float appliedDuty() const override { return 0.0f; }
+  bool connected() const override { return true; }
+  uint64_t sampleTime() const override { return 0; }
+  void resetPosition() override {}
+  void rebaseline() override {}
+};
+
+App::Drive& testDrive() {
+  static StubMotor left;
+  static StubMotor right;
+  static App::Drive drive(left, right, /*trackWidth=*/200.0f);
+  return drive;
+}
 
 // pumpOne() -- the pre-ring `Comms::pump(Cmd&, now)` shape, rebuilt on the
 // ring API (command-ingestion-ring-buffered-comms-subsystem-routing-two-
@@ -1118,7 +1150,7 @@ void scenarioUpdateStatusProjectsAllEightFieldsFromSynthesizedState() {
   state.otos.present = true;
   state.otos.connected = true;
   state.health.wedgeLatch = true;
-  tlm.update(state);  // derives flags_ from `state` -- kFlagActive | kFlagConnLeft |
+  tlm.update(state, testDrive());  // derives flags_ from `state` -- kFlagActive | kFlagConnLeft |
                        // kFlagOtosPresent | kFlagOtosConnected | kFlagFaultWedgeLatch
                        // == 0x8f, given the fields set above and every other
                        // RobotState field left at its default
@@ -1157,7 +1189,7 @@ void scenarioUpdateStatusReadyFalseBeforeBoot() {
   App::Telemetry tlm(tlmComms);
 
   Types::RobotState state;  // health.ready defaults to false (robot_state.h)
-  tlm.update(state);
+  tlm.update(state, testDrive());
   comms.updateStatus(state, tlm);
 
   serialFake.enqueueInbound("STATUS");

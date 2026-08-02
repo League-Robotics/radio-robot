@@ -89,23 +89,17 @@ void configureSimForBenchTest(TestSim::SimHarness& sim) {
   // what they always meant -- never let the real shaping in via silence.
   sim.planner().applyShaperLimits(/*aMax=*/1.0e6f, /*aDecel=*/1.0e6f, /*alphaMax=*/1.0e5f,
                                   /*alphaDecel=*/1.0e5f, /*jerkMax=*/0.0f, /*yawJerkMax=*/0.0f);
-  // SIM OVERRIDE (130-002): composeRobot() also boots Motion::WheelTrim's
-  // velocity-domain trim gains LIVE now (the exact gap unify-sim-and-robot-
-  // composition-roots.md's own item 1 documents -- these used to boot at
-  // their fail-closed all-zero default in every sim session while live on
-  // every hardware session). Types::RobotState::Wheel::cmdVelocity IS the
-  // trim-corrected value (Motion::Planner::stageTrim()/update(), planner.h),
-  // so a genuinely-live trim now makes driveTargetVelLeft()/Right() read a
-  // small, transient, CORRECT trim correction around the profiled target
-  // instead of landing on it exactly -- these harnesses' fixed-tolerance
-  // "target is committed" checks were written back when trim was always
-  // zero. Trim's own convergence/correctness has dedicated coverage
-  // elsewhere (wheel-speed-controller-moves-into-drive.md's tickets,
-  // motion/planner/tests/) -- zero it here, explicitly, rather than let it
-  // silently change what a fixed ±1 mm/s tolerance means in a harness that
-  // is testing queue/stop-condition/protocol mechanics, not trim.
-  sim.planner().applyTrimGains(/*kp=*/0.0f, /*ki=*/0.0f, /*iMax=*/0.0f, /*kaff=*/0.0f,
-                               /*trimMax=*/0.0f);
+  // 130-005 REMOVAL NOTE: this used to also zero Motion::WheelTrim's
+  // velocity-domain trim gains here, explicitly, so driveTargetVelLeft()/
+  // Right() (state.wheelLeft/Right.cmdVelocity) kept landing EXACTLY on the
+  // profiled target for these harnesses' fixed-tolerance "target is
+  // committed" checks -- a live trim used to perturb that field by a small,
+  // transient, CORRECT correction. Motion::WheelTrim is deleted outright
+  // (wheel-speed-controller-moves-into-drive.md Phase 3): Motion::Planner
+  // now publishes cmdVelocity bit-for-bit as the profiled command, always,
+  // with no correction of any kind ever added to it -- App::Drive's own
+  // Stage B/C controller corrects duty, a layer downstream of this field,
+  // so there is nothing left here to zero.
 }
 
 }  // namespace TestSupport

@@ -3,6 +3,8 @@
 // layout.
 #include "app/telemetry.h"
 
+#include "app/drive.h"
+
 namespace App {
 
 // kAckRingDepth (telemetry.h) must match the generated msg::Telemetry::
@@ -56,7 +58,7 @@ void Telemetry::setLiveFlag(uint32_t bit, bool active) {
   setFlag(bit, active);
 }
 
-void Telemetry::update(const Types::RobotState& state) {
+void Telemetry::update(const Types::RobotState& state, const Drive& drive) {
   // now (for age ONLY -- NOT the wire `now` field, which stays
   // state.time.cycleStart via the caller's own emit(cycleStart) call,
   // unchanged from before this ticket): every sampleTime this method reads
@@ -117,6 +119,17 @@ void Telemetry::update(const Types::RobotState& state) {
   frame_.cycleBusy = state.time.cycleBusy;
   frame_.cyclePeriod = state.time.cyclePeriod;
 
+  // App::Drive's unified wheel-speed controller (130-005, issue 04's
+  // folded-in observability mandate) -- read straight off the SAME Drive
+  // instance RobotLoop::cycle() already ticked this cycle (see update()'s
+  // own doc comment, telemetry.h).
+  frame_.dutyPerSpeedLeft = drive.dutyPerSpeedLeft();
+  frame_.dutyPerSpeedRight = drive.dutyPerSpeedRight();
+  frame_.biasLeft = drive.biasLeft();
+  frame_.biasRight = drive.biasRight();
+  frame_.pidLeft = drive.pidLeft();
+  frame_.pidRight = drive.pidRight();
+
   // Flags -- the single assembly point: every bit that CAN be known at
   // this point in the cycle, derived straight from `state`.
   // kFlagFaultMoveTimeout/kFlagFaultShapingDisabled (bits 15/16) are
@@ -142,6 +155,8 @@ void Telemetry::update(const Types::RobotState& state) {
   setFlag(kFlagFaultPositionClamped, state.health.positionClamped);
   setFlag(kFlagFaultWheelFrozenLeft, state.health.wheelFrozenLeft);
   setFlag(kFlagFaultWheelFrozenRight, state.health.wheelFrozenRight);
+  setFlag(kFlagFaultWheelDeficitLeft, drive.deficitLeft());
+  setFlag(kFlagFaultWheelDeficitRight, drive.deficitRight());
 
   // lastActivity_/everMoved_ -- computed against state.time.cycleStart,
   // NOT the `now` local above: that local is the age-computation instant
@@ -310,6 +325,13 @@ void Telemetry::emitPrimary(uint32_t now) {
 
   tlm.cycle_busy = frame_.cycleBusy;
   tlm.cycle_period = frame_.cyclePeriod;
+
+  tlm.duty_per_speed_left = frame_.dutyPerSpeedLeft;
+  tlm.duty_per_speed_right = frame_.dutyPerSpeedRight;
+  tlm.bias_left = frame_.biasLeft;
+  tlm.bias_right = frame_.biasRight;
+  tlm.pid_left = frame_.pidLeft;
+  tlm.pid_right = frame_.pidRight;
 
   msg::ReplyEnvelope env;
   env.corr_id = 0;  // unsolicited push -- envelope.proto's own convention

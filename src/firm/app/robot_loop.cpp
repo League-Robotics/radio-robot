@@ -329,7 +329,7 @@ void RobotLoop::boot() {
     bootState.wheelLeft.connected = preamble_.leftConnected();
     bootState.wheelRight.connected = preamble_.rightConnected();
     bootState.otos.connected = preamble_.otosConnected();
-    tlm_.update(bootState);
+    tlm_.update(bootState, drive_);
     // NOT forced. Forcing here pushed one frame per probe pass -- a ~5s
     // flood on every reset, ahead of the DEVICE banner and READY.
     //
@@ -548,7 +548,7 @@ void RobotLoop::cycle() {
     publishHealth();
     publishTiming(cycleStartUs);
 
-    tlm_.update(state_);
+    tlm_.update(state_, drive_);
 
     // TLM: command surface. The mode-change switch and the "is this a
     // force-a-frame request" answer live in Telemetry::applyAction() --

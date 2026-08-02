@@ -50,6 +50,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <utility>
+#include <vector>
 
 #include "app/drive.h"
 #include "devices/device_config.h"
@@ -517,6 +519,210 @@ void scenarioBumplessTransferAcrossBiasUpdate() {
   checkTrue(drive.biasLeft() > 1.0f, "bias actually adapted over the run (not a no-op check)");
 }
 
+// ===========================================================================
+// 7. 130-005: Stage B's steady gate and anti-windup -- the coverage
+// Motion::WheelTrim's own deleted test suite (wheel_trim_test.cpp's
+// testIntegratorEngagesOnlyInHold()/testUnitBehaviorOfTheLaw()) provided
+// for the OLD planner-side trim, carried over onto Drive's fastPid() (the
+// mechanism that now lives here instead -- drive.h's own header). Drives
+// tick() directly with nonzero ControlGains and AdaptationBounds.tauAdapt
+// left at its all-zero default (Stage C stays off, isolating Stage B).
+// ===========================================================================
+
+void scenarioFastPidSteadyGateAndAntiWindup() {
+  beginScenario("Stage B: the fast PID's integrator engages only when steady (frozen while ramping, "
+                "not reset) and anti-winds-up against pidMax (130-005 coverage carried over from the "
+                "deleted Motion::WheelTrim suite)");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
+
+  App::Drive::ControlGains gains;
+  gains.kp = 0.05f;
+  gains.ki = 0.5f;
+  gains.iMax = 50.0f;
+  gains.kaff = 0.05f;
+  gains.pidMax = 20.0f;  // deliberately small -- reachable within this test's tick budget
+  drive.setControlGains(gains);
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.aSteady = 50.0f;  // [mm/s^2]
+  // tauAdapt left at 0 (the all-zero default) -- Stage C stays off.
+  drive.setAdaptationBounds(bounds);
+
+  const float cmd = 200.0f;  // [mm/s] commanded speed
+  uint32_t now = 1000;
+
+  // Phase 1: RAMPING (|cmdAccel| >= aSteady) with a persistent, large
+  // error (velocity held at exactly 0) -- the integrator must stay
+  // EXACTLY zero throughout, mirroring Motion::WheelTrim's own accel-phase
+  // gate. p+feed alone (0.05*200 + 0.05*100 = 15) stays under pidMax (20),
+  // so if the integral is genuinely frozen, pidLeft() is IDENTICAL and
+  // exact on every single tick -- no closed-form assumption needed beyond
+  // "the inputs don't change and neither does the gate".
+  const float kRampAccel = 100.0f;  // [mm/s^2] >= aSteady -- ramping
+  const float kExpectedRampPid = gains.kp * cmd + gains.kaff * kRampAccel;  // 15.0
+  for (int i = 0; i < 20; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = cmd;
+    state.wheelLeft.cmdAccel = kRampAccel;
+    state.wheelLeft.velocity = 0.0f;  // stalled: a large, persistent error
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;  // [us] -- dt = 0.05s
+    drive.tick(state);
+    checkFloatEq(drive.pidLeft(), kExpectedRampPid,
+                "ramping: pid is p+feed only, no integral growth (the integrator stayed frozen)");
+    now += 50;
+  }
+
+  // Phase 2: STEADY (|cmdAccel| < aSteady), same persistent error -- the
+  // integrator now engages and grows, and the total pid output clamps at
+  // pidMax without ever exceeding it (anti-windup): once the provisional
+  // sum is pinned against the clamp, fastPid() stops integrating further
+  // (the same pushingIntoClamp gate WheelTrim::compute() used to implement).
+  bool sawGrowth = false;
+  float previousPid = drive.pidLeft();
+  for (int i = 0; i < 50; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = cmd;
+    state.wheelLeft.cmdAccel = 0.0f;  // steady
+    state.wheelLeft.velocity = 0.0f;  // same large, persistent error
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;
+    drive.tick(state);
+    checkTrue(std::fabs(drive.pidLeft()) <= gains.pidMax + 1e-3f,
+             "pid never exceeds pidMax, even sustained (anti-windup)");
+    if (drive.pidLeft() > previousPid + 1e-6f) sawGrowth = true;
+    previousPid = drive.pidLeft();
+    now += 50;
+  }
+  checkTrue(sawGrowth,
+           "the integrator actually grew once steady (it was frozen during the ramp, not disabled "
+           "outright)");
+  checkFloatEq(drive.pidLeft(), gains.pidMax,
+              "pid settles PINNED at the clamp under a persistent error large enough to saturate it",
+              0.5f);
+}
+
+// ===========================================================================
+// 8. 130-005 AC#2: a WHEELS teleop command and a planner Move both reach the
+// SAME Drive controller path -- Drive's tick() reads only state.wheelLeft/
+// Right.cmdVelocity/cmdAccel/velocity, with NO knowledge of which subsystem
+// staged them (drive.h's own header: "no privileged or degraded path").
+// Exercises the REAL production write path for the WHEELS side
+// (Drive::command()+Drive::update(), exactly as RobotLoop calls them) against
+// a hand-staged blackboard for the Move side (state.wheelLeft.cmdVelocity/
+// cmdAccel set directly, exactly what Motion::Planner::update() stages for a
+// Move cruising at the same speed with zero accel -- MovePhase::Hold) --
+// then asserts tick()'s bias/duty evolution is IDENTICAL, cycle for cycle,
+// under the SAME imperfect plant.
+// ===========================================================================
+
+void scenarioWheelsAndMoveReachIdenticalDriveBehavior() {
+  beginScenario("130-005 AC#2: a WHEELS command and a planner Move reach the SAME Drive controller "
+                "path -- identical tick-by-tick bias/duty for the same commanded velocity");
+
+  const float cmd = 200.0f;          // [mm/s] commanded cruise speed, both paths
+  const float plantGain = 0.85f;     // a known, imperfect plant -- gives Stage C something to close
+  constexpr int kCycles = 60;
+
+  auto runPath = [&](bool viaWheels) {
+    MockMotor left;
+    MockMotor right;
+    const float trackWidth = 200.0f;  // [mm]
+    App::Drive drive(left, right, trackWidth);
+    drive.setDutyPerSpeed(1.0f, 1.0f);  // identity: duty == corrected command
+
+    App::Drive::ControlGains gains;
+    gains.kp = 0.1f;
+    gains.ki = 0.3f;
+    gains.iMax = 40.0f;
+    gains.kaff = 0.05f;
+    gains.pidMax = 30.0f;
+    drive.setControlGains(gains);
+
+    App::Drive::AdaptationBounds bounds;
+    bounds.biasMax = 40.0f;   // [mm/s]
+    bounds.tauAdapt = 2.0f;   // [s]
+    bounds.aSteady = 50.0f;   // [mm/s^2]
+    drive.setAdaptationBounds(bounds);
+
+    uint32_t now = 1000;
+    float measured = 0.0f;  // both wheels start at rest, identically
+    std::vector<float> dutyTrace;
+    std::vector<float> biasTrace;
+    dutyTrace.reserve(kCycles);
+    biasTrace.reserve(kCycles);
+
+    for (int i = 0; i < kCycles; ++i) {
+      Types::RobotState state{};
+      if (viaWheels) {
+        // WHEELS: arm once (a real command() call), then Drive's own
+        // update() republishes its targets onto the blackboard every
+        // cycle -- the exact call RobotLoop makes each cycle while Drive
+        // owns motion.
+        if (i == 0) drive.command(cmd, cmd, /*duration=*/60000.0f, /*moveId=*/1, now);
+        drive.update(state, now);
+      } else {
+        // Move: hand-stage exactly what Motion::Planner::update() would
+        // publish for a Move cruising at `cmd` with zero accel (Hold
+        // phase) -- Motion::Planner sheds all wheel-actuation code
+        // (130-005), so this is bit-for-bit what tick() actually sees
+        // from a real Move at cruise.
+        state.wheelLeft.cmdVelocity = cmd;
+        state.wheelLeft.cmdAccel = 0.0f;
+      }
+      state.wheelLeft.velocity = measured;
+      state.wheelLeft.connected = true;
+      state.wheelLeft.sampleTime = now - 10;
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;  // [us] -- dt = 0.05s
+
+      drive.tick(state);
+      dutyTrace.push_back(left.lastDutyCmd);
+      biasTrace.push_back(drive.biasLeft());
+
+      // The plant's own response to the duty this tick just computed,
+      // consumed as next tick's measured velocity (same convention as the
+      // Stage C scenarios above).
+      measured = plantGain * (cmd + drive.biasLeft());
+      now += 50;
+    }
+    return std::make_pair(dutyTrace, biasTrace);
+  };
+
+  const auto wheels = runPath(/*viaWheels=*/true);
+  const auto move = runPath(/*viaWheels=*/false);
+
+  checkTrue(wheels.first.size() == move.first.size(), "both paths ran the same number of cycles");
+  bool allMatched = true;
+  for (size_t i = 0; i < wheels.first.size() && i < move.first.size(); ++i) {
+    if (std::fabs(wheels.first[i] - move.first[i]) > 1e-4f ||
+        std::fabs(wheels.second[i] - move.second[i]) > 1e-4f) {
+      allMatched = false;
+      char buf[256];
+      std::snprintf(buf, sizeof(buf),
+                    "tick %zu: WHEELS (duty=%g, bias=%g) != Move (duty=%g, bias=%g)", i,
+                    static_cast<double>(wheels.first[i]), static_cast<double>(wheels.second[i]),
+                    static_cast<double>(move.first[i]), static_cast<double>(move.second[i]));
+      fail(buf);
+    }
+  }
+  checkTrue(allMatched, "every cycle's duty/bias matched exactly between the WHEELS path and the Move "
+                       "path -- one controller, no privileged or degraded writer");
+  // Not a trivially-passing no-op: the plant gain error actually moved bias
+  // over the run, on both paths.
+  checkTrue(std::fabs(wheels.second.back()) > 1.0f,
+           "bias actually adapted over the run on both paths (not a no-op check)");
+}
+
 }  // namespace
 
 int main() {
@@ -526,6 +732,8 @@ int main() {
   scenarioBiasConvergesUnderKnownPlantGainError();
   scenarioBiasClampHoldsAgainstDivergentError();
   scenarioBumplessTransferAcrossBiasUpdate();
+  scenarioFastPidSteadyGateAndAntiWindup();
+  scenarioWheelsAndMoveReachIdenticalDriveBehavior();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Drive scenarios passed\n");

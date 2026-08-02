@@ -209,11 +209,23 @@ class ControlConfig(BaseModel):
     clasi/sprints/119-land-at-zero-and-clean-house-motion-semantics-deletions/issues/delete-the-config-attic-and-dead-tour-kwargs.md
     for the full consumer audit.
     """
-    vel_kp:        Optional[float] = None   # → SET pid.kp   (duty per mm/s error)
-    vel_ki:        Optional[float] = None   # → SET pid.ki
-    vel_kff:       Optional[float] = None   # → SET pid.kff  (duty per mm/s target)
-    vel_imax:      Optional[float] = None   # → SET pid.iMax (integrator clamp, duty)
-    vel_kaw:       Optional[float] = None   # → SET pid.kaw  (anti-windup gain, 1/s; 0 = off)
+    # vel_kp/vel_ki/vel_kff/vel_imax/vel_kaw (control.*, NOT the same JSON
+    # key as planner.vel_kp/ki/i_max, which feeds the parked M4 duty
+    # stage's PlannerLimits.velKp/Ki/IMax): build-time bake ONLY as of
+    # 130-005. The `pid.*` SET keys that used to push these live are
+    # REPOINTED onto App::Drive's unified wheel-speed controller instead
+    # (the wheel_pid_* fields below) -- closing the silent no-op `pid.*`
+    # was onto a control law with no live consumer (gen_boot_config.py
+    # still bakes these into msg::MotorConfig.velGains, the per-motor
+    # velocity PID that has had no firmware reader since the velocity PID
+    # moved off Devices::Motor entirely, predating this sprint). Still
+    # required here for the same lossless-round-trip reason as every
+    # other field in this model.
+    vel_kp:        Optional[float] = None
+    vel_ki:        Optional[float] = None
+    vel_kff:       Optional[float] = None
+    vel_imax:      Optional[float] = None
+    vel_kaw:       Optional[float] = None
     vel_filt:      Optional[float] = None   # velocity EMA weight — NO live SET key;
     #   build-time bake only (gen_boot_config.py → MotorConfig.setVelFiltAlpha())
     min_wheel_mms: Optional[float] = None   # → SET minWheelMms (low-speed deadband)
@@ -282,18 +294,24 @@ class ControlConfig(BaseModel):
     # gen_boot_config.py's wheel_controller_config_for_config(); declared
     # here for the SAME lossless-round-trip reason as every other field
     # in this block -- without a model field, pydantic silently drops the
-    # key at parse time. No live SET/Patch key exists for any of these
-    # (ticket 005's job, not this one) -- see
-    # config_sync_allowlist.json's own entries for these keys.
+    # key at parse time.
+    #
+    # 130-005: wheel_pid_kp/ki/i_max/kaff/max are now ALSO live-tunable --
+    # the `pid.*` SET keys (pid.kp/pid.ki/pid.iMax/pid.kff/pid.kaw) route
+    # here instead of the dead planner duty-stage path (vel_kp et al.
+    # above); see calibration/push.py's calibration_kwargs() for the wire
+    # push and configurator.cpp's applyMotorConfigPatch() for the firmware
+    # side. wheel_v_min/bias_max/tau_adapt/a_steady/deficit_* remain
+    # bake-only (population-measured/generated constants, not live-tuned).
     wheel_v_min:              Optional[float] = None  # [mm/s] speed floor
     wheel_bias_max:           Optional[float] = None  # [mm/s] Stage C trim authority clamp
     wheel_tau_adapt:          Optional[float] = None  # [s] Stage C adaptation time constant
     wheel_a_steady:           Optional[float] = None  # [mm/s^2] steady-state gate
-    wheel_pid_kp:             Optional[float] = None  # [1] Stage B proportional gain
-    wheel_pid_ki:             Optional[float] = None  # [1/s] Stage B integral gain
-    wheel_pid_i_max:          Optional[float] = None  # [mm/s] Stage B integrator clamp
-    wheel_pid_kaff:           Optional[float] = None  # [s] Stage B accel feedforward
-    wheel_pid_max:            Optional[float] = None  # [mm/s] Stage B total authority clamp
+    wheel_pid_kp:             Optional[float] = None  # [1] Stage B proportional gain — → SET pid.kp
+    wheel_pid_ki:             Optional[float] = None  # [1/s] Stage B integral gain — → SET pid.ki
+    wheel_pid_i_max:          Optional[float] = None  # [mm/s] Stage B integrator clamp — → SET pid.iMax
+    wheel_pid_kaff:           Optional[float] = None  # [s] Stage B accel feedforward — → SET pid.kff
+    wheel_pid_max:            Optional[float] = None  # [mm/s] Stage B total authority clamp — → SET pid.kaw
     wheel_deficit_threshold:  Optional[float] = None  # [mm/s] deficit-flag error threshold
     wheel_deficit_window_ms:  Optional[float] = None  # [ms] deficit-flag sustain window
 

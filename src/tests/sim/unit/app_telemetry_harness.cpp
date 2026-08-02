@@ -41,12 +41,52 @@
 #include <string>
 
 #include "app/comms.h"
+#include "app/drive.h"
 #include "app/telemetry.h"
+#include "devices/motor.h"
 #include "firm/types/robot_state.h"
 #include "messages/envelope.h"
 #include "messages/wire.h"
 #include "messages/wire_runtime.h"
 #include "support/fake_transport.h"
+
+// StubMotor -- a completely inert Devices::Motor (130-005: update()'s new
+// `const Drive&` parameter needs two of these to construct a Drive; this
+// harness never ticks it, so every method beyond the interface minimum is
+// a no-op). Duplicated here per this codebase's established
+// per-harness-file fixture convention (see e.g. app_fake_otos_harness.cpp's
+// own StubMotor).
+class StubMotor : public Devices::Motor {
+ public:
+  void begin() override {}
+  void requestSample() override {}
+  void setDuty(float) override {}
+  void setNeutral(Devices::Neutral) override {}
+  void applyTravelCalib(float) override {}
+  bool reconfigure(const Devices::MotorConfig&) override { return true; }
+  void tick(uint64_t) override {}
+  float position() const override { return 0.0f; }
+  float velocity() const override { return 0.0f; }
+  float appliedDuty() const override { return 0.0f; }
+  bool connected() const override { return true; }
+  uint64_t sampleTime() const override { return 0; }
+  void resetPosition() override {}
+  void rebaseline() override {}
+};
+
+// A single, never-ticked App::Drive -- every scenario below only needs
+// update()'s new Drive& parameter for its OBSERVABILITY accessors
+// (dutyPerSpeedLeft/Right()/biasLeft/Right()/pidLeft/Right()/
+// deficitLeft/Right()), all of which are safe to read on a freshly
+// constructed, uncalibrated Drive (they return their default-initialized
+// 0/0/false). Function-local statics so construction order relative to
+// this TU's other file-scope objects is never in question.
+App::Drive& testDrive() {
+  static StubMotor left;
+  static StubMotor right;
+  static App::Drive drive(left, right, /*trackWidth=*/200.0f);
+  return drive;
+}
 
 // pumpOne() -- the pre-ring `Comms::pump(Cmd&, now)` shape, rebuilt on the
 // ring API (command-ingestion-ring-buffered-comms-subsystem-routing-two-
@@ -216,7 +256,7 @@ void scenarioUpdateProjectsWholeStateInOneCall() {
   state.perception.color = 0x0A090807u;
   state.perception.colorFresh = true;
 
-  telemetry.update(state);
+  telemetry.update(state, testDrive());
   telemetry.ack(7, 0);
   telemetry.emit(kNow);  // first call -- always sends primary (boot, no arming)
   // (120) ack(7, 0) above ALSO pushed onto the bounded ack ring -- see
@@ -297,7 +337,7 @@ void scenarioAgeIsComputedIndependentlyPerReading() {
   state.otos.present = true;
   state.otos.sampleTime = kNow - 35;        // age 35 -- yet another distinct value
 
-  telemetry.update(state);
+  telemetry.update(state, testDrive());
   telemetry.emit(kNow);
 
   msg::Telemetry expected;
@@ -424,7 +464,7 @@ void scenarioFlagsAreFreshlyDerivedFromStateEveryUpdate() {
   state.wheelRight.sampleTime = state.time.cycleStart;
   state.health.i2cSafetyNetCount = 1;
   state.health.wedgeLatch = true;
-  telemetry.update(state);
+  telemetry.update(state, testDrive());
   checkU64Eq(telemetry.flags(), App::kFlagFaultI2CSafetyNet | App::kFlagFaultWedgeLatch,
              "flags() reflects both bits set immediately after update()");
 
@@ -451,7 +491,7 @@ void scenarioFlagsAreFreshlyDerivedFromStateEveryUpdate() {
   state.wheelRight.sampleTime = state.time.cycleStart;
   state.health.i2cSafetyNetCount = 0;
   state.health.wedgeLatch = false;
-  telemetry.update(state);
+  telemetry.update(state, testDrive());
   checkU64Eq(telemetry.flags(), 0, "flags() clears once state reports the condition cleared, via re-derivation");
 
   telemetry.emit(40);
@@ -505,7 +545,7 @@ void scenarioWheelFrozenFlagsAreGatedAndIndependentOfWedgeLatch() {
   state.health.wedgeLatch = true;
   state.health.wheelFrozenLeft = false;
   state.health.wheelFrozenRight = false;
-  telemetry.update(state);
+  telemetry.update(state, testDrive());
   checkU64Eq(telemetry.flags(), App::kFlagFaultWedgeLatch,
              "idle-parked: wedgeLatch sets, neither wheel-frozen bit sets from the same idle condition");
 
@@ -518,7 +558,7 @@ void scenarioWheelFrozenFlagsAreGatedAndIndependentOfWedgeLatch() {
   state.health.wedgeLatch = false;
   state.health.wheelFrozenLeft = true;
   state.health.wheelFrozenRight = false;
-  telemetry.update(state);
+  telemetry.update(state, testDrive());
   checkU64Eq(telemetry.flags(), App::kFlagFaultWheelFrozenLeft,
              "left wheel frozen: only kFlagFaultWheelFrozenLeft sets");
 
@@ -529,7 +569,7 @@ void scenarioWheelFrozenFlagsAreGatedAndIndependentOfWedgeLatch() {
   state.wheelRight.sampleTime = state.time.cycleStart;
   state.health.wheelFrozenLeft = true;
   state.health.wheelFrozenRight = true;
-  telemetry.update(state);
+  telemetry.update(state, testDrive());
   checkU64Eq(telemetry.flags(), App::kFlagFaultWheelFrozenLeft | App::kFlagFaultWheelFrozenRight,
              "both wheels frozen: both bits set together");
 
@@ -540,7 +580,7 @@ void scenarioWheelFrozenFlagsAreGatedAndIndependentOfWedgeLatch() {
   state.wheelRight.sampleTime = state.time.cycleStart;
   state.health.wheelFrozenLeft = false;
   state.health.wheelFrozenRight = false;
-  telemetry.update(state);
+  telemetry.update(state, testDrive());
   checkU64Eq(telemetry.flags(), 0, "released: both wheel-frozen bits clear once Health reports recovery");
 }
 
@@ -568,7 +608,7 @@ void scenarioSetLiveFlagMutatesLiveFlagsIndependentlyOfUpdate() {
   state.time.cycleStart = 0;
   state.wheelLeft.sampleTime = state.time.cycleStart;
   state.wheelRight.sampleTime = state.time.cycleStart;
-  telemetry.update(state);
+  telemetry.update(state, testDrive());
   checkU64Eq(telemetry.flags(), 0, "flags() starts clear");
 
   // Simulates RobotLoop::cycle()'s own post-tick call site:
@@ -586,7 +626,7 @@ void scenarioSetLiveFlagMutatesLiveFlagsIndependentlyOfUpdate() {
   // scenario is about setLiveFlag(), not age.
   nextState.wheelLeft.sampleTime = nextState.time.cycleStart;
   nextState.wheelRight.sampleTime = nextState.time.cycleStart;
-  telemetry.update(nextState);
+  telemetry.update(nextState, testDrive());
   checkU64Eq(telemetry.flags(), App::kFlagFaultMoveTimeout,
              "a later update() call leaves the setLiveFlag()-owned bit untouched");
 
@@ -719,7 +759,7 @@ void scenarioMeasuredCadenceReport() {
   // enough to start the stream under the default kAuto mode.
   Types::RobotState moving;
   moving.command.moveActive = true;
-  telemetry.update(moving);
+  telemetry.update(moving, testDrive());
 
   const uint32_t kStep = 3;  // [ms] fine-grained relative to kPrimaryPeriod=40
   const uint32_t kEndTime = 10000;
@@ -747,7 +787,7 @@ void scenarioMeasuredCadenceReport() {
   const uint64_t whileMoving = telemetry.primaryEmitCount();
   Types::RobotState parked;  // moveActive false, zero velocity, same flags
   parked.time.cycleStart = kEndTime;
-  telemetry.update(parked);
+  telemetry.update(parked, testDrive());
 
   uint32_t now = kEndTime + kStep;
   const uint32_t settleEnd = now + 5000;  // [ms] comfortably > kCoastHoldoff (2000ms)
@@ -804,7 +844,7 @@ void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
   state.wheelLeft.sampleTime = state.time.cycleStart;
   state.wheelRight.sampleTime = state.time.cycleStart;
   state.health.commsMalformedCount = comms.malformedCount();
-  telemetry.update(state);
+  telemetry.update(state, testDrive());
   checkU64Eq(telemetry.flags(), App::kFlagFaultCommsMalformed, "flags() reflects kFlagFaultCommsMalformed");
 
   telemetry.emit(0);
@@ -830,7 +870,7 @@ void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
   clearState.time.cycleStart = 40;
   clearState.wheelLeft.sampleTime = clearState.time.cycleStart;
   clearState.wheelRight.sampleTime = clearState.time.cycleStart;
-  telemetry.update(clearState);
+  telemetry.update(clearState, testDrive());
   checkU64Eq(telemetry.flags(), 0, "flags() clears once state reports the condition cleared");
 
   telemetry.emit(40);
@@ -984,7 +1024,7 @@ void scenarioFreshConstructDefaultsAutoAndStaysSilentAtRest() {
   Types::RobotState parked;
   parked.wheelLeft.connected = true;
   parked.wheelRight.connected = true;
-  telemetry.update(parked);
+  telemetry.update(parked, testDrive());
   for (uint32_t now = 2040; now <= 4000; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
   checkU64Eq(telemetry.primaryEmitCount(), 0, "an update()d-but-parked robot is still silent in kAuto");
 }
@@ -1012,7 +1052,7 @@ void scenarioHandSpunWheelBeforeFirstMoveNeverWakesTheLink() {
   Types::RobotState spun;  // moveActive stays false -- never a real Move
   spun.wheelLeft.velocity = 250.0f;   // hand-spun / bogus first-sample reading
   spun.wheelRight.velocity = 250.0f;
-  telemetry.update(spun);
+  telemetry.update(spun, testDrive());
 
   for (uint32_t now = 0; now <= 4000; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
   checkU64Eq(telemetry.primaryEmitCount(), 0,
@@ -1047,7 +1087,7 @@ void scenarioActivityWindowRefreshesOnActiveAndCoastsThenClosesAfterHoldoff() {
   moving.command.moveActive = true;
   moving.wheelLeft.velocity = 200.0f;
   moving.wheelRight.velocity = 200.0f;
-  telemetry.update(moving);
+  telemetry.update(moving, testDrive());
   telemetry.emit(0);
   checkU64Eq(telemetry.primaryEmitCount(), 1, "moving: kFlagActive alone is enough to emit");
 
@@ -1058,7 +1098,7 @@ void scenarioActivityWindowRefreshesOnActiveAndCoastsThenClosesAfterHoldoff() {
   coasting.command.moveActive = false;
   coasting.wheelLeft.velocity = 50.0f;
   coasting.wheelRight.velocity = 50.0f;
-  telemetry.update(coasting);
+  telemetry.update(coasting, testDrive());
   telemetry.emit(40);
   checkU64Eq(telemetry.primaryEmitCount(), 2,
              "coast-down: nonzero staged velocity with an already-open window keeps the stream alive after "
@@ -1071,7 +1111,7 @@ void scenarioActivityWindowRefreshesOnActiveAndCoastsThenClosesAfterHoldoff() {
   stopped.command.moveActive = false;
   stopped.wheelLeft.velocity = 0.0f;
   stopped.wheelRight.velocity = 0.0f;
-  telemetry.update(stopped);
+  telemetry.update(stopped, testDrive());
   telemetry.emit(80);
   checkU64Eq(telemetry.primaryEmitCount(), 3,
              "just past coast: still inside kCoastHoldoff of the last refresh (40), even though wheels are "
@@ -1111,7 +1151,7 @@ void scenarioSetModeControlsUnsolicitedStreamInOffAndOn() {
   Types::RobotState moving;
   moving.time.cycleStart = 0;
   moving.command.moveActive = true;
-  telemetry.update(moving);
+  telemetry.update(moving, testDrive());
   for (uint32_t now = 0; now <= 400; now += App::kPrimaryPeriod) telemetry.emit(now);
   checkU64Eq(telemetry.primaryEmitCount(), 0, "kOff: no unsolicited frames even though a Move is active");
 
@@ -1122,7 +1162,7 @@ void scenarioSetModeControlsUnsolicitedStreamInOffAndOn() {
   telemetry.setMode(App::TlmMode::kOn);
   Types::RobotState parked;
   parked.time.cycleStart = 440;
-  telemetry.update(parked);
+  telemetry.update(parked, testDrive());
   const uint64_t beforeOn = telemetry.primaryEmitCount();
   for (uint32_t now = 480; now <= 800; now += App::kPrimaryPeriod) telemetry.emit(now);
   checkTrue(telemetry.primaryEmitCount() > beforeOn, "kOn: unsolicited frames stream even though the robot "
@@ -1175,7 +1215,7 @@ void scenarioParkedRobotWithAlternatingFreshLineColorStaysSilent() {
     state.perception.colorFresh = !tickedLine;
     state.perception.line = tickedLine ? 0xAABBCCDDu : 0u;
     state.perception.color = !tickedLine ? 0x11223344u : 0u;
-    telemetry.update(state);
+    telemetry.update(state, testDrive());
 
     if (telemetry.flags() & App::kFlagLinePresent) {
       sawLineBitSet = true;
@@ -1220,7 +1260,7 @@ void scenarioAckOnParkedRobotRidesExactlyKAckRepeatsFramesThenSilence() {
   App::Telemetry telemetry(comms);
 
   Types::RobotState parked;  // moveActive false, everMoved_ stays false -- purely at rest
-  telemetry.update(parked);
+  telemetry.update(parked, testDrive());
 
   constexpr uint32_t kAckTime = 0;
   telemetry.ack(42, 0);
@@ -1265,7 +1305,7 @@ void scenarioBareTlmForceOnParkedRobotProducesExactlyOneFrame() {
   App::Telemetry telemetry(comms);
 
   Types::RobotState parked;
-  telemetry.update(parked);
+  telemetry.update(parked, testDrive());
 
   for (uint32_t now = 0; now <= 2000; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
   checkU64Eq(telemetry.primaryEmitCount(), 0, "setup: parked robot silent before the request");
@@ -1308,7 +1348,7 @@ void scenarioTlmOffThenMoveOnlyAckFramesNoStream() {
   // only the pending enqueue ack's own bounded kAckRepeats burst.
   for (int i = 0; i < 20; ++i, now += App::kPrimaryPeriod) {
     moving.time.cycleStart = now;
-    telemetry.update(moving);
+    telemetry.update(moving, testDrive());
     telemetry.emit(now, /*force=*/false);
   }
   checkU64Eq(telemetry.primaryEmitCount(), App::kAckRepeats,
@@ -1320,7 +1360,7 @@ void scenarioTlmOffThenMoveOnlyAckFramesNoStream() {
   Types::RobotState parked;  // the Move completed -- moveActive drops
   for (int i = 0; i < 20; ++i, now += App::kPrimaryPeriod) {
     parked.time.cycleStart = now;
-    telemetry.update(parked);
+    telemetry.update(parked, testDrive());
     telemetry.emit(now, /*force=*/false);
   }
   checkU64Eq(telemetry.primaryEmitCount(), 2 * App::kAckRepeats,
@@ -1351,7 +1391,7 @@ void scenarioTlmOnThenOffStopsWithinOnePeriodThenAutoRestoresModeTwoBehavior() {
   App::Telemetry telemetry(comms);
 
   Types::RobotState parked;
-  telemetry.update(parked);
+  telemetry.update(parked, testDrive());
 
   telemetry.setMode(App::TlmMode::kOn);
   uint32_t now = 0;
@@ -1481,7 +1521,7 @@ void scenarioApplyActionCoversEveryTlmActionArm() {
   telemetry2.setMode(App::TlmMode::kOff);
   Types::RobotState parked;
   parked.time.cycleStart = 0;
-  telemetry2.update(parked);
+  telemetry2.update(parked, testDrive());
   const bool force = telemetry2.applyAction(App::Comms::TlmAction::kFrame);
   telemetry2.emit(0, force);
   checkU64Eq(telemetry2.primaryEmitCount(), 1,

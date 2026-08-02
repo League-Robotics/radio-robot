@@ -340,11 +340,11 @@ class SimHarness {
   Devices::NezhaMotor& motorLeft() { return graph_.motorLeft(); }
   Devices::NezhaMotor& motorRight() { return graph_.motorRight(); }
 
-  // drive -- 125-003: App::Drive now holds the interim closed-loop gains
-  // (drive.h's own header) a test needs to push directly
-  // (drive().applyGainsLeft()/applyGainsRight()) or read back
-  // (drive().gainsLeft()/gainsRight()) -- the CONFIG-patch routing split
-  // this sprint's own RobotLoop::applyMotorConfigPatch() implements.
+  // drive -- App::Drive now holds the unified wheel-speed controller
+  // (drive.h's own header): setControlGains()/controlGains() (Stage B),
+  // setAdaptationBounds()/adaptationBounds() (Stage C) a test needs to
+  // push directly or read back -- the CONFIG-patch routing
+  // Configurator::applyMotorConfigPatch() implements (130-005).
   App::Drive& drive() { return graph_.drive(); }
   Motion::Planner& planner() { return graph_.planner(); }
 

@@ -177,62 +177,6 @@ Planner::Planner(const PlannerLimits& limits) : limits_(limits) {
                        limits_.velIMax, limits_.velKaff, limits_.velIAccelGate};
   pidLeft_.configure(gains);
   pidRight_.configure(gains);
-  const VelocityTrimGains trim{limits_.trimKp, limits_.trimKi,
-                               limits_.trimIMax, limits_.trimKaff,
-                               limits_.trimMax};
-  trimControlLeft_.configure(trim);
-  trimControlRight_.configure(trim);
-}
-
-void Planner::applyTrimGains(float kp, float ki, float iMax, float kaff,
-                             float trimMax) {
-  limits_.trimKp = kp;
-  limits_.trimKi = ki;
-  limits_.trimIMax = iMax;
-  limits_.trimKaff = kaff;
-  limits_.trimMax = trimMax;
-  const VelocityTrimGains gains{kp, ki, iMax, kaff, trimMax};
-  trimControlLeft_.configure(gains);
-  trimControlRight_.configure(gains);
-}
-
-// The velocity-domain closed loop. Mirrors stageDuty()'s structure -- same
-// per-wheel shape, same filter-lag compensation -- but outputs a velocity
-// CORRECTION rather than a duty, and gates its integrator on the Move's
-// phase rather than on a commanded-accel threshold.
-void Planner::stageTrim(float dt) {
-  const MovePhase phase = active_.occupied ? active_.phase : MovePhase::Idle;
-  const auto stage = [&](WheelTrim& control, float cmd, float cmdPrevious,
-                         float measured, float& trim) {
-    // No active command means nothing to trim TOWARD: correcting a zero
-    // target would fight the drain and creep a stopped robot. Reset so no
-    // learned integral survives into the next Move's ramp as a step.
-    if (cmd == 0.0f) {
-      control.reset();
-      trim = 0.0f;
-      return;
-    }
-    // The terminal creep is already a closed loop on the measured
-    // residual; a second controller stacked on it is what hunts.
-    if (active_.settling) {
-      trim = 0.0f;
-      return;
-    }
-    const float targetAccel = (cmd - cmdPrevious) / dt;  // [mm/s^2]
-    // Filter-lag compensation, same derivation as the duty stage: the EMA
-    // has a group delay of ~dt*(1-w)/w, so during a ramp the filtered
-    // feedback reads a*lag LOW and kp would chase a phantom error that
-    // scales with accel. Exactly zero at steady state, so it cannot
-    // disturb the hold phase the integrator lives in.
-    const float w = std::max(limits_.velocityFilterWeight, 0.05f);
-    const float filterLag = dt * (1.0f - w) / w;  // [s]
-    trim = control.compute(cmd, targetAccel,
-                           measured + targetAccel * filterLag, dt, phase);
-  };
-  stage(trimControlLeft_, cmdLeft_, cmdLeftPrevious_, left_.velocity(),
-        trimLeft_);
-  stage(trimControlRight_, cmdRight_, cmdRightPrevious_, right_.velocity(),
-        trimRight_);
 }
 
 // M4 duty output stage: this tick's staged velocity targets vs the
@@ -480,7 +424,6 @@ TickResult Planner::tick(const Types::RobotState& state) {
   if (!active_.occupied) activateNext(now);
   if (!active_.occupied) {
     drainToZero(dt);
-    stageTrim(dt);
     return result;
   }
 
@@ -678,7 +621,6 @@ TickResult Planner::tick(const Types::RobotState& state) {
     activateNext(now);
     if (!active_.occupied) {
       drainToZero(dt);
-      stageTrim(dt);
       return result;
     }
   }
@@ -686,7 +628,6 @@ TickResult Planner::tick(const Types::RobotState& state) {
   // Re-measure: a same-tick hand-off above swapped the active Move, and
   // `remaining` is measured against ITS baseline and axis.
   planActive(now, dt, done ? measure(now) : measured);
-  stageTrim(dt);
   return result;
 }
 
@@ -1381,29 +1322,23 @@ void Planner::rampCommandsToZero(float decelStep) {  // [mm/s] per interval
 }
 
 void Planner::update(Types::RobotState& state) const {
-  // The ONE place the closed loop is summed into the open loop. The
-  // profile owns the trajectory (cmdLeft_/cmdRight_, which every internal
-  // consumer -- the ledger's anticipation, the next tick's profile carry
-  // -- keeps reading untrimmed); the trim only closes the residual between
-  // what was planned and what the wheels actually did. At the default
-  // all-zero gains the trim is exactly 0 and this is bit-for-bit the
-  // profiled command.
-  const float stagedLeft = cmdLeft_ + trimLeft_;    // [mm/s]
-  const float stagedRight = cmdRight_ + trimRight_;  // [mm/s]
+  // 130-005: this used to be "the ONE place the closed loop is summed into
+  // the open loop" (stagedLeft = cmdLeft_ + trimLeft_, Motion::WheelTrim's
+  // correction). That closed loop is deleted -- App::Drive is now the ONE
+  // wheel-speed controller every cmdVelocity writer shares (drive.h's own
+  // header) -- so Motion::Planner publishes the bare profiled command,
+  // untouched, and Drive does 100% of the correction on the way to duty.
+  const float stagedLeft = cmdLeft_;    // [mm/s]
+  const float stagedRight = cmdRight_;  // [mm/s]
   state.wheelLeft.cmdVelocity = stagedLeft;
   state.wheelRight.cmdVelocity = stagedRight;
 
   // cmdAccel (130-003): a forward finite difference of the staged command
-  // across the one-tick interval that just elapsed, the same shape
-  // stageTrim()/stageDuty() already compute locally for their own accel
-  // feedforward (this is not new math, just the first time it survives
-  // past the tick it was computed in). Diffing the current, trimmed
-  // stagedLeft/Right against last tick's untrimmed cmdLeftPrevious_/
-  // cmdRightPrevious_ carries the same staged-vs-untrimmed asymmetry those
-  // two call sites already accept -- update() is const and cannot roll the
-  // history itself (that happens in tick(), the one mutating half of this
-  // class's own two-method contract), so it reads the previous generation
-  // rollCommandHistory() already aged for it.
+  // across the one-tick interval that just elapsed -- the accel Drive's own
+  // Stage B/C consume (drive.h's own header). update() is const and cannot
+  // roll the history itself (that happens in tick(), the one mutating half
+  // of this class's own two-method contract), so it reads the previous
+  // generation rollCommandHistory() already aged for it.
   const float dt = limits_.controlPeriod * 0.001f;  // [s]
   state.wheelLeft.cmdAccel = (stagedLeft - cmdLeftPrevious_) / dt;
   state.wheelRight.cmdAccel = (stagedRight - cmdRightPrevious_) / dt;
@@ -1413,8 +1348,8 @@ void Planner::update(Types::RobotState& state) const {
   state.command.moveActive = active_.occupied;
   state.command.mode =
       active_.occupied ? Types::Mode::Velocity : Types::Mode::Idle;
-  // Report what is actually being ASKED of the wheels, trim included --
-  // this is telemetry for a human, not the planner's own ledger.
+  // Report what is actually being ASKED of the wheels -- this is telemetry
+  // for a human, not the planner's own ledger.
   state.command.v_x = 0.5f * (stagedLeft + stagedRight);
   state.command.omega = (stagedRight - stagedLeft) / limits_.trackWidth;
 

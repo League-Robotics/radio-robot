@@ -97,12 +97,21 @@ def calibration_kwargs(config: Any) -> dict[str, float | int]:
         baked into the firmware's compiled-in DefaultConfig instead of
         silently inheriting it.  This is what makes "select tovez nocal →
         turns are geometry-pure" true in the sim.
-      - ``pid.kp/ki/kff/iMax/kaw`` — the velocity-PID gains (``control.vel_*``
-        → ``MotorConfigPatch`` Gains, applied to BOTH motors by
-        ``RobotLoop::handleConfig``). Stakeholder 2026-07-18: selecting a
-        robot must be authoritative for the CONTROL gains too — the sim
-        binary bakes its own harness gains (``SimHarness::makeMotorConfig()``)
-        and real firmware bakes whatever robot JSON was active at build time
+      - ``pid.kp/ki/kff/iMax/kaw`` — App::Drive's unified wheel-speed
+        controller's Stage B fast-PID gains (``control.wheel_pid_*`` →
+        ``MotorConfigPatch`` Gains, applied by ``Configurator::
+        applyMotorConfigPatch()``). 130-005 REPOINT: these wire keys used
+        to source from ``control.vel_*`` and land on Motion::Planner's
+        parked M4 duty stage (a silent no-op — nothing ever actuated from
+        it); they now source from ``control.wheel_pid_*`` and land on
+        App::Drive's live controller instead — ``pid.kff``/``pid.kaw``
+        specifically carry Stage B's ``kaff``/``pidMax`` (the two
+        ``ControlGains`` members with no wire field of their own name;
+        both borrowed fields were themselves already fully dead). Stakeholder
+        2026-07-18: selecting a robot must be authoritative for the
+        CONTROL gains too — the sim binary bakes its own harness gains
+        (``SimHarness::makeMotorConfig()``) and real firmware bakes
+        whatever robot JSON was active at build time
         (``gen_boot_config.py``), and neither may silently leak into a
         session. Each key is present only when the config carries a value
         (``ControlConfig``'s own contract: None → firmware boot default
@@ -158,21 +167,25 @@ def calibration_kwargs(config: Any) -> dict[str, float | int]:
     rot_slip = getattr(cal, "rotational_slip", None) if cal else None
     kwargs["rotSlip"] = float(rot_slip) if rot_slip is not None else 0.0
 
-    # ── Velocity-PID gains: present when set ───────────────────────────────
-    # See this function's docstring.  Wire keys are protocol.py's own
+    # ── App::Drive's unified wheel-speed controller: Stage B fast-PID
+    # gains, present when set ──────────────────────────────────────────────
+    # See this function's docstring. Wire keys are protocol.py's own
     # vocabulary (_MOTOR_PID_KEYS); both hardware
     # (binary_bridge.translate_command → NezhaProtocol.set_config) and Sim
     # (SimTransport._handle_config_set → NezhaProtocol.config) accept them.
-    # headingKp/headingKd/minSpeed/distanceKp/arriveDwell -- DELETED
-    # (115-003, gut S1 motion-stack excision): see this function's own
-    # docstring.
+    # 130-005 REPOINT: sourced from control.wheel_pid_* now, not
+    # control.vel_* (Motion::Planner's parked, dead M4 duty stage) --
+    # pid.kff/pid.kaw carry Stage B's kaff/pidMax (see this function's own
+    # docstring). headingKp/headingKd/minSpeed/distanceKp/arriveDwell --
+    # DELETED (115-003, gut S1 motion-stack excision): see this function's
+    # own docstring.
     ctrl = getattr(config, "control", None)
     for wire_key, attr in (
-        ("pid.kp", "vel_kp"),
-        ("pid.ki", "vel_ki"),
-        ("pid.kff", "vel_kff"),
-        ("pid.iMax", "vel_imax"),
-        ("pid.kaw", "vel_kaw"),
+        ("pid.kp", "wheel_pid_kp"),
+        ("pid.ki", "wheel_pid_ki"),
+        ("pid.kff", "wheel_pid_kaff"),
+        ("pid.iMax", "wheel_pid_i_max"),
+        ("pid.kaw", "wheel_pid_max"),
     ):
         value = getattr(ctrl, attr, None) if ctrl is not None else None
         if value is not None:

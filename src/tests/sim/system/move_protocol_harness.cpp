@@ -1030,10 +1030,16 @@ void scenarioConfigMidMoveDoesNotChangeCompletionOutcome() {
   constexpr uint32_t kIdInterfered = 51;
   constexpr uint32_t kCorrInterfered = 151;
   constexpr uint32_t kConfigCorrId = 152;
-  // 125-003: kp routes to App::Drive's own interim gains now, not
-  // Devices::Motor::gains() (deleted -- sprint.md Decision 2/7).
-  checkFloatEq(interfered.planner().limits().velKp, 0.002f, 0.0001f,
-               "interfered: left motor starts at bench_test_config.h's own shipped kp");
+  // 125-003 -> 130-005: kp routes to App::Drive's own unified wheel-speed
+  // controller now (Configurator::applyMotorConfigPatch(), drive_.
+  // setControlGains()) -- NOT Motion::Planner's parked M4 duty stage
+  // (velKp, dead since 128-015) and not Devices::Motor::gains() (deleted --
+  // sprint.md Decision 2/7). Drive's ControlGains ship all-zero by default
+  // (130-004's own Open Question 4 decision -- live bench tuning is ticket
+  // 006's job), and bench_test_config.cpp pushes no override, so kp starts
+  // at exactly 0.
+  checkFloatEq(interfered.drive().controlGains().kp, 0.0f, 0.0001f,
+               "interfered: Drive's controller starts at its all-zero default (no override pushed)");
 
   interfered.injectMove(/*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
                         kStopTimeMs, kTimeoutMs, /*replace=*/true, kIdInterfered, kCorrInterfered);
@@ -1057,8 +1063,9 @@ void scenarioConfigMidMoveDoesNotChangeCompletionOutcome() {
   }
 
   checkTrue(configAcked, "interfered: the CONFIG patch was acked OK, mid-flight");
-  checkFloatEq(interfered.planner().limits().velKp, 0.02f, 0.0001f,
-               "interfered: the CONFIG patch's own kp landed live, unaffected by the concurrently-active Move");
+  checkFloatEq(interfered.drive().controlGains().kp, 0.02f, 0.0001f,
+               "interfered: the CONFIG patch's own kp landed live on Drive's controller, unaffected by "
+               "the concurrently-active Move");
   checkTrue(interferedCompleted, "interfered: the Move completes within a bounded number of cycles");
   checkUintEq(interferedErr, 0, "interfered: the completion ack's err is OK");
   checkTrue((interferedFlags & App::kFlagFaultMoveTimeout) == 0, "interfered: ended via TIME, not timeout");

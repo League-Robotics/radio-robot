@@ -24,8 +24,11 @@ import pytest
 from robot_radio.testgui.telemetry_panel import (
     arrow_fraction,
     body_to_screen,
+    fmt_bias,
+    fmt_duty_per_speed,
     fmt_enc,
     fmt_heading_source,
+    fmt_pid,
     fmt_pose,
     fmt_seq,
     fmt_time,
@@ -150,6 +153,10 @@ class TestFormatting:
         assert fmt_pose(None) == "—"
         assert fmt_vel(None) == "—"
         assert fmt_twist(None) == "—"
+        assert fmt_duty_per_speed(None, None) == "—"
+        assert fmt_duty_per_speed(0.001182, None) == "—"  # either absent -> placeholder
+        assert fmt_bias(None, None) == "—"
+        assert fmt_pid(None, None) == "—"
 
     def test_values(self):
         assert fmt_time(12345) == "12.345 s"
@@ -158,6 +165,13 @@ class TestFormatting:
         assert "17.8" in fmt_pose((350, -12, 1780))   # 1780 cdeg -> 17.8 deg
         assert "150" in fmt_vel((150, 148))
         assert "11.5" in fmt_twist((149, 200))         # 200 mrad/s -> 11.5 deg/s
+
+    def test_wheel_controller_values(self):
+        """130-005: App::Drive's unified wheel-speed controller observability
+        (dutyPerSpeed/bias/pid rows)."""
+        assert fmt_duty_per_speed(0.001182, 0.001193) == "L 0.001182   R 0.001193"
+        assert fmt_bias(12.5, -3.2) == "L +12.5   R -3.2   mm/s"
+        assert fmt_pid(4.0, -1.0) == "L +4.0   R -1.0   mm/s"
 
 
 # ---------------------------------------------------------------------------
@@ -195,6 +209,12 @@ class TestPanelWiring:
                 encpose=(340, -10, 1770),
                 otos=(352, -14, 1782),
                 twist=(149, 200),
+                duty_per_speed_left=0.001182,
+                duty_per_speed_right=0.001193,
+                bias_left=12.5,
+                bias_right=-3.2,
+                pid_left=4.0,
+                pid_right=-1.0,
             )
             ctrl.update_frame(frame)
 
@@ -202,10 +222,16 @@ class TestPanelWiring:
             seq_lbl = widget.findChild(QLabel, "tlm_val_seq")
             enc_lbl = widget.findChild(QLabel, "tlm_val_enc")
             twist_lbl = widget.findChild(QLabel, "tlm_val_twist")
+            duty_lbl = widget.findChild(QLabel, "tlm_val_duty_per_speed")
+            bias_lbl = widget.findChild(QLabel, "tlm_val_bias")
+            pid_lbl = widget.findChild(QLabel, "tlm_val_pid")
             assert time_lbl.text() == "12.345 s"
             assert seq_lbl.text() == "42"
             assert "1024" in enc_lbl.text()
             assert "149" in twist_lbl.text()
+            assert "0.001182" in duty_lbl.text()
+            assert "12.5" in bias_lbl.text()
+            assert "4.0" in pid_lbl.text()
 
             # Both velocity arrows exist.
             assert widget.findChild(QWidget, "tlm_arrow_vel") is not None

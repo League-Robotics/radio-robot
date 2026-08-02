@@ -52,27 +52,22 @@ void plannerDuty(void* planner, float* left, float* right) {
 }
 
 // Everything the bench charts need that is NOT already in RobotState: the
-// PROFILED command (state.wheel*.cmdVelocity carries profile + trim, so
-// the two cannot be separated from the blackboard alone), the trim and its
-// integrator, and the Move's phase. One call so a per-tick capture is one
-// FFI crossing.
+// PROFILED command (state.wheel*.cmdVelocity, bit-for-bit as of 130-005 --
+// Motion::Planner no longer carries any wheel-actuation correction of its
+// own, see planner.h's own header) and the Move's phase. One call so a
+// per-tick capture is one FFI crossing.
+//
+// 130-005: this used to also return Motion::WheelTrim's trim/integrator
+// (deleted -- the wheel-speed controller now lives entirely in App::Drive,
+// see drive.h's own header; its bias/fast-PID observability is on Drive's
+// own accessors, wired into the wire Telemetry frame instead of this
+// bench-only C API).
 void plannerTrim(void* planner, float* profiledLeft, float* profiledRight,
-                 float* trimLeft, float* trimRight, float* integralLeft,
-                 float* integralRight, uint8_t* phase) {
+                 uint8_t* phase) {
   const auto* p = static_cast<const Motion::Planner*>(planner);
   *profiledLeft = p->commandedLeft();
   *profiledRight = p->commandedRight();
-  *trimLeft = p->trimLeft();
-  *trimRight = p->trimRight();
-  *integralLeft = p->trimIntegralLeft();
-  *integralRight = p->trimIntegralRight();
   *phase = static_cast<uint8_t>(p->phase());
-}
-
-void plannerApplyTrimGains(void* planner, float kp, float ki, float iMax,
-                           float kaff, float trimMax) {
-  static_cast<Motion::Planner*>(planner)->applyTrimGains(kp, ki, iMax, kaff,
-                                                         trimMax);
 }
 
 // Layout guard for the ctypes mirror: the harness compares these against

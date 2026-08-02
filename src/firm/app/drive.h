@@ -148,6 +148,15 @@ class Drive {
     calibrated_ = left != 0.0f && right != 0.0f;
   }
 
+  // Live observability of the installed conversion scale (130-005, issue
+  // 04's folded-in observability mandate -- "ships with the feature, not
+  // after it") -- wired into the wire Telemetry frame / TestGUI so the
+  // baked calibration this robot is actually running is visible without a
+  // firmware rebuild, same reasoning as biasLeft()/Right()/pidLeft()/
+  // Right() below.
+  float dutyPerSpeedLeft() const { return dutyPerSpeedLeft_; }    // [duty/(mm/s)]
+  float dutyPerSpeedRight() const { return dutyPerSpeedRight_; }  // [duty/(mm/s)]
+
   // Commanded->actual correction, per wheel per direction of approach
   // (docs/design/wheel-speed-command-mapping.md). Drive inverts the measured
   // line to seed the feedforward. gain 1 / intercept 0 = no correction.
@@ -207,9 +216,9 @@ class Drive {
   void setAdaptationBounds(const AdaptationBounds& bounds) { bounds_ = bounds; }
   const AdaptationBounds& adaptationBounds() const { return bounds_; }
 
-  // --- Stage B/C observability (test accessors today; ticket 005 wires
-  // these into the wire telemetry frame / TestGUI per issue 04's own
-  // folded-in observability mandate) ---
+  // --- Stage B/C observability (wired into the wire Telemetry frame /
+  // TestGUI by 130-005, per issue 04's own folded-in observability
+  // mandate -- App::Telemetry::update() reads these directly) ---
   float biasLeft() const { return biasLeft_; }      // [mm/s] Stage C's adapted parameter
   float biasRight() const { return biasRight_; }    // [mm/s]
   float pidLeft() const { return lastPidLeft_; }    // [mm/s] last-computed Stage B output

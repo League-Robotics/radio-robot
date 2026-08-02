@@ -1,38 +1,46 @@
 #!/usr/bin/env python3
-"""square_tour_velocity.py -- a SQUARE TOUR (4 x 500 mm legs, 4 x 90 deg
-turns) through the REAL Motion::Planner, driven on the VELOCITY plane: the
-path the firmware actually takes.
+"""square_tour_velocity.py -- RETIRED (130-005).
 
-WHY A SECOND TOUR SCRIPT. square_tour_sim.py drives the plant from the
-planner's DUTY output, which the robot does not use -- RobotLoop stages
-`state.wheel*.cmdVelocity` and App::Drive converts it open-loop through a
-per-wheel, per-direction affine map measured on the bench. This script
-mirrors THAT path:
+This script exercised Motion::WheelTrim, the planner-side velocity-domain
+closed loop:
 
     planner profile  -> + velocity trim  -> cmdVelocity   [mm/s]
       -> Drive's calibrated inverse map  -> duty          [-1, 1]
         -> motor / gearbox / wheel                        [mm/s]
 
-so the velocity trim (wheel_trim.h) is exercised exactly as it will be on
-the robot, on top of the same calibration.
+Per `wheel-speed-controller-moves-into-drive.md` Phase 3 (DECIDED,
+stakeholder 2026-08-01), that controller moved wholesale into App::Drive --
+Motion::Planner sheds ALL wheel-actuation code, `Motion::WheelTrim` is
+deleted outright (no redirect stub), and its `applyTrimGains()`/
+`trimLeft()`/`trimRight()`/`trimIntegralLeft()`/`trimIntegralRight()` are
+gone from the C++ API this script's ctypes harness bound. Setting
+`PlannerLimits.trimKp` et al. (`tourLimits()` below) is now a silent no-op
+-- the constructor no longer reads those fields into anything -- so this
+script would not fail loudly, it would just quietly stop exercising what
+its own docstring claims to measure. Retired rather than left running:
 
-THE DISTURBANCE. Drive is given ONE shared duty-per-speed constant while
-the two gearboxes differ -- the situation the measured speed->command
-study found on the real robot (the two wheels ~2% apart in true gain, and
-a shared constant inherits the difference as a systematic error). Here the
-split is deliberately larger (+-4.8%) so the effect is visible in one
-tour. That residual is precisely what no feedforward can remove and what
-the trim exists to close.
+  - The "old additive trim" baseline this script's own CSVs already
+    captured (`square_tour_velocity_trim.csv`/`_trim_sym.csv`, this
+    directory) IS the historical A/B comparison point ticket 130-006's
+    bench acceptance needs -- they are kept, not deleted.
+  - A successor bench script exercising App::Drive's Stage B/C controller
+    directly (bias/fast-PID observability, now on Drive's own accessors
+    and the wire Telemetry frame -- see drive.h/telemetry.proto) is
+    ticket 130-006's job, on real hardware.
 
-SCHEDULE FIDELITY. The plant runs continuously (1 ms substeps) while the
-loop's events land at their real within-cycle offsets, so the two encoders
-are genuinely read 8 ms apart and each duty write lands when it really
-does. Plant model (stiction, slew, quantum, velocity noise, time constant)
-is shared with square_tour_sim.py.
-
-    uv run python src/tests/bench/square_tour_velocity.py
-    uv run python src/tests/bench/square_tour_velocity.py --no-trim
-    uv run python src/tests/bench/square_tour_velocity.py --symmetric
+Historical docstring (for context, no longer accurate as a usage guide):
+WHY A SECOND TOUR SCRIPT. square_tour_sim.py drives the plant from the
+planner's DUTY output, which the robot does not use -- RobotLoop stages
+`state.wheel*.cmdVelocity` and App::Drive converts it through its own
+calibrated map. THE DISTURBANCE. Drive was given ONE shared duty-per-speed
+constant while the two gearboxes differ (+-4.8% here, deliberately larger
+than the ~2% measured on the real robot) so the effect is visible in one
+tour -- that residual is precisely what no feedforward can remove and what
+the (now-relocated) controller exists to close. SCHEDULE FIDELITY. The
+plant ran continuously (1 ms substeps) while the loop's events land at
+their real within-cycle offsets, so the two encoders are genuinely read
+8 ms apart and each duty write lands when it really does -- plant model
+shared with square_tour_sim.py.
 """
 
 import argparse
@@ -493,6 +501,13 @@ def writeCsv(run: dict, out: Path) -> None:
 
 
 def main() -> None:
+    sys.exit(
+        "square_tour_velocity.py is RETIRED (130-005): it exercised "
+        "Motion::WheelTrim, deleted outright when the wheel-speed "
+        "controller moved into App::Drive. See this file's own module "
+        "docstring for the historical baseline CSVs and the ticket "
+        "130-006 successor. Not run.")
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-trim", action="store_true",
                         help="disable the velocity trim (open loop)")

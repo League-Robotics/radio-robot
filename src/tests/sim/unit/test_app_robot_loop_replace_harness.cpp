@@ -16,25 +16,41 @@
 // Two tiers of construction, deliberately different, each matched to what
 // it needs to observe:
 //
-//   Cases 1-5 (scenarioSameCurvature.../scenarioHighRateReplacement) drive
-//   a bare Motion::Planner directly (TestPlanner::benchLimits() +
+//   Cases 1, 2, 5 (scenarioSameCurvature.../scenarioHighRateReplacement)
+//   drive a bare Motion::Planner directly (TestPlanner::benchLimits() +
 //   TestPlanner::PerfectPlant/NoisyPlant, src/motion/planner/tests/
 //   test_support.h -- the SAME zero-Python, no-RobotLoop scaffolding
 //   src/motion/planner/tests/planner_scenarios_test.cpp's own
 //   testReplacePreempts() already uses for the "does it preempt at all"
-//   smoke case). This is deliberate, not a shortcut: Finding 1's two edges
-//   are BOTH internal to Planner::move()/tick() -- profileVelocity_'s
-//   axis-unit carry and the WheelTrim integrator's phase-gated (not
-//   replace-gated) reset -- and reaching them through the full wire
-//   codec/RobotLoop graph would add nothing but noise. It also matters
-//   that these run under REALISTIC, finite accel/decel ceilings
-//   (TestPlanner::benchLimits(), the same bench-plausible limits the
-//   sketch-verification suite already uses) rather than TestSim::
-//   SimHarness's own "effectively unshaped" sim defaults (aMax ~1e6,
-//   src/sim/sim_harness.h's simPlannerLimits()) -- an unshaped ceiling
-//   would let the profiler jump straight to cruise in one step regardless
-//   of the carried-velocity mismatch, hiding exactly the discontinuity
-//   ticket 005 needs measured.
+//   smoke case). This is deliberate, not a shortcut: Finding 1's
+//   profileVelocity_ axis-unit carry is internal to Planner::move()/tick(),
+//   and reaching it through the full wire codec/RobotLoop graph would add
+//   nothing but noise. It also matters that these run under REALISTIC,
+//   finite accel/decel ceilings (TestPlanner::benchLimits(), the same
+//   bench-plausible limits the sketch-verification suite already uses)
+//   rather than TestSim::SimHarness's own "effectively unshaped" sim
+//   defaults (aMax ~1e6, src/sim/sim_harness.h's simPlannerLimits()) -- an
+//   unshaped ceiling would let the profiler jump straight to cruise in one
+//   step regardless of the carried-velocity mismatch, hiding exactly the
+//   discontinuity ticket 005 needs measured.
+//
+//   130-005 REMOVAL NOTE: Finding 1's SECOND edge -- the WheelTrim
+//   integrator's phase-gated (not replace-gated) reset surviving a
+//   mid-motion axis change -- was characterized here as cases 3/4
+//   (scenarioEdgeAAxisChangeAtSpeed/scenarioAxisChangeFromRestSanity,
+//   `planner.applyTrimGains()`/`trimIntegralLeft()`/`trimLeft()`/
+//   `trimRight()`). Per wheel-speed-controller-moves-into-drive.md Phase 3
+//   (DECIDED, stakeholder 2026-08-01), Motion::WheelTrim is deleted
+//   outright -- Motion::Planner carries no wheel-actuation state of any
+//   kind any more, so there is no integral left for a replace to disturb,
+//   and the question those two cases characterized no longer has a
+//   subject. Removed together (case 4 measured itself against case 3's
+//   own peak, so neither survives alone) rather than repointed: the
+//   equivalent question for App::Drive's OWN bias/fast-PID state
+//   surviving a Move replace is a different scenario, against a
+//   different (RobotLoop-level) harness tier, and is not part of this
+//   ticket's acceptance criteria -- see app_drive_harness.cpp for Drive's
+//   own Stage B/C coverage instead.
 //
 //   The duplicate-id sanity check (scenarioDuplicateIdSanityNoOp) drives
 //   the real TestSim::SimHarness (src/sim/sim_harness.h) instead, because
@@ -68,7 +84,6 @@ using Motion::MovePhase;
 using Motion::Planner;
 using TestPlanner::benchLimits;
 using TestPlanner::cycle;
-using TestPlanner::NoisyPlant;
 using TestPlanner::PerfectPlant;
 
 // --- Hand-rolled assertion plumbing (see motion_stop_condition_harness.cpp /
@@ -140,15 +155,6 @@ Move angleTwistMove(uint32_t id, float threshold, float omega, float timeout = 6
 // active() + pendingCount() -- the protocol-v5 5-deep queue's own total
 // occupancy (planner.h's own kQueueDepth comment: "1 active + 4 pending").
 int queueDepth(const Planner& p) { return (p.active() ? 1 : 0) + p.pendingCount(); }
-
-// Case 3's own peak transient wheel-speed error, stashed here so case 4 can
-// report the SAME metric measured under the SAME trim gains/plant and show
-// it is materially smaller -- the direct, data-driven demonstration that
-// the extra error in case 3 is attributable to the surviving integral, not
-// to the ordinary kp response every fresh ramp gets (see case 4's own
-// header comment). 0 until scenarioEdgeAAxisChangeAtSpeed() runs; main()
-// below runs case 3 before case 4, in file order.
-float g_case3PeakTransientErrorMmS = 0.0f;  // [mm/s]
 
 // ===========================================================================
 // Case 1 -- same-curvature-at-speed (baseline). Replace a Linear move with
@@ -251,198 +257,12 @@ void scenarioEdgeBLargeCurvatureStepAtSpeed() {
             "wheel's actual measured speed) is observable, not just theoretical");
 }
 
-// ===========================================================================
-// Case 3 (Edge A) -- axis-change-at-speed. Replace a Distance-stopped
-// (Linear axis) move with an Angle-stopped (Angular axis) move while at
-// speed. profileVelocity_/profileAccel_ zero on the axis change
-// (planner.cpp ~723-729) -- but the WheelTrim integrator does NOT (it is
-// phase-gated -- frozen outside MovePhase::Hold, reset only when cmd hits
-// EXACTLY 0.0f, wheel_trim.h/planner.cpp's stageTrim()). A replace at speed
-// never passes through cmd==0, so a Move A-learned integral survives
-// straight into Move B's own command. Measures the resulting transient
-// wheel-speed error and gives an explicit benign/hazardous verdict.
-// ===========================================================================
-void scenarioEdgeAAxisChangeAtSpeed() {
-  beginScenario("Case 3 (Edge A): axis-change-at-speed -- Distance replaced by Angle while cruising; "
-                "the trim integrator is NOT reset by replace");
-  Planner planner(benchLimits());
-  // Nonzero trim gains so the integrator has something to learn from Move
-  // A's own (gain-mismatched) straight leg -- at the default all-zero
-  // gains the trim is exactly 0 always and this scenario would prove
-  // nothing.
-  planner.applyTrimGains(/*kp=*/0.3f, /*ki=*/0.5f, /*iMax=*/150.0f, /*kaff=*/0.0f, /*trimMax=*/150.0f);
-  NoisyPlant plant;
-  plant.gainLeft = 0.85f;   // left wheel runs 15% slow -- gives the integrator a persistent, real error
-  plant.gainRight = 1.0f;
-  plant.trackingLag = 1.0f;  // instant response -- isolates the gain-mismatch error from any lag confound
-  Types::RobotState state;
-  uint32_t now = 0;
-
-  const float kSpeed = 150.0f;  // [mm/s]
-  CHECK(planner.move(distanceTwistMove(20, 5000.0f, kSpeed), false));
-  for (int i = 0; i < 200; ++i) cycle(planner, state, plant, now, kPeriod);
-  checkTrue(planner.phase() == MovePhase::Hold, "straight Move A reaches Hold before the replace");
-
-  const float integralBeforeLeft = planner.trimIntegralLeft();
-  std::printf("  CASE3_TRIM_INTEGRAL_BEFORE_REPLACE_MM_S=%.4f\n", static_cast<double>(integralBeforeLeft));
-  checkTrue(std::fabs(integralBeforeLeft) > 1.0f,
-            "the trim integrator has learned a real (nonzero) correction from the gain-mismatched "
-            "straight leg -- precondition for this scenario to mean anything");
-
-  const float kOmega = 2.0f;  // [rad/s]
-  // Axis change: Linear (Distance) -> Angular (Angle), replace=true, MID-MOTION.
-  CHECK(planner.move(angleTwistMove(21, 3.14159265f, kOmega), true));
-  cycle(planner, state, plant, now, kPeriod);  // activation tick
-
-  const float integralAfterLeft = planner.trimIntegralLeft();
-  const bool integralSurvived = std::fabs(integralAfterLeft - integralBeforeLeft) < 0.5f;
-  std::printf("  CASE3_TRIM_INTEGRAL_AFTER_REPLACE_MM_S=%.4f (survives replace unreset: %s)\n",
-              static_cast<double>(integralAfterLeft), integralSurvived ? "yes" : "no");
-  checkTrue(integralSurvived,
-            "the trim integrator is NOT reset by replace -- it carries its pre-replace value into the "
-            "new (Angular) axis, confirming the design issue's own claim structurally, not just by "
-            "downstream effect");
-
-  // The transient wheel-speed ERROR the stale integrator injects into the
-  // NEW Move over the next N control cycles: trimLeft()/trimRight() is the
-  // correction ADDED on top of the freshly-profiled (from-rest, since the
-  // axis changed) command -- exactly the extra velocity a stale,
-  // off-axis-learned integral asks for on a move it was never tuned
-  // against.
-  constexpr int kTransientCycles = 10;  // 10 * 50ms = 500ms immediately after the replace
-  float peakTrimLeft = 0.0f;
-  float peakTrimRight = 0.0f;
-  for (int i = 0; i < kTransientCycles; ++i) {
-    cycle(planner, state, plant, now, kPeriod);
-    peakTrimLeft = std::max(peakTrimLeft, std::fabs(planner.trimLeft()));
-    peakTrimRight = std::max(peakTrimRight, std::fabs(planner.trimRight()));
-  }
-  const float peakTransientError = std::max(peakTrimLeft, peakTrimRight);  // [mm/s]
-  g_case3PeakTransientErrorMmS = peakTransientError;  // case 4 reports against this
-
-  // ===== THE labeled number: Case 3's measured transient wheel-speed error. =====
-  std::printf(
-      "  CASE3_EDGE_A_TRANSIENT_WHEEL_SPEED_ERROR_MM_S=%.4f (peak over %d cycles / %.2fs post-replace; "
-      "left=%.4f right=%.4f)\n",
-      static_cast<double>(peakTransientError), kTransientCycles,
-      static_cast<double>(kTransientCycles) * (kPeriod * 0.001f), static_cast<double>(peakTrimLeft),
-      static_cast<double>(peakTrimRight));
-  // ================================================================================
-
-  // Verdict, backed by that number: compare the stale-integrator error
-  // against the NEW Move's own commanded wheel speed (omega * trackWidth/2)
-  // -- the yardstick for "is this misapplied correction big enough to
-  // meaningfully distort (or exceed, or reverse) the turn it landed on."
-  const float kNewMoveCommandedWheelSpeed = kOmega * benchLimits().trackWidth * 0.5f;  // [mm/s]
-  const bool hazardous = peakTransientError > kNewMoveCommandedWheelSpeed;
-  std::printf(
-      "  CASE3_EDGE_A_VERDICT=%s (transient %.4f mm/s vs the new Move's own commanded wheel speed "
-      "%.4f mm/s)\n",
-      hazardous ? "HAZARDOUS" : "BENIGN", static_cast<double>(peakTransientError),
-      static_cast<double>(kNewMoveCommandedWheelSpeed));
-  checkTrue(std::isfinite(peakTransientError), "Case 3's transient wheel-speed error is a finite measurement");
-}
-
-// ===========================================================================
-// Case 4 -- axis-change-from-rest (sanity). Same shape as case 3 but the
-// Distance Move is allowed to COMPLETE and drain to rest first (the
-// sanctioned "stop, then turn" path), rather than being replaced
-// mid-motion. Coming to rest passes cmd through EXACTLY 0.0f, which is
-// stageTrim()'s own reset trigger -- so the SAME trim gains that let case 3
-// carry a stale integral here start the new Angle Move at integral == 0.
-// Expect zero surprises.
-// ===========================================================================
-void scenarioAxisChangeFromRestSanity() {
-  beginScenario("Case 4: axis-change-from-rest (sanity) -- Move A completes and drains to rest, "
-                "THEN the Angle Move: zero surprises");
-  Planner planner(benchLimits());
-  // Same trim gains as case 3 -- if coming to rest did NOT reset the
-  // integrator, this scenario would show the identical carry-over case 3
-  // does, and it must not.
-  planner.applyTrimGains(/*kp=*/0.3f, /*ki=*/0.5f, /*iMax=*/150.0f, /*kaff=*/0.0f, /*trimMax=*/150.0f);
-  NoisyPlant plant;
-  plant.gainLeft = 0.85f;
-  plant.gainRight = 1.0f;
-  plant.trackingLag = 1.0f;
-  Types::RobotState state;
-  uint32_t now = 0;
-
-  // A SHORT Distance Move that actually reaches its threshold and drains to
-  // rest on its own (not replaced mid-motion) -- the sanctioned path.
-  CHECK(planner.move(distanceTwistMove(30, 120.0f, 150.0f), false));
-  bool completed = false;
-  for (int i = 0; i < 300 && !completed; ++i) {
-    completed = cycle(planner, state, plant, now, kPeriod).completed;
-  }
-  checkTrue(completed, "Move A (short straight) completes on its own before the axis change");
-  // A few more drain cycles so the ramp-to-zero actually lands on cmd==0
-  // (stageTrim()'s own reset trigger) and settles.
-  for (int i = 0; i < 20; ++i) cycle(planner, state, plant, now, kPeriod);
-  checkTrue(!planner.active(), "planner is idle (drained) before the axis change");
-
-  const float integralBeforeLeft = planner.trimIntegralLeft();
-  std::printf("  CASE4_TRIM_INTEGRAL_AT_REST_MM_S=%.4f (expect ~0 -- drain-to-zero resets it, unlike a "
-              "mid-motion replace)\n",
-              static_cast<double>(integralBeforeLeft));
-  checkTrue(std::fabs(integralBeforeLeft) < 1e-3f,
-            "coming to rest naturally resets the trim integrator (the cmd==0.0f branch) -- the "
-            "structural difference from case 3's mid-motion replace");
-
-  // The raw commanded-value jump, same metric case 1 measures (before vs.
-  // one activation tick after) -- reported for direct comparison, NOT
-  // gated at case 1's sub-mm/s noise floor: from a genuine standstill the
-  // profile legitimately ramps up over its first tick (the ordinary accel
-  // step every fresh Move gets, axis change or not) -- that is not a
-  // "surprise" in the sense this ticket characterizes, so the assertion
-  // below only bounds it by the shape's own one-tick accel ceiling, not by
-  // case 1's "nothing should have changed at all" floor.
-  const float leftBeforeCmd = planner.commandedLeft();
-  const float rightBeforeCmd = planner.commandedRight();
-
-  const float kOmega = 2.0f;  // [rad/s] -- identical to case 3, for a direct comparison
-  CHECK(planner.move(angleTwistMove(31, 3.14159265f, kOmega), false));  // from rest; queue is empty either way
-  cycle(planner, state, plant, now, kPeriod);  // activation tick
-  const float rawDiscontinuity = std::max(std::fabs(planner.commandedLeft() - leftBeforeCmd),
-                                          std::fabs(planner.commandedRight() - rightBeforeCmd));  // [mm/s]
-  std::printf("  CASE4_FROM_REST_DISCONTINUITY_MM_S=%.4f (informational -- the ordinary first-tick accel "
-              "ramp from a genuine standstill, not a stale-state jump)\n",
-              static_cast<double>(rawDiscontinuity));
-
-  constexpr int kTransientCycles = 10;
-  float peakTrimLeft = 0.0f;
-  float peakTrimRight = 0.0f;
-  for (int i = 0; i < kTransientCycles; ++i) {
-    cycle(planner, state, plant, now, kPeriod);
-    peakTrimLeft = std::max(peakTrimLeft, std::fabs(planner.trimLeft()));
-    peakTrimRight = std::max(peakTrimRight, std::fabs(planner.trimRight()));
-  }
-  const float peakTransientError = std::max(peakTrimLeft, peakTrimRight);  // [mm/s]
-
-  // ===== THE labeled number: case 4's own counterpart to case 3's transient error. =====
-  std::printf("  CASE4_FROM_REST_TRANSIENT_WHEEL_SPEED_ERROR_MM_S=%.4f (peak over %d cycles; left=%.4f "
-              "right=%.4f; case 3's own peak was %.4f)\n",
-              static_cast<double>(peakTransientError), kTransientCycles, static_cast<double>(peakTrimLeft),
-              static_cast<double>(peakTrimRight), static_cast<double>(g_case3PeakTransientErrorMmS));
-  // ===================================================================================
-
-  // This nonzero value is NOT the hazard case 3 characterizes -- it is
-  // ordinary kp reacting to the SAME plant tracking imperfection (gainLeft
-  // != gainRight) case 3's own plant has, present on any fresh ramp with or
-  // without a prior Move (kp is not phase-gated; only the INTEGRAL is --
-  // wheel_trim.h's own header). The literal "discontinuity is zero"
-  // criterion is the INTEGRAL check above (CASE4_TRIM_INTEGRAL_AT_REST_MM_S,
-  // asserted ~0), which IS the state a replace could have left stale. What
-  // this comparison confirms instead: case 4's peak transient is
-  // meaningfully SMALLER than case 3's own (measured under identical trim
-  // gains and an identical plant) -- the gap between the two is exactly
-  // the surviving-integral contribution case 3 carries and case 4 does not.
-  checkTrue(g_case3PeakTransientErrorMmS > 0.0f,
-            "case 3 ran first and recorded a nonzero peak transient to compare against");
-  checkTrue(peakTransientError < 0.75f * g_case3PeakTransientErrorMmS,
-            "axis-change-from-rest's transient error is meaningfully smaller than case 3's own "
-            "(same trim gains, same plant) -- the missing piece is the stale integral case 3 alone "
-            "carries, confirming case 3's hazard is specific to replacing MID-MOTION");
-}
+// Cases 3/4 (axis-change-at-speed / axis-change-from-rest), which
+// characterized Motion::WheelTrim's phase-gated integrator surviving a
+// mid-motion replace, are REMOVED (130-005) -- see this file's own header
+// note for why: the trim they characterized is deleted outright, and
+// Motion::Planner carries no wheel-actuation state left for a replace to
+// disturb.
 
 // ===========================================================================
 // Case 5 -- high-rate replacement (~20 Hz for >=5s). Issue replace=True
@@ -572,8 +392,6 @@ void scenarioDuplicateIdSanityNoOp() {
 int main() {
   scenarioSameCurvatureAtSpeedBaseline();
   scenarioEdgeBLargeCurvatureStepAtSpeed();
-  scenarioEdgeAAxisChangeAtSpeed();
-  scenarioAxisChangeFromRestSanity();
   scenarioHighRateReplacement();
   scenarioDuplicateIdSanityNoOp();
 

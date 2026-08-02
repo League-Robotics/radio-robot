@@ -264,6 +264,13 @@ _FLAG_FAULT_SHAPING_DISABLED = 1 << 16
 # rather than renumbered around.
 _FLAG_FAULT_WHEEL_FROZEN_LEFT = 1 << 19
 _FLAG_FAULT_WHEEL_FROZEN_RIGHT = 1 << 20
+# 130-005 (wheel-speed-controller-moves-into-drive.md, issue 04's
+# folded-in observability mandate): App::Drive's deficit-flag policy --
+# a sustained large speed error while BOTH Stage C's bias and Stage B's
+# fast PID sit pinned at their configured authority. See telemetry.h's
+# own kFlagFaultWheelDeficitLeft/Right doc comment.
+_FLAG_FAULT_WHEEL_DEFICIT_LEFT = 1 << 21
+_FLAG_FAULT_WHEEL_DEFICIT_RIGHT = 1 << 22
 
 
 def _unpack_channels4(word: "int | None") -> "tuple[int, int, int, int] | None":
@@ -380,6 +387,17 @@ class TLMFrame:
         naming the frozen wheel; ``planner.tour.run_tour()`` aborts the
         active leg the instant either bit is observed rather than
         driving on.
+      - ``fault_wheel_deficit_left``/``fault_wheel_deficit_right`` (bits
+        21/22, 130-005, wheel-speed-controller-moves-into-drive.md) —
+        App::Drive's deficit-flag policy: a sustained large speed error
+        while BOTH Stage C's bias and Stage B's fast PID sit pinned at
+        their configured authority ceiling — no more correction to give,
+        so the robot runs slow, loudly, rather than silently.
+      - ``duty_per_speed_left``/``duty_per_speed_right``/``bias_left``/
+        ``bias_right``/``pid_left``/``pid_right`` (fields 17-22, 130-005)
+        — App::Drive's unified wheel-speed controller's installed
+        conversion scale and live per-wheel Stage C/B state, always
+        populated (no presence gate).
     These properties are the ticket's own "existing downstream consumer
     keeps working unchanged" surface — grep ``src/host/robot_radio/`` for
     every attribute name the pre-115 standalone bool/bitmask fields
@@ -451,6 +469,19 @@ class TLMFrame:
     otos_reading: "OtosReading | None" = None      # full OTOS burst (adds v_x/v_y/omega/time over `otos`); valid iff otos_present
     cycle_busy: int | None = None                 # [us] cycleStart -> frame-staging instant, THIS cycle (123-004, migrated from TelemetrySecondary)
     cycle_period: int | None = None               # [us] this cycle's cycleStart minus the previous cycle's (123-004)
+    # App::Drive's unified wheel-speed controller (130-005, issue 04's
+    # folded-in observability mandate): the installed conversion scale,
+    # Stage C's adapted bias, and Stage B's last-computed fast-PID output,
+    # per wheel. Always populated (no presence gate) -- Drive always has
+    # SOME value for these (0.0 if uncalibrated / no gains configured, per
+    # the fail-closed contract drive.h documents). The deficit-flag policy
+    # rides flags bits 21/22 instead -- see fault_wheel_deficit_left/right.
+    duty_per_speed_left: float | None = None       # [duty/(mm/s)]
+    duty_per_speed_right: float | None = None      # [duty/(mm/s)]
+    bias_left: float | None = None                 # [mm/s] Stage C's adapted parameter
+    bias_right: float | None = None                # [mm/s]
+    pid_left: float | None = None                  # [mm/s] Stage B's last-computed output
+    pid_right: float | None = None                 # [mm/s]
     recvTime: float | None = None                 # [s] HOST monotonic clock at frame decode (127-004) -- NOT populated by from_pb2() itself; set by read_pending_binary_tlm_frames() at the point each frame is drained off the wire. See that method's own docstring; every other builder of a TLMFrame (from_pb2() alone, or a hand-built test double) leaves this at its None default, same "never decoded" convention as every other field.
 
     # ------------------------------------------------------------------
@@ -523,6 +554,22 @@ class TLMFrame:
         """Bit 20 (129-002) -- same as ``fault_wheel_frozen_left``, RIGHT
         wheel."""
         return self._flag(_FLAG_FAULT_WHEEL_FROZEN_RIGHT)
+
+    @property
+    def fault_wheel_deficit_left(self) -> bool:
+        """Bit 21 (130-005) -- App::Drive's LEFT-wheel deficit-flag
+        policy: a sustained large speed error while BOTH the Stage C bias
+        and the Stage B fast PID sit pinned at their configured authority
+        -- there is no more correction to give, so the robot runs slow,
+        loudly, rather than silently (issue 04's fail-loud observability
+        mandate)."""
+        return self._flag(_FLAG_FAULT_WHEEL_DEFICIT_LEFT)
+
+    @property
+    def fault_wheel_deficit_right(self) -> bool:
+        """Bit 22 (130-005) -- same as ``fault_wheel_deficit_left``, RIGHT
+        wheel."""
+        return self._flag(_FLAG_FAULT_WHEEL_DEFICIT_RIGHT)
 
     @property
     def event_deadman_expired(self) -> bool:
@@ -617,6 +664,16 @@ class TLMFrame:
         # populated, no presence gate.
         frame.cycle_busy = int(telemetry.cycle_busy)
         frame.cycle_period = int(telemetry.cycle_period)
+
+        # App::Drive's unified wheel-speed controller (130-005) -- always
+        # populated, no presence gate (see this dataclass's own field
+        # comments above).
+        frame.duty_per_speed_left = float(telemetry.duty_per_speed_left)
+        frame.duty_per_speed_right = float(telemetry.duty_per_speed_right)
+        frame.bias_left = float(telemetry.bias_left)
+        frame.bias_right = float(telemetry.bias_right)
+        frame.pid_left = float(telemetry.pid_left)
+        frame.pid_right = float(telemetry.pid_right)
 
         # Bounded ack ring (120, ADDITIVE) -- ALWAYS populated (may be
         # empty), oldest-pushed first, matching the wire's own push/evict

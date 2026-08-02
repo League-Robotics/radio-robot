@@ -118,16 +118,33 @@ void Configurator::applyMotorConfigPatch(const msg::MotorConfigPatch& patch) {
   // wire arm (boot_config.h's own DriveBootConfig comment says exactly that);
   // it stays boot-baked.
 
-  // pid.* wire keys retarget the planner's own duty-stage gains.
-  float kff = planner_.limits().velKff;
-  float kp = planner_.limits().velKp;
-  float ki = planner_.limits().velKi;
-  float iMax = planner_.limits().velIMax;
-  if (patch.kp.has) kp = patch.kp.val;
-  if (patch.ki.has) ki = patch.ki.val;
-  if (patch.kff.has) kff = patch.kff.val;
-  if (patch.i_max.has) iMax = patch.i_max.val;
-  planner_.applyVelGains(kff, kp, ki, iMax);
+  // pid.* wire keys retarget App::Drive's unified wheel-speed controller
+  // (130-005 repoint, wheel-speed-controller-moves-into-drive.md Phase 3 /
+  // sprint 130 Architecture Decision 3): closes the silent no-op these keys
+  // used to be onto Motion::Planner's parked M4 duty stage
+  // (applyVelGains()/velKff/velKp/velKi/velIMax, inert since 128-015 --
+  // nothing ever actuated from it, see planner.h's own commandedDutyLeft/
+  // Right() doc comment).
+  //
+  // `ControlGains` (drive.h) has 5 fields -- kp/ki/iMax/kaff/pidMax --
+  // exactly like `MotorConfigPatch` has 5 -- kp/ki/i_max/kff/kaw. kp/ki/
+  // i_max keep both their wire-key NAME and their gain SEMANTICS, now
+  // landing on Drive instead of the planner. kff/kaw have no Stage-B
+  // counterpart of their own name, but both were ALREADY fully dead on
+  // this path (kff's old duty-per-speed retarget was removed above; kaw
+  // was never read by any apply site at all, on any prior sprint) --
+  // repurposed to carry the two ControlGains members that would otherwise
+  // have no wire key: kaff (accel feedforward) and pidMax (total fast-loop
+  // authority). The wire's field NUMBERS/NAMES are unchanged (a routing
+  // change, not a wire-grammar change -- sprint 130's own Out-of-Scope
+  // line) -- only what C++ code the values land in changes.
+  Drive::ControlGains gains = drive_.controlGains();
+  if (patch.kp.has) gains.kp = patch.kp.val;
+  if (patch.ki.has) gains.ki = patch.ki.val;
+  if (patch.i_max.has) gains.iMax = patch.i_max.val;
+  if (patch.kff.has) gains.kaff = patch.kff.val;    // pid.kff -> Stage B's kaff
+  if (patch.kaw.has) gains.pidMax = patch.kaw.val;  // pid.kaw -> Stage B's pidMax
+  drive_.setControlGains(gains);
 
   if (patch.travel_calib.has) {
     if (patch.side == msg::BoundMotorSide::LEFT) {

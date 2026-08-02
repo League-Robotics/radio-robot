@@ -233,11 +233,16 @@ def loadLibrary() -> ctypes.CDLL:
     lib.plannerStructSizes.argtypes = [ctypes.POINTER(ctypes.c_uint32)] * 4
     lib.plannerDuty.argtypes = [ctypes.c_void_p, ctypes.POINTER(ctypes.c_float),
                                 ctypes.POINTER(ctypes.c_float)]
+    # 130-005: plannerTrim()'s signature shrank to (profiledLeft,
+    # profiledRight, phase) -- Motion::WheelTrim (trim + its integrator) is
+    # deleted outright; the wheel-speed controller now lives entirely in
+    # App::Drive (drive.h's own header), whose bias/fast-PID observability
+    # reaches the wire Telemetry frame instead of this bench-only C API.
+    # plannerApplyTrimGains() is deleted with it -- there is no live gains
+    # setter left on Motion::Planner to bind.
     lib.plannerTrim.argtypes = ([ctypes.c_void_p] +
-                                [ctypes.POINTER(ctypes.c_float)] * 6 +
+                                [ctypes.POINTER(ctypes.c_float)] * 2 +
                                 [ctypes.POINTER(ctypes.c_uint8)])
-    lib.plannerApplyTrimGains.argtypes = [ctypes.c_void_p] + \
-        [ctypes.c_float] * 5
 
     lib.plannerLimitsOffsets.restype = ctypes.c_uint32
     lib.plannerLimitsOffsets.argtypes = [ctypes.POINTER(ctypes.c_uint32),

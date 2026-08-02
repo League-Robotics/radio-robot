@@ -131,6 +131,22 @@ import "common.proto";
 // honest-zero placeholder. `TelemetrySecondary` is DELETED outright -- see
 // that message's own (now-historical) doc comment, below, for the
 // survivor-field review.
+//
+// 130-005 (wheel-speed-controller-moves-into-drive.md Phase 3, issue 04's
+// folded-in observability mandate -- "ships with the feature, not after
+// it"): fields 17-22, ADDITIVE, next free numbers after 123-004's
+// cycle_busy/cycle_period=15/16 (nothing above is renumbered or removed).
+// App::Drive's unified wheel-speed controller's installed conversion
+// scale (duty_per_speed_left/right) and Stage C/B's live per-wheel
+// bias/fast-PID output (bias_left/right, pid_left/right) -- plain
+// `float`, not the scaled-`sint32` packing 124-008 applied elsewhere:
+// these are calibration/diagnostic quantities read rarely relative to
+// the encoder/pose stream, and the frame has ample margin under the
+// envelope budget (wire.h's own kReplyEnvelopeMaxEncodedSize) to afford
+// exact values over a derived scale factor. The deficit-flag policy's
+// per-wheel fail-loud bit (drive.h's own deficitLeft()/Right()) rides
+// flags bits 21/22 instead -- a boolean fits the existing bit-string,
+// not a new float pair; see flags' own (max) widening below.
 // ---------------------------------------------------------------------------
 
 // Current drive mode -- relocated here from the deleted planner.proto
@@ -302,7 +318,19 @@ message Telemetry {
   //             fires on a healthy robot merely parked at rest) -- see
   //             telemetry.h's own kFlagFaultWheelFrozenLeft doc comment.
   //   bit 20 -- fault: RIGHT wheel frozen -- same as bit 19, right wheel.
-  //   bits 21-31 reserved
+  //   bit 21 -- fault: App::Drive's deficit-flag policy, LEFT wheel
+  //             (130-005, drive.h's own header) -- a sustained large
+  //             speed error while BOTH Stage C's bias and Stage B's fast
+  //             PID sit pinned at their configured authority; the robot
+  //             runs slow, loudly, never silently (issue 04's fail-loud
+  //             observability mandate).
+  //   bit 22 -- fault: same as bit 21, RIGHT wheel.
+  //   bits 23-31 reserved
+  //
+  // (max)=8388607 ((1<<23)-1) -- 130-005: widened to cover bits 21/22
+  // above, the same discipline command-ingestion-...-two-stops.md and
+  // 124-008 applied for bits 18 and 16/17 respectively (see the notes
+  // below) -- the bound tracks the highest LIVE bit.
   //
   // (max)=2097151 ((1<<21)-1) -- 129-002 (wheel-frozen-fault-flag-in-
   // telemetry.md): widened to cover bits 19/20 above, the same discipline
@@ -322,7 +350,7 @@ message Telemetry {
   // silent because validateBounds() runs on decode only, never encode (see
   // wire.cpp's own decodeInto()/encodeInto() split). Widened to cover both
   // bit 16 and this ticket's own new bit 17.
-  uint32 flags = 4 [(max) = 2097151];
+  uint32 flags = 4 [(max) = 8388607];
 
   // ack_corr/ack_err -- DELETED (124-008, issue §B4): the single "freshest
   // ack" scalar slot duplicated the ack ring's (acks, below) newest entry;
@@ -403,6 +431,19 @@ message Telemetry {
   // 186B) -- see wire.h's own kEnvelopeBudgetBytes derivation comment.
   uint32 cycle_busy   = 15 [(max) = 200000];  // [us] cycleStart -> frame-staging instant, THIS cycle
   uint32 cycle_period = 16 [(max) = 200000];  // [us] this cycle's cycleStart minus the previous cycle's
+
+  // App::Drive's unified wheel-speed controller (130-005, see this
+  // message's own doc comment above for the field-number/packing
+  // rationale). duty_per_speed_left/right is the installed conversion
+  // scale (Drive::setDutyPerSpeed()); bias_left/right is Stage C's
+  // adapted parameter; pid_left/right is Stage B's last-computed
+  // fast-PID output. deficitLeft()/Right() ride flags bits 21/22 instead.
+  float duty_per_speed_left  = 17;  // [duty/(mm/s)]
+  float duty_per_speed_right = 18;  // [duty/(mm/s)]
+  float bias_left            = 19;  // [mm/s]
+  float bias_right           = 20;  // [mm/s]
+  float pid_left             = 21;  // [mm/s]
+  float pid_right            = 22;  // [mm/s]
 }
 
 // TelemetrySecondary -- DELETED (124-009, robot-state-blackboard-...md,

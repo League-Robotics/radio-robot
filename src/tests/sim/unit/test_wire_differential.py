@@ -209,6 +209,13 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
         "enc_left": 7, "enc_right": 8, "otos": 9, "pose": 10, "twist": 11, "line": 12, "color": 13,
         "acks": 14,
         "cycle_busy": 15, "cycle_period": 16,  # 123-004, ADDITIVE (migrated from TelemetrySecondary)
+        # 130-005, ADDITIVE (App::Drive's unified wheel-speed controller --
+        # issue 04's folded-in observability mandate): the installed
+        # conversion scale and live per-wheel Stage C/B state. Nothing
+        # above is renumbered.
+        "duty_per_speed_left": 17, "duty_per_speed_right": 18,
+        "bias_left": 19, "bias_right": 20,
+        "pid_left": 21, "pid_right": 22,
     }
     actual_telemetry_numbers = {f.name: f.number for f in pb_telemetry.Telemetry.DESCRIPTOR.fields}
     assert actual_telemetry_numbers == expected_telemetry_numbers

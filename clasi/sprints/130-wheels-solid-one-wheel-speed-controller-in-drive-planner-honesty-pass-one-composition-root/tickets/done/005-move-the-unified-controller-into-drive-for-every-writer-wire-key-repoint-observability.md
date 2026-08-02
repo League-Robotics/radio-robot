@@ -2,9 +2,11 @@
 id: '005'
 title: Move the unified controller into Drive for every writer; wire-key repoint +
   observability
-status: open
-use-cases: [SUC-001]
-depends-on: ['004']
+status: done
+use-cases:
+- SUC-001
+depends-on:
+- '004'
 github-issue: ''
 issue:
 - wheel-speed-controller-moves-into-drive.md
@@ -33,24 +35,26 @@ and the TestGUI.
 
 ## Acceptance Criteria
 
-- [ ] `Motion::WheelTrim` and its planner-side ownership (`stageTrim()`,
+- [x] `Motion::WheelTrim` and its planner-side ownership (`stageTrim()`,
       trim state) deleted from `src/motion` — no redirect stub, no
       future caller (git preserves history).
-- [ ] A WHEELS teleop command and a planner Move both reach the SAME
+- [x] A WHEELS teleop command and a planner Move both reach the SAME
       `Drive` controller path — verified by a test asserting identical
       Drive behavior for the same commanded velocity regardless of
       which subsystem issued it.
-- [ ] `pid.*` CONFIG wire keys route to the new controller's live gains
+- [x] `pid.*` CONFIG wire keys route to the new controller's live gains
       (`kp`/`ki`/`iMax`/`kaff`/`pidMax`) — `SET pid.kp` visibly tunes
       the controller or returns an explicit error; no silent no-op
       remains anywhere on the wire surface.
-- [ ] Live `dutyPerSpeedLeft/Right`, `bias` (both wheels), and the PID
+- [x] Live `dutyPerSpeedLeft/Right`, `bias` (both wheels), and the PID
       integrator are published in telemetry and surfaced in the
       TestGUI.
-- [ ] `drive.h`'s header comment is corrected: "there is no controller
+- [x] `drive.h`'s header comment is corrected: "there is no controller
       here" and "closed-loop control lives in Motion::Planner's own duty
       stage" (already false — the duty stage is parked) are both
       replaced with an accurate description of the unified controller.
+      (Already landed by ticket 004's own header rewrite; verified
+      still accurate as of this ticket — no remaining stale text.)
 
 ## Testing
 
