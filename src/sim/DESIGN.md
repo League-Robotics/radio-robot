@@ -23,7 +23,7 @@ sim implementations that could silently diverge from each other.
 | File | Role |
 |---|---|
 | `sim_plant.h` / `sim_plant.cpp` | `SimPlant` — the one honest simulated I2C bus. Owns the wire *protocol* (Nezha `0x60` duty write / `0x46` encoder select+read, OTOS register map); physics is delegated to `WheelPlant`×2 + `OtosPlant` (`src/tests/sim/plant/`). |
-| `sim_harness.h` | `SimHarness` — composition root: wires the **real** `App::RobotLoop` firmware graph (the same modules `src/firm/main.cpp` constructs — two `Devices::NezhaMotor`/`MotorArmor` pairs, `Devices::Otos`/`ColorSensorLeaf`/`LineSensorLeaf`, `App::Comms`/`Telemetry`/`App::MoveQueue`/`Drive`/`Odometry`/`Preamble`) against `SimPlant`, a fake clock, and two `TestSupport::FakeTransport` links (serial + radio). |
+| `sim_harness.h` | `SimHarness` — composition root: calls the SAME `App::composeRobot()` (`src/firm/app/boot_wiring.h`) `src/firm/main.cpp` calls, substituting `SimPlant` for the real `Devices::MicroBitI2CBus` in the one `Devices::I2CBus&` slot, plus two `TestSupport::FakeTransport` links (serial + radio) for the real transports and a fake clock/sleeper. Everything downstream of the bus — motors/armor, OTOS/color/line, Comms/Telemetry, Drive/Odometry/Planner/Preamble/Configurator/RobotLoop — is built by `composeRobot()` itself, not hand-wired here (130-002, see below). |
 | `sim_ctypes.cpp` | `extern "C"` ABI over `SimHarness`/`SimPlant` — every export is a thin call-through so Python's `ctypes` can drive the sim with no binding generator. |
 | `sim_clock.h` / `sim_clock.cpp` | `SimClock`/`SimSleeper` — steppable virtual time (`Devices::Clock`/`Sleeper` implementations); nothing advances the clock except an explicit `advanceMicros()` call from `SimHarness::step()`. |
 | `CMakeLists.txt` | Builds `firmware_host` from these files + `src/firm/` (HOST_BUILD) + `src/tests/sim/{plant,support}`. |
@@ -38,6 +38,30 @@ just parses whatever bytes firmware actually put on the wire — there is no
 prediction left to desync. `SimHarness` is a THIN composition root only —
 no simulation logic (that lives in `SimPlant`/`WheelPlant`/`OtosPlant`) and
 no firmware dispatch logic (that lives in `App::RobotLoop`, unmodified).
+
+**130-002 (unify-sim-and-robot-composition-roots.md) — `composeRobot()` is
+now THE composition root; the "gap is the composition root and
+configuration path" framing that issue opened with is closed.** Before this
+ticket, `SimHarness` hand-wired its own copy of the App::/Motion:: graph,
+including its own `simPlannerLimits()` literals — materially different
+from what `main.cpp` booted (shaping effectively off, wheel-trim gains
+fail-closed at zero in every sim session while live on every hardware
+session, no rotation calibration installed at all). `App::composeRobot()`/
+`App::RobotGraph` (`src/firm/app/boot_wiring.{h,cpp}`, plus the
+`Config::boot_config`-reading conversion helpers in
+`src/firm/app/boot_calibration.{h,cpp}`) is now the ONE function both
+`main.cpp` and `SimHarness` call; `config/boot_config.cpp` (the generated,
+robot-JSON-baked calibration) is linked into the host lib too, so both
+roots bake the identical default. A `BootOverrides` struct is the only
+sanctioned seam for a genuine sim/hardware divergence — three fields exist
+today (`trackWidth`, `controlPeriod`/`actuationDelay`, `otosConfig`), each
+with a doc comment explaining why it is a real fixture/plant property and
+not accidental drift (`app/boot_wiring.h`'s own header). A composition-root
+parity test (`src/tests/sim/system/test_composition_root_parity.py`)
+compares a freshly-booted `SimHarness`'s live `Motion::PlannerLimits`
+against the same `bootPlannerLimits()`/`effectiveTrackWidth()` computation
+`main.cpp` would get, field by field, so this claim is enforced by a test,
+not just true today by inspection.
 
 The Python side lives in `src/host/robot_radio/`:
 

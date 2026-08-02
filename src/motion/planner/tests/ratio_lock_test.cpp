@@ -62,13 +62,13 @@ RatioReport runMove(const Move& move, const PlannerLimits& limits,
   Types::RobotState state{};
   uint32_t now = 1000;
   RatioReport report;
-  const MoveShape shape = shapeOf(move, limits.trackWidth);
+  const MoveShape shape = shapeOf(move, limits.plant.trackWidth);
   CHECK(shape.valid);
 
   CHECK(planner.move(move, false));
   for (int i = 0; i < 4000; ++i) {
     const TickResult result =
-        cycle(planner, state, plant, now, limits.controlPeriod);
+        cycle(planner, state, plant, now, limits.plant.controlPeriod);
     ++report.ticks;
     // The staged pair must stay on the shape's ray, always.
     const double cross =
@@ -112,7 +112,7 @@ void testRatioHeldOnPerfectPlant() {
       std::exit(1);
     }
     // And both wheels land on their own targets, on the same tick.
-    const MoveShape shape = shapeOf(c.move, limits.trackWidth);
+    const MoveShape shape = shapeOf(c.move, limits.plant.trackWidth);
     CHECK_NEAR(report.finalLeft, shape.distanceLeft, 1e-2);
     CHECK_NEAR(report.finalRight, shape.distanceRight, 1e-2);
   }
@@ -124,7 +124,7 @@ void testRatioHeldThroughEveryPhase() {
   // all of them, not just at cruise.
   const PlannerLimits limits = benchLimits();
   const Move move = twistMove(1, Move::Kind::Distance, 2000.0f, 200.0f, 1.0f);
-  const MoveShape shape = shapeOf(move, limits.trackWidth);
+  const MoveShape shape = shapeOf(move, limits.plant.trackWidth);
   Planner planner(limits);
   Types::RobotState state{};
   PerfectPlant plant;
@@ -138,7 +138,7 @@ void testRatioHeldThroughEveryPhase() {
   // Keep ticking past completion so the drain is covered too.
   for (int i = 0; i < 4000; ++i) {
     const TickResult result =
-        cycle(planner, state, plant, now, limits.controlPeriod);
+        cycle(planner, state, plant, now, limits.plant.controlPeriod);
     const float dominant =
         std::max(std::fabs(planner.commandedLeft()),
                  std::fabs(planner.commandedRight()));
@@ -190,10 +190,10 @@ void testBehindWheelBindsRatherThanClipping() {
   // wheel has plenty of headroom: the outer wheel binds, and the inner
   // must come down in proportion rather than holding its own cruise.
   PlannerLimits limits = benchLimits();
-  limits.vMax = 200.0f;  // [mm/s] force the outer wheel to bind
+  limits.ceilings.vMax = 200.0f;  // [mm/s] force the outer wheel to bind
   const Move move = twistMove(1, Move::Kind::Distance, 800.0f, 200.0f, 1.0f);
-  const MoveShape shape = shapeOf(move, limits.trackWidth);
-  CHECK(shape.cruise > limits.vMax);  // the outer wheel really is over
+  const MoveShape shape = shapeOf(move, limits.plant.trackWidth);
+  CHECK(shape.cruise > limits.ceilings.vMax);  // the outer wheel really is over
 
   Planner planner(limits);
   Types::RobotState state{};
@@ -203,17 +203,17 @@ void testBehindWheelBindsRatherThanClipping() {
   bool sawCruise = false;
   for (int i = 0; i < 4000; ++i) {
     const TickResult result =
-        cycle(planner, state, plant, now, limits.controlPeriod);
+        cycle(planner, state, plant, now, limits.plant.controlPeriod);
     const float left = planner.commandedLeft();
     const float right = planner.commandedRight();
     // Neither wheel ever exceeds the ceiling ...
-    CHECK(std::fabs(left) <= limits.vMax + 1e-3f);
-    CHECK(std::fabs(right) <= limits.vMax + 1e-3f);
+    CHECK(std::fabs(left) <= limits.ceilings.vMax + 1e-3f);
+    CHECK(std::fabs(right) <= limits.ceilings.vMax + 1e-3f);
     // ... and the ratio is intact even while the outer wheel is pinned.
     const double cross = static_cast<double>(left) * shape.unitRight -
                          static_cast<double>(right) * shape.unitLeft;
     CHECK(std::fabs(cross) <= 1e-3);
-    if (std::fabs(right) >= limits.vMax - 1e-2f) {
+    if (std::fabs(right) >= limits.ceilings.vMax - 1e-2f) {
       sawCruise = true;
       // The inner wheel was scaled down in proportion, NOT left at its
       // own uncapped cruise.
@@ -230,9 +230,9 @@ void testOneWheelArcIsLegal() {
   // must not divide by zero or drag the moving wheel to a halt.
   const PlannerLimits limits = benchLimits();
   const float omega = 2.0f;  // [rad/s]
-  const float v_x = omega * 0.5f * limits.trackWidth;  // [mm/s] -> left wheel 0
+  const float v_x = omega * 0.5f * limits.plant.trackWidth;  // [mm/s] -> left wheel 0
   const Move move = twistMove(1, Move::Kind::Distance, 300.0f, v_x, omega);
-  const MoveShape shape = shapeOf(move, limits.trackWidth);
+  const MoveShape shape = shapeOf(move, limits.plant.trackWidth);
   CHECK_NEAR(shape.unitLeft, 0.0f, 1e-6);
   CHECK_NEAR(shape.unitRight, 1.0f, 1e-6);
 
@@ -259,7 +259,7 @@ void testNeverAcceleratesAfterBraking() {
   bool braking = false;
   for (int i = 0; i < 4000; ++i) {
     const TickResult result =
-        cycle(planner, state, plant, now, limits.controlPeriod);
+        cycle(planner, state, plant, now, limits.plant.controlPeriod);
     const float speed = std::fabs(planner.commandedLeft());
     if (speed < previous - 1e-3f) braking = true;
     if (braking) CHECK(speed <= previous + 1e-3f);

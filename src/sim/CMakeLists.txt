@@ -41,6 +41,14 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 #   app/*.cpp                 -- Comms/Drive/Odometry/Preamble/RobotLoop/
 #                                 Telemetry (the single-loop rebuild's
 #                                 whole App:: graph)
+#   app/boot_wiring.cpp, app/boot_calibration.cpp
+#                              -- 130-002 (unify-sim-and-robot-composition-
+#                                 roots.md): the ONE shared composition
+#                                 root (App::composeRobot()/RobotGraph) and
+#                                 its Config::boot_config-reading
+#                                 calibration helpers -- TestSim::
+#                                 SimHarness (sim_harness.h) calls the SAME
+#                                 composeRobot() src/firm/main.cpp does.
 #   devices/nezha_motor.cpp, devices/otos.cpp, devices/color_sensor.cpp,
 #   devices/line_sensor.cpp
 #                              -- the device leaves SimPlant answers wire
@@ -69,8 +77,6 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 #   com/*.cpp                 -- real serial/radio transport (CODAL-only);
 #                                 SimHarness uses TestSupport::FakeTransport
 #                                 instead
-#   config/boot_config.cpp    -- bakes in the ACTIVE ROBOT JSON at ARM
-#                                 build time; not part of the sim graph
 #   main.cpp                  -- the ARM entry point (constructs uBit,
 #                                 the real I2C bus/transports -- none of
 #                                 which link host-side)
@@ -81,6 +87,18 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 #                                 line (harmless either way -- omitted here
 #                                 purely because nothing in this library's
 #                                 link needs it).
+#
+# REVERSED by 130-002 (used to be listed "Absent"):
+#   config/boot_config.cpp    -- bakes in the ACTIVE ROBOT JSON. Used to be
+#                                 excluded ("not part of the sim graph");
+#                                 now linked here too so both composition
+#                                 roots bake the SAME robot-JSON calibration
+#                                 by default (unify-sim-and-robot-
+#                                 composition-roots.md work item 2). A sim
+#                                 scenario needing a synthetic-plant config
+#                                 still overrides via the existing
+#                                 SimLoop.configure_from_robot()/
+#                                 sim_configure_drive() config-push path.
 # ---------------------------------------------------------------------------
 set(APP_SOURCES
     "${SOURCE_DIR}/app/comms.cpp"
@@ -94,6 +112,10 @@ set(APP_SOURCES
     "${SOURCE_DIR}/app/preamble.cpp"
     "${SOURCE_DIR}/app/robot_loop.cpp"
     "${SOURCE_DIR}/app/telemetry.cpp"
+    # 130-002 -- the shared composition root, see this file's own "Present"
+    # comment above.
+    "${SOURCE_DIR}/app/boot_wiring.cpp"
+    "${SOURCE_DIR}/app/boot_calibration.cpp"
 )
 # odometry.cpp (122-002, motion-library extraction ticket 2): lives under
 # MOTION_DIR (122-001: src/motion, a sibling of src/firm), not
@@ -117,8 +139,6 @@ set(MOTION_SOURCES
     "${MOTION_DIR}/planner/profile.cpp"
     "${MOTION_DIR}/planner/shape.cpp"
     "${MOTION_DIR}/planner/estimation.cpp"
-    "${MOTION_DIR}/planner/wheel_pid.cpp"
-    "${MOTION_DIR}/planner/wheel_trim.cpp"
     "${MOTION_DIR}/planner/planner.cpp"
 )
 set(DEVICE_SOURCES
@@ -130,15 +150,20 @@ set(DEVICE_SOURCES
 # config/persisted_tuning.cpp (114-004) -- App::RobotLoop (APP_SOURCES,
 # above) now #includes config/persisted_tuning.h and calls its pure
 # serializeSnapshot()/Config::TuningStore seam directly, so this TU must
-# link into the host lib too -- UNLIKE config/boot_config.cpp (still
-# absent, see this file's own "Absent" note below: that one bakes in the
-# active robot JSON at ARM build time and has no sim role at all).
-# persisted_tuning.cpp's own #ifndef HOST_BUILD block (the ARM-only
-# MicroBitStorage adapter) compiles out entirely under this file's
-# -DHOST_BUILD=1, mirroring app/comms.cpp's identical SerialTransport/
-# RadioTransport guard.
+# link into the host lib too. persisted_tuning.cpp's own #ifndef HOST_BUILD
+# block (the ARM-only MicroBitStorage adapter) compiles out entirely under
+# this file's -DHOST_BUILD=1, mirroring app/comms.cpp's identical
+# SerialTransport/RadioTransport guard.
+#
+# config/boot_config.cpp (130-002, REVERSED from this file's pre-130-002
+# "Absent" note): bakes in the active robot JSON at ARM build time -- now
+# linked host-side too, so App::composeRobot() bakes the SAME calibration
+# in both the sim and hardware composition roots by default. Has zero
+# CODAL includes (see boot_config.h's own header), so nothing prevents
+# linking it here.
 set(CONFIG_SOURCES
     "${SOURCE_DIR}/config/persisted_tuning.cpp"
+    "${SOURCE_DIR}/config/boot_config.cpp"
 )
 set(MESSAGE_SOURCES
     "${SOURCE_DIR}/messages/wire.cpp"

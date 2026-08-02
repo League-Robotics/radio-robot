@@ -34,6 +34,8 @@
 
 namespace App {
 
+class Drive;  // update()'s second parameter, below -- see that method's own doc comment.
+
 // --- flags bit layout ----------------------------------------------------
 // The single place a reader decodes a bit against. Every bit below is
 // derived INSIDE update() from a Types::RobotState field, except bits 15/16
@@ -171,6 +173,21 @@ namespace App {
 //                                    (Devices::MotorArmor::wedgeSuspect()
 //                                    on motorR_, Types::RobotState::
 //                                    Health::wheelFrozenRight).
+//   bit 21 (kFlagFaultWheelDeficitLeft) -- App::Drive's LEFT-wheel
+//                                    deficit-flag policy (drive.h's own
+//                                    header): a sustained large speed
+//                                    error while BOTH the Stage C bias
+//                                    AND the Stage B fast PID sit pinned
+//                                    at their configured authority --
+//                                    there is no more correction to give,
+//                                    so the robot must say so loudly
+//                                    rather than silently running slow
+//                                    (issue 04's fail-loud observability
+//                                    mandate). Derived from
+//                                    App::Drive::deficitLeft() inside
+//                                    update() (130-005).
+//   bit 22 (kFlagFaultWheelDeficitRight) -- same as bit 21, RIGHT wheel
+//                                    (App::Drive::deficitRight()).
 //
 // === Freshness bits -- valid-THIS-FRAME qualifiers for a payload field;
 //     toggle BY DESIGN every cycle they are not fresh; carry NO
@@ -211,7 +228,7 @@ namespace App {
 //                                    ends before any frame could carry the
 //                                    edge) -- the `READY` cleartext line
 //                                    is the right vehicle for that signal.
-//   bits 21-31 -- reserved for future use.
+//   bits 23-31 -- reserved for future use.
 constexpr uint32_t kFlagOtosPresent = 1u << 0;
 constexpr uint32_t kFlagOtosConnected = 1u << 1;
 constexpr uint32_t kFlagActive = 1u << 2;
@@ -233,12 +250,19 @@ constexpr uint32_t kFlagFaultPositionClamped = 1u << 17;
 constexpr uint32_t kFlagFaultCommandsDropped = 1u << 18;
 constexpr uint32_t kFlagFaultWheelFrozenLeft = 1u << 19;
 constexpr uint32_t kFlagFaultWheelFrozenRight = 1u << 20;
+constexpr uint32_t kFlagFaultWheelDeficitLeft = 1u << 21;
+constexpr uint32_t kFlagFaultWheelDeficitRight = 1u << 22;
 
 // Primary cadence target: primary period == cycle period -- the frame is
-// emitted every loop iteration. Matches robot_loop.cpp's genuine
-// 40ms/~25Hz kCycle. Callers pace against this and measure their own real
-// number; emit() does not need to hit it exactly.
-constexpr uint32_t kPrimaryPeriod = 40;  // [ms] ~25 Hz, matches robot_loop.cpp's kCycle
+// emitted every loop iteration. primaryDue() (telemetry.cpp) gates on
+// `elapsed >= kPrimaryPeriod`, a FLOOR, not an equality check -- so this
+// stays 40 unchanged after 130-007 raised robot_loop.cpp's own kCycle
+// 40 -> 50: 50ms elapsed is still >= 40ms, so the gate is satisfied every
+// single cycle exactly as it was before, and a primary frame still emits
+// every cycle (effective emission rate ~20 Hz, one per 50 ms cycle) --
+// confirmed, not just left to infer. Only bumping kPrimaryPeriod above 50
+// would change this; there is no reason to.
+constexpr uint32_t kPrimaryPeriod = 40;  // [ms] floor; robot_loop.cpp's kCycle (50ms) exceeds it every cycle
 
 // Ack ring depth. MUST match telemetry.proto's Telemetry.acks (max_count)
 // exactly -- checked by a static_assert against the generated
@@ -294,6 +318,20 @@ class Telemetry {
 
     uint32_t cycleBusy = 0;    // [us] cycleStart -> frame-staging instant, THIS cycle
     uint32_t cyclePeriod = 0;  // [us] this cycle's own cycleStart minus the previous cycle's
+
+    // App::Drive's unified wheel-speed controller (130-005, issue 04's
+    // folded-in observability mandate: "ships with the feature, not
+    // after it") -- the installed conversion scale, Stage C's adapted
+    // bias, and Stage B's last-computed fast-PID output, per wheel.
+    // deficitLeft()/Right() ride flags bits 21/22 instead (drive.h's own
+    // header -- a fail-loud policy fits the existing bit-string, not a
+    // new float pair).
+    float dutyPerSpeedLeft = 0.0f;   // [duty/(mm/s)]
+    float dutyPerSpeedRight = 0.0f;  // [duty/(mm/s)]
+    float biasLeft = 0.0f;   // [mm/s] Stage C's adapted parameter
+    float biasRight = 0.0f;  // [mm/s]
+    float pidLeft = 0.0f;    // [mm/s] Stage B's last-computed output
+    float pidRight = 0.0f;   // [mm/s]
   };
 
   // comms -- primary-frame send path (Comms::sendReply()). Comms already
@@ -325,7 +363,17 @@ class Telemetry {
   // bits it derives from `state`, so a bit it does not own survives an
   // update() call untouched (see setLiveFlag()'s own doc comment for why
   // that is exactly the behavior two of those bits need).
-  void update(const Types::RobotState& state);
+  //
+  // `drive` (130-005): the SAME App::Drive instance RobotLoop::cycle()
+  // already ticks this cycle -- read-only here, for its own observability
+  // accessors (dutyPerSpeedLeft/Right(), biasLeft/Right(), pidLeft/Right(),
+  // deficitLeft/Right()). Widening this signature (rather than routing
+  // these values through Types::RobotState first) mirrors Drive::tick()'s
+  // own 130-003 signature widening -- one deliberate widening now instead
+  // of a second one later. Call this AFTER drive_.tick(state_) so the
+  // values read are this-cycle-fresh, not stale-by-one-cycle (drive_.tick()
+  // already runs at the top of RobotLoop::cycle(), well before this call).
+  void update(const Types::RobotState& state, const Drive& drive);
 
   // setLiveFlag -- the ONE narrow, deliberately-NOT-named-setFlag escape
   // hatch from update()'s single-assembly-point contract, for the bits

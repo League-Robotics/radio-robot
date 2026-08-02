@@ -56,54 +56,37 @@ _EXPECTED_RAW = {
     "alphaDecel": 5.0,
     "jerkMax": 1500.0,
     "yawJerkMax": 30.0,
-    "controlPeriod": 47.0,
-    "actuationDelay": 47.0,
-    "requireSettle": False,
+    "controlPeriod": 50.0,   # 130-007: one 50ms control period everywhere (was 47.0)
+    "actuationDelay": 50.0,  # 130-007: one 50ms control period everywhere (was 47.0)
     "settleRestVelocity": 10.0,
     "settleRestOmega": 0.16,
-    "settleWindow": 2500.0,
     "settleEpsilonLinear": 4.0,
     "settleEpsilonAngular": 0.035,
     "headingHoldGain": 2.0,
-    "velKp": 0.0009,
-    "velKi": 0.004,
-    "velIMax": 0.25,
-    "velIAccelGate": 50.0,
-    "dutyFloor": 0.18,
-    "trimKp": 0.15,
-    "trimKi": 0.4,
-    "trimIMax": 40.0,
-    "trimMax": 80.0,
     "decelPlanFraction": 0.4,
 }
-
-# velKff/velKaff/trimKaff are DERIVED from the JSON's plant_gain=1370.0/
-# plant_tau=0.23 -- exactly the arithmetic main.cpp's own deleted literal
-# block used to do inline (kff = 1/gain, kaff = tau/gain, trimKaff = tau/2).
-_PLANT_GAIN = 1370.0
-_PLANT_TAU = 0.23
-_EXPECTED_DERIVED = {
-    "velKff": 1.0 / _PLANT_GAIN,
-    "velKaff": _PLANT_TAU / _PLANT_GAIN,
-    "trimKaff": _PLANT_TAU / 2.0,
-}
+# 130-009: requireSettle/settleWindow, the M4 duty-stage gains (velKp/
+# velKi/velIMax/velIAccelGate/dutyFloor, plus the derived velKff/velKaff),
+# and the dead planner-side trim gains (trimKp/trimKi/trimIMax/trimMax,
+# plus the derived trimKaff) are all removed from
+# planner_config_for_config()'s own output -- see that function's own
+# docstring. plant_gain/plant_tau are still present in tovez.json (kept as
+# recorded measured data) but no longer read by this generator at all.
 
 
 def test_planner_config_for_config_reads_tovez_json():
     """planner_config_for_config() reads tovez.json's real planner block --
-    every raw field byte-identical to the pre-ticket main.cpp literals, and
-    every derived field computed from the JSON's plant_gain/plant_tau."""
+    every field byte-identical to the pre-ticket main.cpp literals."""
     cfg = json.loads(_TOVEZ_JSON.read_text())
 
     result = gbc.planner_config_for_config(cfg)
 
     for field, expected in _EXPECTED_RAW.items():
         assert result[field] == expected, f"{field}: {result[field]!r} != {expected!r}"
-
-    for field, expected in _EXPECTED_DERIVED.items():
-        assert result[field] == pytest.approx(expected, rel=0, abs=0), (
-            f"{field}: {result[field]!r} != {expected!r}"
-        )
+    assert set(result.keys()) == set(_EXPECTED_RAW.keys()), (
+        f"planner_config_for_config() field set changed: {sorted(result.keys())} != "
+        f"{sorted(_EXPECTED_RAW.keys())}"
+    )
 
 
 def test_planner_config_for_config_raises_with_no_robot_config():
@@ -159,33 +142,24 @@ def test_generate_emits_default_planner_limits_byte_identical_to_pre_ticket_lite
     assert "cfg.alphaDecel = 5.0f;" in content
     assert "cfg.jerkMax = 1500.0f;" in content
     assert "cfg.yawJerkMax = 30.0f;" in content
-    assert "cfg.controlPeriod = 47.0f;" in content
-    assert "cfg.actuationDelay = 47.0f;" in content
-    assert "cfg.requireSettle = false;" in content
+    assert "cfg.controlPeriod = 50.0f;" in content    # 130-007: was 47.0f
+    assert "cfg.actuationDelay = 50.0f;" in content    # 130-007: was 47.0f
     assert "cfg.settleRestVelocity = 10.0f;" in content
     assert "cfg.settleRestOmega = 0.16f;" in content
-    assert "cfg.settleWindow = 2500.0f;" in content
     assert "cfg.settleEpsilonLinear = 4.0f;" in content
     assert "cfg.settleEpsilonAngular = 0.035f;" in content
     assert "cfg.headingHoldGain = 2.0f;" in content
-    # Derived (kff = 1/plant_gain, kaff = plant_tau/plant_gain,
-    # trimKaff = plant_tau/2) -- these are the SAME float32-rounded values
-    # `1.0f / 1370.0f` / `0.23f / 1370.0f` / `0.23f / 2` produced inline in
-    # main.cpp's own deleted literal block (verified bit-identical via
-    # gen_boot_config.py's existing _f() round-trip formatting).
-    assert "cfg.velKff = 0.000729927f;" in content
-    assert "cfg.velKp = 0.0009f;" in content
-    assert "cfg.velKi = 0.004f;" in content
-    assert "cfg.velIMax = 0.25f;" in content
-    assert "cfg.velKaff = 0.0001678832f;" in content
-    assert "cfg.velIAccelGate = 50.0f;" in content
-    assert "cfg.dutyFloor = 0.18f;" in content
-    assert "cfg.trimKp = 0.15f;" in content
-    assert "cfg.trimKi = 0.4f;" in content
-    assert "cfg.trimIMax = 40.0f;" in content
-    assert "cfg.trimKaff = 0.115f;" in content
-    assert "cfg.trimMax = 80.0f;" in content
     assert "cfg.decelPlanFraction = 0.4f;" in content
+    # 130-009: requireSettle/settleWindow, the M4 duty-stage gains (velKff/
+    # velKp/velKi/velIMax/velKaff/velIAccelGate/dutyFloor), and the dead
+    # planner-side trim gains (trimKp/trimKi/trimIMax/trimKaff/trimMax) no
+    # longer appear anywhere in the generated PlannerBootConfig at all.
+    for removed in ("requireSettle", "settleWindow", "velKff", "velKp",
+                    "velKi", "velIMax", "velKaff", "velIAccelGate",
+                    "dutyFloor", "trimKp", "trimKi", "trimIMax", "trimKaff",
+                    "trimMax"):
+        assert f"cfg.{removed} = " not in content, (
+            f"cfg.{removed} still emitted -- 130-009 removed this field")
 
 
 if __name__ == "__main__":

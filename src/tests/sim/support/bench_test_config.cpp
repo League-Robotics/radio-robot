@@ -62,17 +62,45 @@ Gains benchTestGains() {
 void configureSimForBenchTest(TestSim::SimHarness& sim) {
   sim.configureMotor(1, benchTestMotorConfig(1));
   sim.configureMotor(2, benchTestMotorConfig(2));
-  // App::Drive holds no controller of its own (command-ingestion-ring-
-  // buffered-comms-subsystem-routing-two-stops.md §4: Drive is open loop
-  // from calibrated speed) -- benchTestGains() reaches the one controller
-  // that still exists, Motion::Planner's own duty stage, below.
+  // 130-007 REMOVAL NOTE: this used to also push benchTestGains() onto
+  // Motion::Planner's own M4 duty stage (sim.planner().applyVelGains(...))
+  // -- that stage is deleted outright (WheelPid/stageDuty(), reversing
+  // sprint 128 Decision 2's PARK now that App::Drive's own controller is
+  // the proven, shipped law); the call site is gone with it. Only the
+  // duty-per-speed scale below survives -- see its own comment.
   {
     const Gains g = benchTestGains();
-    sim.planner().applyVelGains(g.kff, g.kp, g.ki, g.iMax);
     // Open-loop wheel drive: kff IS the duty-per-speed scale for the sim
     // plant (1/kDefaultDutyVelMax).
     sim.drive().setDutyPerSpeed(g.kff, g.kff);
   }
+  // SIM OVERRIDE (130-002, unify-sim-and-robot-composition-roots.md): the
+  // sim now boots its shaper ceilings through the SAME composeRobot() path
+  // hardware does (App::RobotGraph), which bakes the REAL robot JSON's
+  // measured ramp/jerk ceilings (aMax 300 mm/s^2, alphaMax 6 rad/s^2, etc)
+  // -- replacing the OLD sim-only TestSim::simPlannerLimits() literals,
+  // which were "effectively UNSHAPED" (aMax 1e6) on purpose: every
+  // sim/system harness that calls configureSimForBenchTest() tests
+  // queue/stop-condition/protocol mechanics (chaining, replace, ESTOP/STOP,
+  // ERR_FULL, ...) against a FIXED, hand-counted cycle budget that assumes
+  // a commanded velocity lands in the wheel's target in ONE step -- not
+  // motion-shaping fidelity, which has its own dedicated coverage in
+  // src/motion/planner/tests/. Restore the historical unshaped ceilings
+  // here, explicitly, so those fixed-cycle-count assertions keep meaning
+  // what they always meant -- never let the real shaping in via silence.
+  sim.planner().applyShaperLimits(/*aMax=*/1.0e6f, /*aDecel=*/1.0e6f, /*alphaMax=*/1.0e5f,
+                                  /*alphaDecel=*/1.0e5f, /*jerkMax=*/0.0f, /*yawJerkMax=*/0.0f);
+  // 130-005 REMOVAL NOTE: this used to also zero Motion::WheelTrim's
+  // velocity-domain trim gains here, explicitly, so driveTargetVelLeft()/
+  // Right() (state.wheelLeft/Right.cmdVelocity) kept landing EXACTLY on the
+  // profiled target for these harnesses' fixed-tolerance "target is
+  // committed" checks -- a live trim used to perturb that field by a small,
+  // transient, CORRECT correction. Motion::WheelTrim is deleted outright
+  // (wheel-speed-controller-moves-into-drive.md Phase 3): Motion::Planner
+  // now publishes cmdVelocity bit-for-bit as the profiled command, always,
+  // with no correction of any kind ever added to it -- App::Drive's own
+  // Stage B/C controller corrects duty, a layer downstream of this field,
+  // so there is nothing left here to zero.
 }
 
 }  // namespace TestSupport

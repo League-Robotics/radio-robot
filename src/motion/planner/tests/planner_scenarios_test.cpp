@@ -422,6 +422,54 @@ void testCurvatureReversalStillLandsAtRest() {
   CHECK(sawRestAtBoundary);
 }
 
+// ===========================================================================
+// cmdAccel round-trips through Types::RobotState (130-003,
+// wheel-speed-controller-moves-into-drive.md): Planner::update() publishes
+// cmdAccel as the finite difference of the staged command across the ONE
+// control period that just elapsed, so App::Drive's forthcoming unified
+// controller (ticket 004) can read it straight off the same blackboard
+// tick() already hands Drive. This is plumbing-only smoke coverage -- it
+// proves the wire-up, not any control law (there is none yet).
+// ===========================================================================
+
+void testCmdAccelRoundTrips() {
+  Planner planner(benchLimits());
+  PerfectPlant plant;
+  Types::RobotState state;
+  uint32_t now = 0;
+  CHECK(planner.move(distanceMove(1, 5000.0f, 300.0f), false));
+
+  // Tick 1: ramps up from rest. rollCommandHistory() ages the PRE-tick
+  // cmdLeft_ (still 0, the pre-Move default) into cmdLeftPrevious_ before
+  // this tick's own cmdLeft_ is computed -- so cmdAccel after this first
+  // cycle() describes "leaving rest," not yet a ramp-to-ramp measurement.
+  cycle(planner, state, plant, now, kPeriod);
+  const float firstLeft = state.wheelLeft.cmdVelocity;
+  const float firstRight = state.wheelRight.cmdVelocity;
+  CHECK(firstLeft > 0.0f);
+  CHECK(firstRight > 0.0f);
+
+  // Tick 2: cmdLeftPrevious_/cmdRightPrevious_ are now tick 1's real,
+  // nonzero cmdLeft_/cmdRight_ -- a genuine ramp-to-ramp finite difference,
+  // independently computed here from the two OBSERVED cmdVelocity samples
+  // rather than from any Planner-internal state.
+  cycle(planner, state, plant, now, kPeriod);
+  const float secondLeft = state.wheelLeft.cmdVelocity;
+  const float secondRight = state.wheelRight.cmdVelocity;
+  const float dt = kPeriod * 0.001f;  // [s]
+  const float expectedLeftAccel = (secondLeft - firstLeft) / dt;
+  const float expectedRightAccel = (secondRight - firstRight) / dt;
+
+  // Genuinely accelerating (still ramping toward the 300 mm/s cruise), so
+  // this is a real round-trip check, not a degenerate 0-equals-0 pass.
+  CHECK(expectedLeftAccel > 1.0f);
+  CHECK(expectedRightAccel > 1.0f);
+  CHECK_NEAR(state.wheelLeft.cmdAccel, expectedLeftAccel, 1e-2f);
+  CHECK_NEAR(state.wheelRight.cmdAccel, expectedRightAccel, 1e-2f);
+  // Straight-line distance Move: both wheels ramp identically.
+  CHECK_NEAR(state.wheelLeft.cmdAccel, state.wheelRight.cmdAccel, 1e-3f);
+}
+
 }  // namespace
 
 int main() {
@@ -438,6 +486,7 @@ int main() {
   testTimeMoveRuns();
   testCurvatureChainAtSpeed();
   testCurvatureReversalStillLandsAtRest();
+  testCmdAccelRoundTrips();
   std::printf("planner_scenarios_test: all checks passed\n");
   return 0;
 }

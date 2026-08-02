@@ -149,9 +149,15 @@ def test_calibration_commands_pushes_oi_ol_oa_unconditionally() -> None:
 
 def test_calibration_commands_pushes_pid_gains_when_present() -> None:
     """Stakeholder 2026-07-18: the control gains live in the robot JSON and
-    must ride the same connect-time push as the geometry calibration --
-    ``control.vel_*`` -> ``SET pid.*`` (MotorConfigPatch, both motors).
+    must ride the same connect-time push as the geometry calibration.
     Values formatted ``:g`` like rotSlip.
+
+    130-005 (wheel-speed-controller-moves-into-drive.md Phase 3): ``pid.*``
+    is REPOINTED from ``control.vel_*`` (Motion::Planner's parked M4 duty
+    stage, dead since 128-015) onto ``control.wheel_pid_*`` (App::Drive's
+    unified wheel-speed controller) -- ``pid.kff``/``pid.kaw`` specifically
+    carry Stage B's ``kaff``/``pidMax`` (see ``calibration_kwargs()``'s own
+    docstring for the full field-borrowing rationale).
 
     115-003 (gut-to-minimal-firmware S1 motion-stack excision): the former
     ``control.heading_*`` -> ``SET headingKp/headingKd`` push
@@ -166,7 +172,8 @@ def test_calibration_commands_pushes_pid_gains_when_present() -> None:
 
     cfg = _cfg()
     cfg.control = types.SimpleNamespace(
-        vel_kp=0.002, vel_ki=0.0, vel_kff=0.0, vel_imax=0.0, vel_kaw=0.0,
+        wheel_pid_kp=0.002, wheel_pid_ki=0.0, wheel_pid_kaff=0.0,
+        wheel_pid_i_max=0.0, wheel_pid_max=0.0,
         heading_kp=1.0, heading_kd=0.0)
 
     cmds = calibration_commands(cfg)
@@ -199,11 +206,7 @@ def test_calibration_commands_omits_pid_gains_when_config_has_none() -> None:
 
 def test_real_tovez_nocal_json_pushes_neutral_gains_via_real_model() -> None:
     """End-to-end through the REAL pydantic model: data/robots/
-    tovez_nocal.json carries the vel_* neutral baseline (stakeholder
-    2026-07-18: ki/kd = 0, vanilla kp; kff = 0.002 = 1/500 -- the vanilla
-    inverse-plant slope, kept non-zero because it IS the open-loop law the
-    PID checkbox's disabled state drives, see nezha_motor.h's dispatch
-    bullet) and ``load_robot_config()`` + ``calibration_commands()``
+    tovez_nocal.json and ``load_robot_config()`` + ``calibration_commands()``
     actually read it from there. This is the test that catches a JSON key
     the model silently drops (heading_kp/heading_kd were not ControlConfig
     fields before this change).
@@ -213,19 +216,24 @@ def test_real_tovez_nocal_json_pushes_neutral_gains_via_real_model() -> None:
     in ``tovez_nocal.json`` are no longer neutral placeholders -- per the
     JSON's own ``_neutral_note``, they are now the SIM-VALIDATED motion
     values (config-as-truth), replacing the old broken code defaults
-    (``heading_kp=6``, ``distance_kp=8``, ``actuation_lag=0.13``). This
-    test's name is now a slight misnomer for the heading/distance gains
-    (only the ``vel_*``/PID group is still "neutral") -- it asserts
-    whatever the JSON's ``control`` section currently holds, which is the
-    whole point: the JSON, not this test, is the source of truth.
+    (``heading_kp=6``, ``distance_kp=8``, ``actuation_lag=0.13``).
 
     UPDATE (115-003, gut-to-minimal-firmware S1 motion-stack excision):
     113-003's own ``minSpeed``/``distanceKp``/``arriveDwell``/``headingKp``/
     ``headingKd`` pushes (``PlannerConfigPatch`` wire keys) are DELETED, not
     ported -- ``PlannerConfigPatch`` itself, and the ``App::Pilot`` that
     applied it, are gone; none of these five keys are valid ``set_config()``
-    wire keys any more (see ``calibration_kwargs()``'s own docstring). Only
-    the ``vel_*``/PID group still reaches the wire from this JSON."""
+    wire keys any more (see ``calibration_kwargs()``'s own docstring).
+
+    UPDATE (130-005, wheel-speed-controller-moves-into-drive.md Phase 3):
+    ``pid.*`` is REPOINTED from ``control.vel_*`` onto
+    ``control.wheel_pid_*`` (App::Drive's unified wheel-speed controller).
+    ``tovez_nocal.json`` ships every ``wheel_pid_*`` field at 0.0 (ticket
+    130-004's own decision: the no-calibration profile ships Stage B fully
+    inert, pending ticket 006's bench tuning on hardware) -- every
+    ``pid.*`` line below now reads ``0``, not the old ``vel_*`` values
+    (``pid.kff`` used to read ``0.002`` from ``control.vel_kff``; it now
+    reads Stage B's ``kaff``, which is also 0 in this profile)."""
     from robot_radio.calibration.push import calibration_commands
     from robot_radio.config.robot_config import load_robot_config
 
@@ -236,7 +244,7 @@ def test_real_tovez_nocal_json_pushes_neutral_gains_via_real_model() -> None:
     cmds = calibration_commands(cfg)
 
     for expected in (
-        "SET pid.kp=0.002", "SET pid.ki=0", "SET pid.kff=0.002",
+        "SET pid.kp=0", "SET pid.ki=0", "SET pid.kff=0",
         "SET pid.iMax=0", "SET pid.kaw=0",
     ):
         assert (expected, 200) in cmds, f"missing {expected!r} in {cmds}"

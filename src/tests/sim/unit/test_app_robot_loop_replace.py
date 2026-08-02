@@ -1,16 +1,22 @@
 """Off-hardware acceptance proof for sprint 127 ticket 001 (SUC-001):
 characterizes the firmware's ``Move`` ``replace=True`` preemption path
-against the five cases the sprint's design issue investigation identified
+against the cases the sprint's design issue investigation identified
 (clasi/sprints/127-host-side-path-planner-goto-and-path-following/issues/
 sprint-127-host-side-path-planner-goto-path-following.md, "Finding 1"),
-plus a duplicate-id sanity smoke check.
+plus a duplicate-id sanity smoke check. Originally five cases; cases 3/4
+(the WheelTrim-integrator-survives-a-replace pair) are REMOVED as of
+130-005 -- ``Motion::WheelTrim`` is deleted outright and Motion::Planner
+carries no wheel-actuation state left for a replace to disturb (see
+``test_app_robot_loop_replace_harness.cpp``'s own file header note).
 
 Compiles ``test_app_robot_loop_replace_harness.cpp`` against TWO source
 sets, matched to what each half of the harness needs:
 
   - Cases 1-5 drive a bare ``Motion::Planner`` directly
     (``src/motion/planner/planner.cpp`` + its own leaf modules --
-    profile/shape/estimation/wheel_pid/wheel_trim -- plus the test-only
+    profile/shape/estimation (130-005: wheel_trim deleted; 130-007:
+    wheel_pid/the parked M4 duty stage deleted too -- the wheel-speed
+    controller now lives entirely in App::Drive) -- plus the test-only
     zero-Python scaffolding at ``src/motion/planner/tests/test_support.h``,
     the SAME machinery ``src/motion/planner/tests/
     planner_scenarios_test.cpp``'s own ``testReplacePreempts()`` already
@@ -56,9 +62,11 @@ _BENCH_TEST_CONFIG_SRC = _SUPPORT_DIR / "bench_test_config.cpp"
 # compiles (SimHarness composes the real App::RobotLoop graph -- see
 # sim_harness.h's own header) -- needed by this file's own
 # scenarioDuplicateIdSanityNoOp(). Cases 1-5's own planner.cpp/shape.cpp/
-# profile.cpp/estimation.cpp/wheel_pid.cpp/wheel_trim.cpp are ALREADY part
-# of this same list (Planner integration folded them into every RobotLoop-
-# linking graph) -- one combined source list serves both halves of the
+# profile.cpp/estimation.cpp are ALREADY part of this same list (Planner
+# integration folded them into every RobotLoop-linking graph; 130-005:
+# wheel_trim.cpp deleted; 130-007: wheel_pid.cpp/the parked M4 duty stage
+# deleted too -- the wheel-speed controller now lives entirely in
+# App::Drive) -- one combined source list serves both halves of the
 # harness with no duplication.
 _APP_SOURCES = [
     _SOURCE_DIR / "app" / "robot_loop.cpp",
@@ -74,13 +82,17 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "telemetry.cpp",
     _MOTION_PLANNER_DIR / "profile.cpp",
     _MOTION_PLANNER_DIR / "estimation.cpp",
-    _MOTION_PLANNER_DIR / "wheel_pid.cpp",
     _MOTION_PLANNER_DIR / "shape.cpp",
-    _MOTION_PLANNER_DIR / "wheel_trim.cpp",
     _MOTION_PLANNER_DIR / "planner.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",
     _REPO_ROOT / "src" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
+    # 130-002 -- the shared composition root (App::composeRobot()/
+    # RobotGraph) sim_harness.h now boots through, plus its
+    # Config::boot_config-reading calibration helpers (the "four-source-
+    # list trap" this ticket's own note calls out).
+    _SOURCE_DIR / "app" / "boot_wiring.cpp",
+    _SOURCE_DIR / "app" / "boot_calibration.cpp",
 ]
 # 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
 # entry here) is gone outright -- zero instantiations; App::Drive holds no
@@ -96,6 +108,10 @@ _DEVICE_SOURCES = [
 ]
 _CONFIG_SOURCES = [
     _SOURCE_DIR / "config" / "persisted_tuning.cpp",
+    # 130-002 -- both composition roots now bake the SAME robot-JSON
+    # calibration by default (unify-sim-and-robot-composition-roots.md
+    # work item 2).
+    _SOURCE_DIR / "config" / "boot_config.cpp",
 ]
 _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire.cpp",
@@ -135,9 +151,11 @@ def _all_sources():
 
 def test_app_robot_loop_replace_harness_compiles_and_passes(tmp_path):
     """Compile the 127-001 replace-preemption harness + its dependency graph;
-    assert every scenario (cases 1-5 + the duplicate-id sanity check) passes,
-    printing every measured number (Case 2's Edge B discontinuity, Case 3's
-    Edge A transient error + verdict, Case 5's max step/queue depth, ...)."""
+    assert every scenario (cases 1, 2, 5 + the duplicate-id sanity check)
+    passes, printing every measured number (Case 2's Edge B discontinuity,
+    Case 5's max step/queue depth, ...). Cases 3/4 (WheelTrim-integrator-
+    survives-a-replace) are REMOVED as of 130-005 -- see the harness's own
+    file header note."""
     sources = _all_sources()
     for src in sources:
         assert src.is_file(), f"required source missing: {src}"

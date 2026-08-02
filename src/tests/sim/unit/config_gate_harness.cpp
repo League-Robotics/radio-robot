@@ -287,12 +287,14 @@ int main() {
     // 125-003: kp used to route to App::Drive's own interim motion-local
     // wheel-velocity PID gains, not Devices::Motor::gains() (deleted -- the
     // velocity PID moved off the motor entirely, sprint.md Decision 2/7).
-    // 128-015: that interim PID class is deleted outright (zero
-    // instantiations; App::Drive holds no controller of its own).
-    // Planner integration (2026-07-26): pid.* wire keys now retarget the
-    // on-robot planner's own duty-stage gains.
-    checkFloatEq(sim.planner().limits().velKp, 0.05f,
-                 "the motor patch's kp actually landed live -- handleConfig() ran, unaffected by the gate");
+    // 128-015: that interim PID class is deleted outright. Planner
+    // integration (2026-07-26) -> 130-005: pid.* wire keys retargeted AGAIN,
+    // this time from the planner's own (parked, dead) M4 duty stage onto
+    // App::Drive's unified wheel-speed controller -- the ONE wheel
+    // controller every cmdVelocity writer shares (drive.h's own header).
+    checkFloatEq(sim.drive().controlGains().kp, 0.05f,
+                 "the motor patch's kp actually landed live on Drive's controller -- handleConfig() ran, "
+                 "unaffected by the gate");
   }
 
   // --- Scenario 5: configured-then-accepted -- real motion, no port

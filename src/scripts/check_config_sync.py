@@ -207,11 +207,17 @@ PATCH_TO_PYDANTIC: dict[PatchKey, list[str]] = {
         "calibration.mm_per_wheel_deg_left",
         "calibration.mm_per_wheel_deg_right",
     ],
-    ("MotorConfigPatch", "kp"): ["control.vel_kp"],
-    ("MotorConfigPatch", "ki"): ["control.vel_ki"],
-    ("MotorConfigPatch", "kff"): ["control.vel_kff"],
-    ("MotorConfigPatch", "i_max"): ["control.vel_imax"],
-    ("MotorConfigPatch", "kaw"): ["control.vel_kaw"],
+    # 130-005: pid.* re-pointed from Motion::Planner's parked M4 duty stage
+    # (control.vel_*, now allowlisted below as pydantic-field-no-patch) onto
+    # App::Drive's unified wheel-speed controller (control.wheel_pid_*).
+    # kff/kaw carry Stage B's kaff/pidMax -- the two ControlGains members
+    # with no wire field of their own name (see configurator.cpp's
+    # applyMotorConfigPatch() doc comment for the full rationale).
+    ("MotorConfigPatch", "kp"): ["control.wheel_pid_kp"],
+    ("MotorConfigPatch", "ki"): ["control.wheel_pid_ki"],
+    ("MotorConfigPatch", "kff"): ["control.wheel_pid_kaff"],
+    ("MotorConfigPatch", "i_max"): ["control.wheel_pid_i_max"],
+    ("MotorConfigPatch", "kaw"): ["control.wheel_pid_max"],
     # PlannerConfigPatch (min_speed/heading_kp/heading_kd/distance_kp/
     # arrive_dwell) -- DELETED wholesale (115-003, gut-to-minimal-firmware
     # S1 motion-stack excision): the patch type itself, and every

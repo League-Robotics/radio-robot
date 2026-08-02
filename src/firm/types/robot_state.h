@@ -128,6 +128,18 @@ struct RobotState {
     //     See docs/design/design.md §5 and src/motion/DESIGN.md for the
     //     current architecture.
     float cmdVelocity = 0.0f;  // [mm/s] signed, this cycle's commanded target for this wheel
+
+    // cmdAccel -- the commanded acceleration accompanying cmdVelocity this
+    // cycle, added 130-003 (wheel-speed-controller-moves-into-drive.md) so
+    // App::Drive's forthcoming unified controller (ticket 004) can gate its
+    // slow-timescale bias adaptation on "is this a steady-state tick" without
+    // re-deriving a derivative Motion::Planner already knows. Same
+    // writer/consumer contract as cmdVelocity above (see that field's own
+    // comment): Motion::Planner::update() writes it while a Move owns
+    // motion; App::Drive itself does not write this field for WHEELS teleop
+    // -- an open-loop teleop command carries no independent accel target of
+    // its own, so it is left at its default (0) while Drive owns motion.
+    float cmdAccel = 0.0f;  // [mm/s^2] signed, this cycle's commanded accel for this wheel
   };
   Wheel wheelLeft;
   Wheel wheelRight;

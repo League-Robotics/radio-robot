@@ -59,13 +59,17 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "telemetry.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "profile.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "estimation.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "wheel_pid.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "shape.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "wheel_trim.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "planner.cpp",
     _SOURCE_DIR / "app" / "drive.cpp",
     _REPO_ROOT / "src" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
+    # 130-002 -- the shared composition root (App::composeRobot()/
+    # RobotGraph) sim_harness.h now boots through, plus its
+    # Config::boot_config-reading calibration helpers (the "four-source-
+    # list trap" this ticket's own note calls out).
+    _SOURCE_DIR / "app" / "boot_wiring.cpp",
+    _SOURCE_DIR / "app" / "boot_calibration.cpp",
 ]
 # 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
 # entry here) is gone outright -- zero instantiations; App::Drive holds no
@@ -81,6 +85,10 @@ _DEVICE_SOURCES = [
 ]
 _CONFIG_SOURCES = [
     _SOURCE_DIR / "config" / "persisted_tuning.cpp",
+    # 130-002 -- both composition roots now bake the SAME robot-JSON
+    # calibration by default (unify-sim-and-robot-composition-roots.md
+    # work item 2).
+    _SOURCE_DIR / "config" / "boot_config.cpp",
 ]
 _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire.cpp",

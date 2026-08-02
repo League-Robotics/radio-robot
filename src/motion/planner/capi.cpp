@@ -44,35 +44,23 @@ void plannerUpdate(void* planner, Types::RobotState* state) {
   static_cast<const Motion::Planner*>(planner)->update(*state);
 }
 
-// M4 duty-plane outputs -- see Planner::commandedDutyLeft/Right().
-void plannerDuty(void* planner, float* left, float* right) {
-  const auto* p = static_cast<const Motion::Planner*>(planner);
-  *left = p->commandedDutyLeft();
-  *right = p->commandedDutyRight();
-}
-
 // Everything the bench charts need that is NOT already in RobotState: the
-// PROFILED command (state.wheel*.cmdVelocity carries profile + trim, so
-// the two cannot be separated from the blackboard alone), the trim and its
-// integrator, and the Move's phase. One call so a per-tick capture is one
-// FFI crossing.
+// PROFILED command (state.wheel*.cmdVelocity, bit-for-bit as of 130-005 --
+// Motion::Planner no longer carries any wheel-actuation correction of its
+// own, see planner.h's own header) and the Move's phase. One call so a
+// per-tick capture is one FFI crossing.
+//
+// 130-005: this used to also return Motion::WheelTrim's trim/integrator
+// (deleted -- the wheel-speed controller now lives entirely in App::Drive,
+// see drive.h's own header; its bias/fast-PID observability is on Drive's
+// own accessors, wired into the wire Telemetry frame instead of this
+// bench-only C API).
 void plannerTrim(void* planner, float* profiledLeft, float* profiledRight,
-                 float* trimLeft, float* trimRight, float* integralLeft,
-                 float* integralRight, uint8_t* phase) {
+                 uint8_t* phase) {
   const auto* p = static_cast<const Motion::Planner*>(planner);
   *profiledLeft = p->commandedLeft();
   *profiledRight = p->commandedRight();
-  *trimLeft = p->trimLeft();
-  *trimRight = p->trimRight();
-  *integralLeft = p->trimIntegralLeft();
-  *integralRight = p->trimIntegralRight();
   *phase = static_cast<uint8_t>(p->phase());
-}
-
-void plannerApplyTrimGains(void* planner, float kp, float ki, float iMax,
-                           float kaff, float trimMax) {
-  static_cast<Motion::Planner*>(planner)->applyTrimGains(kp, ki, iMax, kaff,
-                                                         trimMax);
 }
 
 // Layout guard for the ctypes mirror: the harness compares these against
@@ -95,27 +83,32 @@ void plannerStructSizes(uint32_t* robotState, uint32_t* move,
 // insertion point reads a different member. The failure looked like a
 // wildly mistuned controller, not a layout bug. Offsets catch it exactly.
 //
+// 130-009: PlannerLimits regrouped from 34 flat fields into 18 fields
+// under four sub-structs (ceilings/plant/landing/tracking) -- offsetof()
+// with a nested member-designator (e.g. `offsetof(L, ceilings.vMax)`)
+// works the same way for a standard-layout aggregate; each entry below is
+// still that field's absolute byte offset from the start of PlannerLimits.
+//
 // Writes min(count, field count) entries and returns the field count.
 uint32_t plannerLimitsOffsets(uint32_t* out, uint32_t count) {
   using L = Motion::PlannerLimits;
   static const uint32_t kOffsets[] = {
-      offsetof(L, vMax),                 offsetof(L, aMax),
-      offsetof(L, aDecel),               offsetof(L, omegaMax),
-      offsetof(L, alphaMax),             offsetof(L, alphaDecel),
-      offsetof(L, trackWidth),           offsetof(L, controlPeriod),
-      offsetof(L, actuationDelay),       offsetof(L, velocityFilterWeight),
-      offsetof(L, otosStaleness),        offsetof(L, headingOtosWeight),
-      offsetof(L, requireSettle),        offsetof(L, settleWindow),
-      offsetof(L, headingHoldGain),      offsetof(L, velKff),
-      offsetof(L, velKp),                offsetof(L, velKi),
-      offsetof(L, velIMax),              offsetof(L, velKaff),
-      offsetof(L, velIAccelGate),        offsetof(L, dutyFloor),
-      offsetof(L, settleEpsilonLinear),  offsetof(L, settleEpsilonAngular),
-      offsetof(L, jerkMax),              offsetof(L, yawJerkMax),
-      offsetof(L, settleRestVelocity),   offsetof(L, settleRestOmega),
-      offsetof(L, trimKp),               offsetof(L, trimKi),
-      offsetof(L, trimIMax),             offsetof(L, trimKaff),
-      offsetof(L, trimMax),             offsetof(L, decelPlanFraction),
+      // ceilings
+      offsetof(L, ceilings.vMax),        offsetof(L, ceilings.aMax),
+      offsetof(L, ceilings.aDecel),      offsetof(L, ceilings.omegaMax),
+      offsetof(L, ceilings.alphaMax),    offsetof(L, ceilings.alphaDecel),
+      offsetof(L, ceilings.jerkMax),     offsetof(L, ceilings.yawJerkMax),
+      // plant
+      offsetof(L, plant.trackWidth),     offsetof(L, plant.controlPeriod),
+      offsetof(L, plant.actuationDelay), offsetof(L, plant.velocityFilterWeight),
+      // landing
+      offsetof(L, landing.settleEpsilonLinear),
+      offsetof(L, landing.settleEpsilonAngular),
+      offsetof(L, landing.settleRestVelocity),
+      offsetof(L, landing.settleRestOmega),
+      offsetof(L, landing.decelPlanFraction),
+      // tracking
+      offsetof(L, tracking.headingHoldGain),
   };
   const uint32_t total = sizeof(kOffsets) / sizeof(kOffsets[0]);
   const uint32_t n = count < total ? count : total;

@@ -13,6 +13,17 @@
 //                               Planner method that mutates Types::RobotState.
 // Moves are handed in as they arrive via move(); activation happens on the
 // next tick() (which is where current time/pose baselines live).
+//
+// tick()'s own Move lifecycle (130-008, planner-honesty-pass-50ms-period-
+// tick-state-machine-limits-reduction.md item 2) is an explicit state
+// machine, Motion::MoveLifecycle (planner_types.h): Idle -> Breakaway ->
+// Tracking -> (Idle|Draining), with Stopping as the parallel path a
+// Kind::Stop entry takes, and Draining as the transient path back to Idle
+// once the queue runs dry. Replaces the previous implicit encoding as
+// interacting `occupied`/`hasMoved`/`settling` booleans. MovePhase
+// (Accel/Hold/Decel) is `Tracking`'s own sub-phase, not a sibling state.
+// Full transition table, event definitions, and completion-priority order:
+// Planner::tick()'s own doc comment in planner.cpp.
 #pragma once
 
 #include <cstdint>
@@ -22,8 +33,6 @@
 #include "profile.h"
 #include "shape.h"
 #include "types/robot_state.h"
-#include "wheel_pid.h"
-#include "wheel_trim.h"
 
 namespace Motion {
 
@@ -69,53 +78,31 @@ class Planner {
   float commandedLeft() const { return cmdLeft_; }    // [mm/s]
   float commandedRight() const { return cmdRight_; }  // [mm/s]
 
-  // M4 duty-plane outputs (planner_types.h velK* gains; 0 while the duty
-  // stage is unconfigured). PARKED (128-015): stageDuty() below no longer
-  // runs automatically from tick(), so these reflect only the last
-  // EXPLICIT stageDuty() call (or 0.0f if none has ever run, or after
-  // estop()) -- not "this tick's" targets unless the caller just drove
-  // stageDuty() itself. See stageDuty()'s own doc comment.
-  float commandedDutyLeft() const { return dutyLeft_; }    // [-1, 1]
-  float commandedDutyRight() const { return dutyRight_; }  // [-1, 1]
-
-  // M4 duty output stage -- PARKED from the live tick (128-015, sprint 128
-  // Decision 2: the class and this method stay; only the automatic
-  // per-cycle call from tick() is removed). Its output was computed every
-  // cycle and DISCARDED either way -- App::Drive actuates from
-  // Types::RobotState::Wheel::cmdVelocity (WheelTrim's velocity-domain
-  // output, staged by stageTrim()/update()), never from commandedDutyLeft/
-  // Right() -- so parking it is a ~21-evaluation/s timing improvement, not
-  // a behavior change. Kept PUBLIC and callable on demand (rather than
-  // deleted) for two reasons: WheelPid's own ctest tiers
-  // (wheel_pid_test.cpp's testPlannerDutyStage(),
-  // planner_duty_scenarios_test.cpp) drive it directly to keep the class's
-  // coverage warm without paying its cost in the live loop, and a future
-  // duty-sink cutover ticket (owner: whoever picks it up -- see
-  // src/motion/DESIGN.md's "wheel control generations" note) can call it
-  // from tick() again once that decision is made, with zero interface
-  // change. See planner.cpp's own doc comment on the definition for the
-  // control-law details.
-  void stageDuty(float dt);  // [s]
-
-  // Velocity-trim observability: the correction added to the profiled
-  // command this tick, and the integrator behind it. commandedLeft() +
-  // trimLeft() is exactly what update() stages as cmdVelocity.
-  float trimLeft() const { return trimLeft_; }    // [mm/s]
-  float trimRight() const { return trimRight_; }  // [mm/s]
-  float trimIntegralLeft() const { return trimControlLeft_.integral(); }
-  float trimIntegralRight() const { return trimControlRight_.integral(); }
-  // Which regime the active Move is in -- what gates the trim's integrator
-  // and what the bench charts shade behind the velocity traces.
+  // Which regime the active Move is in -- 130-005: no longer gates any
+  // trim integrator here (Motion::WheelTrim/stageTrim() are deleted; the
+  // wheel-speed controller's own fast-PID steady gate now lives in
+  // App::Drive::fastPid(), keyed off cmdAccel, not MovePhase -- see
+  // drive.h's own header) -- kept for what the bench charts still shade
+  // behind the velocity traces and for Move-lifecycle observability.
   MovePhase phase() const {
     return active_.occupied ? active_.phase : MovePhase::Idle;
   }
 
+  // The top-level Move lifecycle state (130-008) -- see this file's own
+  // header comment and Planner::tick()'s doc comment in planner.cpp for
+  // the full transition table. Observability (tests / telemetry
+  // derivation), same footing as phase() above.
+  MoveLifecycle lifecycle() const { return lifecycle_; }
+
   // Live-tuning entry points (the CONFIG wire arm / persisted tuning):
   // plain in-memory updates, never persisted here.
-  void applyVelGains(float kff, float kp, float ki, float iMax);
-  // Velocity-domain trim gains (wheel_trim.h). No kff by construction.
-  void applyTrimGains(float kp, float ki, float iMax, float kaff,
-                      float trimMax);
+  //
+  // 130-007: applyVelGains() (the M4 duty stage's own gains setter) is
+  // deleted with the stage -- the `pid.*` CONFIG wire keys it used to
+  // (silently) target were already repointed onto App::Drive's unified
+  // wheel-speed controller by ticket 005
+  // (wheel-speed-controller-moves-into-drive.md Phase 3); this deletion
+  // just removes the dead destination those keys no longer reach.
   void applyShaperLimits(float aMax, float aDecel, float alphaMax,
                          float alphaDecel, float jerkMax, float yawJerkMax);
   const PlannerLimits& limits() const { return limits_; }
@@ -160,12 +147,14 @@ class Planner {
     // instead of driven -- skipping the leg outright, which is far worse
     // than the hang being fixed. "Moved, then stopped, and stayed stopped"
     // is the condition; "has not started yet" is not.
-    bool hasMoved = false;
-    // Settle-confirm (PlannerLimits::requireSettle): profile-complete has
-    // fired and we are holding the completion back until the body has
-    // arrived and stopped, or until settleWindow expires.
-    bool settling = false;
-    uint32_t settleStart = 0;  // [ms] when profile-complete fired
+    //
+    // 130-008: this used to be its own boolean (`hasMoved`), flipped once
+    // and read directly. It is now the Planner-level `lifecycle_`'s own
+    // Breakaway->Tracking transition (see tick()'s doc comment) --
+    // `lifecycle_ != MoveLifecycle::Breakaway` is the exact replacement
+    // test, and the settle-confirm `settling`/`settleStart` pair this used
+    // to sit beside is deleted outright (dead: PlannerLimits::
+    // requireSettle no longer drives anything -- see its own doc comment).
 
     // Per-wheel plan, captured once at activation (shape.h). The profiler
     // works in SHAPE space: one scalar lambda -- the dominant wheel's own
@@ -174,9 +163,9 @@ class Planner {
     AxisLimits wheelLimits{};  // shape-space ceilings, [mm/s] and [mm/s^2]
     // How much of the Move's OWN axis quantity (body path [mm] for a
     // Distance Move, heading [rad] for an Angle Move) advances per unit of
-    // lambda. Everything outside planActive() -- the completion tests, the
-    // settle creep, activeBoundary_, profileVelocity_ -- stays in axis
-    // units; this factor is the only bridge, applied on the way in and
+    // lambda. Everything outside planActive() -- the completion tests,
+    // activeBoundary_, profileVelocity_ -- stays in axis units; this
+    // factor is the only bridge, applied on the way in and
     // undone on the way out. A straight has axisPerLambda == 1 (lambda IS
     // the body speed) and a pivot has 2/trackWidth (lambda is the wheel
     // speed, omega = lambda/halfTrack), which is exactly the half-track
@@ -190,13 +179,6 @@ class Planner {
 
   enum class Axis : uint8_t { None, Linear, Angular, Wheels };
   static Axis axisOf(const Move& m);
-
-  // The velocity-domain trim: this tick's closed-loop correction, added to
-  // the profiled command only at update() time. Runs on every tick() exit
-  // path; inert (0) at the default all-zero gains. stageDuty() (public,
-  // above) used to run alongside it here -- PARKED as of 128-015, see that
-  // method's own doc comment.
-  void stageTrim(float dt);  // [s]
 
   // The measured state the completion tests and the settle gate read,
   // computed once per tick from the freshly integrated estimate.
@@ -281,26 +263,16 @@ class Planner {
   PlannerLimits limits_;
   WheelChannel left_, right_;
   PoseTracker pose_;
-  WheelPid pidLeft_, pidRight_;   // M4 duty stage (inert at zero gains)
-  float dutyLeft_ = 0.0f;   // [-1, 1] this tick's duty output
-  float dutyRight_ = 0.0f;  // [-1, 1]
-  // Velocity-domain closed loop. Kept SEPARATE from cmdLeft_/cmdRight_ and
-  // summed only in update(), for two independent reasons: measure()'s ZOH
-  // anticipation computes PLANNED travel from cmdLeft_/cmdLeftPrevious_,
-  // so a trim folded into them would be counted as planned distance and
-  // corrupt the ledger; and the next tick's `previous` argument to
-  // profileStep() is the profiled velocity, so a trim inside it would make
-  // the profiler ramp from a trimmed value and break the discrete-exact
-  // accounting. The profiler plans against a command that is not exactly
-  // what is actuated -- which is correct, because the ledger is anchored
-  // to MEASURED positions and closing that gap is the trim's whole job.
-  WheelTrim trimControlLeft_, trimControlRight_;
-  float trimLeft_ = 0.0f;   // [mm/s] this tick's correction
-  float trimRight_ = 0.0f;  // [mm/s]
 
   Move pending_[kQueueDepth]{};
   int pendingCount_ = 0;
   ActiveMove active_{};
+
+  // The top-level Move lifecycle (130-008) -- see this file's own header
+  // comment and Planner::tick()'s doc comment (planner.cpp) for the full
+  // transition table. Reset on every activateNext() and on every tick
+  // that leaves the planner with no active Move.
+  MoveLifecycle lifecycle_ = MoveLifecycle::Idle;
 
   // Positive-frame previous command on the profiled axis (the carry the
   // next tick ramps from); per-wheel carries for Wheels Moves and drain.
@@ -313,10 +285,6 @@ class Planner {
   // latency. measure()'s anticipation needs it; nothing else does.
   float cmdLeftPrevious_ = 0.0f;   // [mm/s]
   float cmdRightPrevious_ = 0.0f;  // [mm/s]
-  // Last tick's filtered measurement -- the braking stage's actuation-lead
-  // compensation derives the measured accel from it (see stageDuty()).
-  float measuredLeftPrevious_ = 0.0f;   // [mm/s]
-  float measuredRightPrevious_ = 0.0f;  // [mm/s]
   Axis lastAxis_ = Axis::None;
   float activeBoundary_ = 0.0f;  // last planned boundary velocity, positive frame
   // The shape-space decel ceiling of the most recently active shaped Move,

@@ -1,9 +1,40 @@
 ---
 status: pending
-priority: high
+priority: low
 ---
 
 # OTOS reports a frozen constant on tovez
+
+## CORRECTION 2026-08-02 — this was probably NOT a fault
+
+**The robot was on the STAND for every observation in this issue.** Wheels off
+the ground, so the chassis never translated. The OTOS is an optical
+ground-tracking sensor: with a static scene under it, a constant reading is
+CORRECT behaviour, not a frozen sensor.
+
+What the original report treated as damning -- "identical to the millimetre
+across two sessions, metres of travel and ~195 deg of rotation" -- was metres of
+WHEEL travel measured by the encoders on free-spinning wheels. The robot itself
+went nowhere, and the OTOS said so.
+
+Re-checked 2026-08-02 with the sensor confirmed physically connected:
+`STATUS ... otos=1`, telemetry `otos=(48, -4, -114)` -- still the same constant,
+still on the stand, still consistent with "no chassis motion".
+
+The claim was made by comparing two screenshots without accounting for the test
+regime, which is exactly the mistake `.claude/rules/playfield-testing.md` and
+`hardware-bench-testing.md` exist to keep separate: stand facts and playfield
+facts are not interchangeable.
+
+**What would actually settle it:** move the chassis -- by hand across a surface,
+or a real playfield run -- and confirm the OTOS pose changes. Until someone does
+that, there is no evidence of a sensor fault here. Do not spend time chasing
+one; if it reads constant while the robot is genuinely translating, THAT is the
+bug, and this issue can be reopened at high priority with that evidence.
+
+Retained (still true, still worth doing): a live-but-unchanging sensor is
+indistinguishable in the GUI from one that is not wired in. A staleness/liveness
+check would make the difference visible either way -- see the Work section.
 
 Across two TestGUI sessions ~45 minutes apart on 2026-07-31, separated by metres
 of travel and ~195 deg of accumulated rotation, the OTOS reported:

@@ -209,11 +209,23 @@ class ControlConfig(BaseModel):
     clasi/sprints/119-land-at-zero-and-clean-house-motion-semantics-deletions/issues/delete-the-config-attic-and-dead-tour-kwargs.md
     for the full consumer audit.
     """
-    vel_kp:        Optional[float] = None   # → SET pid.kp   (duty per mm/s error)
-    vel_ki:        Optional[float] = None   # → SET pid.ki
-    vel_kff:       Optional[float] = None   # → SET pid.kff  (duty per mm/s target)
-    vel_imax:      Optional[float] = None   # → SET pid.iMax (integrator clamp, duty)
-    vel_kaw:       Optional[float] = None   # → SET pid.kaw  (anti-windup gain, 1/s; 0 = off)
+    # vel_kp/vel_ki/vel_kff/vel_imax/vel_kaw (control.*, NOT the same JSON
+    # key as planner.vel_kp/ki/i_max, which feeds the parked M4 duty
+    # stage's PlannerLimits.velKp/Ki/IMax): build-time bake ONLY as of
+    # 130-005. The `pid.*` SET keys that used to push these live are
+    # REPOINTED onto App::Drive's unified wheel-speed controller instead
+    # (the wheel_pid_* fields below) -- closing the silent no-op `pid.*`
+    # was onto a control law with no live consumer (gen_boot_config.py
+    # still bakes these into msg::MotorConfig.velGains, the per-motor
+    # velocity PID that has had no firmware reader since the velocity PID
+    # moved off Devices::Motor entirely, predating this sprint). Still
+    # required here for the same lossless-round-trip reason as every
+    # other field in this model.
+    vel_kp:        Optional[float] = None
+    vel_ki:        Optional[float] = None
+    vel_kff:       Optional[float] = None
+    vel_imax:      Optional[float] = None
+    vel_kaw:       Optional[float] = None
     vel_filt:      Optional[float] = None   # velocity EMA weight — NO live SET key;
     #   build-time bake only (gen_boot_config.py → MotorConfig.setVelFiltAlpha())
     min_wheel_mms: Optional[float] = None   # → SET minWheelMms (low-speed deadband)
@@ -274,6 +286,35 @@ class ControlConfig(BaseModel):
     wheel_gain_right_decel:      Optional[float] = None
     wheel_intercept_right_decel: Optional[float] = None  # [mm/s]
 
+    # 130-004 (wheel-speed-controller-moves-into-drive.md): App::Drive's
+    # unified three-timescale wheel-speed controller -- Stage B's
+    # wire-tunable fast-PID gains (wheel_pid_*) and Stage C/deficit-flag's
+    # generated-constant bounds (wheel_v_min/wheel_bias_max/
+    # wheel_tau_adapt/wheel_a_steady/wheel_deficit_*). REQUIRED by
+    # gen_boot_config.py's wheel_controller_config_for_config(); declared
+    # here for the SAME lossless-round-trip reason as every other field
+    # in this block -- without a model field, pydantic silently drops the
+    # key at parse time.
+    #
+    # 130-005: wheel_pid_kp/ki/i_max/kaff/max are now ALSO live-tunable --
+    # the `pid.*` SET keys (pid.kp/pid.ki/pid.iMax/pid.kff/pid.kaw) route
+    # here instead of the dead planner duty-stage path (vel_kp et al.
+    # above); see calibration/push.py's calibration_kwargs() for the wire
+    # push and configurator.cpp's applyMotorConfigPatch() for the firmware
+    # side. wheel_v_min/bias_max/tau_adapt/a_steady/deficit_* remain
+    # bake-only (population-measured/generated constants, not live-tuned).
+    wheel_v_min:              Optional[float] = None  # [mm/s] speed floor
+    wheel_bias_max:           Optional[float] = None  # [mm/s] Stage C trim authority clamp
+    wheel_tau_adapt:          Optional[float] = None  # [s] Stage C adaptation time constant
+    wheel_a_steady:           Optional[float] = None  # [mm/s^2] steady-state gate
+    wheel_pid_kp:             Optional[float] = None  # [1] Stage B proportional gain — → SET pid.kp
+    wheel_pid_ki:             Optional[float] = None  # [1/s] Stage B integral gain — → SET pid.ki
+    wheel_pid_i_max:          Optional[float] = None  # [mm/s] Stage B integrator clamp — → SET pid.iMax
+    wheel_pid_kaff:           Optional[float] = None  # [s] Stage B accel feedforward — → SET pid.kff
+    wheel_pid_max:            Optional[float] = None  # [mm/s] Stage B total authority clamp — → SET pid.kaw
+    wheel_deficit_threshold:  Optional[float] = None  # [mm/s] deficit-flag error threshold
+    wheel_deficit_window_ms:  Optional[float] = None  # [ms] deficit-flag sustain window
+
 
 class EstimatorConfig(BaseModel):
     """``App::StateEstimator``'s fusion weights -- mirrors the robot JSON's
@@ -310,7 +351,7 @@ class EstimatorConfig(BaseModel):
 
 
 class PlannerConfig(BaseModel):
-    """``Motion::Planner``'s full tuning surface -- mirrors the robot JSON's
+    """``Motion::Planner``'s tuning surface -- mirrors the robot JSON's
     top-level ``planner`` object 1:1 (``robot_config.schema.json``'s own
     ``planner`` block; see that file's description for the full
     field-by-field rationale). Baked at build time by
@@ -332,10 +373,17 @@ class PlannerConfig(BaseModel):
     is what actually enforces fail-closed-ness at codegen time, not this
     model.
 
-    ``vel_kff``/``vel_kaff``/``trim_kaff`` are deliberately NOT fields
-    here: they are DERIVED by the generator from ``plant_gain``/
-    ``plant_tau`` (see ``PlannerBootConfig``'s own doc comment,
-    ``src/firm/config/boot_config.h``), never stored raw in the JSON.
+    130-009 (PlannerLimits 34->18 reshape): 11 fields removed -- the M4
+    duty-stage gains (``vel_kp``/``vel_ki``/``vel_i_max``/
+    ``vel_i_accel_gate``/``duty_floor``, plus the derived ``vel_kff``/
+    ``vel_kaff``, which were never fields here in the first place) and the
+    settle-confirm pair (``require_settle``/``settle_window``) -- and 5
+    more for the planner-side trim gains WheelTrim left dead
+    (``trim_kp``/``trim_ki``/``trim_i_max``/``trim_max``, plus the derived
+    ``trim_kaff``). ``plant_gain``/``plant_tau`` stay as plain recorded
+    measured data -- unread by ``planner_config_for_config()`` now that
+    every field either of them fed is gone -- so a lossless round-trip of
+    an existing robot JSON's ``planner`` block still keeps them.
     """
     v_max:        Optional[float] = None  # [mm/s] planner.v_max
     a_max:        Optional[float] = None  # [mm/s^2] planner.a_max
@@ -349,27 +397,15 @@ class PlannerConfig(BaseModel):
     control_period:   Optional[float] = None  # [ms] planner.control_period
     actuation_delay:  Optional[float] = None  # [ms] planner.actuation_delay
 
-    require_settle:          Optional[bool] = None   # planner.require_settle
     settle_rest_velocity:    Optional[float] = None  # [mm/s] planner.settle_rest_velocity
     settle_rest_omega:       Optional[float] = None  # [rad/s] planner.settle_rest_omega
-    settle_window:           Optional[float] = None  # [ms] planner.settle_window
     settle_epsilon_linear:   Optional[float] = None  # [mm] planner.settle_epsilon_linear
     settle_epsilon_angular:  Optional[float] = None  # [rad] planner.settle_epsilon_angular
     heading_hold_gain:       Optional[float] = None  # [1/s] planner.heading_hold_gain
 
-    plant_gain: Optional[float] = None  # [mm/s per duty] planner.plant_gain
-    plant_tau:  Optional[float] = None  # [s] planner.plant_tau
+    plant_gain: Optional[float] = None  # [mm/s per duty] planner.plant_gain -- recorded, unread
+    plant_tau:  Optional[float] = None  # [s] planner.plant_tau -- recorded, unread
 
-    vel_kp:            Optional[float] = None  # [duty/(mm/s)] planner.vel_kp
-    vel_ki:            Optional[float] = None  # [duty/(mm/s)/s] planner.vel_ki
-    vel_i_max:         Optional[float] = None  # [duty] planner.vel_i_max
-    vel_i_accel_gate:  Optional[float] = None  # [mm/s^2] planner.vel_i_accel_gate
-    duty_floor:        Optional[float] = None  # [-1,1] planner.duty_floor
-
-    trim_kp:              Optional[float] = None  # [1] planner.trim_kp
-    trim_ki:              Optional[float] = None  # [1/s] planner.trim_ki
-    trim_i_max:           Optional[float] = None  # [mm/s] planner.trim_i_max
-    trim_max:             Optional[float] = None  # [mm/s] planner.trim_max
     decel_plan_fraction:  Optional[float] = None  # [1] planner.decel_plan_fraction
 
 

@@ -46,7 +46,15 @@ class RobotLoop {
   // Whole-schedule pace target for one cycle(). Public so composition
   // roots (TestSim::SimHarness::kCycleDtUs) derive from this one
   // declaration instead of a drifting duplicate literal.
-  static constexpr uint32_t kCycle = 40;  // [ms] (~25 Hz)
+  // 130-007: 40 -> 50 (one 50 ms control period everywhere -- sim and
+  // hardware identical). At 40 the loop's measured busy time (~21 ms) plus
+  // vendor-bus-clearance overrun meant the pacer never actually slept
+  // (delivered period drifted ~46-48 ms, the "47 ms" `boot_config.cpp`
+  // baked as a separate, dishonest number). At 50, busy time is
+  // comfortably under budget, so the pacer paces again: the delivered
+  // period is exactly 50 ms and stable -- see robot_loop.cpp's own kPace
+  // computation.
+  static constexpr uint32_t kCycle = 50;  // [ms] (~20 Hz)
 
   // All references are already-constructed modules; the composition root
   // (main.cpp or a harness) owns construction and wiring order. The

@@ -105,6 +105,12 @@ struct Telemetry {
     uint8_t acks_count = 0;
     uint32_t cycle_busy = 0;
     uint32_t cycle_period = 0;
+    float duty_per_speed_left = 0.0f;
+    float duty_per_speed_right = 0.0f;
+    float bias_left = 0.0f;
+    float bias_right = 0.0f;
+    float pid_left = 0.0f;
+    float pid_right = 0.0f;
 
     // --- array / optional-string accessors ---
     const uint32_t* acks() const { return acks_; }

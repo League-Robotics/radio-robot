@@ -1,5 +1,55 @@
 # Hardware Bench Testing
 
+## STOP — there is more than one robot on the USB hub
+
+**Our robot is `tovez`. Address it by UID, never by port number.**
+
+```
+tovez  9906360200052820a8fdb5e413abb276000000006e052820   <- OURS
+vizev  99063602000528205560754f2f401c2f000000006e052820   <- NOT OURS. Never touch.
+```
+
+If you are doing mainline development, you are developing on `tovez`. However, you may be told that you can also deploy to other machines, but do not do this without specific instructions. 
+
+**Every default path currently leads to the WRONG robot**, verified 2026-08-01:
+
+- `mbdeploy deploy` with no target auto-picks "the unique non-relay device" —
+  which is `vizev` whenever `tovez` is unplugged.
+- `pyocd` with no `-u` picks the only probe it can see — `vizev`.
+- A remembered port number is worse than useless: **port numbers move on every
+  re-enumeration.** `/dev/cu.usbmodem2121102` was `tovez` in the morning and
+  `togov` (a third robot) by afternoon; `vizev` now holds `2121402`, which the
+  `zavaz` relay held that same morning.
+
+Use `mbdeploy` freely to find out what is attached -- discovery is fine and
+expected:
+
+```bash
+uv run mbdeploy probe         # refresh the registry
+uv run mbdeploy list          # UID -> port -> name, live
+```
+
+Identify BOTH boards, then target `tovez` and leave `vizev` alone. The rule is
+about which device you act on, not about looking.
+
+### Then, before any hardware command
+
+Confirm the row says `tovez`, take the PORT from that row for this session only,
+and pass the **UID** to anything that accepts a target:
+
+```bash
+uv run mbdeploy deploy --hex ./MICROBIT.hex 9906360200052820a8fdb5e413abb276000000006e052820
+pyocd gdbserver -t nrf52833 -u 9906360200052820a8fdb5e413abb276000000006e052820
+```
+
+If `mbdeploy list` does not show `tovez`, it is **unplugged** — stop and say so.
+Do not fall back to "the only device present"; that is how you flash someone
+else's robot. (`mbdeploy probe` prints the stale registry too, including devices
+that are not connected and several rows sharing one port — `list` is the live
+view, `probe` is not.)
+
+---
+
 The robot is **connected and mounted on a stand**. Its wheels are off the ground,
 so it **cannot drive away** — it is safe to power the motors and spin the wheels
 freely during verification. Use the real hardware to confirm changes, not just

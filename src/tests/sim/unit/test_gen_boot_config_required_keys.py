@@ -53,12 +53,23 @@ config"): ``estimator.weight_heading_otos``/``weight_omega_otos``/
 source-side fallback, mirroring `App::StateEstimator`'s own fail-closed
 boot-config precedent.
 
-ADDED (129-009, config consolidation): all 29 ``planner.*`` keys join
+ADDED (129-009, config consolidation): all 29 ``planner.*`` keys joined
 ``_REQUIRED_KEY_PATHS`` below the same way -- ``gen_boot_config.py``'s new
 ``planner_config_for_config()`` reads every one via ``_require()``, no
 source-side fallback, same fail-closed posture as every other field this
 ticket's own acceptance criteria call for ("Booting with a `planner`-less
 JSON raises the configured boot fault").
+
+REDUCED (130-009, planner-honesty-pass-...limits-reduction.md item 3): 13
+of those 29 keys are removed again -- the 7 that fed PlannerLimits'
+now-deleted M4 duty-stage fields (``vel_kp``/``vel_ki``/``vel_i_max``/
+``vel_i_accel_gate``/``duty_floor``, plus ``require_settle``/
+``settle_window``, the settle-confirm defer path's own pair), the 4 that
+fed the dead planner-side trim gains (``trim_kp``/``trim_ki``/
+``trim_i_max``/``trim_max``), and ``plant_gain``/``plant_tau`` themselves
+-- ``planner_config_for_config()`` no longer reads either at all now that
+every field either derived from them is gone. See that function's own
+docstring for the per-field rationale.
 
 REMOVED (118 ticket 004, land-at-zero-completion-delete-stop-lead.md): a
 former fourth ``estimator.*`` key -- a boot-time anticipation-lead
@@ -155,24 +166,11 @@ _REQUIRED_KEY_PATHS = [
     ("planner", "yaw_jerk_max"),
     ("planner", "control_period"),
     ("planner", "actuation_delay"),
-    ("planner", "require_settle"),
     ("planner", "settle_rest_velocity"),
     ("planner", "settle_rest_omega"),
-    ("planner", "settle_window"),
     ("planner", "settle_epsilon_linear"),
     ("planner", "settle_epsilon_angular"),
     ("planner", "heading_hold_gain"),
-    ("planner", "plant_gain"),
-    ("planner", "plant_tau"),
-    ("planner", "vel_kp"),
-    ("planner", "vel_ki"),
-    ("planner", "vel_i_max"),
-    ("planner", "vel_i_accel_gate"),
-    ("planner", "duty_floor"),
-    ("planner", "trim_kp"),
-    ("planner", "trim_ki"),
-    ("planner", "trim_i_max"),
-    ("planner", "trim_max"),
     ("planner", "decel_plan_fraction"),
 ]
 

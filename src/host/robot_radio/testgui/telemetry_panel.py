@@ -227,6 +227,31 @@ def fmt_loop_timing(cycle_busy: "int | None", cycle_period: "int | None") -> str
     return f"{cycle_busy / 1000.0:.1f}ms / {cycle_period / 1000.0:.1f}ms"
 
 
+def fmt_duty_per_speed(left: "float | None", right: "float | None") -> str:
+    """App::Drive's installed conversion scale ``[duty/(mm/s)]``, per wheel
+    (130-005, issue 04's folded-in observability mandate) -- ``—`` if
+    either is absent (no TLMFrame decoded yet)."""
+    if left is None or right is None:
+        return "—"
+    return f"L {left:.6f}   R {right:.6f}"
+
+
+def fmt_bias(left: "float | None", right: "float | None") -> str:
+    """App::Drive's Stage C adapted bias ``[mm/s]``, per wheel (130-005) --
+    ``—`` if either is absent."""
+    if left is None or right is None:
+        return "—"
+    return f"L {left:+.1f}   R {right:+.1f}   mm/s"
+
+
+def fmt_pid(left: "float | None", right: "float | None") -> str:
+    """App::Drive's Stage B last-computed fast-PID output ``[mm/s]``, per
+    wheel (130-005) -- ``—`` if either is absent."""
+    if left is None or right is None:
+        return "—"
+    return f"L {left:+.1f}   R {right:+.1f}   mm/s"
+
+
 def fmt_twist(twist: "tuple[int, ...] | None") -> str:
     """Body-frame twist; differential ``(v, ω)`` or mecanum ``(vx, vy, ω)``."""
     parsed = twist_velocity(twist)
@@ -402,6 +427,11 @@ def build_telemetry_panel(recorder: "Any" = None) -> "tuple[Any, Any]":
         ("twist", "tlm_val_twist", True, "tlm_arrow_twist"),
         ("heading src", "tlm_val_heading_source", False, None),
         ("loop", "tlm_val_loop", False, None),  # 122-003
+        # App::Drive's unified wheel-speed controller (130-005, issue 04's
+        # folded-in observability mandate).
+        ("dutyPerSpeed", "tlm_val_duty_per_speed", False, None),
+        ("bias", "tlm_val_bias", False, None),
+        ("pid", "tlm_val_pid", False, None),
     ]
 
     value_labels: dict[str, Any] = {}
@@ -497,6 +527,13 @@ def build_telemetry_panel(recorder: "Any" = None) -> "tuple[Any, Any]":
             self._values["tlm_val_twist"].setText(fmt_twist(getattr(frame, "twist", None)))
             self._values["tlm_val_loop"].setText(
                 fmt_loop_timing(getattr(frame, "cycle_busy", None), getattr(frame, "cycle_period", None)))
+            self._values["tlm_val_duty_per_speed"].setText(
+                fmt_duty_per_speed(getattr(frame, "duty_per_speed_left", None),
+                                   getattr(frame, "duty_per_speed_right", None)))
+            self._values["tlm_val_bias"].setText(
+                fmt_bias(getattr(frame, "bias_left", None), getattr(frame, "bias_right", None)))
+            self._values["tlm_val_pid"].setText(
+                fmt_pid(getattr(frame, "pid_left", None), getattr(frame, "pid_right", None)))
 
             heading_source = getattr(frame, "heading_source", None)
             heading_lbl = self._values["tlm_val_heading_source"]

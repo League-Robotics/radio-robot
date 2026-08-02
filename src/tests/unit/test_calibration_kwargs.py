@@ -67,14 +67,23 @@ def test_calibration_kwargs_covers_the_pre_refactor_field_set() -> None:
     docstring). heading_kp/heading_kd/min_speed/distance_kp/arrive_dwell
     are still present on the config object here (a config that carries
     them is realistic -- boot-config JSON keeps the fields for the Tier-2
-    bake) but must NOT appear in kwargs."""
+    bake) but must NOT appear in kwargs.
+
+    130-005: the pid.* fields now source from control.wheel_pid_* (App::
+    Drive's unified controller) instead of control.vel_* (Motion::
+    Planner's parked M4 duty stage) -- vel_* are still set here (a config
+    that carries the now-dead-on-this-path fields is realistic -- they
+    still feed the parked duty stage's own boot config) but must NOT
+    drive the pid.* kwargs any more; only wheel_pid_* does."""
     cfg = _cfg(
         calibration=types.SimpleNamespace(
             mm_per_wheel_deg_left=0.5, mm_per_wheel_deg_right=0.51,
             rotational_slip=0.85,
         ),
         control=types.SimpleNamespace(
-            vel_kp=0.002, vel_ki=0.0, vel_kff=0.0, vel_imax=0.0, vel_kaw=0.0,
+            vel_kp=0.999, vel_ki=0.999, vel_kff=0.999, vel_imax=0.999, vel_kaw=0.999,
+            wheel_pid_kp=0.002, wheel_pid_ki=0.0, wheel_pid_kaff=0.0,
+            wheel_pid_i_max=0.0, wheel_pid_max=0.0,
             heading_kp=1.0, heading_kd=0.0,
             min_speed=16.0, distance_kp=2.5, arrive_dwell=0.15,
         ),
@@ -90,6 +99,9 @@ def test_calibration_kwargs_covers_the_pre_refactor_field_set() -> None:
     assert kwargs["mr"] == 0.51
     assert kwargs["tw"] == 128
     assert kwargs["rotSlip"] == 0.85
+    # The dead vel_* value (0.999) must NOT leak through -- only wheel_pid_kp
+    # (0.002) reaches the wire's pid.kp key.
+    assert kwargs["pid.kp"] == 0.002
 
 
 def test_calibration_kwargs_omits_control_keys_when_control_is_none() -> None:
@@ -161,7 +173,15 @@ def test_calibration_commands_tovez_json_snapshot() -> None:
         field's own provenance note in tovez.json) changes the
         ``scale_to_int8()``-encoded register value this line pins.
         ``OA`` is unchanged (-13): 126-004 confirmed
-        ``otos_angular_scale`` (0.987) correct as committed, no edit."""
+        ``otos_angular_scale`` (0.987) correct as committed, no edit.
+
+    130-005: the ``pid.*`` lines now source from ``control.wheel_pid_*``
+    (App::Drive's unified controller) instead of ``control.vel_*``
+    (Motion::Planner's parked M4 duty stage) -- see ``calibration_kwargs()``'s
+    own docstring. ``tovez.json`` ships every ``wheel_pid_*`` field at 0.0
+    (ticket 130-004's own decision: shipped inert pending ticket 006's
+    bench tuning on hardware), so every ``pid.*`` line here reads ``0``
+    now, not the old ``vel_*`` values."""
     cfg = load_robot_config(_ROBOTS_DIR / "tovez.json")
 
     cmds = calibration_commands(cfg)
@@ -171,11 +191,11 @@ def test_calibration_commands_tovez_json_snapshot() -> None:
         ("SET mr=0.707700", 200),
         ("SET tw=128", 200),
         ("SET rotSlip=0.9117", 200),
-        ("SET pid.kp=0.0016", 200),
-        ("SET pid.ki=0.005", 200),
-        ("SET pid.kff=0.0008", 200),
-        ("SET pid.iMax=0.3", 200),
-        ("SET pid.kaw=20", 200),
+        ("SET pid.kp=0", 200),
+        ("SET pid.ki=0", 200),
+        ("SET pid.kff=0", 200),
+        ("SET pid.iMax=0", 200),
+        ("SET pid.kaw=0", 200),
         ("OI", 500),
         ("OL 28", 200),
         ("OA -13", 200),
@@ -192,7 +212,11 @@ def test_calibration_commands_tovez_nocal_json_snapshot() -> None:
     ``otos_angular_scale`` are all uncalibrated sentinels, unaffected by
     126-003/126-004's tovez.json-only edits), and re-running
     ``calibration_commands()`` against the live file reproduces this exact
-    list -- no independent drift, no change needed."""
+    list -- no independent drift, no change needed.
+
+    130-005: the ``pid.*`` lines now source from ``control.wheel_pid_*``
+    (all 0.0 in this profile too) instead of ``control.vel_*`` -- see
+    ``test_calibration_commands_tovez_json_snapshot``'s own note."""
     cfg = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
 
     cmds = calibration_commands(cfg)
@@ -202,9 +226,9 @@ def test_calibration_commands_tovez_nocal_json_snapshot() -> None:
         ("SET mr=0.704851", 200),
         ("SET tw=128", 200),
         ("SET rotSlip=1", 200),
-        ("SET pid.kp=0.002", 200),
+        ("SET pid.kp=0", 200),
         ("SET pid.ki=0", 200),
-        ("SET pid.kff=0.002", 200),
+        ("SET pid.kff=0", 200),
         ("SET pid.iMax=0", 200),
         ("SET pid.kaw=0", 200),
         ("OI", 500),

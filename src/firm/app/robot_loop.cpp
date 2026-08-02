@@ -329,7 +329,7 @@ void RobotLoop::boot() {
     bootState.wheelLeft.connected = preamble_.leftConnected();
     bootState.wheelRight.connected = preamble_.rightConnected();
     bootState.otos.connected = preamble_.otosConnected();
-    tlm_.update(bootState);
+    tlm_.update(bootState, drive_);
     // NOT forced. Forcing here pushed one frame per probe pass -- a ~5s
     // flood on every reset, ahead of the DEVICE banner and READY.
     //
@@ -509,7 +509,7 @@ void RobotLoop::cycle() {
   // cycle -- one actuation path regardless of which decider produced them
   // (one cycle of command-to-wheels latency, the same the planner's own
   // actuationDelay compensates for).
-  drive_.tick(state_.wheelLeft.cmdVelocity, state_.wheelRight.cmdVelocity);
+  drive_.tick(state_);
 
   motorL_.requestSample();  // brick latches ONE pending read per select
   runAndWait(kSettle, [&] {
@@ -548,7 +548,7 @@ void RobotLoop::cycle() {
     publishHealth();
     publishTiming(cycleStartUs);
 
-    tlm_.update(state_);
+    tlm_.update(state_, drive_);
 
     // TLM: command surface. The mode-change switch and the "is this a
     // force-a-frame request" answer live in Telemetry::applyAction() --

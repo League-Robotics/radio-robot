@@ -1,27 +1,27 @@
 {
-  "990636020005282029e57506e6d0bc50000000006e052820": {
-    "enum": 3,
-    "port": "/dev/cu.usbmodem2121102",
-    "uid": "990636020005282029e57506e6d0bc50000000006e052820"
-  },
-  "99063602000528203b43773cab0210ea000000006e052820": {
-    "enum": 4,
-    "port": "/dev/cu.usbmodem2121102",
-    "uid": "99063602000528203b43773cab0210ea000000006e052820"
-  },
-  "99063602000528204f02a3519fdba0c7000000006e052820": {
-    "announcement": "DEVICE:RADIOBRIDGE:relay:gozop:4267970133",
+  "990636020005282017449eac613c0332000000006e052820": {
+    "announcement": "DEVICE:RADIOBRIDGE:relay:getez:1784514240",
     "common_name": "relay",
-    "device_name": "gozop",
-    "enum": 1,
-    "port": "/dev/cu.usbmodem2121402",
+    "device_name": "getez",
+    "enum": 4,
+    "port": "/dev/cu.usbmodem214102",
     "role": "RADIOBRIDGE",
-    "serial": "4267970133",
-    "uid": "99063602000528204f02a3519fdba0c7000000006e052820"
+    "serial": "1784514240",
+    "uid": "990636020005282017449eac613c0332000000006e052820"
+  },
+  "99063602000528205560754f2f401c2f000000006e052820": {
+    "enum": 5,
+    "port": "/dev/cu.usbmodem2121302",
+    "uid": "99063602000528205560754f2f401c2f000000006e052820"
   },
   "990636020005282094fd03de9720813f000000006e052820": {
-    "enum": 7,
-    "port": "/dev/cu.usbmodem14602",
+    "announcement": "DEVICE:NEZHA2:robot:vogop:3685347683",
+    "common_name": "robot",
+    "device_name": "vogop",
+    "enum": 1,
+    "port": "/dev/cu.usbmodem212202",
+    "role": "NEZHA2",
+    "serial": "3685347683",
     "uid": "990636020005282094fd03de9720813f000000006e052820"
   },
   "9906360200052820a8fdb5e413abb276000000006e052820": {
@@ -38,20 +38,10 @@
     "announcement": "DEVICE:RADIOBRIDGE:relay:zavaz:4076631795",
     "common_name": "relay",
     "device_name": "zavaz",
-    "enum": 6,
-    "port": "/dev/cu.usbmodem2121402",
+    "enum": 3,
+    "port": "/dev/cu.usbmodem2121102",
     "role": "RADIOBRIDGE",
     "serial": "4076631795",
     "uid": "9906360200052820e9d16c3809a44554000000006e052820"
-  },
-  "9906360200052820fe9a0254d8d892d9000000006e052820": {
-    "announcement": "DEVICE:NEZHA2:robot:togov:2108549556",
-    "common_name": "robot",
-    "device_name": "togov",
-    "enum": 5,
-    "port": "/dev/cu.usbmodem2121102",
-    "role": "NEZHA2",
-    "serial": "2108549556",
-    "uid": "9906360200052820fe9a0254d8d892d9000000006e052820"
   }
 }

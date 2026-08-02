@@ -1,38 +1,46 @@
 #!/usr/bin/env python3
-"""square_tour_velocity.py -- a SQUARE TOUR (4 x 500 mm legs, 4 x 90 deg
-turns) through the REAL Motion::Planner, driven on the VELOCITY plane: the
-path the firmware actually takes.
+"""square_tour_velocity.py -- RETIRED (130-005).
 
-WHY A SECOND TOUR SCRIPT. square_tour_sim.py drives the plant from the
-planner's DUTY output, which the robot does not use -- RobotLoop stages
-`state.wheel*.cmdVelocity` and App::Drive converts it open-loop through a
-per-wheel, per-direction affine map measured on the bench. This script
-mirrors THAT path:
+This script exercised Motion::WheelTrim, the planner-side velocity-domain
+closed loop:
 
     planner profile  -> + velocity trim  -> cmdVelocity   [mm/s]
       -> Drive's calibrated inverse map  -> duty          [-1, 1]
         -> motor / gearbox / wheel                        [mm/s]
 
-so the velocity trim (wheel_trim.h) is exercised exactly as it will be on
-the robot, on top of the same calibration.
+Per `wheel-speed-controller-moves-into-drive.md` Phase 3 (DECIDED,
+stakeholder 2026-08-01), that controller moved wholesale into App::Drive --
+Motion::Planner sheds ALL wheel-actuation code, `Motion::WheelTrim` is
+deleted outright (no redirect stub), and its `applyTrimGains()`/
+`trimLeft()`/`trimRight()`/`trimIntegralLeft()`/`trimIntegralRight()` are
+gone from the C++ API this script's ctypes harness bound. Setting
+`PlannerLimits.trimKp` et al. (`tourLimits()` below) is now a silent no-op
+-- the constructor no longer reads those fields into anything -- so this
+script would not fail loudly, it would just quietly stop exercising what
+its own docstring claims to measure. Retired rather than left running:
 
-THE DISTURBANCE. Drive is given ONE shared duty-per-speed constant while
-the two gearboxes differ -- the situation the measured speed->command
-study found on the real robot (the two wheels ~2% apart in true gain, and
-a shared constant inherits the difference as a systematic error). Here the
-split is deliberately larger (+-4.8%) so the effect is visible in one
-tour. That residual is precisely what no feedforward can remove and what
-the trim exists to close.
+  - The "old additive trim" baseline this script's own CSVs already
+    captured (`square_tour_velocity_trim.csv`/`_trim_sym.csv`, this
+    directory) IS the historical A/B comparison point ticket 130-006's
+    bench acceptance needs -- they are kept, not deleted.
+  - A successor bench script exercising App::Drive's Stage B/C controller
+    directly (bias/fast-PID observability, now on Drive's own accessors
+    and the wire Telemetry frame -- see drive.h/telemetry.proto) is
+    ticket 130-006's job, on real hardware.
 
-SCHEDULE FIDELITY. The plant runs continuously (1 ms substeps) while the
-loop's events land at their real within-cycle offsets, so the two encoders
-are genuinely read 8 ms apart and each duty write lands when it really
-does. Plant model (stiction, slew, quantum, velocity noise, time constant)
-is shared with square_tour_sim.py.
-
-    uv run python src/tests/bench/square_tour_velocity.py
-    uv run python src/tests/bench/square_tour_velocity.py --no-trim
-    uv run python src/tests/bench/square_tour_velocity.py --symmetric
+Historical docstring (for context, no longer accurate as a usage guide):
+WHY A SECOND TOUR SCRIPT. square_tour_sim.py drives the plant from the
+planner's DUTY output, which the robot does not use -- RobotLoop stages
+`state.wheel*.cmdVelocity` and App::Drive converts it through its own
+calibrated map. THE DISTURBANCE. Drive was given ONE shared duty-per-speed
+constant while the two gearboxes differ (+-4.8% here, deliberately larger
+than the ~2% measured on the real robot) so the effect is visible in one
+tour -- that residual is precisely what no feedforward can remove and what
+the (now-relocated) controller exists to close. SCHEDULE FIDELITY. The
+plant ran continuously (1 ms substeps) while the loop's events land at
+their real within-cycle offsets, so the two encoders are genuinely read
+8 ms apart and each duty write lands when it really does -- plant model
+shared with square_tour_sim.py.
 """
 
 import argparse
@@ -110,30 +118,36 @@ def driveDuty(desired: float, previous: float) -> float:
 
 def tourLimits(trim: bool, leeway: float = DECEL_LEEWAY, kaff: float = 0.5
                ) -> PlannerLimits:
+    # 130-009: PlannerLimits reshaped to 18 fields under four sub-structs
+    # (ceilings/plant/landing/tracking); requireSettle/settleWindow,
+    # otosStaleness/headingOtosWeight, the M4 duty-stage gains (velKff/
+    # velKp/velKi/velIMax/velKaff/velIAccelGate/dutyFloor), and the dead
+    # planner-side trim gains (trimKp/trimKi/trimIMax/trimKaff/trimMax --
+    # already a silent no-op per this script's own RETIRED docstring
+    # above, since Motion::WheelTrim was deleted by 130-005) are all
+    # DELETED outright -- there is nothing left to set for any of them.
+    # `trim`/`kaff` are kept as this function's own parameters (the
+    # RETIRED docstring's A/B-comparison call sites still pass them) but
+    # no longer have anywhere to land.
     limits = PlannerLimits()
-    limits.vMax = 400.0
-    limits.aMax = 300.0
-    limits.aDecel = 250.0
-    limits.omegaMax = 3.0
-    limits.alphaMax = 6.0
-    limits.alphaDecel = 5.0
-    limits.trackWidth = TRACK
-    limits.controlPeriod = float(CYCLE)
-    limits.actuationDelay = float(CYCLE)  # [ms] command staged at next cycle
-    limits.velocityFilterWeight = 0.35
-    limits.otosStaleness = 200
-    limits.headingOtosWeight = 0.0
-    limits.requireSettle = False
+    limits.ceilings.vMax = 400.0
+    limits.ceilings.aMax = 300.0
+    limits.ceilings.aDecel = 250.0
+    limits.ceilings.omegaMax = 3.0
+    limits.ceilings.alphaMax = 6.0
+    limits.ceilings.alphaDecel = 5.0
+    limits.plant.trackWidth = TRACK
+    limits.plant.controlPeriod = float(CYCLE)
+    limits.plant.actuationDelay = float(CYCLE)  # [ms] command staged at next cycle
+    limits.plant.velocityFilterWeight = 0.35
     # Rest floors for the closing planned stop. These bound the residual
     # coast: the stop completes once the FILTERED measured speed is under
     # the floor, and the plant then coasts a further ~v*tau. At 0.16 rad/s
     # with tau 0.23 s that is ~2 deg of uncorrected rotation, which was
     # most of this tour's final heading error. Sized just above the
     # filtered velocity-noise floor instead.
-    limits.settleRestVelocity = 6.0   # [mm/s]
-    limits.settleRestOmega = 0.06     # [rad/s]
-    limits.settleWindow = 2500.0
-    limits.dutyFloor = BREAKAWAY
+    limits.landing.settleRestVelocity = 6.0   # [mm/s]
+    limits.landing.settleRestOmega = 0.06     # [rad/s]
     # Outer heading loop, on top of the trim's inner wheel-rate loop.
     #
     # These are NOT redundant, which was worth measuring rather than
@@ -146,27 +160,10 @@ def tourLimits(trim: bool, leeway: float = DECEL_LEEWAY, kaff: float = 0.5
     #
     # (The ratio lock is not a third corrector -- it constrains the
     # commanded pair and never reads a measurement.)
-    limits.headingHoldGain = 2.0 if trim else 0.0
-    # Duty stage OFF -- this tour drives the velocity plane.
-    limits.velKff = 0.0
-    limits.velKp = 0.0
-    limits.velKi = 0.0
-    limits.velIMax = 0.0
-    limits.velKaff = 0.0
-    limits.velIAccelGate = 1.0e9
-    limits.jerkMax = 1500.0    # [mm/s^3] aMax reached in ~0.2 s
-    limits.yawJerkMax = 30.0   # [rad/s^3]
-    limits.decelPlanFraction = leeway
-    if trim:
-        # Commissioning gains: kp well under 1 (measured wheel velocity is
-        # a raw difference quotient), kaff at half the measured plant tau,
-        # and a bounded trim authority so feedback trims the profile
-        # rather than replacing it.
-        limits.trimKp = 0.25       # [1]
-        limits.trimKi = 0.5        # [1/s]
-        limits.trimIMax = 60.0     # [mm/s]
-        limits.trimKaff = TAU * kaff  # [s]
-        limits.trimMax = 120.0     # [mm/s]
+    limits.tracking.headingHoldGain = 2.0 if trim else 0.0
+    limits.ceilings.jerkMax = 1500.0    # [mm/s^3] aMax reached in ~0.2 s
+    limits.ceilings.yawJerkMax = 30.0   # [rad/s^3]
+    limits.landing.decelPlanFraction = leeway
     return limits
 
 
@@ -493,6 +490,13 @@ def writeCsv(run: dict, out: Path) -> None:
 
 
 def main() -> None:
+    sys.exit(
+        "square_tour_velocity.py is RETIRED (130-005): it exercised "
+        "Motion::WheelTrim, deleted outright when the wheel-speed "
+        "controller moved into App::Drive. See this file's own module "
+        "docstring for the historical baseline CSVs and the ticket "
+        "130-006 successor. Not run.")
+
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--no-trim", action="store_true",
                         help="disable the velocity trim (open loop)")

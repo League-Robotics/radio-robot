@@ -270,7 +270,7 @@ void scenarioWindowOutlivesCompletion() {
   constexpr uint32_t kMoveId = 900;
   constexpr uint32_t kCorrEnqueue = 9001;
   constexpr uint32_t kCorrResend = 9002;
-  constexpr float kStopTime = 200.0f;  // [ms] short TIME stop -- 5 cycles @ RobotLoop::kCycle=40ms
+  constexpr float kStopTime = 200.0f;  // [ms] short TIME stop -- 4 cycles @ RobotLoop::kCycle=50ms (130-007: was 5 @ 40ms)
 
   sim.injectMove(/*v_x=*/150.0f, /*v_y=*/0.0f, /*omega=*/0.0f, MoveStopKind::kTime, kStopTime,
                  /*timeout=*/5000.0f, /*replace=*/false, kMoveId, kCorrEnqueue);
@@ -327,7 +327,14 @@ void scenarioErrFullNotRecorded() {
   // that every line injected before one step() is consumed within THAT
   // step, in order -- so move 6 is routed against a queue already filled
   // by moves 1-5, exactly as a real back-to-back burst would be.
-  constexpr float kEachStopTime = 120.0f;  // [ms] short enough to drain within this scenario
+  // 130-007: 120 -> 300ms. At RobotLoop::kCycle=40ms, 3 steps (below) landed
+  // at exactly 120ms -- the fill moves' own TIME stop threshold -- with zero
+  // margin (relying on the completion check happening to fall just short of
+  // triggering). At kCycle=50ms, 3 steps is 150ms, which would OVERSHOOT a
+  // 120ms threshold and complete the first fill move before this scenario
+  // ever checks "still filling" -- widened so 3 steps (150ms) stays
+  // comfortably under the threshold regardless of cycle period.
+  constexpr float kEachStopTime = 300.0f;  // [ms] short enough to drain within this scenario
   constexpr float kTimeout = 5000.0f;        // [ms]
   const uint32_t kFillIds[5] = {950, 951, 952, 953, 954};
   const uint32_t kFillCorrs[5] = {9501, 9502, 9503, 9504, 9505};
@@ -356,9 +363,9 @@ void scenarioErrFullNotRecorded() {
   checkUintEq(rejectErr, static_cast<uint32_t>(msg::ErrCode::ERR_FULL),
               "the 6th move is rejected with ERR_FULL -- the queue was genuinely full");
 
-  // Let all five fill moves run to completion and drain (5 * 120ms = 600ms;
+  // Let all five fill moves run to completion and drain (5 * 300ms = 1500ms;
   // run comfortably longer).
-  sim.step(40);  // 40 * 40ms = 1.6s
+  sim.step(40);  // 40 * 50ms = 2.0s
   (void)sim.drainTelemetry();
   checkTrue(!sim.planner().active(), "the planner is idle -- all five fill moves completed and drained");
   checkUintEq(static_cast<uint32_t>(queueDepth(sim.planner())), 0u, "queue is fully drained");

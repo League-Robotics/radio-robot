@@ -1,5 +1,7 @@
-// drive.h -- App::Drive: the wheel-drive subsystem and the owner of the
-// WHEELS command's whole lifecycle. Two responsibilities, and only two:
+// drive.h -- App::Drive: the wheel-drive subsystem, the owner of the
+// WHEELS command's whole lifecycle, AND (130-004, wheel-speed-controller-
+// moves-into-drive.md -- DECIDED, stakeholder 2026-08-01) the ONE unified
+// wheel-speed controller every cmdVelocity writer shares. Responsibilities:
 //
 //   1. The bounded wheel command (command-ingestion-ring-buffered-comms-
 //      subsystem-routing-two-stops.md §4). `WHEELS` is the dumb teleop
@@ -8,11 +10,60 @@
 //      Before this change those four pieces of state lived as loose members
 //      on App::RobotLoop and were overwritten in place by each arriving
 //      command, so a superseded command never completed and never acked.
-//   2. Actuation: commanded wheel SPEED -> motor duty, via the per-wheel
-//      open-loop calibration and the crawl shaper, then the leaf writes.
-//
-// There is no controller here -- duty is open loop from calibrated speed.
-// Closed-loop wheel control lives in Motion::Planner's own duty stage.
+//   2. Actuation: commanded wheel SPEED -> motor duty, through the
+//      three-timescale controller below, then the crawl shaper and the
+//      leaf writes. EVERY writer (WHEELS teleop and a planner Move alike)
+//      goes through the SAME tick() -- no privileged or degraded path.
+//   3. The controller itself, at three timescales (parameter table and
+//      full derivation: wheel-speed-controller-moves-into-drive.md Phase
+//      2). `correctedCommand()`/tick() carry the per-tick detail; this is
+//      the shape:
+//        Stage A (offline)   -- the calibrated conversion map (the
+//                                existing per-wheel/per-direction affine
+//                                correction, corrGain_/corrIntercept_),
+//                                corrected by Stage C's bias:
+//                                v_corrected = map(v_cmd) + bias;
+//                                dutyFF = dutyPerSpeed * v_corrected. The
+//                                map's SLOPE is never adapted online.
+//        Stage B (fast)      -- a small-authority PID (p + i + kaff*a_cmd,
+//                                clamped ±pidMax) on wheel-speed error.
+//                                Because Stage A+C already carry all DC
+//                                content, its integrator idles near zero
+//                                -- the condition under which a loop near
+//                                stiction does not stick-slip (the
+//                                documented 2-3 Hz duty-domain limit
+//                                cycle this design avoids by construction,
+//                                not by tuning). Reset on estop().
+//        Stage C (slow)      -- bounded adaptation of ONE parameter, the
+//                                map's additive `bias` -- NEVER the
+//                                slope. Runs only when steady
+//                                (|a_cmd| < aSteady), at/above the speed
+//                                floor (vMin), and on a fresh, connected,
+//                                non-frozen measurement. tauAdapt-slow
+//                                (design tens of seconds), clamped to
+//                                ±biasMax (the population-measured
+//                                spread, ticket 001), reset on estop() --
+//                                see setAdaptationBounds()'s own doc
+//                                comment for the full fail-closed
+//                                contract (issue 04's safety intent,
+//                                folded in and superseded here; sprint
+//                                130 Architecture Design Rationale
+//                                Decision 3).
+//        Stage D (unchanged) -- the crawl shaper / quiet-at-zero
+//                                baseline below; the breakaway dead zone
+//                                stays feedforward-owned, never
+//                                rediscovered by the adaptive bias.
+//      Wheels-solid contract enforcement: a sub-vMin nonzero command is
+//      rounded UP to vMin (applySpeedFloor(), Open Question 2 --
+//      matches the project's own established boost-to-breakaway fix
+//      rather than silently stalling the wheel); a sustained large error
+//      while BOTH bias and the fast PID sit pinned at their configured
+//      authority raises a deficit-flag policy (deficitLeft()/Right()) --
+//      the robot runs slow, loudly, never silently. `Motion::Planner`
+//      sheds ALL wheel-actuation code (Motion::WheelTrim, its own former
+//      home) -- see wheel_trim.h's own header, parked pending ticket
+//      005's deletion; Motion::Planner publishes cmdVelocity/cmdAccel
+//      only, from here on.
 //
 // LOAD-BEARING (the 2026-07-31 runaway): estop() re-asserts its commanded
 // zero for kStopEnforceTicks cycles, and unconditionally for as long as
@@ -25,7 +76,17 @@
 //
 // Two-method contract, adopted from Motion::Planner (planner.h) so the two
 // motion deciders read the same way at their call sites:
-//   tick(speedLeft, speedRight)      -- DO THE WORK: shape and write duty.
+//   tick(const Types::RobotState&)   -- DO THE WORK: shape and write duty,
+//                                       reading whichever subsystem's
+//                                       cmdVelocity/cmdAccel the blackboard
+//                                       currently carries (130-003: the
+//                                       signature widened from two loose
+//                                       speed floats to the whole state so
+//                                       the forthcoming unified controller
+//                                       -- ticket 004 -- can also see
+//                                       cmdAccel and each wheel's measured
+//                                       sampleTime/freshness, without a
+//                                       second signature change).
 //   update(Types::RobotState&, now)  -- SAVE results into the blackboard:
 //                                       expire the armed command and
 //                                       publish this subsystem's targets,
@@ -87,6 +148,15 @@ class Drive {
     calibrated_ = left != 0.0f && right != 0.0f;
   }
 
+  // Live observability of the installed conversion scale (130-005, issue
+  // 04's folded-in observability mandate -- "ships with the feature, not
+  // after it") -- wired into the wire Telemetry frame / TestGUI so the
+  // baked calibration this robot is actually running is visible without a
+  // firmware rebuild, same reasoning as biasLeft()/Right()/pidLeft()/
+  // Right() below.
+  float dutyPerSpeedLeft() const { return dutyPerSpeedLeft_; }    // [duty/(mm/s)]
+  float dutyPerSpeedRight() const { return dutyPerSpeedRight_; }  // [duty/(mm/s)]
+
   // Commanded->actual correction, per wheel per direction of approach
   // (docs/design/wheel-speed-command-mapping.md). Drive inverts the measured
   // line to seed the feedforward. gain 1 / intercept 0 = no correction.
@@ -99,6 +169,62 @@ class Drive {
   // and the shipped default -- see Config::DriveBootConfig's own doc
   // comment for why 0.20 was wrong).
   void setCrawlPulse(float crawlPulse) { crawlPulse_ = crawlPulse; }
+
+  // Stage B's wire-tunable gains (wheel-speed-controller-moves-into-
+  // drive.md's parameter table, rows 8-12) -- fail-closed default (every
+  // field 0) produces exactly zero PID contribution, the SAME "all-zero
+  // gains, exactly zero correction" contract Motion::WheelTrim's own
+  // header documents (wheel_trim.h) and this ticket's own testing
+  // requirement carries forward. Shipped at all-zero on every robot as
+  // of 130-004 (Open Question 4): the profiler's own every-tick
+  // re-plan-from-measured-position may already supply equivalent
+  // correction at the planning layer, and this stage's live bench
+  // tuning is ticket 006's job, on hardware -- not a judgment call this
+  // ticket can make with tovez hard-silent.
+  struct ControlGains {
+    float kp = 0.0f;      // [1] dimensionless: mm/s of PID output per mm/s of error
+    float ki = 0.0f;      // [1/s]
+    float iMax = 0.0f;    // [mm/s] integrator clamp; 0 disables integration
+    float kaff = 0.0f;    // [s] accel feedforward ~= the plant time constant
+    // Total fast-loop authority; 0 disables the clamp. Also gates the
+    // deficit-flag policy below (updateDeficit()'s own doc comment,
+    // drive.cpp): with pidMax == 0, the fast PID can never register as
+    // "saturated," so the deficit flag never raises regardless of
+    // deficitThreshold/deficitWindow -- both stages activate together.
+    float pidMax = 0.0f;  // [mm/s]
+  };
+  void setControlGains(const ControlGains& gains) { gains_ = gains; }
+  const ControlGains& controlGains() const { return gains_; }
+
+  // Stage C / deficit-flag policy's generated-constant bounds (parameter
+  // table rows 4/6/7/13) -- population-measured (ticket 001) speed floor
+  // and adaptation authority, plus the design-chosen adaptation time
+  // constant/steady-gate/deficit thresholds. `tauAdapt <= 0` OR
+  // `aSteady <= 0` disables Stage C's adaptation outright (bias stays
+  // wherever estop()/the boot default left it, the same "0 = off"
+  // convention crawlPulse_/ControlGains::iMax/pidMax already use);
+  // `deficitThreshold <= 0` OR `deficitWindow <= 0` disables the
+  // deficit-flag policy outright.
+  struct AdaptationBounds {
+    float vMin = 0.0f;              // [mm/s] speed floor (Open Question 2)
+    float biasMax = 0.0f;           // [mm/s] Stage C trim authority clamp
+    float tauAdapt = 0.0f;          // [s] Stage C adaptation time constant; <=0 disables
+    float aSteady = 0.0f;           // [mm/s^2] |a_cmd| below this counts as steady
+    float deficitThreshold = 0.0f;  // [mm/s] sustained error magnitude that flags a deficit
+    float deficitWindow = 0.0f;     // [ms] how long the deficit condition must sustain
+  };
+  void setAdaptationBounds(const AdaptationBounds& bounds) { bounds_ = bounds; }
+  const AdaptationBounds& adaptationBounds() const { return bounds_; }
+
+  // --- Stage B/C observability (wired into the wire Telemetry frame /
+  // TestGUI by 130-005, per issue 04's own folded-in observability
+  // mandate -- App::Telemetry::update() reads these directly) ---
+  float biasLeft() const { return biasLeft_; }      // [mm/s] Stage C's adapted parameter
+  float biasRight() const { return biasRight_; }    // [mm/s]
+  float pidLeft() const { return lastPidLeft_; }    // [mm/s] last-computed Stage B output
+  float pidRight() const { return lastPidRight_; }  // [mm/s]
+  bool deficitLeft() const { return deficitLeft_; }
+  bool deficitRight() const { return deficitRight_; }
 
   // False until setDutyPerSpeed() has landed a real (nonzero) pair. An
   // uncalibrated Drive REFUSES to drive: tick() writes no duty at all,
@@ -134,12 +260,16 @@ class Drive {
 
   // --- The two-method contract ---
 
-  // Convert the commanded wheel speeds to duty (per-wheel calibration ->
-  // crawl shaping -> quiet-at-zero) and write the leaves. Takes the speeds
-  // as parameters rather than reading its own targets: the loop hands it
-  // whichever subsystem's targets the blackboard currently carries, so
-  // there is one actuation path regardless of who decided the motion.
-  void tick(float speedLeft, float speedRight);  // [mm/s] [mm/s] signed
+  // Convert the commanded wheel speeds to duty -- Stage A (calibration +
+  // bias) -> Stage B (fast PID) -> Stage C (bias adaptation, computed
+  // this tick for NEXT tick's Stage A) -> Stage D (crawl shaping ->
+  // quiet-at-zero) -- and write the leaves. Reads state.wheelLeft/
+  // Right.cmdVelocity/cmdAccel/velocity/sampleTime/connected rather than
+  // its own targets: the loop hands it whichever subsystem's targets the
+  // blackboard currently carries, so there is one actuation path
+  // regardless of who decided the motion. See this file's own header
+  // for the full per-stage algorithm.
+  void tick(const Types::RobotState& state);
 
   // Expire an armed command whose deadline has passed (latching the
   // completion event), then publish this subsystem's targets into
@@ -161,8 +291,14 @@ class Drive {
 
  private:
   // Invert the measured line for one wheel: the command whose ACTUAL
-  // result is `desired`. `previous` picks the accel/decel branch.
-  float correctedCommand(float desired, float previous, bool leftWheel) const;
+  // result is `desired`, PLUS `bias` (Stage C's adapted parameter) --
+  // see drive.cpp's own doc comment for why `bias` must be folded in
+  // here rather than added at the call site (the "stop is stop" guard
+  // below must cover the bias term too, or a nonzero adapted bias would
+  // creep a commanded-zero wheel). `previous` picks the accel/decel
+  // branch.
+  float correctedCommand(float desired, float previous, bool leftWheel,
+                         float bias) const;
 
   // Correction table [wheel][direction]: 0 = left/right, 0 = accel/decel.
   float corrGain_[2][2] = {{1.0f, 1.0f}, {1.0f, 1.0f}};
@@ -173,6 +309,61 @@ class Drive {
 
   // Crawl shaper (drive.cpp).
   float crawlDuty(float duty, float& carry) const;
+
+  // --- Stage B/C: the wheel-speed controller (130-004; see this file's
+  // own header for the full algorithm) ---
+
+  // Stage B's per-wheel PID computation. `integral` is the caller's own
+  // persistent state (pidIntegralLeft_/Right_ below), mutated in place.
+  // `steady` gates the integrator exactly like Motion::WheelTrim's own
+  // Hold-phase gate (wheel_trim.cpp) -- see drive.cpp's own doc comment.
+  float fastPid(float& integral, float err, float aCmd, float dt,
+               bool steady) const;
+
+  // Stage C's bounded bias adaptation -- mutates `bias` in place.
+  // `vCmdMagnitude` is the (already speed-floored) |commanded speed|,
+  // for the vMin gate. See drive.cpp's own doc comment for the full
+  // steady/floor/freshness gate.
+  void adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
+                bool fresh, float dt) const;
+
+  // Wheels-solid speed floor (Open Question 2, resolved -- see this
+  // file's own header). A stop (0.0f exactly) is never floored.
+  float applySpeedFloor(float commanded) const;
+
+  // Sustained-condition latch for the deficit-flag policy -- mutates
+  // `since`/`latched` in place. See drive.cpp's own doc comment.
+  void updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
+                     bool& latched) const;
+
+  // Guards the same now<sampleTime clock-domain edge Telemetry::ageOf()
+  // guards (telemetry.cpp) -- returns 0 rather than an underflowed huge
+  // value.
+  uint32_t sampleAge(uint32_t now, uint32_t sampleTime) const;
+
+  ControlGains gains_;
+  AdaptationBounds bounds_;
+
+  float pidIntegralLeft_ = 0.0f;   // [mm/s] Stage B integrator state
+  float pidIntegralRight_ = 0.0f;  // [mm/s]
+  float lastPidLeft_ = 0.0f;       // [mm/s] observability: last-computed Stage B output
+  float lastPidRight_ = 0.0f;      // [mm/s]
+
+  float biasLeft_ = 0.0f;   // [mm/s] Stage C's ONE adapted parameter, per wheel
+  float biasRight_ = 0.0f;  // [mm/s]
+
+  // Deficit-flag sustained-condition tracking (0 == not currently
+  // accumulating; see updateDeficit()'s own doc comment, drive.cpp).
+  uint32_t deficitSinceLeft_ = 0;   // [ms]
+  uint32_t deficitSinceRight_ = 0;  // [ms]
+  bool deficitLeft_ = false;
+  bool deficitRight_ = false;
+
+  // Wheel-measurement freshness gate for Stage C (see adaptBias()'s own
+  // doc comment, drive.cpp) -- generous relative to one control period
+  // (~47-50ms) plus the brick's own per-wheel skew, so normal per-cycle
+  // jitter never trips it; a genuinely stale/disconnected reading does.
+  static constexpr uint32_t kMaxSampleAge = 200;  // [ms]
 
   Devices::Motor& left_;
   Devices::Motor& right_;
@@ -213,9 +404,9 @@ class Drive {
   // being handed to the leaves instead of being trusted after one write.
   uint8_t stopEnforceCountdown_ = 0;
 
-  // 30 cycles at RobotLoop::kCycle(40ms) == 1.2s -- comfortably past the
-  // <=0.15s measured stop-observed bound, without holding the
-  // re-assertion open indefinitely (App cannot reference
+  // 30 cycles at RobotLoop::kCycle(50ms, 130-007: was 40ms) == 1.5s --
+  // comfortably past the <=0.15s measured stop-observed bound, without
+  // holding the re-assertion open indefinitely (App cannot reference
   // App::RobotLoop::kCycle directly here without a layer cycle, so this
   // is a plain literal, same as NezhaMotor's own kMinWriteIntervalUs
   // comment coupling).

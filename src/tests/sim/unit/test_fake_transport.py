@@ -62,6 +62,13 @@ def test_fake_transport_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            # `src` itself, because firmware headers include each other as
+            # "firm/types/robot_state.h" -- a repo-root-relative path that
+            # -I src/firm alone cannot resolve. Every working harness in this
+            # directory passes both; these two were missing it and had been
+            # failing to COMPILE (not assert) as a result.
+            "-I",
+            str(_REPO_ROOT / "src"),
             "-I",
             str(_TESTS_SIM_DIR),
             "-o",

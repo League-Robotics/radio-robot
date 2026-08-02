@@ -29,6 +29,9 @@ _COMMS_SRC = _SOURCE_DIR / "app" / "comms.cpp"
 # real App::Telemetry (for its flags()/mode() -- the two Telemetry-sourced
 # STATUS fields), so telemetry.cpp joins the compile graph.
 _TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
+# 130-005: Telemetry::update() takes a const App::Drive& now (its own
+# observability accessors) -- drive.cpp must link too.
+_DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 _WIRE_SRC = _SOURCE_DIR / "messages" / "wire.cpp"
 _WIRE_RUNTIME_SRC = _SOURCE_DIR / "messages" / "wire_runtime.cpp"
 
@@ -55,6 +58,7 @@ def test_app_comms_harness_compiles_and_passes(tmp_path):
     assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
     assert _COMMS_SRC.is_file(), f"comms.cpp missing: {_COMMS_SRC}"
     assert _TELEMETRY_SRC.is_file(), f"telemetry.cpp missing: {_TELEMETRY_SRC}"
+    assert _DRIVE_SRC.is_file(), f"drive.cpp missing: {_DRIVE_SRC}"
     assert _WIRE_SRC.is_file(), f"wire.cpp missing (run scripts/gen_messages.py?): {_WIRE_SRC}"
     assert _WIRE_RUNTIME_SRC.is_file(), f"wire_runtime.cpp missing: {_WIRE_RUNTIME_SRC}"
     assert _SOURCE_DIR.is_dir(), f"src/firm/ tree missing: {_SOURCE_DIR}"
@@ -84,6 +88,7 @@ def test_app_comms_harness_compiles_and_passes(tmp_path):
             str(_HARNESS_SRC),
             str(_COMMS_SRC),
             str(_TELEMETRY_SRC),
+            str(_DRIVE_SRC),
             str(_WIRE_SRC),
             str(_WIRE_RUNTIME_SRC),
         ],
