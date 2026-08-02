@@ -2,9 +2,11 @@
 id: '006'
 title: 'Bench acceptance: controller A/B, WHEELS-holds-speed-under-drag, +500 spec
   re-verification'
-status: open
-use-cases: [SUC-001]
-depends-on: ['005']
+status: in-progress
+use-cases:
+- SUC-001
+depends-on:
+- '005'
 github-issue: ''
 issue:
 - wheel-speed-controller-moves-into-drive.md
