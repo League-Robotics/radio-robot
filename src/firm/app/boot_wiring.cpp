@@ -46,8 +46,8 @@ RobotGraph::Resolved RobotGraph::resolve(const BootOverrides& overrides) {
   // genuinely delivers its own cycle time (see BootOverrides' own doc
   // comment, boot_wiring.h).
   r.plannerLimits = bootPlannerLimits(r.drivetrainConfig, r.trackWidth);
-  if (overrides.controlPeriod) r.plannerLimits.controlPeriod = *overrides.controlPeriod;
-  if (overrides.actuationDelay) r.plannerLimits.actuationDelay = *overrides.actuationDelay;
+  if (overrides.controlPeriod) r.plannerLimits.plant.controlPeriod = *overrides.controlPeriod;
+  if (overrides.actuationDelay) r.plannerLimits.plant.actuationDelay = *overrides.actuationDelay;
 
   return r;
 }

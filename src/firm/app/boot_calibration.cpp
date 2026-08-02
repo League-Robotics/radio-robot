@@ -33,40 +33,25 @@ Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainC
   const Config::PlannerBootConfig src = Config::defaultPlannerLimits();
 
   Motion::PlannerLimits out;
-  out.vMax = src.vMax;
-  out.aMax = src.aMax;
-  out.aDecel = src.aDecel;
-  out.omegaMax = src.omegaMax;
-  out.alphaMax = src.alphaMax;
-  out.alphaDecel = src.alphaDecel;
-  out.jerkMax = src.jerkMax;
-  out.yawJerkMax = src.yawJerkMax;
+  out.ceilings.vMax = src.vMax;
+  out.ceilings.aMax = src.aMax;
+  out.ceilings.aDecel = src.aDecel;
+  out.ceilings.omegaMax = src.omegaMax;
+  out.ceilings.alphaMax = src.alphaMax;
+  out.ceilings.alphaDecel = src.alphaDecel;
+  out.ceilings.jerkMax = src.jerkMax;
+  out.ceilings.yawJerkMax = src.yawJerkMax;
 
-  out.controlPeriod = src.controlPeriod;
-  out.actuationDelay = src.actuationDelay;
+  out.plant.controlPeriod = src.controlPeriod;
+  out.plant.actuationDelay = src.actuationDelay;
 
-  out.requireSettle = src.requireSettle;
-  out.settleRestVelocity = src.settleRestVelocity;
-  out.settleRestOmega = src.settleRestOmega;
-  out.settleWindow = src.settleWindow;
-  out.settleEpsilonLinear = src.settleEpsilonLinear;
-  out.settleEpsilonAngular = src.settleEpsilonAngular;
-  out.headingHoldGain = src.headingHoldGain;
+  out.landing.settleRestVelocity = src.settleRestVelocity;
+  out.landing.settleRestOmega = src.settleRestOmega;
+  out.landing.settleEpsilonLinear = src.settleEpsilonLinear;
+  out.landing.settleEpsilonAngular = src.settleEpsilonAngular;
+  out.landing.decelPlanFraction = src.decelPlanFraction;
 
-  out.velKff = src.velKff;
-  out.velKp = src.velKp;
-  out.velKi = src.velKi;
-  out.velIMax = src.velIMax;
-  out.velKaff = src.velKaff;
-  out.velIAccelGate = src.velIAccelGate;
-  out.dutyFloor = src.dutyFloor;
-
-  out.trimKp = src.trimKp;
-  out.trimKi = src.trimKi;
-  out.trimIMax = src.trimIMax;
-  out.trimKaff = src.trimKaff;
-  out.trimMax = src.trimMax;
-  out.decelPlanFraction = src.decelPlanFraction;
+  out.tracking.headingHoldGain = src.headingHoldGain;
 
   // trackWidth/velocityFilterWeight are the two PlannerLimits fields NOT
   // sourced from Config::PlannerBootConfig -- see that struct's own doc
@@ -74,16 +59,17 @@ Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainC
   // (scrub-corrected, by default effectiveTrackWidth()'s) value;
   // velocityFilterWeight mirrors the robot JSON's vel_filt_alpha EMA
   // weight, with the same >0.05 sanity floor main.cpp always applied.
-  out.trackWidth = trackWidth;
-  out.velocityFilterWeight = drivetrainConfig.vel_filt_alpha > 0.05f
-                                 ? drivetrainConfig.vel_filt_alpha
-                                 : 1.0f;
+  out.plant.trackWidth = trackWidth;
+  out.plant.velocityFilterWeight = drivetrainConfig.vel_filt_alpha > 0.05f
+                                        ? drivetrainConfig.vel_filt_alpha
+                                        : 1.0f;
   return out;
 }
 
 void installShaperLimits(Motion::Planner& planner, const Motion::PlannerLimits& limits) {
-  planner.applyShaperLimits(limits.aMax, limits.aDecel, limits.alphaMax, limits.alphaDecel,
-                            limits.jerkMax, limits.yawJerkMax);
+  planner.applyShaperLimits(limits.ceilings.aMax, limits.ceilings.aDecel,
+                            limits.ceilings.alphaMax, limits.ceilings.alphaDecel,
+                            limits.ceilings.jerkMax, limits.ceilings.yawJerkMax);
 }
 
 void installRotationCalibration(RobotLoop& robotLoop,

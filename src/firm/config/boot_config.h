@@ -228,31 +228,37 @@ struct WheelControllerBootConfig {
 // wheel_controller_config_for_config().
 WheelControllerBootConfig defaultWheelControllerConfig();
 
-// PlannerBootConfig -- Motion::Planner's full tuning surface (profile
-// ceilings, loop timing, settle/rest, duty-stage PID, trim loop), baked
-// from the active robot JSON's `planner` block
-// (data/robots/robot_config.schema.json).
+// PlannerBootConfig -- Motion::Planner's tuning surface (profile ceilings,
+// loop timing, settle/rest, heading hold), baked from the active robot
+// JSON's `planner` block (data/robots/robot_config.schema.json).
 //
 // Field-for-field mirror of the TUNABLE subset of Motion::PlannerLimits
 // (src/motion/planner/planner_types.h) -- NOT the whole struct: trackWidth
-// and velocityFilterWeight stay sourced from DrivetrainConfig, and
-// otosStaleness/headingOtosWeight are not set here -- they keep
-// PlannerLimits' own struct defaults. Declared independently here, rather
-// than reusing Motion::PlannerLimits directly, because config/ may depend
-// only on messages/ (docs/design/design.md §5's dependency diagram),
-// never on src/motion -- the same reasoning EstimatorBootConfig's own doc
-// comment above gives for not reusing App::StateEstimator::FusionWeights
-// directly. main.cpp (the one place both types are visible) converts this
-// struct into a Motion::PlannerLimits, the same toDeviceMotorConfig()
-// pattern already uses for msg::MotorConfig -> Devices::MotorConfig.
+// and velocityFilterWeight stay sourced from DrivetrainConfig. Declared
+// independently here, rather than reusing Motion::PlannerLimits directly,
+// because config/ may depend only on messages/ (docs/design/design.md
+// §5's dependency diagram), never on src/motion -- the same reasoning
+// EstimatorBootConfig's own doc comment above gives for not reusing
+// App::StateEstimator::FusionWeights directly. main.cpp (the one place
+// both types are visible) converts this struct into a
+// Motion::PlannerLimits, the same toDeviceMotorConfig() pattern already
+// uses for msg::MotorConfig -> Devices::MotorConfig.
 //
-// velKff/velKaff/trimKaff are DERIVED, not stored raw in the robot JSON:
-// the JSON carries the measured plant primitives (`planner.plant_gain`
-// [mm/s per duty], `planner.plant_tau` [s]) and gen_boot_config.py's
-// planner_config_for_config() computes velKff = 1/plant_gain,
-// velKaff = plant_tau/plant_gain, trimKaff = plant_tau/2 once, in the
-// generator -- store the measurement, derive the gain, so the derivation
-// stays in one reviewed place.
+// 130-009 (PlannerLimits 34->23(->18) reshape): this struct's own dead
+// fields are cut alongside PlannerLimits' -- `requireSettle`/
+// `settleWindow` (the settle-confirm defer path, dissolved by 130-008),
+// the M4 duty-stage gains `velKff`/`velKp`/`velKi`/`velIMax`/`velKaff`/
+// `velIAccelGate`/`dutyFloor` (WheelPid/stageDuty() deleted by 130-007),
+// and the planner-side velocity trim `trimKp`/`trimKi`/`trimIMax`/
+// `trimKaff`/`trimMax` (Motion::WheelTrim deleted by 130-005, superseded
+// by App::Drive's own controller -- Config::WheelControllerBootConfig
+// above is that controller's config, a disjoint field set). The JSON's
+// `plant_gain`/`plant_tau` measured primitives stay (still read for
+// `trimKaff`'s derivation... no -- trimKaff itself is cut too; plant_tau
+// alone has no PlannerBootConfig consumer left as of this ticket, kept in
+// the schema/JSON as recorded measured data, same "declared but unread by
+// this generator" posture ShaperBootConfig's own doc comment above
+// documents for a different struct).
 //
 // REQUIRED, same fail-closed posture as every other struct here: a robot
 // JSON missing the `planner` block (or any of its keys) fails codegen
@@ -274,32 +280,12 @@ struct PlannerBootConfig {
   float actuationDelay = 0.0f;  // [ms] command-staged-to-wheels latency
 
   // Settle/rest and heading hold.
-  bool requireSettle = false;
   float settleRestVelocity = 0.0f;    // [mm/s]
   float settleRestOmega = 0.0f;       // [rad/s]
-  float settleWindow = 0.0f;          // [ms] max extra wait past profile-complete
   float settleEpsilonLinear = 0.0f;   // [mm]
   float settleEpsilonAngular = 0.0f;  // [rad]
   float headingHoldGain = 0.0f;       // [1/s] rad/s of correction per rad of error
 
-  // Duty-stage PID (Motion::Planner's M4 stage). velKff/velKaff derived
-  // from planner.plant_gain/planner.plant_tau -- see this struct's own
-  // doc comment above.
-  float velKff = 0.0f;          // [duty/(mm/s)] feedforward slope, = 1/plant_gain
-  float velKp = 0.0f;           // [duty/(mm/s)] proportional
-  float velKi = 0.0f;           // [duty/(mm/s)/s] integral rate
-  float velIMax = 0.0f;         // [duty] integrator clamp
-  float velKaff = 0.0f;         // [duty/(mm/s^2)] accel feedforward, = plant_tau/plant_gain
-  float velIAccelGate = 0.0f;   // [mm/s^2] integral ramp gate
-  float dutyFloor = 0.0f;       // [-1,1] stiction floor
-
-  // Velocity-domain trim (wheel_trim.h). trimKaff derived from
-  // planner.plant_tau -- see this struct's own doc comment above.
-  float trimKp = 0.0f;             // [1] dimensionless: mm/s of trim per mm/s of error
-  float trimKi = 0.0f;             // [1/s]
-  float trimIMax = 0.0f;           // [mm/s] integrator clamp
-  float trimKaff = 0.0f;           // [s] accel feedforward, = plant_tau/2
-  float trimMax = 0.0f;            // [mm/s] total trim authority
   float decelPlanFraction = 0.0f;  // [1] fraction of decel ceiling to plan brake-start against
 };
 

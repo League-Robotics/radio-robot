@@ -1,23 +1,34 @@
 // pose_ownership_test.cpp -- SUC-002 / 128-016 regression
 // (robot-state-pose-needs-exactly-one-writer.md): Motion::Odometry::
-// integrate() is Types::RobotState::pose's ONE writer. Before this
+// integrate() is Types::RobotState::pose's ONE writer. Before that
 // ticket, Planner::update() ALSO wrote state.pose from its own internal
-// PoseTracker (`pose_`), which blends a fresh OTOS heading whenever
-// limits_.headingOtosWeight > 0 -- a second writer, ordering-dependent on
-// which of Odometry/Planner ran last a given cycle (App::RobotLoop's own
-// publishPose() vs. planner_.update(), robot_loop.cpp). At the shipped
-// default (headingOtosWeight == 0.0) the two writers happened to agree
-// closely enough that the bug was invisible; a nonzero weight made
-// telemetry's pose source silently flip.
+// PoseTracker (`pose_`), which used to blend a fresh OTOS heading
+// whenever `PlannerLimits::headingOtosWeight > 0` -- a second writer,
+// ordering-dependent on which of Odometry/Planner ran last a given cycle
+// (App::RobotLoop's own publishPose() vs. planner_.update(),
+// robot_loop.cpp). At the shipped default (headingOtosWeight == 0.0) the
+// two writers happened to agree closely enough that the bug was
+// invisible; a nonzero weight made telemetry's pose source silently flip.
+//
+// 130-009 deletes `headingOtosWeight`/`otosStaleness` (and the blend call
+// site in Planner::tick() they gated) from PlannerLimits outright -- the
+// feature was live code but configured off in every robot JSON, and the
+// sprint scoped OTOS-heading fusion out to a from-scratch estimator-v2
+// design (clasi/issues/later/estimator-v2-otos-fusion-sim-first.md)
+// rather than reshaping this ad hoc blend. There is consequently no way
+// to construct "OTOS blend configured" any more; this test keeps the
+// underlying invariant it always proved -- Planner::update() never
+// writes state.pose, regardless of what state.otos carries -- which is
+// now true unconditionally rather than only at the shipped default.
 //
 // This test drives the SAME per-cycle order App::RobotLoop::cycle() uses
 // -- Odometry integrates and publishes pose FIRST, the Planner
 // tick()s/update()s SECOND, both against one shared Types::RobotState --
 // with a fresh OTOS heading present every cycle, clearly divergent from
-// the encoder-only heading, and headingOtosWeight configured > 0 (the
-// exact hazard this ticket closes). It asserts state.pose stays
-// bit-for-bit what Odometry alone computed, cycle after cycle, proving
-// Planner::update() no longer touches it at all.
+// the encoder-only heading, so a resurrected blend call site would be
+// caught immediately. It asserts state.pose stays bit-for-bit what
+// Odometry alone computed, cycle after cycle, proving Planner::update()
+// never touches it.
 //
 // Odometry/BodyKinematics are not linked into the standalone `planner`
 // library (this directory's own CMakeLists.txt) -- this test target adds
@@ -63,19 +74,20 @@ void publishPose(Types::RobotState& state, const Odometry& odom) {
 
 void testPlannerNeverWritesStatePoseEvenWithOtosBlendConfigured() {
   PlannerLimits limits;
-  limits.vMax = 600.0f;
-  limits.aMax = 400.0f;
-  limits.aDecel = 300.0f;
-  limits.omegaMax = 8.0f;
-  limits.alphaMax = 12.0f;
-  limits.alphaDecel = 10.0f;
-  limits.trackWidth = kTrackWidth;
-  limits.controlPeriod = kPeriod;
-  limits.otosStaleness = 200;
-  // The exact hazard this ticket closes: a nonzero blend weight used to
-  // make Planner::update() overwrite state.pose with pose_'s OTOS-blended
-  // heading instead of leaving Odometry's write alone.
-  limits.headingOtosWeight = 0.6f;
+  limits.ceilings.vMax = 600.0f;
+  limits.ceilings.aMax = 400.0f;
+  limits.ceilings.aDecel = 300.0f;
+  limits.ceilings.omegaMax = 8.0f;
+  limits.ceilings.alphaMax = 12.0f;
+  limits.ceilings.alphaDecel = 10.0f;
+  limits.plant.trackWidth = kTrackWidth;
+  limits.plant.controlPeriod = kPeriod;
+  // No headingOtosWeight/otosStaleness to configure any more -- 130-009
+  // deleted both fields along with the blend call site they gated (see
+  // this file's own header). The fresh, clearly-divergent OTOS heading
+  // fed into state.otos below is what used to make a nonzero blend
+  // weight overwrite state.pose; it is retained here as a belt-and-braces
+  // check that no blend of any kind fires, configured or not.
 
   Planner planner(limits);
   Odometry odom(kTrackWidth, 0.0f, 0.0f);

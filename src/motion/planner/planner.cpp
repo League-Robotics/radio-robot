@@ -173,20 +173,20 @@ float angularDirection(const Move& m) {
 }  // namespace
 
 Planner::Planner(const PlannerLimits& limits) : limits_(limits) {
-  left_.configure(limits_.velocityFilterWeight);
-  right_.configure(limits_.velocityFilterWeight);
-  pose_.configure(limits_.trackWidth);
+  left_.configure(limits_.plant.velocityFilterWeight);
+  right_.configure(limits_.plant.velocityFilterWeight);
+  pose_.configure(limits_.plant.trackWidth);
 }
 
 void Planner::applyShaperLimits(float aMax, float aDecel, float alphaMax,
                                 float alphaDecel, float jerkMax,
                                 float yawJerkMax) {
-  limits_.aMax = aMax;
-  limits_.aDecel = aDecel;
-  limits_.alphaMax = alphaMax;
-  limits_.alphaDecel = alphaDecel;
-  limits_.jerkMax = jerkMax;
-  limits_.yawJerkMax = yawJerkMax;
+  limits_.ceilings.aMax = aMax;
+  limits_.ceilings.aDecel = aDecel;
+  limits_.ceilings.alphaMax = alphaMax;
+  limits_.ceilings.alphaDecel = alphaDecel;
+  limits_.ceilings.jerkMax = jerkMax;
+  limits_.ceilings.yawJerkMax = yawJerkMax;
   shaperConfigured_ = true;
 }
 
@@ -234,16 +234,17 @@ bool Planner::plannedStop(uint32_t moveId) {
 }
 
 float Planner::plannedStopWindow() const {
-  const float drain = limits_.aDecel > 0.0f
-                          ? 1000.0f * limits_.vMax / limits_.aDecel  // [ms]
+  const float drain = limits_.ceilings.aDecel > 0.0f
+                          ? 1000.0f * limits_.ceilings.vMax / limits_.ceilings.aDecel  // [ms]
                           : 0.0f;
-  // settleWindow when the robot has one configured (it is the same
-  // "how long may arrival take" allowance), else a fixed floor so an
-  // unconfigured planner still converges.
+  // PlannerLimits::settleWindow (the "how long may arrival take" allowance
+  // this used to read when the robot had one configured) is deleted by
+  // 130-009 -- dead everywhere except this one reader once the
+  // settle-confirm defer path itself was dissolved (130-008). Falls back
+  // to this fixed floor unconditionally now, same value every robot JSON
+  // already baked (2500ms), so an unconfigured planner still converges.
   constexpr float kDefaultSettleAllowance = 500.0f;  // [ms]
-  const float settle =
-      limits_.settleWindow > 0.0f ? limits_.settleWindow : kDefaultSettleAllowance;
-  return drain + settle;
+  return drain + kDefaultSettleAllowance;
 }
 
 void Planner::estop() {
@@ -350,7 +351,7 @@ void Planner::rollCommandHistory() {
 TickResult Planner::tick(const Types::RobotState& state) {
   TickResult result{};
   const uint32_t now = state.time.cycleStart;
-  const float dt = limits_.controlPeriod * 0.001f;  // [s]
+  const float dt = limits_.plant.controlPeriod * 0.001f;  // [s]
   ticked_ = true;
 
   // SENSE -> ESTIMATE (sketch §4): filter on fresh samples only, integrate
@@ -370,11 +371,16 @@ TickResult Planner::tick(const Types::RobotState& state) {
   // measure(), where it informs the plan without accumulating (sketch §4:
   // "traveled distance is ALWAYS anchored to measured positions").
   pose_.integrate(left_.basisPosition(), right_.basisPosition());
-  if (state.otos.present && limits_.headingOtosWeight > 0.0f &&
-      static_cast<int32_t>(now - state.otos.sampleTime) <=
-          static_cast<int32_t>(limits_.otosStaleness)) {
-    pose_.blendHeading(state.otos.heading, limits_.headingOtosWeight);
-  }
+  // OTOS heading blend -- DELETED by 130-009 along with
+  // PlannerLimits::headingOtosWeight/otosStaleness: the feature was live
+  // code (pose_.blendHeading()) but configured off in every robot JSON
+  // (OTOS blend weight 0 everywhere), and the sprint scoped it out in
+  // favor of a from-scratch estimator-v2 fusion design (tracked separately,
+  // clasi/issues/later/estimator-v2-otos-fusion-sim-first.md) rather than
+  // reshaping this ad hoc blend. pose_.blendHeading() itself is untouched
+  // (estimation.h/.cpp) -- a future estimator-v2 ticket may call it again
+  // from a different site; only this call site and its two config fields
+  // are gone.
 
   if (!active_.occupied) activateNext(now);
   if (!active_.occupied) {
@@ -414,8 +420,8 @@ TickResult Planner::tick(const Types::RobotState& state) {
   } else if (stallApplies) {
     const bool angular = (m.kind == Move::Kind::Angle);
     const bool atRest =
-        angular ? std::fabs(measured.omega) <= limits_.settleRestOmega
-                : std::fabs(measured.bodyVelocity) <= limits_.settleRestVelocity;
+        angular ? std::fabs(measured.omega) <= limits_.landing.settleRestOmega
+                : std::fabs(measured.bodyVelocity) <= limits_.landing.settleRestVelocity;
     const float epsilon =
         angular ? kStallEpsilonAngular : kStallEpsilonLinear;
     // Progress is measured against where the residual stood when the window
@@ -493,7 +499,7 @@ TickResult Planner::tick(const Types::RobotState& state) {
         // hand-off gap. Exact-multiple thresholds still complete exactly
         // at the threshold, and every Move gets at least one planned tick.
         done = elapsed > 0 && static_cast<float>(elapsed) +
-                                      limits_.controlPeriod >
+                                      limits_.plant.controlPeriod >
                                   m.threshold;
         break;
       case Move::Kind::Distance:
@@ -643,7 +649,7 @@ void Planner::activateNext(uint32_t now) {
   // Captured ONCE here rather than recomputed per tick -- the shape is a
   // property of the Move, and re-deriving it every tick would let a
   // divide-by-a-measured-quantity wander.
-  active_.shape = shapeOf(next, limits_.trackWidth);
+  active_.shape = shapeOf(next, limits_.plant.trackWidth);
   active_.wheelLimits = shapeLimits(active_.shape, limits_);
   if (active_.shape.valid && active_.wheelLimits.aDecel > 0.0f) {
     lastShapeDecel_ = active_.wheelLimits.aDecel;
@@ -662,7 +668,7 @@ void Planner::activateNext(uint32_t now) {
     } else if (next.kind == Move::Kind::Angle) {
       active_.axisPerLambda =
           std::fabs(active_.shape.unitRight - active_.shape.unitLeft) /
-          limits_.trackWidth;
+          limits_.plant.trackWidth;
     }
   }
   if (!(active_.axisPerLambda > 0.0f)) active_.axisPerLambda = 1.0f;
@@ -682,7 +688,7 @@ Planner::Measurement Planner::measure(uint32_t now) const {
   Measurement out;
   out.bodyVelocity = 0.5f * (left_.velocity() + right_.velocity());  // [mm/s]
   out.omega =
-      (right_.velocity() - left_.velocity()) / limits_.trackWidth;  // [rad/s]
+      (right_.velocity() - left_.velocity()) / limits_.plant.trackWidth;  // [rad/s]
   if (!active_.occupied) return out;
 
   // Anticipation: how far the body still travels between the last measured
@@ -703,7 +709,7 @@ Planner::Measurement Planner::measure(uint32_t now) const {
   // plant fails to track, the error is bounded by one sample interval and
   // fully corrected by the next anchor; it never accumulates, because the
   // pose itself is anchored to measured positions.
-  const float delay = limits_.actuationDelay * 0.001f;  // [s]
+  const float delay = limits_.plant.actuationDelay * 0.001f;  // [s]
   const float ageLeft = ageSeconds(now, left_.basisTime());    // [s]
   const float ageRight = ageSeconds(now, right_.basisTime());  // [s]
   const float elapsedLeft = delay > 0.0f ? cmdLeftPrevious_ : cmdLeft_;
@@ -714,7 +720,7 @@ Planner::Measurement Planner::measure(uint32_t now) const {
       elapsedRight * ageRight + cmdRight_ * delay;  // [mm]
   const float predictPath = 0.5f * (predictLeft + predictRight);       // [mm]
   const float predictHeading =
-      (predictRight - predictLeft) / limits_.trackWidth;               // [rad]
+      (predictRight - predictLeft) / limits_.plant.trackWidth;               // [rad]
 
   const Move& m = active_.move;
   switch (m.kind) {
@@ -758,8 +764,8 @@ bool Planner::settleReached(const Measurement& measured, float dt) const {
   // completion test. Both axes must be quiet -- a stop that left the robot
   // spinning is not a stop.
   if (m.kind == Move::Kind::Stop) {
-    return std::fabs(measured.bodyVelocity) <= limits_.settleRestVelocity &&
-           std::fabs(measured.omega) <= limits_.settleRestOmega;
+    return std::fabs(measured.bodyVelocity) <= limits_.landing.settleRestVelocity &&
+           std::fabs(measured.omega) <= limits_.landing.settleRestOmega;
   }
   if (m.velocityKind != Move::VelocityKind::Twist) return false;
   switch (m.kind) {
@@ -769,12 +775,12 @@ bool Planner::settleReached(const Measurement& measured, float dt) const {
       return false;  // nothing physical to confirm
     case Move::Kind::Distance:
       return std::fabs(measured.anchoredRemaining) <=
-                 limits_.settleEpsilonLinear &&
-             std::fabs(measured.bodyVelocity) <= limits_.settleRestVelocity;
+                 limits_.landing.settleEpsilonLinear &&
+             std::fabs(measured.bodyVelocity) <= limits_.landing.settleRestVelocity;
     case Move::Kind::Angle:
       return std::fabs(measured.anchoredRemaining) <=
-                 limits_.settleEpsilonAngular &&
-             std::fabs(measured.omega) <= limits_.settleRestOmega;
+                 limits_.landing.settleEpsilonAngular &&
+             std::fabs(measured.omega) <= limits_.landing.settleRestOmega;
   }
   return false;
 }
@@ -821,10 +827,10 @@ float Planner::boundaryLambda(float dt) const {
   if (pendingCount_ == 0) return 0.0f;
   // Fail closed: never plan a hand-off we have no configured authority to
   // brake out of.
-  if (limits_.aDecel <= 0.0f) return 0.0f;
+  if (limits_.ceilings.aDecel <= 0.0f) return 0.0f;
 
   const Move& next = pending_[0];
-  const MoveShape nextShape = shapeOf(next, limits_.trackWidth);
+  const MoveShape nextShape = shapeOf(next, limits_.plant.trackWidth);
   if (!nextShape.valid || !active_.shape.valid) return 0.0f;
 
   const bool exactRatio = shapesCompatible(active_.shape, nextShape);
@@ -869,8 +875,8 @@ float Planner::boundaryLambda(float dt) const {
     // does today (measured: 433 mm/s of misinterpreted per-wheel command).
     constexpr int kHandoffBlendCycles = 8;
     const float wheelDecelCeiling = axisOf(active_.move) == Axis::Angular
-        ? limits_.alphaDecel * 0.5f * limits_.trackWidth
-        : limits_.aDecel;
+        ? limits_.ceilings.alphaDecel * 0.5f * limits_.plant.trackWidth
+        : limits_.ceilings.aDecel;
     cap = std::min(cap, curvatureHandoffLambdaCap(active_.shape, nextShape,
                                                   wheelDecelCeiling, dt,
                                                   kHandoffBlendCycles));
@@ -883,7 +889,7 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
   rollCommandHistory();
   const Move& m = active_.move;
   const float elapsed = static_cast<float>(now - active_.activationTime);
-  const float period = limits_.controlPeriod;  // [ms]
+  const float period = limits_.plant.controlPeriod;  // [ms]
 
   // M1 terminal-settle creep (DELETED by 130-008): this used to run a
   // closed-loop P creep on the measured residual while a completed Move
@@ -905,9 +911,9 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
     const float ticksLeft =
         m.kind == Move::Kind::Time ? (m.threshold - elapsed) / period
                                    : 1.0e9f;
-    const float accelStep = limits_.aMax * dt;
-    const float decelStep = limits_.aDecel * dt;
-    const float vCap = limits_.vMax;  // [mm/s] wheel-space ceiling
+    const float accelStep = limits_.ceilings.aMax * dt;
+    const float decelStep = limits_.ceilings.aDecel * dt;
+    const float vCap = limits_.ceilings.vMax;  // [mm/s] wheel-space ceiling
     cmdLeft_ = timedRamp(cmdLeft_, std::clamp(m.vLeft, -vCap, vCap), 0.0f,
                          accelStep, decelStep, ticksLeft);
     cmdRight_ = timedRamp(cmdRight_, std::clamp(m.vRight, -vCap, vCap), 0.0f,
@@ -923,7 +929,7 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
       // real queue entry so its arrival is sequenced, observable, and
       // acked. A zero/absent decel ceiling snaps straight to zero rather
       // than never converging (an unconfigured shaper must still stop).
-      const float decelStep = limits_.aDecel * dt;
+      const float decelStep = limits_.ceilings.aDecel * dt;
       rampCommandsToZero(decelStep);
       profileVelocity_ = std::max(0.0f, profileVelocity_ - decelStep);
       profileAccel_ = 0.0f;
@@ -954,17 +960,17 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
               : 0.0f;
       activeBoundary_ = boundaryLambda(dt) * shapeMean;
       const float vPrev = 0.5f * (cmdLeft_ + cmdRight_);
-      const float omegaPrev = (cmdRight_ - cmdLeft_) / limits_.trackWidth;
+      const float omegaPrev = (cmdRight_ - cmdLeft_) / limits_.plant.trackWidth;
       const float v = timedRamp(vPrev,
-                                std::clamp(m.v_x, -limits_.vMax, limits_.vMax),
+                                std::clamp(m.v_x, -limits_.ceilings.vMax, limits_.ceilings.vMax),
                                 sign(m.v_x) * activeBoundary_,
-                                limits_.aMax * dt, limits_.aDecel * dt,
+                                limits_.ceilings.aMax * dt, limits_.ceilings.aDecel * dt,
                                 ticksLeft);
       const float omega =
-          timedRamp(omegaPrev, m.omega, 0.0f, limits_.alphaMax * dt,
-                    limits_.alphaDecel * dt, ticksLeft);
+          timedRamp(omegaPrev, m.omega, 0.0f, limits_.ceilings.alphaMax * dt,
+                    limits_.ceilings.alphaDecel * dt, ticksLeft);
       profileVelocity_ = std::fabs(v);
-      const float halfTrack = 0.5f * limits_.trackWidth;
+      const float halfTrack = 0.5f * limits_.plant.trackWidth;
       cmdLeft_ = v - omega * halfTrack;
       cmdRight_ = v + omega * halfTrack;
       break;
@@ -1182,18 +1188,18 @@ void Planner::planWheels(float dt, const Measurement& measured) {
 }
 
 void Planner::applyHeadingHold() {
-  if (limits_.headingHoldGain <= 0.0f) return;
+  if (limits_.tracking.headingHoldGain <= 0.0f) return;
   // P on the uncommanded axis, back toward the Move's activation heading.
   const float error = active_.baselineHeading - pose_.heading();  // [rad]
-  const float omegaCorrection = limits_.headingHoldGain * error;  // [rad/s]
-  float differential = omegaCorrection * 0.5f * limits_.trackWidth;  // [mm/s]
+  const float omegaCorrection = limits_.tracking.headingHoldGain * error;  // [rad/s]
+  float differential = omegaCorrection * 0.5f * limits_.plant.trackWidth;  // [mm/s]
 
   // Clamp the CORRECTION, never the profiled velocity: the faster wheel
   // must stay inside vMax, and the mean of the pair -- which is what the
   // odometry integrates as ds, and therefore what the distance accounting
   // depends on -- must come out exactly as profiled.
   const float profiled = 0.5f * (cmdLeft_ + cmdRight_);  // [mm/s]
-  const float headroom = std::max(0.0f, limits_.vMax - std::fabs(profiled));
+  const float headroom = std::max(0.0f, limits_.ceilings.vMax - std::fabs(profiled));
   differential = std::clamp(differential, -headroom, headroom);
 
   cmdLeft_ = profiled - differential;
@@ -1212,7 +1218,7 @@ void Planner::drainToZero(float dt) {
   // the two ceilings coincide.
   const float decelStep = drainDecel(dt);
   rampCommandsToZero(decelStep);
-  profileVelocity_ = std::max(0.0f, profileVelocity_ - limits_.aDecel * dt);
+  profileVelocity_ = std::max(0.0f, profileVelocity_ - limits_.ceilings.aDecel * dt);
 }
 
 // The decel ceiling the drain and the planned stop ramp at: the active
@@ -1223,7 +1229,7 @@ float Planner::drainDecel(float dt) const {  // [s] -> [mm/s] per interval
     return active_.wheelLimits.aDecel * dt;
   }
   if (lastShapeDecel_ > 0.0f) return lastShapeDecel_ * dt;
-  return limits_.aDecel * dt;
+  return limits_.ceilings.aDecel * dt;
 }
 
 // Ramp the staged pair toward zero by one decel step, PROPORTIONALLY: the
@@ -1269,7 +1275,7 @@ void Planner::update(Types::RobotState& state) const {
   // roll the history itself (that happens in tick(), the one mutating half
   // of this class's own two-method contract), so it reads the previous
   // generation rollCommandHistory() already aged for it.
-  const float dt = limits_.controlPeriod * 0.001f;  // [s]
+  const float dt = limits_.plant.controlPeriod * 0.001f;  // [s]
   state.wheelLeft.cmdAccel = (stagedLeft - cmdLeftPrevious_) / dt;
   state.wheelRight.cmdAccel = (stagedRight - cmdRightPrevious_) / dt;
 
@@ -1281,7 +1287,7 @@ void Planner::update(Types::RobotState& state) const {
   // Report what is actually being ASKED of the wheels -- this is telemetry
   // for a human, not the planner's own ledger.
   state.command.v_x = 0.5f * (stagedLeft + stagedRight);
-  state.command.omega = (stagedRight - stagedLeft) / limits_.trackWidth;
+  state.command.omega = (stagedRight - stagedLeft) / limits_.plant.trackWidth;
 
   // NOTE (128-016, robot-state-pose-needs-exactly-one-writer.md): this
   // block used to also write state.pose.* from pose_ (PoseTracker, this
@@ -1296,7 +1302,7 @@ void Planner::update(Types::RobotState& state) const {
   // longer ALSO pushed onto state.pose here.
   const float bodyVelocity = 0.5f * (left_.velocity() + right_.velocity());
   const float omegaBody =
-      (right_.velocity() - left_.velocity()) / limits_.trackWidth;
+      (right_.velocity() - left_.velocity()) / limits_.plant.trackWidth;
 
   state.estimate.wheelLeft = {left_.basisPosition(), left_.velocity(),
                               left_.basisTime(), left_.valid()};

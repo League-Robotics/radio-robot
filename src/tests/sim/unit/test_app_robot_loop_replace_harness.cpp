@@ -207,7 +207,7 @@ void scenarioEdgeBLargeCurvatureStepAtSpeed() {
   PerfectPlant plant;
   Types::RobotState state;
   uint32_t now = 0;
-  const float trackWidth = benchLimits().trackWidth;  // [mm]
+  const float trackWidth = benchLimits().plant.trackWidth;  // [mm]
 
   const float kSpeed = 150.0f;  // [mm/s] -- the design issue's own worked example
   CHECK(planner.move(distanceTwistMove(10, 5000.0f, kSpeed), false));

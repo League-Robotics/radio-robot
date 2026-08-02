@@ -180,14 +180,14 @@ inline Motion::TickResult cycle(Motion::Planner& planner, Types::RobotState& sta
 
 inline Motion::PlannerLimits benchLimits() {
   Motion::PlannerLimits limits;
-  limits.vMax = 600.0f;         // [mm/s]
-  limits.aMax = 400.0f;         // [mm/s^2]
-  limits.aDecel = 300.0f;       // [mm/s^2]
-  limits.omegaMax = 8.0f;       // [rad/s]
-  limits.alphaMax = 12.0f;      // [rad/s^2]
-  limits.alphaDecel = 10.0f;    // [rad/s^2]
-  limits.trackWidth = 100.0f;   // [mm]
-  limits.controlPeriod = 50.0f; // [ms]
+  limits.ceilings.vMax = 600.0f;         // [mm/s]
+  limits.ceilings.aMax = 400.0f;         // [mm/s^2]
+  limits.ceilings.aDecel = 300.0f;       // [mm/s^2]
+  limits.ceilings.omegaMax = 8.0f;       // [rad/s]
+  limits.ceilings.alphaMax = 12.0f;      // [rad/s^2]
+  limits.ceilings.alphaDecel = 10.0f;    // [rad/s^2]
+  limits.plant.trackWidth = 100.0f;      // [mm]
+  limits.plant.controlPeriod = 50.0f;    // [ms]
   return limits;
 }
 

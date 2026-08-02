@@ -351,7 +351,7 @@ class EstimatorConfig(BaseModel):
 
 
 class PlannerConfig(BaseModel):
-    """``Motion::Planner``'s full tuning surface -- mirrors the robot JSON's
+    """``Motion::Planner``'s tuning surface -- mirrors the robot JSON's
     top-level ``planner`` object 1:1 (``robot_config.schema.json``'s own
     ``planner`` block; see that file's description for the full
     field-by-field rationale). Baked at build time by
@@ -373,10 +373,17 @@ class PlannerConfig(BaseModel):
     is what actually enforces fail-closed-ness at codegen time, not this
     model.
 
-    ``vel_kff``/``vel_kaff``/``trim_kaff`` are deliberately NOT fields
-    here: they are DERIVED by the generator from ``plant_gain``/
-    ``plant_tau`` (see ``PlannerBootConfig``'s own doc comment,
-    ``src/firm/config/boot_config.h``), never stored raw in the JSON.
+    130-009 (PlannerLimits 34->18 reshape): 11 fields removed -- the M4
+    duty-stage gains (``vel_kp``/``vel_ki``/``vel_i_max``/
+    ``vel_i_accel_gate``/``duty_floor``, plus the derived ``vel_kff``/
+    ``vel_kaff``, which were never fields here in the first place) and the
+    settle-confirm pair (``require_settle``/``settle_window``) -- and 5
+    more for the planner-side trim gains WheelTrim left dead
+    (``trim_kp``/``trim_ki``/``trim_i_max``/``trim_max``, plus the derived
+    ``trim_kaff``). ``plant_gain``/``plant_tau`` stay as plain recorded
+    measured data -- unread by ``planner_config_for_config()`` now that
+    every field either of them fed is gone -- so a lossless round-trip of
+    an existing robot JSON's ``planner`` block still keeps them.
     """
     v_max:        Optional[float] = None  # [mm/s] planner.v_max
     a_max:        Optional[float] = None  # [mm/s^2] planner.a_max
@@ -390,27 +397,15 @@ class PlannerConfig(BaseModel):
     control_period:   Optional[float] = None  # [ms] planner.control_period
     actuation_delay:  Optional[float] = None  # [ms] planner.actuation_delay
 
-    require_settle:          Optional[bool] = None   # planner.require_settle
     settle_rest_velocity:    Optional[float] = None  # [mm/s] planner.settle_rest_velocity
     settle_rest_omega:       Optional[float] = None  # [rad/s] planner.settle_rest_omega
-    settle_window:           Optional[float] = None  # [ms] planner.settle_window
     settle_epsilon_linear:   Optional[float] = None  # [mm] planner.settle_epsilon_linear
     settle_epsilon_angular:  Optional[float] = None  # [rad] planner.settle_epsilon_angular
     heading_hold_gain:       Optional[float] = None  # [1/s] planner.heading_hold_gain
 
-    plant_gain: Optional[float] = None  # [mm/s per duty] planner.plant_gain
-    plant_tau:  Optional[float] = None  # [s] planner.plant_tau
+    plant_gain: Optional[float] = None  # [mm/s per duty] planner.plant_gain -- recorded, unread
+    plant_tau:  Optional[float] = None  # [s] planner.plant_tau -- recorded, unread
 
-    vel_kp:            Optional[float] = None  # [duty/(mm/s)] planner.vel_kp
-    vel_ki:            Optional[float] = None  # [duty/(mm/s)/s] planner.vel_ki
-    vel_i_max:         Optional[float] = None  # [duty] planner.vel_i_max
-    vel_i_accel_gate:  Optional[float] = None  # [mm/s^2] planner.vel_i_accel_gate
-    duty_floor:        Optional[float] = None  # [-1,1] planner.duty_floor
-
-    trim_kp:              Optional[float] = None  # [1] planner.trim_kp
-    trim_ki:              Optional[float] = None  # [1/s] planner.trim_ki
-    trim_i_max:           Optional[float] = None  # [mm/s] planner.trim_i_max
-    trim_max:             Optional[float] = None  # [mm/s] planner.trim_max
     decel_plan_fraction:  Optional[float] = None  # [1] planner.decel_plan_fraction
 
 

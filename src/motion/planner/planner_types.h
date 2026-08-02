@@ -43,136 +43,119 @@ struct Move {
   float vRight = 0.0f;     // [mm/s] signed cruise, Wheels
 };
 
+// PlannerLimits -- 130-009 (planner-honesty-pass-50ms-period-tick-state-
+// machine-limits-reduction.md item 3) reshaped this struct from 34 flat
+// fields to 18, grouped into four coherent sub-structs, breaking the
+// append-only ctypes-mirror constraint ONCE, deliberately (a single,
+// contained ABI break -- sprint 130's own Migration Concerns). The sprint's
+// own planning text targeted 23 fields (keeping five more, the old
+// velocity-domain trim gains trimKp/trimKi/trimIMax/trimKaff/trimMax under
+// a `tracking` group) -- this ticket found, by direct evidence (grep
+// against planner.cpp/planner.h), that those five ALSO have zero readers:
+// 130-005 deleted Motion::WheelTrim (the only thing that ever read them)
+// and left the fields themselves behind, orphaned exactly like the M4
+// duty-stage fields ticket 007 orphaned. Per this ticket's own instruction
+// to work from evidence rather than the target count, they are cut here
+// too -- see the ticket's own completion note for the full justification.
+// That leaves `tracking` holding just `headingHoldGain` (still genuinely
+// read, planner.cpp's applyHeadingHold()).
+//
+// Cut (16, not 11): `velKff`/`velKp`/`velKi`/`velIMax`/`velKaff`/
+// `velIAccelGate`/`dutyFloor` (the M4 duty stage, deleted outright by
+// 130-007 -- WheelPid/stageDuty() had already deleted the code that
+// consumed them, these were the trailing dead config fields);
+// `headingOtosWeight`/`otosStaleness` (the OTOS heading-blend feature --
+// a live code path in Planner::tick() as of this ticket, but out of
+// SCOPE by explicit sprint decision, tracked forward to
+// clasi/issues/later/estimator-v2-otos-fusion-sim-first.md -- the blend
+// call site in tick() is deleted alongside these two fields);
+// `requireSettle`/`settleWindow` (the settle-confirm DEFER path, dissolved
+// by 130-008's `Settling`-state deletion -- `plannedStopWindow()` was the
+// one other reader of `settleWindow` and now falls back to its built-in
+// default allowance); `trimKp`/`trimKi`/`trimIMax`/`trimKaff`/`trimMax`
+// (the planner-side velocity trim, superseded and left dead by 130-005's
+// move of wheel actuation into App::Drive -- see above).
 struct PlannerLimits {
-  float vMax = 600.0f;          // [mm/s] linear velocity ceiling
-  float aMax = 0.0f;            // [mm/s^2] linear accel-ramp ceiling
-  float aDecel = 0.0f;          // [mm/s^2] linear decel-taper ceiling
-  float omegaMax = 8.0f;        // [rad/s] angular velocity ceiling
-  float alphaMax = 0.0f;        // [rad/s^2] angular accel-ramp ceiling
-  float alphaDecel = 0.0f;      // [rad/s^2] angular decel-taper ceiling
-  float trackWidth = 100.0f;    // [mm] wheel separation
-  float controlPeriod = 50.0f;  // [ms] the loop interval one tick() plans for
-  float actuationDelay = 0.0f;  // [ms] command-staged-to-wheels latency compensated in planning
-  float velocityFilterWeight = 1.0f;  // EMA weight on fresh encoder velocity; 1 = unfiltered
-  uint32_t otosStaleness = 200;       // [ms] max OTOS age still eligible to blend
-  float headingOtosWeight = 0.0f;     // [0..1] complementary blend, fail-closed default
+  // Profile ceilings: the ideal-plant magnitude bounds the trapezoid/
+  // S-curve profiler plans against, body-frame linear and angular.
+  struct Ceilings {
+    float vMax = 600.0f;      // [mm/s] linear velocity ceiling
+    float aMax = 0.0f;        // [mm/s^2] linear accel-ramp ceiling
+    float aDecel = 0.0f;      // [mm/s^2] linear decel-taper ceiling
+    float omegaMax = 8.0f;    // [rad/s] angular velocity ceiling
+    float alphaMax = 0.0f;    // [rad/s^2] angular accel-ramp ceiling
+    float alphaDecel = 0.0f;  // [rad/s^2] angular decel-taper ceiling
+    // Jerk ceilings (S-curve shaping): bound how fast the PROFILE's own
+    // acceleration may change, and taper acceleration to zero exactly at
+    // cruise (no instant accel corners -> no whiplash). 0 = disabled
+    // (plain trapezoid, all pre-existing behavior unchanged).
+    float jerkMax = 0.0f;     // [mm/s^3] linear axis
+    float yawJerkMax = 0.0f;  // [rad/s^3] angular axis
+  } ceilings;
 
-  // Settle-confirm DEFER PATH -- DELETED by 130-008. `requireSettle` used
-  // to hold a completed Move's report back until it had physically ARRIVED
-  // and come to rest (its own `Settling` sub-state), up to `settleWindow`.
-  // Arrival completion (Planner::tick()'s `arrived` event, tested directly
-  // against settleReached()) already reports `TickResult::settled`
-  // truthfully without ever deferring the completion tick, so the defer
-  // path was a second mechanism answering a question the first one already
-  // answers. `requireSettle` is consequently unread by Motion::Planner as
-  // of this ticket. `settleWindow` is NOT dead the same way: it is still
-  // read by plannedStopWindow() as a planned stop's own bounded backstop
-  // (an unrelated use that predates settle-confirm) -- that reuse ends,
-  // and plannedStopWindow() falls back to its built-in default allowance,
-  // only when ticket 009's PlannerLimits 34->23 reshape removes the field
-  // outright. Both fields are kept here, inert or partially inert, until
-  // that reshape.
-  bool requireSettle = false;
-  float settleWindow = 0.0f;  // [ms] plannedStopWindow()'s own backstop allowance
+  // Plant/loop facts: the physical wheelbase and the discrete timing every
+  // exactness calculation assumes.
+  struct Plant {
+    float trackWidth = 100.0f;    // [mm] wheel separation
+    float controlPeriod = 50.0f;  // [ms] the loop interval one tick() plans for
+    float actuationDelay = 0.0f;  // [ms] command-staged-to-wheels latency compensated in planning
+    float velocityFilterWeight = 1.0f;  // EMA weight on fresh encoder velocity; 1 = unfiltered
+  } plant;
 
-  // Heading hold on Distance Moves: P gain on the UNCOMMANDED angular
-  // axis, driving heading back to the Move's activation baseline. The
-  // correction is purely differential, so the profiled path length -- and
-  // therefore the distance exactness -- is untouched. 0 = off.
-  float headingHoldGain = 0.0f;  // [1/s] rad/s of correction per rad of error
+  // Arrival/landing: "close enough to the target, and at rest" for THIS
+  // robot's fine-positioning resolution, plus the decel-authority leeway
+  // the profile plans its brake-start against.
+  struct Landing {
+    // Settle-confirm arrival tolerances. On an ideal plant the defaults are
+    // easily reachable; on a stiction plant whose minimum creep step is one
+    // duty pulse per control period, an epsilon finer than that step is
+    // unreachable.
+    float settleEpsilonLinear = 1.0f;     // [mm]
+    float settleEpsilonAngular = 0.005f;  // [rad]
+    // Settle rest floors -- "at rest" thresholds on the FILTERED measured
+    // velocity. A per-robot property: they must sit ABOVE the robot's own
+    // filtered velocity-noise floor (else rest never confirms) and LOW
+    // enough that the post-settle coast (~floor * plant tau) stays inside
+    // the arrival epsilons.
+    float settleRestVelocity = 5.0f;  // [mm/s]
+    float settleRestOmega = 0.02f;    // [rad/s]
+    // Decel LEEWAY: the fraction of the decel ceiling the profile plans its
+    // brake-START against (profile.h AxisLimits::aDecelPlan). 0 or 1 means
+    // "plan at full authority", the pre-existing behavior.
+    //
+    // Below 1 the profile commits to braking sooner and rides a gentler
+    // ramp, holding the rest of the authority in reserve. That matters on a
+    // plant with a real time constant: braking at the full ceiling, the
+    // wheel cannot follow the command down, so the command reaches zero
+    // while the wheel is still moving and the body COASTS ~v*tau past the
+    // target (measured here as +6.5 deg of overshoot past the last turn of
+    // a square tour). A gentler planned ramp is one the plant can actually
+    // track, so it arrives at the boundary already slow.
+    //
+    // This is decel-AUTHORITY headroom, not command-authority headroom: the
+    // profile still commands all the way down to the boundary, and the
+    // terminal step and the per-step floor still use the FULL ceiling, so
+    // the landing stays discrete-exact and an infeasible state still brakes
+    // as hard as it can.
+    float decelPlanFraction = 0.0f;  // [1] 0 or 1 = full authority
+  } landing;
 
-  // M4 duty-plane output stage (issue §7.6): the per-wheel velocity->duty
-  // PID that used to be relocated into the motion library (Motion::WheelPid,
-  // Planner::stageDuty()) -- DELETED outright by 130-007, reversing sprint
-  // 128 Decision 2's PARK now that App::Drive's own controller (tickets
-  // 004/005) is the proven, shipped law. These fields are now unread by
-  // Motion::Planner; kept here only until ticket 009's PlannerLimits
-  // 34->23 reshape removes them (see src/motion/DESIGN.md's "wheel control
-  // generations" note and git history for WheelPid's own implementation).
-  float velKff = 0.0f;   // [duty/(mm/s)] feedforward slope
-  float velKp = 0.0f;    // [duty/(mm/s)] proportional
-  float velKi = 0.0f;    // [duty/(mm/s)/s] integral rate
-  float velIMax = 0.0f;  // [duty] integrator clamp; 0 disables integration
+  // Angular tracking correction on top of the profiled command.
+  struct Tracking {
+    // Heading hold on Distance Moves: P gain on the UNCOMMANDED angular
+    // axis, driving heading back to the Move's activation baseline. The
+    // correction is purely differential, so the profiled path length --
+    // and therefore the distance exactness -- is untouched. 0 = off.
+    float headingHoldGain = 0.0f;  // [1/s] rad/s of correction per rad of error
+  } tracking;
 
-  // Acceleration feedforward (velKaff ~= plantTau * velKff): a first-order
-  // plant needs (v + tau*dv/dt)/gain of duty to TRACK a ramp, not v/gain.
-  // Feeding the commanded accel through this term keeps ramp tracking
-  // error near zero, so the integral never winds up during ramps -- the
-  // measured cruise-entry overshoot spike was exactly that windup
-  // releasing. 0 = off.
-  float velKaff = 0.0f;  // [duty/(mm/s^2)]
-  float velIAccelGate = 1.0e9f;  // [mm/s^2] integral ramp gate (deleted duty stage; see above)
-  // Motor write-suppression deadband ([-1,1] duty): the leaf's armored
-  // write forces any |duty| below this to zero before it reaches the bus,
-  // so a NONZERO commanded velocity whose PID duty computes below it is a
-  // command the hardware silently ignores -- measured on the robot as the
-  // settle creep stalling dead for ~1 s (then walking back on one wheel
-  // only) while ~0.02-duty commands evaporated. The duty stage floors the
-  // staged duty here whenever the commanded velocity is nonzero. 0 = off.
-  float dutyFloor = 0.0f;
-  // Settle-confirm arrival tolerances -- "close enough to the target" for
-  // THIS robot's fine-positioning resolution. On an ideal plant the
-  // defaults are easily reachable; on a stiction plant whose minimum
-  // creep step is one dutyFloor pulse per control period, an epsilon
-  // finer than that step is unreachable and every settling Move burns
-  // the whole settleWindow before completing at expiry.
-  float settleEpsilonLinear = 1.0f;     // [mm]
-  float settleEpsilonAngular = 0.005f;  // [rad]
-
-  // Jerk ceilings (S-curve shaping): bound how fast the PROFILE's own
-  // acceleration may change, and taper acceleration to zero exactly at
-  // cruise (no instant accel corners -> no whiplash). 0 = disabled
-  // (plain trapezoid, all pre-existing behavior unchanged).
-  float jerkMax = 0.0f;     // [mm/s^3] linear axis
-  float yawJerkMax = 0.0f;  // [rad/s^3] angular axis
-
-  // Settle rest floors -- "at rest" thresholds on the FILTERED measured
-  // velocity. A per-robot property: they must sit ABOVE the robot's own
-  // filtered velocity-noise floor (else rest never confirms) and LOW
-  // enough that the post-settle coast (~floor * plant tau) stays inside
-  // the arrival epsilons. Defaults match the previous built-in constants.
-  float settleRestVelocity = 5.0f;  // [mm/s]
-  float settleRestOmega = 0.02f;    // [rad/s]
-
-  // Velocity-domain trim (wheel_trim.h) -- the closed loop that actually
-  // reaches the wheels, since the loop's one actuation contract is a wheel
-  // VELOCITY and App::Drive owns the calibrated velocity->duty map. The
-  // planner stages `profiledTarget + trim`. Fail-closed at all-zero: the
-  // trim is exactly 0 and the staged command is bit-for-bit the profile.
-  //
-  // Deliberately NO trimKff -- see wheel_trim.h for why a feedforward term
-  // in this domain would double-count a target that is already there.
-  //
-  // APPEND NEW FIELDS HERE, AT THE END. py/planner_harness.py mirrors this
-  // struct field-for-field over ctypes; inserting mid-struct silently
-  // scrambles every field after the insertion point on the Python side,
-  // and a same-size insertion passes a size-only guard. plannerStructSizes
-  // now checks per-field OFFSETS too, which is what catches it.
-  float trimKp = 0.0f;    // [1] dimensionless: mm/s of trim per mm/s of error
-  float trimKi = 0.0f;    // [1/s]
-  float trimIMax = 0.0f;  // [mm/s] integrator clamp; 0 disables integration
-  float trimKaff = 0.0f;  // [s] accel feedforward ~= plant time constant
-  float trimMax = 0.0f;   // [mm/s] total trim authority; 0 = unclamped
-
-  // Decel LEEWAY: the fraction of the decel ceiling the profile plans its
-  // brake-START against (profile.h AxisLimits::aDecelPlan). 0 or 1 means
-  // "plan at full authority", the pre-existing behavior.
-  //
-  // Below 1 the profile commits to braking sooner and rides a gentler
-  // ramp, holding the rest of the authority in reserve. That matters on a
-  // plant with a real time constant: braking at the full ceiling, the
-  // wheel cannot follow the command down, so the command reaches zero
-  // while the wheel is still moving and the body COASTS ~v*tau past the
-  // target (measured here as +6.5 deg of overshoot past the last turn of
-  // a square tour). A gentler planned ramp is one the plant can actually
-  // track, so it arrives at the boundary already slow.
-  //
-  // This is decel-AUTHORITY headroom, not command-authority headroom: the
-  // profile still commands all the way down to the boundary, and the
-  // terminal step and the per-step floor still use the FULL ceiling, so
-  // the landing stays discrete-exact and an infeasible state still brakes
-  // as hard as it can.
-  float decelPlanFraction = 0.0f;  // [1] 0 or 1 = full authority
+  // APPEND NEW FIELDS TO THE END OF WHICHEVER SUB-STRUCT THEY BELONG IN
+  // (or add a new sub-struct at the end of PlannerLimits itself).
+  // src/tests/bench/planner_harness.py mirrors this struct field-for-field
+  // over ctypes, sub-struct for sub-struct; inserting mid-struct silently
+  // scrambles every field after the insertion point on the Python side, and
+  // a same-size insertion passes a size-only guard. plannerLimitsOffsets()
+  // checks per-field OFFSETS too, which is what catches it.
 };
 
 // Which regime the ACTIVE Move is in, folded from both wheels' StepPhase
@@ -219,10 +202,10 @@ struct TickResult {
   bool timedOut = false;
   // True when the Move was, at the moment it completed, both within the
   // arrival epsilon of its target and at rest. Always evaluated and
-  // reported truthfully, whether or not `requireSettle` deferred the
-  // completion to obtain it (a settleWindow expiry completes with
-  // settled = false and timedOut = false -- the window ran out, the Move
-  // did not).
+  // reported truthfully -- the settle-confirm DEFER path that used to hold
+  // a completion back until this was true (`PlannerLimits::requireSettle`,
+  // deleted by 130-008/130-009) is gone; `settled` is simply computed at
+  // whichever tick the Move actually completes on.
   bool settled = false;
 };
 

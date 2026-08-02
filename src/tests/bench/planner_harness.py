@@ -46,7 +46,14 @@ class Wheel(ctypes.Structure):
                 ("sampleTime", ctypes.c_uint32),   # [ms]
                 ("connected", ctypes.c_bool),
                 ("positionEpoch", ctypes.c_uint8),
-                ("cmdVelocity", ctypes.c_float)]   # [mm/s]
+                ("cmdVelocity", ctypes.c_float),   # [mm/s]
+                # cmdAccel -- added 130-003 (src/firm/types/robot_state.h);
+                # this ctypes mirror missed it at the time (nobody ran this
+                # bench script across 130-003/005/007) -- caught and fixed
+                # here, 130-009, as a byproduct of exercising the
+                # plannerStructSizes() guard this ticket's own PlannerLimits
+                # reshape depends on.
+                ("cmdAccel", ctypes.c_float)]      # [mm/s^2]
 
 
 class Otos(ctypes.Structure):
@@ -114,7 +121,14 @@ class Health(ctypes.Structure):
                 ("wedgeLatch", ctypes.c_bool),
                 ("moveTimeout", ctypes.c_bool),
                 ("shapingDisabled", ctypes.c_bool),
-                ("positionClamped", ctypes.c_bool)]
+                ("positionClamped", ctypes.c_bool),
+                # wheelFrozenLeft/wheelFrozenRight/ready -- like Wheel.
+                # cmdAccel above, missing from this mirror since whichever
+                # ticket added them to robot_state.h; caught and fixed here,
+                # 130-009, for the same reason.
+                ("wheelFrozenLeft", ctypes.c_bool),
+                ("wheelFrozenRight", ctypes.c_bool),
+                ("ready", ctypes.c_bool)]
 
 
 class RobotState(ctypes.Structure):
@@ -145,43 +159,68 @@ class Move(ctypes.Structure):
                 ("vRight", ctypes.c_float)]      # [mm/s]
 
 
-class PlannerLimits(ctypes.Structure):
-    _fields_ = [("vMax", ctypes.c_float),            # [mm/s]
-                ("aMax", ctypes.c_float),            # [mm/s^2]
-                ("aDecel", ctypes.c_float),          # [mm/s^2]
-                ("omegaMax", ctypes.c_float),        # [rad/s]
-                ("alphaMax", ctypes.c_float),        # [rad/s^2]
-                ("alphaDecel", ctypes.c_float),      # [rad/s^2]
-                ("trackWidth", ctypes.c_float),      # [mm]
+# PlannerLimits -- 130-009 reshaped this from 34 flat fields to 18 fields
+# under four sub-structs (ceilings/plant/landing/tracking), grouped
+# field-for-field the same way src/motion/planner/planner_types.h groups
+# the real C++ struct. The 16 fields cut by that ticket (requireSettle/
+# settleWindow, the M4 duty-stage gains velKff/velKp/velKi/velIMax/
+# velKaff/velIAccelGate/dutyFloor, and the dead planner-side trim gains
+# trimKp/trimKi/trimIMax/trimKaff/trimMax -- see planner_types.h's own
+# doc comment for why each is gone) have no mirror here any more.
+class Ceilings(ctypes.Structure):
+    _fields_ = [("vMax", ctypes.c_float),        # [mm/s]
+                ("aMax", ctypes.c_float),        # [mm/s^2]
+                ("aDecel", ctypes.c_float),      # [mm/s^2]
+                ("omegaMax", ctypes.c_float),    # [rad/s]
+                ("alphaMax", ctypes.c_float),    # [rad/s^2]
+                ("alphaDecel", ctypes.c_float),  # [rad/s^2]
+                ("jerkMax", ctypes.c_float),     # [mm/s^3] S-curve
+                ("yawJerkMax", ctypes.c_float)]  # [rad/s^3]
+
+
+class Plant(ctypes.Structure):
+    _fields_ = [("trackWidth", ctypes.c_float),      # [mm]
                 ("controlPeriod", ctypes.c_float),   # [ms]
                 ("actuationDelay", ctypes.c_float),  # [ms]
-                ("velocityFilterWeight", ctypes.c_float),
-                ("otosStaleness", ctypes.c_uint32),  # [ms]
-                ("headingOtosWeight", ctypes.c_float),
-                ("requireSettle", ctypes.c_bool),
-                ("settleWindow", ctypes.c_float),    # [ms]
-                ("headingHoldGain", ctypes.c_float),  # [1/s]
-                ("velKff", ctypes.c_float),   # [duty/(mm/s)] M4 duty stage
-                ("velKp", ctypes.c_float),    # [duty/(mm/s)]
-                ("velKi", ctypes.c_float),    # [duty/(mm/s)/s]
-                ("velIMax", ctypes.c_float),  # [duty]
-                ("velKaff", ctypes.c_float),  # [duty/(mm/s^2)] accel feedforward
-                ("velIAccelGate", ctypes.c_float),  # [mm/s^2] integral ramp gate
-                ("dutyFloor", ctypes.c_float),   # [-1,1] stiction breakaway kick
-                ("settleEpsilonLinear", ctypes.c_float),   # [mm]
+                ("velocityFilterWeight", ctypes.c_float)]
+
+
+class Landing(ctypes.Structure):
+    _fields_ = [("settleEpsilonLinear", ctypes.c_float),   # [mm]
                 ("settleEpsilonAngular", ctypes.c_float),  # [rad]
-                ("jerkMax", ctypes.c_float),     # [mm/s^3] S-curve
-                ("yawJerkMax", ctypes.c_float),  # [rad/s^3]
-                ("settleRestVelocity", ctypes.c_float),  # [mm/s]
-                ("settleRestOmega", ctypes.c_float),     # [rad/s]
-                # Velocity-domain trim (wheel_trim.h) -- the closed loop
-                # that actually reaches the wheels. No trimKff by design.
-                ("trimKp", ctypes.c_float),    # [1] dimensionless
-                ("trimKi", ctypes.c_float),    # [1/s]
-                ("trimIMax", ctypes.c_float),  # [mm/s]
-                ("trimKaff", ctypes.c_float),  # [s] ~= plant time constant
-                ("trimMax", ctypes.c_float),   # [mm/s] total trim authority
-                ("decelPlanFraction", ctypes.c_float)]  # [1] decel leeway
+                ("settleRestVelocity", ctypes.c_float),    # [mm/s]
+                ("settleRestOmega", ctypes.c_float),       # [rad/s]
+                ("decelPlanFraction", ctypes.c_float)]     # [1] decel leeway
+
+
+class Tracking(ctypes.Structure):
+    _fields_ = [("headingHoldGain", ctypes.c_float)]  # [1/s]
+
+
+class PlannerLimits(ctypes.Structure):
+    _fields_ = [("ceilings", Ceilings),
+                ("plant", Plant),
+                ("landing", Landing),
+                ("tracking", Tracking)]
+
+
+# Flat (group, field) path list, in the SAME order as capi.cpp's
+# plannerLimitsOffsets() -- what the offset guard below walks to compare
+# each leaf field's ABSOLUTE offset against the C++ side. Kept separate
+# from the nested ctypes classes above (which is what Python code actually
+# sets/reads) purely so the guard has one flat list to zip against the C
+# side's flat kOffsets array.
+_LIMITS_FIELD_PATHS = [
+    ("ceilings", "vMax"), ("ceilings", "aMax"), ("ceilings", "aDecel"),
+    ("ceilings", "omegaMax"), ("ceilings", "alphaMax"), ("ceilings", "alphaDecel"),
+    ("ceilings", "jerkMax"), ("ceilings", "yawJerkMax"),
+    ("plant", "trackWidth"), ("plant", "controlPeriod"),
+    ("plant", "actuationDelay"), ("plant", "velocityFilterWeight"),
+    ("landing", "settleEpsilonLinear"), ("landing", "settleEpsilonAngular"),
+    ("landing", "settleRestVelocity"), ("landing", "settleRestOmega"),
+    ("landing", "decelPlanFraction"),
+    ("tracking", "headingHoldGain"),
+]
 
 
 # Motion::MovePhase, mirrored for the bench charts' phase shading.
@@ -267,49 +306,55 @@ def loadLibrary() -> ctypes.CDLL:
     # insertion point reads a different member. That happened (the trim
     # gains, 2026-07-27) and presented as a wildly mistuned controller
     # rather than as a layout error, so check the offsets.
+    #
+    # 130-009: PlannerLimits is now grouped into four ctypes sub-structs
+    # (Ceilings/Plant/Landing/Tracking) -- _LIMITS_FIELD_PATHS walks the
+    # flat (group, field) order capi.cpp's kOffsets array uses, and each
+    # leaf's ABSOLUTE offset is the group's own offset within PlannerLimits
+    # plus the field's offset within the group.
     count = lib.plannerLimitsOffsets(None, 0)
     buffer = (ctypes.c_uint32 * count)()
     lib.plannerLimitsOffsets(buffer, count)
-    pyFields = [name for name, _ in PlannerLimits._fields_]
-    assert count == len(pyFields), (
+    assert count == len(_LIMITS_FIELD_PATHS), (
         f"PlannerLimits: C++ has {count} fields, ctypes mirror has "
-        f"{len(pyFields)} -- mirror out of date")
-    for index, name in enumerate(pyFields):
-        pyOffset = getattr(PlannerLimits, name).offset
+        f"{len(_LIMITS_FIELD_PATHS)} -- mirror out of date")
+    for index, (group, name) in enumerate(_LIMITS_FIELD_PATHS):
+        groupType = dict(PlannerLimits._fields_)[group]
+        groupOffset = getattr(PlannerLimits, group).offset
+        fieldOffset = getattr(groupType, name).offset
+        pyOffset = groupOffset + fieldOffset
         assert buffer[index] == pyOffset, (
-            f"PlannerLimits.{name}: C++ offset {buffer[index]} != ctypes "
-            f"offset {pyOffset} -- field ORDER differs between "
+            f"PlannerLimits.{group}.{name}: C++ offset {buffer[index]} != "
+            f"ctypes offset {pyOffset} -- field ORDER differs between "
             f"planner_types.h and this mirror")
     return lib
 
 
 def benchLimits() -> PlannerLimits:
     limits = PlannerLimits()
-    limits.vMax = 600.0
-    limits.aMax = 400.0
-    limits.aDecel = 300.0
-    limits.omegaMax = 8.0
-    limits.alphaMax = 12.0
-    limits.alphaDecel = 10.0
-    limits.trackWidth = 100.0
-    limits.controlPeriod = 50.0
-    limits.actuationDelay = 0.0
-    limits.velocityFilterWeight = 1.0
-    limits.otosStaleness = 200
-    limits.headingOtosWeight = 0.0
-    limits.requireSettle = False
-    limits.settleWindow = 0.0
-    limits.headingHoldGain = 0.0
-    limits.velKff = 0.0
-    limits.velKp = 0.0
-    limits.velKi = 0.0
-    limits.velIMax = 0.0
-    limits.velKaff = 0.0
-    limits.velIAccelGate = 1.0e9
-    limits.jerkMax = 0.0
-    limits.yawJerkMax = 0.0
-    limits.settleRestVelocity = 5.0
-    limits.settleRestOmega = 0.02
+    limits.ceilings.vMax = 600.0
+    limits.ceilings.aMax = 400.0
+    limits.ceilings.aDecel = 300.0
+    limits.ceilings.omegaMax = 8.0
+    limits.ceilings.alphaMax = 12.0
+    limits.ceilings.alphaDecel = 10.0
+    limits.ceilings.jerkMax = 0.0
+    limits.ceilings.yawJerkMax = 0.0
+    limits.plant.trackWidth = 100.0
+    limits.plant.controlPeriod = 50.0
+    limits.plant.actuationDelay = 0.0
+    limits.plant.velocityFilterWeight = 1.0
+    # settleEpsilonLinear/Angular: ctypes zero-initializes every field
+    # regardless of planner_types.h's own default member initializers (a
+    # raw ctypes.Structure is never C++-constructed, so those defaults
+    # never apply) -- explicit here, matching planner_types.h's own
+    # PlannerLimits::Landing defaults (1.0mm/0.005rad), so settleReached()
+    # has a real (not zero) tolerance to test against.
+    limits.landing.settleEpsilonLinear = 1.0
+    limits.landing.settleEpsilonAngular = 0.005
+    limits.landing.settleRestVelocity = 5.0
+    limits.landing.settleRestOmega = 0.02
+    limits.tracking.headingHoldGain = 0.0
     return limits
 
 
@@ -408,7 +453,7 @@ def runTurnScenario(lib: ctypes.CDLL) -> None:
             break
     assert done, "turn never completed"
 
-    heading = (plant.positionRight - plant.positionLeft) / limits.trackWidth
+    heading = (plant.positionRight - plant.positionLeft) / limits.plant.trackWidth
     error = abs(heading - quarterTurn)
     assert error <= 1e-5, f"turn error {error:.8f} rad"
     print(f"turn 90 deg @ 2 rad/s: landing error "
@@ -417,47 +462,48 @@ def runTurnScenario(lib: ctypes.CDLL) -> None:
 
 
 def runSettleScenario(lib: ctypes.CDLL) -> None:
-    """Settle-confirm (M1) on a zero-error plant: with requireSettle the
-    completion defers at most ONE tick past profile-complete (the sample
-    proving v == 0 arrives one cycle after the landing command -- the
-    discrete-sensing bound; the settle gate is measured-velocity-only) and
-    reports settled=True. Without requireSettle, completion fires at
-    profile-complete, one sample BEFORE that reading can exist, so settled
-    is honestly False there."""
-    ticks = {}
-    for requireSettle in (False, True):
-        limits = benchLimits()
-        limits.requireSettle = requireSettle
-        limits.settleWindow = 1000.0  # [ms]
-        planner = lib.plannerCreate(ctypes.byref(limits))
-        state, plant, result = RobotState(), PerfectPlant(), TickResult()
-        move = Move(id=3, kind=KIND_DISTANCE, threshold=500.0, timeout=60000.0,
-                    velocityKind=VELOCITY_TWIST, v_x=150.0)
-        assert lib.plannerMove(planner, ctypes.byref(move), False)
+    """Arrival-confirm on a zero-error plant: TickResult::settled is always
+    settleReached(), evaluated truthfully at whichever tick the Move
+    actually completes on -- 130-008 deleted the settle-confirm DEFER path
+    (PlannerLimits::requireSettle, itself deleted outright by 130-009) that
+    used to hold a profile-complete back until settled; there is no longer
+    any mechanism that waits for it.
 
-        now, completedAt = 0, None
-        for tick in range(400):
-            state.time.cycleStart = now
-            lib.plannerTick(planner, ctypes.byref(state), ctypes.byref(result))
-            lib.plannerUpdate(planner, ctypes.byref(state))
-            now += 50
-            plant.step(state, 0.050, now)
-            if result.completed:
-                completedAt = tick
-                if requireSettle:
-                    assert result.settled, \
-                        "deferred completion must confirm arrival"
-                assert not result.timedOut
-                break
-        assert completedAt is not None, "move never completed"
-        ticks[requireSettle] = completedAt
-        lib.plannerDestroy(planner)
+    For a Move landing via a continuous decel ramp (this scenario), the
+    `profile-complete` event fires the instant the commanded velocity's
+    ZOH lookahead prediction reaches the target -- one tick BEFORE the
+    encoder sample confirming that landing speed has actually been
+    reached exists (the one-cycle actuation/measurement lag). So
+    `settled` is honestly False here: this is the exact "Without
+    requireSettle, completion fires at profile-complete, one sample
+    BEFORE that reading can exist" case the pre-130-009 version of this
+    docstring described -- now the ONLY case, since the field that used
+    to select the other one is gone."""
+    limits = benchLimits()
+    planner = lib.plannerCreate(ctypes.byref(limits))
+    state, plant, result = RobotState(), PerfectPlant(), TickResult()
+    move = Move(id=3, kind=KIND_DISTANCE, threshold=500.0, timeout=60000.0,
+                velocityKind=VELOCITY_TWIST, v_x=150.0)
+    assert lib.plannerMove(planner, ctypes.byref(move), False)
 
-    assert ticks[True] - ticks[False] <= 1, (
-        f"settle-confirm cost {ticks[True] - ticks[False]} ticks on a "
-        f"zero-error plant; it must cost none")
-    print(f"settle-confirm: profile-complete and settle-complete both on "
-          f"tick {ticks[True] + 1}")
+    now, completedAt = 0, None
+    for tick in range(400):
+        state.time.cycleStart = now
+        lib.plannerTick(planner, ctypes.byref(state), ctypes.byref(result))
+        lib.plannerUpdate(planner, ctypes.byref(state))
+        now += 50
+        plant.step(state, 0.050, now)
+        if result.completed:
+            completedAt = tick
+            assert not result.settled, (
+                "expected settled=False: the confirming zero-velocity sample "
+                "lags one tick behind profile-complete on this ramp-landing move")
+            assert not result.timedOut
+            break
+    assert completedAt is not None, "move never completed"
+    lib.plannerDestroy(planner)
+    print(f"settle-confirm: profile-complete fires, settled honestly False, on "
+          f"tick {completedAt + 1}")
 
 
 def runHeadingHoldScenario(lib: ctypes.CDLL) -> None:
@@ -465,7 +511,7 @@ def runHeadingHoldScenario(lib: ctypes.CDLL) -> None:
     leaving the distance accounting exactly where it was -- the correction
     is differential, so the mean of the wheel pair is untouched."""
     limits = benchLimits()
-    limits.headingHoldGain = 4.0  # [1/s]
+    limits.tracking.headingHoldGain = 4.0  # [1/s]
     planner = lib.plannerCreate(ctypes.byref(limits))
     state, plant, result = RobotState(), PerfectPlant(), TickResult()
     move = Move(id=4, kind=KIND_DISTANCE, threshold=500.0, timeout=60000.0,
@@ -480,14 +526,14 @@ def runHeadingHoldScenario(lib: ctypes.CDLL) -> None:
         now += 50
         plant.step(state, 0.050, now)
         if tick == 10:
-            plant.disturbHeading(0.20, limits.trackWidth)  # [rad]
+            plant.disturbHeading(0.20, limits.plant.trackWidth)  # [rad]
         if result.completed:
             done = True
         elif done:
             break
     assert done, "move never completed"
 
-    heading = (plant.positionRight - plant.positionLeft) / limits.trackWidth
+    heading = (plant.positionRight - plant.positionLeft) / limits.plant.trackWidth
     path = 0.5 * (plant.positionLeft + plant.positionRight)
     assert abs(heading) <= 0.01, f"heading not recovered: {heading:.5f} rad"
     assert abs(path - 500.0) <= 1e-3, f"distance no longer exact: {path:.6f} mm"

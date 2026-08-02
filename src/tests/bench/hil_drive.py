@@ -54,26 +54,24 @@ BRIDGE_TIMEOUT = 1000.0  # [ms] its timeout backstop
 
 def hilLimits() -> PlannerLimits:
     limits = PlannerLimits()
-    limits.vMax = 300.0          # [mm/s] gentle bench ceiling
-    limits.aMax = 200.0          # [mm/s^2]
-    limits.aDecel = 120.0   # measured: bridge braking authority ~4x weaker than sim plant        # [mm/s^2]
-    limits.omegaMax = 2.0        # [rad/s]
-    limits.alphaMax = 2.5        # [rad/s^2]
-    limits.alphaDecel = 1.2  # measured: single-turn trace, 76 deg overshoot at 5.0      # [rad/s^2]
-    limits.trackWidth = 128.0    # [mm] tovez.json drivetrain trackwidth
-    limits.controlPeriod = 50.0  # [ms]
-    limits.actuationDelay = 150.0  # [ms] velocity-mode value (run 2, known
-                                   # good): transport + firmware PID plant lag
-    limits.velocityFilterWeight = 0.4  # real encoder velocity is noisy
-    limits.otosStaleness = 200
-    limits.headingOtosWeight = 0.0
-    limits.requireSettle = True
-    limits.settleWindow = 4000.0  # [ms]
-    limits.headingHoldGain = 1.2  # [1/s] straight legs crabbed ~-10 deg uncorrected (run 1)
-    # 130-007: the M4 duty stage (velKff/velKp/velKi/velIMax's one-time
-    # destination) is deleted outright -- these PlannerLimits fields are
-    # unread by Motion::Planner now (left at their ctypes default, 0.0, until
-    # ticket 009's PlannerLimits reshape removes the fields themselves).
+    limits.ceilings.vMax = 300.0          # [mm/s] gentle bench ceiling
+    limits.ceilings.aMax = 200.0          # [mm/s^2]
+    limits.ceilings.aDecel = 120.0   # measured: bridge braking authority ~4x weaker than sim plant        # [mm/s^2]
+    limits.ceilings.omegaMax = 2.0        # [rad/s]
+    limits.ceilings.alphaMax = 2.5        # [rad/s^2]
+    limits.ceilings.alphaDecel = 1.2  # measured: single-turn trace, 76 deg overshoot at 5.0      # [rad/s^2]
+    limits.plant.trackWidth = 128.0    # [mm] tovez.json drivetrain trackwidth
+    limits.plant.controlPeriod = 50.0  # [ms]
+    limits.plant.actuationDelay = 150.0  # [ms] velocity-mode value (run 2, known
+                                         # good): transport + firmware PID plant lag
+    limits.plant.velocityFilterWeight = 0.4  # real encoder velocity is noisy
+    limits.tracking.headingHoldGain = 1.2  # [1/s] straight legs crabbed ~-10 deg uncorrected (run 1)
+    # 130-009: requireSettle/settleWindow (the settle-confirm defer path,
+    # already dissolved by 130-008) and otosStaleness/headingOtosWeight
+    # (the OTOS heading blend, out of scope this sprint) are DELETED from
+    # PlannerLimits outright -- there is nothing left here to set for
+    # either. The M4 duty stage (velKff/velKp/velKi/velIMax's one-time
+    # destination) is deleted the same way (130-007/130-009).
     return limits
 
 

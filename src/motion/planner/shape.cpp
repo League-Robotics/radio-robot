@@ -132,20 +132,20 @@ AxisLimits shapeLimits(const MoveShape& shape, const PlannerLimits& limits) {
   if (mean > 0.0f) {
     // lambda * mean is the body's forward speed, so a body-frame linear
     // ceiling C bounds lambda at C/mean.
-    vMax = tighten(vMax, limits.vMax / mean);
-    aMax = tighten(aMax, limits.aMax / mean);
-    aDecel = tighten(aDecel, limits.aDecel / mean);
-    jMax = tighten(jMax, limits.jerkMax / mean);
+    vMax = tighten(vMax, limits.ceilings.vMax / mean);
+    aMax = tighten(aMax, limits.ceilings.aMax / mean);
+    aDecel = tighten(aDecel, limits.ceilings.aDecel / mean);
+    jMax = tighten(jMax, limits.ceilings.jerkMax / mean);
   }
   if (diff > 0.0f) {
     // lambda * diff / trackWidth is the body's yaw rate, so an angular
     // ceiling C bounds lambda at C * trackWidth / diff. For a pivot
     // (diff == 2) that is exactly C * halfTrack -- the same half-track
     // scaling the per-Kind Angle case applied after profiling.
-    vMax = tighten(vMax, limits.omegaMax * limits.trackWidth / diff);
-    aMax = tighten(aMax, limits.alphaMax * limits.trackWidth / diff);
-    aDecel = tighten(aDecel, limits.alphaDecel * limits.trackWidth / diff);
-    jMax = tighten(jMax, limits.yawJerkMax * limits.trackWidth / diff);
+    vMax = tighten(vMax, limits.ceilings.omegaMax * limits.plant.trackWidth / diff);
+    aMax = tighten(aMax, limits.ceilings.alphaMax * limits.plant.trackWidth / diff);
+    aDecel = tighten(aDecel, limits.ceilings.alphaDecel * limits.plant.trackWidth / diff);
+    jMax = tighten(jMax, limits.ceilings.yawJerkMax * limits.plant.trackWidth / diff);
   }
 
   // lambda IS the dominant wheel's speed, so no shape may ever plan a wheel
@@ -153,7 +153,7 @@ AxisLimits shapeLimits(const MoveShape& shape, const PlannerLimits& limits) {
   // both shipped configs this never binds -- omegaMax*halfTrack is 192 mm/s
   // on the robot and 400 mm/s in sim, against a 400/600 vMax -- so it
   // changes no current behavior; it is a guard, not a retune.)
-  if (limits.vMax > 0.0f) vMax = tighten(vMax, limits.vMax);
+  if (limits.ceilings.vMax > 0.0f) vMax = tighten(vMax, limits.ceilings.vMax);
 
   out.vMax = vMax;
   out.aMax = aMax;
@@ -174,9 +174,9 @@ AxisLimits shapeLimits(const MoveShape& shape, const PlannerLimits& limits) {
   // Moves get the full requested leeway; short ones get only what they can
   // pay for, and the knob degrades smoothly instead of falling off a cliff.
   out.aDecelPlan = 0.0f;
-  if (limits.decelPlanFraction > 0.0f && limits.decelPlanFraction < 1.0f &&
+  if (limits.landing.decelPlanFraction > 0.0f && limits.landing.decelPlanFraction < 1.0f &&
       aDecel > 0.0f) {
-    float planned = aDecel * limits.decelPlanFraction;
+    float planned = aDecel * limits.landing.decelPlanFraction;
     if (shape.hasDistanceTarget) {
       const float dominant = std::max(std::fabs(shape.distanceLeft),
                                       std::fabs(shape.distanceRight));

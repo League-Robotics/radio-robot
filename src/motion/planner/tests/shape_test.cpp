@@ -183,47 +183,47 @@ void testDegenerateGuards() {
 
 void testShapeLimitsReduceExactly() {
   PlannerLimits limits = TestPlanner::benchLimits();
-  limits.jerkMax = 5000.0f;   // [mm/s^3]
-  limits.yawJerkMax = 30.0f;  // [rad/s^3]
+  limits.ceilings.jerkMax = 5000.0f;   // [mm/s^3]
+  limits.ceilings.yawJerkMax = 30.0f;  // [rad/s^3]
 
   // A straight must reduce to the LINEAR ceilings, untouched -- this is
   // the exact brace-init the per-Kind Distance case used.
   const MoveShape straight =
       shapeOf(twistMove(Move::Kind::Distance, 500.0f, 150.0f, 0.0f),
-              limits.trackWidth);
+              limits.plant.trackWidth);
   const AxisLimits lin = shapeLimits(straight, limits);
-  CHECK_NEAR(lin.vMax, limits.vMax, 1e-4);
-  CHECK_NEAR(lin.aMax, limits.aMax, 1e-4);
-  CHECK_NEAR(lin.aDecel, limits.aDecel, 1e-4);
-  CHECK_NEAR(lin.jMax, limits.jerkMax, 1e-4);
+  CHECK_NEAR(lin.vMax, limits.ceilings.vMax, 1e-4);
+  CHECK_NEAR(lin.aMax, limits.ceilings.aMax, 1e-4);
+  CHECK_NEAR(lin.aDecel, limits.ceilings.aDecel, 1e-4);
+  CHECK_NEAR(lin.jMax, limits.ceilings.jerkMax, 1e-4);
 
   // A pivot must reduce to the ANGULAR ceilings scaled by half the track --
   // the same scaling the per-Kind Angle case applied AFTER profiling, which
   // is equivalent because profileStep() is homogeneous of degree 1.
-  const float halfTrack = 0.5f * limits.trackWidth;
+  const float halfTrack = 0.5f * limits.plant.trackWidth;
   const MoveShape pivot =
       shapeOf(twistMove(Move::Kind::Angle, 1.5707963f, 0.0f, 2.0f),
-              limits.trackWidth);
+              limits.plant.trackWidth);
   const AxisLimits ang = shapeLimits(pivot, limits);
-  CHECK_NEAR(ang.aMax, limits.alphaMax * halfTrack, 1e-3);
-  CHECK_NEAR(ang.aDecel, limits.alphaDecel * halfTrack, 1e-3);
-  CHECK_NEAR(ang.jMax, limits.yawJerkMax * halfTrack, 1e-3);
+  CHECK_NEAR(ang.aMax, limits.ceilings.alphaMax * halfTrack, 1e-3);
+  CHECK_NEAR(ang.aDecel, limits.ceilings.alphaDecel * halfTrack, 1e-3);
+  CHECK_NEAR(ang.jMax, limits.ceilings.yawJerkMax * halfTrack, 1e-3);
   // vMax is the tighter of the angular bound and the wheel ceiling.
   CHECK_NEAR(ang.vMax,
-             std::min(limits.omegaMax * halfTrack, limits.vMax), 1e-3);
+             std::min(limits.ceilings.omegaMax * halfTrack, limits.ceilings.vMax), 1e-3);
 
   // An arc is bounded by whichever axis binds first, and never by more
   // than either.
   const MoveShape arc =
       shapeOf(twistMove(Move::Kind::Distance, 500.0f, 200.0f, 1.0f),
-              limits.trackWidth);
+              limits.plant.trackWidth);
   const AxisLimits both = shapeLimits(arc, limits);
   const float mean = std::fabs(0.5f * (arc.unitLeft + arc.unitRight));
   const float diff = std::fabs(arc.unitRight - arc.unitLeft);
   CHECK_NEAR(both.aMax,
-             std::min(limits.aMax / mean,
-                      limits.alphaMax * limits.trackWidth / diff), 1e-2);
-  CHECK(both.vMax <= limits.vMax + 1e-3f);
+             std::min(limits.ceilings.aMax / mean,
+                      limits.ceilings.alphaMax * limits.plant.trackWidth / diff), 1e-2);
+  CHECK(both.vMax <= limits.ceilings.vMax + 1e-3f);
 
   // An invalid shape yields all-zero ceilings: fail closed, never a
   // silently unbounded profile.

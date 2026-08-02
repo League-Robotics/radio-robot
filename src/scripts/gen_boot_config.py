@@ -97,21 +97,30 @@ JSON omits `calibration.mm_per_wheel_deg_left/right` /
 by this ticket (out of its explicit scope; see sprint 114 ticket 002's own
 Approach step 1).
 
-`planner_config_for_config()` (129-009, config consolidation) — the whole
+`planner_config_for_config()` (129-009, config consolidation) — the
 `Motion::PlannerLimits` tuning surface `main.cpp` used to assemble as C++
-literals (profile ceilings, loop timing, settle/rest, duty-stage PID, trim
-loop), now baked from the robot JSON's own `planner` block into
-`Config::PlannerBootConfig`/`Config::defaultPlannerLimits()`. All 29 raw
-keys are REQUIRED (fail-closed, same posture as every other mapping this
-module documents above); `velKff`/`velKaff`/`trimKaff` are DERIVED from
-the JSON's `plant_gain`/`plant_tau` measured primitives rather than stored
-raw — see that function's own docstring. Distinct from, and NOT a
-replacement for, `shaper_config_for_config()`/`Config::ShaperBootConfig`
-above: that struct is dead (unread by anything, superseded by
-`Motion::Planner`'s own former hand-baked limits) and reads the UNRELATED
-legacy `control.a_max`/`a_decel`/... keys; `planner_config_for_config()`
-reads the NEW `planner.*` keys instead and IS live (main.cpp constructs
-its `Motion::PlannerLimits` from this function's output).
+literals (profile ceilings, loop timing, settle/rest), baked from the
+robot JSON's own `planner` block into `Config::PlannerBootConfig`/
+`Config::defaultPlannerLimits()`. All 18 raw keys are REQUIRED
+(fail-closed, same posture as every other mapping this module documents
+above). Distinct from, and NOT a replacement for,
+`shaper_config_for_config()`/`Config::ShaperBootConfig` above: that struct
+is dead (unread by anything, superseded by `Motion::Planner`'s own former
+hand-baked limits) and reads the UNRELATED legacy `control.a_max`/
+`a_decel`/... keys; `planner_config_for_config()` reads the NEW
+`planner.*` keys instead and IS live (main.cpp constructs its
+`Motion::PlannerLimits` from this function's output).
+
+130-009 (planner-honesty-pass-...limits-reduction.md item 3) cut 11 of
+the original 29 raw keys — the M4 duty-stage gains (`vel_kp`/`vel_ki`/
+`vel_i_max`/`vel_i_accel_gate`/`duty_floor`, plus the derived `velKff`/
+`velKaff`) and the settle-confirm pair (`require_settle`/`settle_window`)
+— and 5 more that fed PlannerLimits' now-dead planner-side trim gains
+(`trim_kp`/`trim_ki`/`trim_i_max`/`trim_max`, plus the derived
+`trimKaff`) — see `planner_config_for_config()`'s own docstring for the
+per-field rationale. `plant_gain`/`plant_tau` are no longer read by this
+function at all (both of their derived consumers are cut); either key may
+still be present in a robot JSON as recorded measured data.
 """
 
 import json
@@ -605,30 +614,31 @@ def wheel_controller_config_for_config(cfg: dict) -> dict:
 def planner_config_for_config(cfg: dict) -> dict:
     """Return a dict of every Config::PlannerBootConfig field (boot_config.h),
     keyed by its C++ field name, read from the robot JSON's `planner` block
-    (129-009, config consolidation).
+    (129-009, config consolidation; field set reduced 130-009).
 
-    Before this ticket every one of these values was a C++ literal
-    assembled directly in main.cpp's Motion::PlannerLimits construction --
-    this is the move to config-as-truth (sprint 114) that block itself
-    called out as still owed ("A planner-domain config surface can
-    supersede these constants later").
+    Before 129-009 every one of these values was a C++ literal assembled
+    directly in main.cpp's Motion::PlannerLimits construction -- this is
+    the move to config-as-truth (sprint 114) that block itself called out
+    as still owed ("A planner-domain config surface can supersede these
+    constants later").
 
-    All 29 raw keys are REQUIRED, same fail-closed posture as every other
+    All 18 raw keys are REQUIRED, same fail-closed posture as every other
     field this generator bakes: a robot JSON missing the `planner` block
     (or any key inside it) fails codegen loudly rather than a robot
     inheriting another robot's plant measurements.
 
-    velKff/velKaff/trimKaff are DERIVED here from the two measured plant
-    primitives (`plant_gain` [mm/s per duty], `plant_tau` [s]) rather than
-    stored raw -- `velKff = 1/plant_gain`, `velKaff = plant_tau/plant_gain`,
-    `trimKaff = plant_tau/2` -- exactly the arithmetic main.cpp's own
-    deleted literal block used to do inline; it now happens once, here, so
-    the derivation stays in one reviewed place (PlannerBootConfig's own doc
-    comment).
+    130-009 (planner-honesty-pass-...limits-reduction.md item 3): cut the
+    11 raw keys that fed PlannerLimits' now-deleted M4 duty-stage/settle-
+    confirm fields (vel_kp/vel_ki/vel_i_max/vel_i_accel_gate/duty_floor/
+    require_settle/settle_window) and the 5 that fed the planner-side
+    trim gains WheelTrim left dead (trim_kp/trim_ki/trim_i_max/trim_max,
+    plus the derived trim_kaff) -- see PlannerBootConfig's own doc comment
+    (boot_config.h) for why each is gone. `plant_gain` is no longer read
+    here (its only consumers, velKff/velKaff, are both cut); `plant_tau`
+    is ALSO no longer read (its only consumer, trimKaff, is cut too) --
+    both keys may still be present in a robot JSON as recorded measured
+    data, simply unread by this function now.
     """
-    plant_gain = _require(cfg, "planner", "plant_gain")
-    plant_tau = _require(cfg, "planner", "plant_tau")
-
     return {
         "vMax": float(_require(cfg, "planner", "v_max")),
         "aMax": float(_require(cfg, "planner", "a_max")),
@@ -642,27 +652,12 @@ def planner_config_for_config(cfg: dict) -> dict:
         "controlPeriod": float(_require(cfg, "planner", "control_period")),
         "actuationDelay": float(_require(cfg, "planner", "actuation_delay")),
 
-        "requireSettle": bool(_require(cfg, "planner", "require_settle")),
         "settleRestVelocity": float(_require(cfg, "planner", "settle_rest_velocity")),
         "settleRestOmega": float(_require(cfg, "planner", "settle_rest_omega")),
-        "settleWindow": float(_require(cfg, "planner", "settle_window")),
         "settleEpsilonLinear": float(_require(cfg, "planner", "settle_epsilon_linear")),
         "settleEpsilonAngular": float(_require(cfg, "planner", "settle_epsilon_angular")),
         "headingHoldGain": float(_require(cfg, "planner", "heading_hold_gain")),
 
-        "velKff": float(1.0) / float(plant_gain),
-        "velKp": float(_require(cfg, "planner", "vel_kp")),
-        "velKi": float(_require(cfg, "planner", "vel_ki")),
-        "velIMax": float(_require(cfg, "planner", "vel_i_max")),
-        "velKaff": float(plant_tau) / float(plant_gain),
-        "velIAccelGate": float(_require(cfg, "planner", "vel_i_accel_gate")),
-        "dutyFloor": float(_require(cfg, "planner", "duty_floor")),
-
-        "trimKp": float(_require(cfg, "planner", "trim_kp")),
-        "trimKi": float(_require(cfg, "planner", "trim_ki")),
-        "trimIMax": float(_require(cfg, "planner", "trim_i_max")),
-        "trimKaff": float(plant_tau) / 2.0,
-        "trimMax": float(_require(cfg, "planner", "trim_max")),
         "decelPlanFraction": float(_require(cfg, "planner", "decel_plan_fraction")),
     }
 
@@ -942,12 +937,11 @@ WheelControllerBootConfig defaultWheelControllerConfig() {{
 }}
 
 PlannerBootConfig defaultPlannerLimits() {{
-    // 129-009 (config consolidation) -- fail-closed baked from the robot
-    // JSON's `planner` block (data/robots/robot_config.schema.json). These
-    // were HARD-CODED C++ literals in main.cpp before this ticket -- see
-    // PlannerBootConfig's own doc comment (src/firm/config/boot_config.h)
-    // for why, and for the velKff/velKaff/trimKaff derivation this
-    // function performs from the JSON's plant_gain/plant_tau primitives.
+    // 129-009 (config consolidation), field set reduced 130-009 -- fail-
+    // closed baked from the robot JSON's `planner` block
+    // (data/robots/robot_config.schema.json). See PlannerBootConfig's own
+    // doc comment (src/firm/config/boot_config.h) for the current field
+    // list and what was cut.
     PlannerBootConfig cfg;
     cfg.vMax = {_f(planner["vMax"])};              // [mm/s]
     cfg.aMax = {_f(planner["aMax"])};              // [mm/s^2]
@@ -961,27 +955,12 @@ PlannerBootConfig defaultPlannerLimits() {{
     cfg.controlPeriod = {_f(planner["controlPeriod"])};    // [ms]
     cfg.actuationDelay = {_f(planner["actuationDelay"])};  // [ms]
 
-    cfg.requireSettle = {'true' if planner["requireSettle"] else 'false'};
     cfg.settleRestVelocity = {_f(planner["settleRestVelocity"])};    // [mm/s]
     cfg.settleRestOmega = {_f(planner["settleRestOmega"])};          // [rad/s]
-    cfg.settleWindow = {_f(planner["settleWindow"])};                // [ms]
     cfg.settleEpsilonLinear = {_f(planner["settleEpsilonLinear"])};  // [mm]
     cfg.settleEpsilonAngular = {_f(planner["settleEpsilonAngular"])};  // [rad]
     cfg.headingHoldGain = {_f(planner["headingHoldGain"])};  // [1/s]
 
-    cfg.velKff = {_f(planner["velKff"])};    // [duty/(mm/s)] = 1/plant_gain
-    cfg.velKp = {_f(planner["velKp"])};      // [duty/(mm/s)]
-    cfg.velKi = {_f(planner["velKi"])};      // [duty/(mm/s)/s]
-    cfg.velIMax = {_f(planner["velIMax"])};  // [duty]
-    cfg.velKaff = {_f(planner["velKaff"])};  // [duty/(mm/s^2)] = plant_tau/plant_gain
-    cfg.velIAccelGate = {_f(planner["velIAccelGate"])};  // [mm/s^2]
-    cfg.dutyFloor = {_f(planner["dutyFloor"])};          // [-1,1]
-
-    cfg.trimKp = {_f(planner["trimKp"])};        // [1]
-    cfg.trimKi = {_f(planner["trimKi"])};        // [1/s]
-    cfg.trimIMax = {_f(planner["trimIMax"])};    // [mm/s]
-    cfg.trimKaff = {_f(planner["trimKaff"])};    // [s] = plant_tau/2
-    cfg.trimMax = {_f(planner["trimMax"])};      // [mm/s]
     cfg.decelPlanFraction = {_f(planner["decelPlanFraction"])};  // [1]
     return cfg;
 }}

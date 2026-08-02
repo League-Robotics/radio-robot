@@ -128,7 +128,7 @@
     "staleness_ms": 60.0
   },
   "planner": {
-    "_domain_note": "129-009 (config consolidation): same physical hardware as tovez.json (same uid/serial) -- carries that file's plant-ID-measured Motion::Planner block forward verbatim rather than a separately-derived set, the same 'same hardware, same plant' posture control.duty_per_speed_*/_drive_calibration_note already established for this profile. See tovez.json's own planner._domain_note/_timing_note/_settle_note/_duty_stage_note/_trim_note for the full measurement history/derivation -- not re-quoted here to avoid a copy that can drift out of sync with the source measurement.",
+    "_domain_note": "129-009 (config consolidation): same physical hardware as tovez.json (same uid/serial) -- carries that file's plant-ID-measured Motion::Planner block forward verbatim rather than a separately-derived set, the same 'same hardware, same plant' posture control.duty_per_speed_*/_drive_calibration_note already established for this profile. See tovez.json's own planner._domain_note/_timing_note/_settle_note for the full measurement history/derivation -- not re-quoted here to avoid a copy that can drift out of sync with the source measurement. 130-009 removed require_settle/settle_window and the M4 duty-stage/trim keys this block used to carry -- see boot_config.h's PlannerBootConfig doc comment.",
     "v_max": 400.0,
     "a_max": 300.0,
     "a_decel": 250.0,
@@ -139,24 +139,13 @@
     "yaw_jerk_max": 30.0,
     "control_period": 50.0,
     "actuation_delay": 50.0,
-    "require_settle": false,
     "settle_rest_velocity": 10.0,
     "settle_rest_omega": 0.16,
-    "settle_window": 2500.0,
     "settle_epsilon_linear": 4.0,
     "settle_epsilon_angular": 0.035,
     "heading_hold_gain": 2.0,
     "plant_gain": 1370.0,
     "plant_tau": 0.23,
-    "vel_kp": 0.0009,
-    "vel_ki": 0.004,
-    "vel_i_max": 0.25,
-    "vel_i_accel_gate": 50.0,
-    "duty_floor": 0.18,
-    "trim_kp": 0.15,
-    "trim_ki": 0.4,
-    "trim_i_max": 40.0,
-    "trim_max": 80.0,
     "decel_plan_fraction": 0.4
   }
 }

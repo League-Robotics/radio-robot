@@ -62,12 +62,12 @@ uint32_t Configurator::apply(const msg::CommandEnvelope& env) {
     // Shaper wire keys retarget the planner's live profile ceilings. Read
     // the planner's current limits, merge the present fields onto them, and
     // push the whole set back -- applyShaperLimits() takes all six.
-    float aMax = planner_.limits().aMax;
-    float aDecel = planner_.limits().aDecel;
-    float alphaMax = planner_.limits().alphaMax;
-    float alphaDecel = planner_.limits().alphaDecel;
-    float jerkMax = planner_.limits().jerkMax;
-    float yawJerkMax = planner_.limits().yawJerkMax;
+    float aMax = planner_.limits().ceilings.aMax;
+    float aDecel = planner_.limits().ceilings.aDecel;
+    float alphaMax = planner_.limits().ceilings.alphaMax;
+    float alphaDecel = planner_.limits().ceilings.alphaDecel;
+    float jerkMax = planner_.limits().ceilings.jerkMax;
+    float yawJerkMax = planner_.limits().ceilings.yawJerkMax;
     if (patch.a_max.has) aMax = patch.a_max.val;
     if (patch.a_decel.has) aDecel = patch.a_decel.val;
     if (patch.alpha_max.has) alphaMax = patch.alpha_max.val;

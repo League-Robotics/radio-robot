@@ -74,57 +74,57 @@ int main() {
   TestSim::SimHarness sim;
   const Motion::PlannerLimits& simLimits = sim.planner().limits();
 
+  // 130-009: PlannerLimits reshaped 34->18 fields under four sub-structs
+  // (ceilings/plant/landing/tracking) -- every field check below just
+  // grew its sub-struct prefix. The 16 fields cut by that ticket
+  // (requireSettle/settleWindow, the M4 duty-stage gains velKff/velKp/
+  // velKi/velIMax/velKaff/velIAccelGate/dutyFloor, and the dead
+  // planner-side trim gains trimKp/trimKi/trimIMax/trimKaff/trimMax) have
+  // no check here any more -- there is nothing left to compare.
   beginScenario("Every field NOT a documented override matches the hardware-equivalent value exactly");
-  checkFloatEq(simLimits.vMax, hw.vMax, "vMax");
-  checkFloatEq(simLimits.aMax, hw.aMax, "aMax");
-  checkFloatEq(simLimits.aDecel, hw.aDecel, "aDecel");
-  checkFloatEq(simLimits.omegaMax, hw.omegaMax, "omegaMax");
-  checkFloatEq(simLimits.alphaMax, hw.alphaMax, "alphaMax");
-  checkFloatEq(simLimits.alphaDecel, hw.alphaDecel, "alphaDecel");
-  checkFloatEq(simLimits.jerkMax, hw.jerkMax, "jerkMax");
-  checkFloatEq(simLimits.yawJerkMax, hw.yawJerkMax, "yawJerkMax");
-  checkFloatEq(static_cast<float>(simLimits.requireSettle), static_cast<float>(hw.requireSettle),
-               "requireSettle");
-  checkFloatEq(simLimits.settleRestVelocity, hw.settleRestVelocity, "settleRestVelocity");
-  checkFloatEq(simLimits.settleRestOmega, hw.settleRestOmega, "settleRestOmega");
-  checkFloatEq(simLimits.settleWindow, hw.settleWindow, "settleWindow");
-  checkFloatEq(simLimits.settleEpsilonLinear, hw.settleEpsilonLinear, "settleEpsilonLinear");
-  checkFloatEq(simLimits.settleEpsilonAngular, hw.settleEpsilonAngular, "settleEpsilonAngular");
-  checkFloatEq(simLimits.headingHoldGain, hw.headingHoldGain, "headingHoldGain");
-  checkFloatEq(simLimits.velKff, hw.velKff, "velKff");
-  checkFloatEq(simLimits.velKp, hw.velKp, "velKp");
-  checkFloatEq(simLimits.velKi, hw.velKi, "velKi");
-  checkFloatEq(simLimits.velIMax, hw.velIMax, "velIMax");
-  checkFloatEq(simLimits.velKaff, hw.velKaff, "velKaff");
-  checkFloatEq(simLimits.velIAccelGate, hw.velIAccelGate, "velIAccelGate");
-  checkFloatEq(simLimits.dutyFloor, hw.dutyFloor, "dutyFloor");
-  checkFloatEq(simLimits.trimKp, hw.trimKp, "trimKp");
-  checkFloatEq(simLimits.trimKi, hw.trimKi, "trimKi");
-  checkFloatEq(simLimits.trimIMax, hw.trimIMax, "trimIMax");
-  checkFloatEq(simLimits.trimKaff, hw.trimKaff, "trimKaff");
-  checkFloatEq(simLimits.trimMax, hw.trimMax, "trimMax");
-  checkFloatEq(simLimits.decelPlanFraction, hw.decelPlanFraction, "decelPlanFraction");
-  checkFloatEq(simLimits.velocityFilterWeight, hw.velocityFilterWeight, "velocityFilterWeight");
+  checkFloatEq(simLimits.ceilings.vMax, hw.ceilings.vMax, "ceilings.vMax");
+  checkFloatEq(simLimits.ceilings.aMax, hw.ceilings.aMax, "ceilings.aMax");
+  checkFloatEq(simLimits.ceilings.aDecel, hw.ceilings.aDecel, "ceilings.aDecel");
+  checkFloatEq(simLimits.ceilings.omegaMax, hw.ceilings.omegaMax, "ceilings.omegaMax");
+  checkFloatEq(simLimits.ceilings.alphaMax, hw.ceilings.alphaMax, "ceilings.alphaMax");
+  checkFloatEq(simLimits.ceilings.alphaDecel, hw.ceilings.alphaDecel, "ceilings.alphaDecel");
+  checkFloatEq(simLimits.ceilings.jerkMax, hw.ceilings.jerkMax, "ceilings.jerkMax");
+  checkFloatEq(simLimits.ceilings.yawJerkMax, hw.ceilings.yawJerkMax, "ceilings.yawJerkMax");
+  checkFloatEq(simLimits.landing.settleRestVelocity, hw.landing.settleRestVelocity,
+               "landing.settleRestVelocity");
+  checkFloatEq(simLimits.landing.settleRestOmega, hw.landing.settleRestOmega,
+               "landing.settleRestOmega");
+  checkFloatEq(simLimits.landing.settleEpsilonLinear, hw.landing.settleEpsilonLinear,
+               "landing.settleEpsilonLinear");
+  checkFloatEq(simLimits.landing.settleEpsilonAngular, hw.landing.settleEpsilonAngular,
+               "landing.settleEpsilonAngular");
+  checkFloatEq(simLimits.landing.decelPlanFraction, hw.landing.decelPlanFraction,
+               "landing.decelPlanFraction");
+  checkFloatEq(simLimits.tracking.headingHoldGain, hw.tracking.headingHoldGain,
+               "tracking.headingHoldGain");
+  checkFloatEq(simLimits.plant.velocityFilterWeight, hw.plant.velocityFilterWeight,
+               "plant.velocityFilterWeight");
 
   beginScenario("trackWidth is the one documented override still genuinely different from "
                 "the hardware-equivalent value, and equal to the documented sim value");
-  checkFloatNe(hw.trackWidth, simLimits.trackWidth, "trackWidth diverges from hw (documented override)");
-  checkFloatEq(simLimits.trackWidth, TestSim::kDefaultTrackWidth,
-               "sim trackWidth equals TestSim::kDefaultTrackWidth (the sim's own fixture value)");
+  checkFloatNe(hw.plant.trackWidth, simLimits.plant.trackWidth,
+               "plant.trackWidth diverges from hw (documented override)");
+  checkFloatEq(simLimits.plant.trackWidth, TestSim::kDefaultTrackWidth,
+               "sim plant.trackWidth equals TestSim::kDefaultTrackWidth (the sim's own fixture value)");
 
   beginScenario("controlPeriod/actuationDelay: still a documented, explicit BootOverride "
                 "structurally, but 130-007's one-50ms-period-everywhere change means the "
                 "hardware-baked default and the sim's kCycle-derived value are now the SAME "
                 "number by construction -- no longer a genuine divergence, and that IS the "
                 "point (one period, not two)");
-  checkFloatEq(hw.controlPeriod, simLimits.controlPeriod,
-               "controlPeriod: hw and sim now coincide (both honestly 50ms, 130-007)");
-  checkFloatEq(simLimits.controlPeriod, static_cast<float>(App::RobotLoop::kCycle),
-               "sim controlPeriod equals App::RobotLoop::kCycle (the sim's own delivered cycle time)");
-  checkFloatEq(hw.actuationDelay, simLimits.actuationDelay,
-               "actuationDelay: hw and sim now coincide (both honestly 50ms, 130-007)");
-  checkFloatEq(simLimits.actuationDelay, static_cast<float>(App::RobotLoop::kCycle),
-               "sim actuationDelay equals App::RobotLoop::kCycle (the sim's own delivered cycle time)");
+  checkFloatEq(hw.plant.controlPeriod, simLimits.plant.controlPeriod,
+               "plant.controlPeriod: hw and sim now coincide (both honestly 50ms, 130-007)");
+  checkFloatEq(simLimits.plant.controlPeriod, static_cast<float>(App::RobotLoop::kCycle),
+               "sim plant.controlPeriod equals App::RobotLoop::kCycle (the sim's own delivered cycle time)");
+  checkFloatEq(hw.plant.actuationDelay, simLimits.plant.actuationDelay,
+               "plant.actuationDelay: hw and sim now coincide (both honestly 50ms, 130-007)");
+  checkFloatEq(simLimits.plant.actuationDelay, static_cast<float>(App::RobotLoop::kCycle),
+               "sim plant.actuationDelay equals App::RobotLoop::kCycle (the sim's own delivered cycle time)");
 
   std::printf("\n");
   if (g_failureCount == 0) {

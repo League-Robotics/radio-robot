@@ -709,7 +709,7 @@
     "planner": {
       "type": "object",
       "additionalProperties": false,
-      "description": "Motion::Planner's full tuning surface (129-009, config consolidation) -- Config::defaultPlannerLimits() (config/boot_config.h), baked via gen_boot_config.py's planner_config_for_config(). Before this ticket every one of these values was a C++ literal main.cpp assembled directly into a Motion::PlannerLimits -- that block's own comment called this out as owed ('A planner-domain config surface can supersede these constants later'). REQUIRED, same fail-closed discipline as `estimator` above: a robot JSON missing this block, or any key inside it, fails codegen loudly rather than a robot silently inheriting another robot's plant measurements (Config::DriveBootConfig's own history is exactly this failure mode). Distinct from, and NOT related to, the `control.a_max`/`a_decel`/`alpha_max`/`alpha_decel`/`j_max`/`yaw_jerk_max`/`vel_kp`/`vel_ki`/... keys above -- those feed the (unread/dead) `Config::ShaperBootConfig` and the deleted NezhaMotor velocity PID respectively; this block feeds the live `Motion::Planner`.",
+      "description": "Motion::Planner's tuning surface (129-009, config consolidation; field set reduced 130-009) -- Config::defaultPlannerLimits() (config/boot_config.h), baked via gen_boot_config.py's planner_config_for_config(). Before 129-009 every one of these values was a C++ literal main.cpp assembled directly into a Motion::PlannerLimits -- that block's own comment called this out as owed ('A planner-domain config surface can supersede these constants later'). REQUIRED, same fail-closed discipline as `estimator` above: a robot JSON missing this block, or any key inside it, fails codegen loudly rather than a robot silently inheriting another robot's plant measurements (Config::DriveBootConfig's own history is exactly this failure mode). Distinct from, and NOT related to, the `control.a_max`/`a_decel`/`alpha_max`/`alpha_decel`/`j_max`/`yaw_jerk_max`/... keys above -- those feed the (unread/dead) `Config::ShaperBootConfig`; this block feeds the live `Motion::Planner`. 130-009 removed require_settle/settle_window (the settle-confirm defer path they gated, dissolved by 130-008) and the M4 duty-stage/velocity-trim keys (vel_kp/vel_ki/vel_i_max/vel_i_accel_gate/duty_floor/trim_kp/trim_ki/trim_i_max/trim_max) -- both mechanisms are deleted from Motion::Planner outright (130-007/130-005 respectively); plant_gain/plant_tau stay as recorded measured data, unread by the generator now that every field either derived is gone.",
       "properties": {
         "_domain_note": {
           "type": "string"
@@ -718,12 +718,6 @@
           "type": "string"
         },
         "_settle_note": {
-          "type": "string"
-        },
-        "_duty_stage_note": {
-          "type": "string"
-        },
-        "_trim_note": {
           "type": "string"
         },
         "_uncalibrated": {
@@ -810,14 +804,6 @@
             "kind": "float"
           }
         },
-        "require_settle": {
-          "type": "boolean",
-          "description": "Motion::PlannerLimits::requireSettle -- when true, a Distance/Angle Move additionally waits for physical arrival before completing.",
-          "firmware": {
-            "field": "requireSettle",
-            "kind": "bool"
-          }
-        },
         "settle_rest_velocity": {
           "type": "number",
           "description": "Motion::PlannerLimits::settleRestVelocity [mm/s] -- 'at rest' linear threshold on filtered measured velocity.",
@@ -831,14 +817,6 @@
           "description": "Motion::PlannerLimits::settleRestOmega [rad/s] -- 'at rest' angular threshold on filtered measured velocity.",
           "firmware": {
             "field": "settleRestOmega",
-            "kind": "float"
-          }
-        },
-        "settle_window": {
-          "type": "number",
-          "description": "Motion::PlannerLimits::settleWindow [ms] -- max extra wait past profile-complete when requireSettle is on.",
-          "firmware": {
-            "field": "settleWindow",
             "kind": "float"
           }
         },
@@ -861,84 +839,12 @@
         "plant_gain": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "description": "Measured plant gain [mm/s per duty] -- NOT baked as its own PlannerLimits field; gen_boot_config.py derives velKff = 1/plant_gain and velKaff = plant_tau/plant_gain from this and plant_tau."
+          "description": "Measured plant gain [mm/s per duty] -- recorded measured data; not currently baked into any PlannerLimits field (130-009 removed velKff/velKaff, its only former consumers)."
         },
         "plant_tau": {
           "type": "number",
           "exclusiveMinimum": 0,
-          "description": "Measured plant time constant [s] -- NOT baked as its own PlannerLimits field; gen_boot_config.py derives velKaff = plant_tau/plant_gain and trimKaff = plant_tau/2 from this and plant_gain."
-        },
-        "vel_kp": {
-          "type": "number",
-          "description": "Motion::PlannerLimits::velKp [duty/(mm/s)] duty-stage proportional gain.",
-          "firmware": {
-            "field": "velKp",
-            "kind": "float"
-          }
-        },
-        "vel_ki": {
-          "type": "number",
-          "description": "Motion::PlannerLimits::velKi [duty/(mm/s)/s] duty-stage integral rate.",
-          "firmware": {
-            "field": "velKi",
-            "kind": "float"
-          }
-        },
-        "vel_i_max": {
-          "type": "number",
-          "description": "Motion::PlannerLimits::velIMax [duty] duty-stage integrator clamp.",
-          "firmware": {
-            "field": "velIMax",
-            "kind": "float"
-          }
-        },
-        "vel_i_accel_gate": {
-          "type": "number",
-          "description": "Motion::PlannerLimits::velIAccelGate [mm/s^2] duty-stage integral ramp gate.",
-          "firmware": {
-            "field": "velIAccelGate",
-            "kind": "float"
-          }
-        },
-        "duty_floor": {
-          "type": "number",
-          "description": "Motion::PlannerLimits::dutyFloor [-1,1] -- stiction floor, the minimum |duty| the duty stage will command for a nonzero commanded velocity.",
-          "firmware": {
-            "field": "dutyFloor",
-            "kind": "float"
-          }
-        },
-        "trim_kp": {
-          "type": "number",
-          "description": "Motion::PlannerLimits::trimKp [1] dimensionless velocity-domain trim proportional gain.",
-          "firmware": {
-            "field": "trimKp",
-            "kind": "float"
-          }
-        },
-        "trim_ki": {
-          "type": "number",
-          "description": "Motion::PlannerLimits::trimKi [1/s] velocity-domain trim integral gain.",
-          "firmware": {
-            "field": "trimKi",
-            "kind": "float"
-          }
-        },
-        "trim_i_max": {
-          "type": "number",
-          "description": "Motion::PlannerLimits::trimIMax [mm/s] velocity-domain trim integrator clamp.",
-          "firmware": {
-            "field": "trimIMax",
-            "kind": "float"
-          }
-        },
-        "trim_max": {
-          "type": "number",
-          "description": "Motion::PlannerLimits::trimMax [mm/s] total velocity-domain trim authority.",
-          "firmware": {
-            "field": "trimMax",
-            "kind": "float"
-          }
+          "description": "Measured plant time constant [s] -- recorded measured data; not currently baked into any PlannerLimits field (130-009 removed velKaff/trimKaff, its only former consumers)."
         },
         "decel_plan_fraction": {
           "type": "number",

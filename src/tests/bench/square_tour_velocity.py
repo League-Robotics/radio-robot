@@ -118,30 +118,36 @@ def driveDuty(desired: float, previous: float) -> float:
 
 def tourLimits(trim: bool, leeway: float = DECEL_LEEWAY, kaff: float = 0.5
                ) -> PlannerLimits:
+    # 130-009: PlannerLimits reshaped to 18 fields under four sub-structs
+    # (ceilings/plant/landing/tracking); requireSettle/settleWindow,
+    # otosStaleness/headingOtosWeight, the M4 duty-stage gains (velKff/
+    # velKp/velKi/velIMax/velKaff/velIAccelGate/dutyFloor), and the dead
+    # planner-side trim gains (trimKp/trimKi/trimIMax/trimKaff/trimMax --
+    # already a silent no-op per this script's own RETIRED docstring
+    # above, since Motion::WheelTrim was deleted by 130-005) are all
+    # DELETED outright -- there is nothing left to set for any of them.
+    # `trim`/`kaff` are kept as this function's own parameters (the
+    # RETIRED docstring's A/B-comparison call sites still pass them) but
+    # no longer have anywhere to land.
     limits = PlannerLimits()
-    limits.vMax = 400.0
-    limits.aMax = 300.0
-    limits.aDecel = 250.0
-    limits.omegaMax = 3.0
-    limits.alphaMax = 6.0
-    limits.alphaDecel = 5.0
-    limits.trackWidth = TRACK
-    limits.controlPeriod = float(CYCLE)
-    limits.actuationDelay = float(CYCLE)  # [ms] command staged at next cycle
-    limits.velocityFilterWeight = 0.35
-    limits.otosStaleness = 200
-    limits.headingOtosWeight = 0.0
-    limits.requireSettle = False
+    limits.ceilings.vMax = 400.0
+    limits.ceilings.aMax = 300.0
+    limits.ceilings.aDecel = 250.0
+    limits.ceilings.omegaMax = 3.0
+    limits.ceilings.alphaMax = 6.0
+    limits.ceilings.alphaDecel = 5.0
+    limits.plant.trackWidth = TRACK
+    limits.plant.controlPeriod = float(CYCLE)
+    limits.plant.actuationDelay = float(CYCLE)  # [ms] command staged at next cycle
+    limits.plant.velocityFilterWeight = 0.35
     # Rest floors for the closing planned stop. These bound the residual
     # coast: the stop completes once the FILTERED measured speed is under
     # the floor, and the plant then coasts a further ~v*tau. At 0.16 rad/s
     # with tau 0.23 s that is ~2 deg of uncorrected rotation, which was
     # most of this tour's final heading error. Sized just above the
     # filtered velocity-noise floor instead.
-    limits.settleRestVelocity = 6.0   # [mm/s]
-    limits.settleRestOmega = 0.06     # [rad/s]
-    limits.settleWindow = 2500.0
-    limits.dutyFloor = BREAKAWAY
+    limits.landing.settleRestVelocity = 6.0   # [mm/s]
+    limits.landing.settleRestOmega = 0.06     # [rad/s]
     # Outer heading loop, on top of the trim's inner wheel-rate loop.
     #
     # These are NOT redundant, which was worth measuring rather than
@@ -154,27 +160,10 @@ def tourLimits(trim: bool, leeway: float = DECEL_LEEWAY, kaff: float = 0.5
     #
     # (The ratio lock is not a third corrector -- it constrains the
     # commanded pair and never reads a measurement.)
-    limits.headingHoldGain = 2.0 if trim else 0.0
-    # Duty stage OFF -- this tour drives the velocity plane.
-    limits.velKff = 0.0
-    limits.velKp = 0.0
-    limits.velKi = 0.0
-    limits.velIMax = 0.0
-    limits.velKaff = 0.0
-    limits.velIAccelGate = 1.0e9
-    limits.jerkMax = 1500.0    # [mm/s^3] aMax reached in ~0.2 s
-    limits.yawJerkMax = 30.0   # [rad/s^3]
-    limits.decelPlanFraction = leeway
-    if trim:
-        # Commissioning gains: kp well under 1 (measured wheel velocity is
-        # a raw difference quotient), kaff at half the measured plant tau,
-        # and a bounded trim authority so feedback trims the profile
-        # rather than replacing it.
-        limits.trimKp = 0.25       # [1]
-        limits.trimKi = 0.5        # [1/s]
-        limits.trimIMax = 60.0     # [mm/s]
-        limits.trimKaff = TAU * kaff  # [s]
-        limits.trimMax = 120.0     # [mm/s]
+    limits.tracking.headingHoldGain = 2.0 if trim else 0.0
+    limits.ceilings.jerkMax = 1500.0    # [mm/s^3] aMax reached in ~0.2 s
+    limits.ceilings.yawJerkMax = 30.0   # [rad/s^3]
+    limits.landing.decelPlanFraction = leeway
     return limits
 
 

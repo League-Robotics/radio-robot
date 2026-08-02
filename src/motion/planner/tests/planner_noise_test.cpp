@@ -67,7 +67,7 @@ Move angleMove(uint32_t id, float threshold, float omega) {
 // and one control period of actuation delay to plan against.
 PlannerLimits noisyLimits() {
   PlannerLimits limits = benchLimits();
-  limits.velocityFilterWeight = 0.3f;
+  limits.plant.velocityFilterWeight = 0.3f;
   // This tier's plant carries a +-40 zig-zag + +-15 white velocity noise;
   // the filtered body-velocity ripple floor is ~8 mm/s, so the rest floor
   // must sit above it (per-robot property -- see PlannerLimits).
@@ -76,9 +76,9 @@ PlannerLimits noisyLimits() {
   // hundred ms after a physical stop, and the plant's tiny tau (~31 ms)
   // means even a generous floor coasts < 1 mm / < 0.01 rad -- inside the
   // arrival epsilons, which remain the arbiter of arrival truth.
-  limits.settleRestVelocity = 25.0f;
-  limits.settleRestOmega = 0.15f;
-  limits.actuationDelay = kPeriod;  // [ms] command lands one cycle late
+  limits.landing.settleRestVelocity = 25.0f;
+  limits.landing.settleRestOmega = 0.15f;
+  limits.plant.actuationDelay = kPeriod;  // [ms] command lands one cycle late
   return limits;
 }
 
@@ -118,11 +118,11 @@ Outcome drive(Planner& planner, Plant& plant, const PlannerLimits& limits,
   Types::RobotState state;
   uint32_t now = 0;
   Outcome outcome;
-  const float dt = limits.controlPeriod * 0.001f;  // [s]
+  const float dt = limits.plant.controlPeriod * 0.001f;  // [s]
   const float stepCeiling =
-      (angular ? std::max(limits.alphaMax, limits.alphaDecel) * 0.5f *
-                     limits.trackWidth
-               : std::max(limits.aMax, limits.aDecel)) *
+      (angular ? std::max(limits.ceilings.alphaMax, limits.ceilings.alphaDecel) * 0.5f *
+                     limits.plant.trackWidth
+               : std::max(limits.ceilings.aMax, limits.ceilings.aDecel)) *
           dt +
       1e-3f;  // [mm/s]
   float previousLeft = 0.0f;   // [mm/s]
@@ -130,13 +130,13 @@ Outcome drive(Planner& planner, Plant& plant, const PlannerLimits& limits,
   float afterGoalPeak = 0.0f;  // [mm/s] monotone envelope once completed
 
   for (int i = 0; i < maxTicks; ++i) {
-    const TickResult r = cycle(planner, state, plant, now, limits.controlPeriod);
+    const TickResult r = cycle(planner, state, plant, now, limits.plant.controlPeriod);
     ++outcome.ticks;
     const float left = state.wheelLeft.cmdVelocity;
     const float right = state.wheelRight.cmdVelocity;
 
-    CHECK(std::fabs(left) <= limits.vMax + 1e-3f);
-    CHECK(std::fabs(right) <= limits.vMax + 1e-3f);
+    CHECK(std::fabs(left) <= limits.ceilings.vMax + 1e-3f);
+    CHECK(std::fabs(right) <= limits.ceilings.vMax + 1e-3f);
     CHECK(std::fabs(left - previousLeft) <= stepCeiling);
     CHECK(std::fabs(right - previousRight) <= stepCeiling);
     previousLeft = left;
@@ -207,7 +207,7 @@ void testTurnUnderNoiseAndLag() {
   CHECK(!outcome.timedOut);
 
   const float heading =
-      (plant.positionRight - plant.positionLeft) / limits.trackWidth;  // [rad]
+      (plant.positionRight - plant.positionLeft) / limits.plant.trackWidth;  // [rad]
   const float error = std::fabs(heading - quarterTurn);
   const float gate = kCruiseOmega * kPeriod * 0.001f;  // [rad] 0.1
   std::printf("  turn 90 deg, noisy+stale+lagged: error %.5f rad "
@@ -335,7 +335,7 @@ void testTrackingLagSensitivity() {
 
 void testHeadingHoldRecoversDisturbance() {
   PlannerLimits limits = benchLimits();
-  limits.headingHoldGain = 4.0f;  // [1/s]
+  limits.tracking.headingHoldGain = 4.0f;  // [1/s]
   Planner planner(limits);
   PerfectPlant plant;
   Types::RobotState state;
@@ -346,19 +346,19 @@ void testHeadingHoldRecoversDisturbance() {
   float worstHeading = 0.0f;  // [rad]
   for (int i = 0; i < 400 && !completed; ++i) {
     completed = cycle(planner, state, plant, now, kPeriod).completed;
-    if (i == 10) plant.disturbHeading(0.20f, limits.trackWidth);  // [rad] kick
+    if (i == 10) plant.disturbHeading(0.20f, limits.plant.trackWidth);  // [rad] kick
     if (i > 10) {
       worstHeading = std::max(
           worstHeading,
           std::fabs((plant.positionRight - plant.positionLeft) /
-                    limits.trackWidth));
+                    limits.plant.trackWidth));
     }
   }
   CHECK(completed);
   for (int i = 0; i < 10; ++i) cycle(planner, state, plant, now, kPeriod);
 
   const float heading =
-      (plant.positionRight - plant.positionLeft) / limits.trackWidth;  // [rad]
+      (plant.positionRight - plant.positionLeft) / limits.plant.trackWidth;  // [rad]
   const float path = 0.5f * (plant.positionLeft + plant.positionRight);  // [mm]
   std::printf("  heading hold: 0.200 rad kick -> residual %.5f rad, "
               "distance %.6f mm\n", std::fabs(heading), path);
@@ -375,7 +375,7 @@ void testHeadingHoldOffLeavesDisturbanceStanding() {
   // simply carried to the end. Proves the recovery above is the P term and
   // not something else in the pipeline.
   const PlannerLimits limits = benchLimits();
-  CHECK(limits.headingHoldGain == 0.0f);
+  CHECK(limits.tracking.headingHoldGain == 0.0f);
   Planner planner(limits);
   PerfectPlant plant;
   Types::RobotState state;
@@ -384,11 +384,11 @@ void testHeadingHoldOffLeavesDisturbanceStanding() {
   bool completed = false;
   for (int i = 0; i < 400 && !completed; ++i) {
     completed = cycle(planner, state, plant, now, kPeriod).completed;
-    if (i == 10) plant.disturbHeading(0.20f, limits.trackWidth);  // [rad]
+    if (i == 10) plant.disturbHeading(0.20f, limits.plant.trackWidth);  // [rad]
   }
   CHECK(completed);
   const float heading =
-      (plant.positionRight - plant.positionLeft) / limits.trackWidth;
+      (plant.positionRight - plant.positionLeft) / limits.plant.trackWidth;
   CHECK_NEAR(heading, 0.20f, 1e-4);
   CHECK_NEAR(0.5f * (plant.positionLeft + plant.positionRight), 500.0f, 1e-3);
 }
@@ -397,7 +397,7 @@ void testHeadingHoldClampedToVelocityCeiling() {
   // A huge gain against a huge error must not push the outer wheel past
   // vMax -- and must still leave the profiled mean exactly where it was.
   PlannerLimits limits = benchLimits();
-  limits.headingHoldGain = 200.0f;  // [1/s] absurd on purpose
+  limits.tracking.headingHoldGain = 200.0f;  // [1/s] absurd on purpose
   Planner planner(limits);
   PerfectPlant plant;
   Types::RobotState state;
@@ -405,16 +405,16 @@ void testHeadingHoldClampedToVelocityCeiling() {
   CHECK(planner.move(distanceMove(42, 2000.0f, 500.0f), false));
   for (int i = 0; i < 40; ++i) {
     cycle(planner, state, plant, now, kPeriod);
-    if (i == 10) plant.disturbHeading(1.0f, limits.trackWidth);  // [rad]
-    CHECK(std::fabs(state.wheelLeft.cmdVelocity) <= limits.vMax + 1e-3f);
-    CHECK(std::fabs(state.wheelRight.cmdVelocity) <= limits.vMax + 1e-3f);
+    if (i == 10) plant.disturbHeading(1.0f, limits.plant.trackWidth);  // [rad]
+    CHECK(std::fabs(state.wheelLeft.cmdVelocity) <= limits.ceilings.vMax + 1e-3f);
+    CHECK(std::fabs(state.wheelRight.cmdVelocity) <= limits.ceilings.vMax + 1e-3f);
   }
 }
 
 void testHeadingHoldUnderNoiseAndLag() {
   const PlannerLimits base = noisyLimits();
   PlannerLimits limits = base;
-  limits.headingHoldGain = 3.0f;  // [1/s]
+  limits.tracking.headingHoldGain = 3.0f;  // [1/s]
   Planner planner(limits);
   NoisyPlant plant = dirtyPlant();
   Types::RobotState state;
@@ -423,12 +423,12 @@ void testHeadingHoldUnderNoiseAndLag() {
   bool completed = false;
   for (int i = 0; i < 400 && !completed; ++i) {
     completed = cycle(planner, state, plant, now, kPeriod).completed;
-    if (i == 10) plant.disturbHeading(0.15f, limits.trackWidth);  // [rad]
+    if (i == 10) plant.disturbHeading(0.15f, limits.plant.trackWidth);  // [rad]
   }
   CHECK(completed);
   for (int i = 0; i < 12; ++i) cycle(planner, state, plant, now, kPeriod);
   const float heading =
-      (plant.positionRight - plant.positionLeft) / limits.trackWidth;  // [rad]
+      (plant.positionRight - plant.positionLeft) / limits.plant.trackWidth;  // [rad]
   const float path = 0.5f * (plant.positionLeft + plant.positionRight);  // [mm]
   std::printf("  heading hold on a dirty plant: residual %.5f rad, "
               "distance error %.3f mm\n", std::fabs(heading),
