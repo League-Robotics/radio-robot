@@ -1,7 +1,7 @@
 ---
 id: '011'
 title: 'Bench re-verification: 50 ms period, tick() state machine, PlannerLimits reshape'
-status: in-progress
+status: done
 use-cases:
 - SUC-004
 depends-on:

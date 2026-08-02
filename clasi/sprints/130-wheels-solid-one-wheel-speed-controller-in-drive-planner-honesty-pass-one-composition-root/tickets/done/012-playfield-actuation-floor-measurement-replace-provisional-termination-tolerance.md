@@ -1,9 +1,11 @@
 ---
 id: '012'
 title: Playfield actuation-floor measurement; replace provisional TERMINATION_TOLERANCE
-status: open
-use-cases: [SUC-006]
-depends-on: ['006']
+status: done
+use-cases:
+- SUC-006
+depends-on:
+- '006'
 github-issue: ''
 issue: measure-actuation-floor-and-set-termination-tolerance.md
 completes_issue: true
