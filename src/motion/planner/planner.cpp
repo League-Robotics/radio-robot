@@ -507,13 +507,69 @@ TickResult Planner::tick(const Types::RobotState& state) {
         // debiting the sub-tick residual to the next Move's cumulative
         // baseline. Final/orthogonal boundary (0): the terminal step has
         // already closed the sum -- complete at (float-noise) zero.
+        //
+        // NOT gated on profileVelocity_ the way Move::Kind::Angle is just
+        // below -- tried and reverted (130-010): it measurably regressed
+        // src/tests/sim/system/test_straight_leg_crab_regression.py (a
+        // dedicated 119-005 permanent regression test with a tight 0.3deg
+        // tolerance) to a genuine +2.0deg crab on an otherwise-isolated
+        // straight leg, where applyHeadingHold()'s own per-tick correction
+        // (planActive()'s Move::Kind::Distance case) stops running the
+        // instant the Move leaves the active Distance branch -- extending
+        // how long the Move stays active before calling itself done, on
+        // THIS axis, extends the window that correction has to lock in
+        // whatever small per-wheel asymmetry the plant's own tail leaves,
+        // rather than shortening it. The reported defect
+        // (sim-tour-turn-shaping-undershoots-90-degree-turns.md) is a
+        // ROTATION (Angle) undershoot; the fix below is scoped to that.
         done = measured.plannedRemaining <= kDoneEpsilonLinear ||
                (activeBoundary_ > 0.0f &&
                 measured.plannedRemaining <=
                     profileVelocity_ * dt + kDoneEpsilonLinear);
         break;
       case Move::Kind::Angle:
-        done = measured.plannedRemaining <= kDoneEpsilonAngular ||
+        // Same "terminal step already closed the sum" premise as
+        // Move::Kind::Distance above, but plannedRemaining reaching the
+        // float-noise floor does NOT mean the ramp has actually reached
+        // its own tail on a plant with a longer real actuation lag than
+        // measure()'s own short (actuationDelay-sized) lookahead assumes
+        // (this profile's own PID-disabled, pure first-order WheelPlant
+        // response, tau far past actuationDelay). Gating this branch on
+        // profileVelocity_ itself being at the rest floor (limits_.
+        // landing.settleRestOmega, the SAME floor settleReached() uses to
+        // call the MEASURED body "at rest") makes "the terminal step has
+        // already closed the sum" true again: this branch now only fires
+        // once the commanded ramp has actually decayed to its own last,
+        // near-zero step -- not merely once the lookahead-adjusted
+        // prediction says so. Measured 2026-08-02 (130-010): without this
+        // gate, an isolated 90deg pivot reported `done` at profileVelocity_
+        // still ~30 deg/s, roughly 12-17 degrees of true rotation short of
+        // where the body eventually settled -- and in a chained tour,
+        // where the very next Move immediately overrides the
+        // still-spinning wheels, that shortfall is never recovered,
+        // showing up as a per-turn undershoot
+        // (sim-tour-turn-shaping-undershoots-90-degree-turns.md). The
+        // `arrived` event above already covers the fully-honest (measured,
+        // at-rest) case for a Twist Angle Move; this gate brings the
+        // Wheels-velocityKind case (which `arrived` structurally excludes,
+        // see its own guard above) up to the same "commanded ramp has
+        // actually finished" standard, without waiting out the plant's own
+        // slower physical coast the way the stall backstop would. Unlike
+        // Move::Kind::Distance, an Angle Move has no per-tick
+        // applyHeadingHold()-style correction running while active for a
+        // longer completion window to disturb -- the Distance regression
+        // above does not apply here.
+        //
+        // settleRestOmega <= 0 is treated as unconfigured (the SAME
+        // fail-open convention shapeLimits()'s tighten() uses for a <=0
+        // ceiling: "contributes nothing," not "zero tolerance"): the
+        // rest-floor gate is then a no-op, matching this branch's
+        // pre-130-010 behavior for any caller that leaves the field at
+        // its structural zero rather than PlannerLimits::Landing's own
+        // 0.02 rad/s in-class default.
+        done = ((limits_.landing.settleRestOmega <= 0.0f ||
+                 std::fabs(profileVelocity_) <= limits_.landing.settleRestOmega) &&
+                measured.plannedRemaining <= kDoneEpsilonAngular) ||
                (activeBoundary_ > 0.0f &&
                 measured.plannedRemaining <=
                     profileVelocity_ * dt + kDoneEpsilonAngular);
@@ -575,8 +631,21 @@ TickResult Planner::tick(const Types::RobotState& state) {
         carryHeading_ = active_.baselineHeading;
       } else {
         carryPath_ = active_.baselinePath;
-        carryHeading_ =
-            active_.baselineHeading + angularDirection(m) * m.threshold;
+        // MEASURED heading (pose_.heading()), not baseline + m.threshold
+        // projected forward -- 130-010. Those used to agree because
+        // m.threshold IS what this Move was asked to turn, but an upstream
+        // caller can rewrite it before the Planner ever sees it (e.g.
+        // App::RobotLoop::handleMove()'s rotation-calibration inversion,
+        // which sizes Motion::Move::threshold to compensate for a plant's
+        // own coast-down overshoot, not to describe "the intended
+        // cumulative contribution" this ledger wants). Carrying the
+        // measured heading is honest by construction once completion
+        // itself lands close to the real target (the profile-complete gate
+        // just above, in the Move::Kind::Angle case of tick()'s own
+        // switch) -- and it is a no-op for the ordinary, uncalibrated case,
+        // where pose_.heading() and baseline+threshold already agree to
+        // within the arrival tolerance.
+        carryHeading_ = pose_.heading();
       }
     }
     active_.occupied = false;

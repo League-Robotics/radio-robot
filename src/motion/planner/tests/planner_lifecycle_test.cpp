@@ -77,7 +77,21 @@ void testDrainingThenIdleAfterQueueEmpties() {
   PerfectPlant plant;
   Types::RobotState state;
   uint32_t now = 0;
-  CHECK(planner.move(distanceMove(1, 300.0f, 150.0f), false));
+  // A short timeout, not the distance itself, ends this Move -- forced to
+  // fire mid-cruise (well before profile-complete/arrived would honestly
+  // fire on this 300mm leg), so it completes with a genuinely nonzero
+  // staged command still in force. 130-010's own profile-complete gate
+  // (planner.cpp's Move::Kind::Distance/Angle cases) now REQUIRES the
+  // commanded ramp to have already decayed near the rest floor before that
+  // event can fire at all -- exactly so a normal (non-timeout) completion
+  // no longer leaves a meaningful residual to drain, which is what this
+  // test used to rely on `distanceMove()`'s own long (60s) timeout to
+  // exercise by accident. `timedOut` is checked unconditionally, before
+  // any of that gating, so it is still the reliable way to force a
+  // completes-while-still-moving scenario here.
+  Move move = distanceMove(1, 300.0f, 150.0f);
+  move.timeout = 200.0f;  // [ms] -- a few ticks into the accel/cruise ramp
+  CHECK(planner.move(move, false));
 
   // Nothing queued behind it: the same tick the Move completes, the
   // staged command it leaves behind (the second-to-last decel step, not

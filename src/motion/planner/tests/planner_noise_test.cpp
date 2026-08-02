@@ -315,6 +315,74 @@ void testTrackingLagSensitivity() {
   }
 }
 
+// ---- 130-010: profile-complete must not fire while still cruising ----
+//
+// sim-tour-turn-shaping-undershoots-90-degree-turns.md's own defect (a
+// commanded 90deg tour turn landing 10.8-20.8deg SHORT, deterministically)
+// lives in the FULL sim/tour stack -- App::RobotLoop's rotation
+// calibration, the cumulative baseline ledger, and a chained tour's next
+// Move overriding the still-turning wheels the instant `done` fires all
+// compound together (see that issue file and this ticket's own commit for
+// the full account) -- and is not reproducible from this standalone
+// Planner+NoisyPlant harness alone; `test_tour_closure_gate.py`'s
+// deterministic per-turn assertion is the real end-to-end regression gate
+// for it. What IS reproducible, and worth pinning here, is the mechanism
+// the fix changes: before 130-010, profile-complete's boundary<=0 branch
+// fired off `plannedRemaining`'s short lookahead alone, with no check that
+// the COMMANDED ramp (profileVelocity_) had actually decayed anywhere near
+// the rest floor. At a severe tracking lag (this test uses trackingLag =
+// 1 - exp(-dt/tau) ~= 0.32, TestSim::WheelPlant's own tau=0.13s at a 50ms
+// period -- well past testTrackingLagSensitivity()'s own worst case, 0.6,
+// which that test's own comment documents as "grows monotonically as
+// tracking degrades") that gap grows large enough that reading the plant's
+// position on the SAME tick `done` fires (rather than after a generous
+// drain, which is what the rest of this file's `drive()` helper measures,
+// and exactly what would mask this) is a meaningful, mechanism-level check
+// that the commanded ramp has genuinely reached its own tail before the
+// Move calls itself finished.
+void testAngleDoesNotUndershootAtCompletionUnderSevereTrackingLag() {
+  PlannerLimits limits = noisyLimits();
+  Planner planner(limits);
+  NoisyPlant plant = dirtyPlant();
+  plant.trackingLag = 0.32f;  // WheelPlant's own tau=0.13s at a 50ms period
+  const float quarterTurn = static_cast<float>(M_PI) * 0.5f;  // [rad]
+  CHECK(planner.move(angleMove(5, quarterTurn, kCruiseOmega), false));
+
+  Types::RobotState state;
+  uint32_t now = 0;
+  float headingAtCompletion = 0.0f;
+  bool completed = false;
+  for (int i = 0; i < 800 && !completed; ++i) {
+    const TickResult r = cycle(planner, state, plant, now, kPeriod);
+    if (r.completed) {
+      CHECK(!r.timedOut);
+      // The SAME instant a chained tour's next Move would take over --
+      // read the plant's position on THIS tick, before any further coast.
+      headingAtCompletion =
+          (plant.positionRight - plant.positionLeft) / limits.plant.trackWidth;
+      completed = true;
+    }
+  }
+  CHECK(completed);
+
+  const float error = headingAtCompletion - quarterTurn;  // [rad] signed
+  std::printf("  turn 90 deg AT COMPLETION, trackingLag=0.32 (WheelPlant "
+              "tau-equivalent): error %+.5f rad (%+.2f deg)\n",
+              error, error * (180.0f / static_cast<float>(M_PI)));
+  // NEVER an undershoot of more than one cruise interval's worth of
+  // rotation at the completion tick itself. This standalone plant does not
+  // reach the sim tour's own -0.19..-0.36 rad undershoot (this file's own
+  // "Angle/Distance completion no longer allowed at speed" comment above
+  // explains why it can't) -- both before and after 130-010 this specific
+  // scenario reads as a modest OVERSHOOT (+0.05 rad pre-fix, +0.14 rad
+  // post-fix: the fix trades a little more measured overshoot here for
+  // closing off the undershoot the tour stack actually hits) -- but the
+  // gate is worth keeping regardless, as a floor against a future change
+  // reopening the "complete while still cruising" gap this ticket closes.
+  const float gate = kCruiseOmega * kPeriod * 0.001f;  // [rad] 0.1
+  CHECK(error >= -gate);
+}
+
 // ---- item 2: settle-confirm completion (M1) -- DELETED by 130-008 ----
 //
 // The six tests that used to live here (zero-error coincidence on a
@@ -448,6 +516,7 @@ int main() {
   testChainUnderNoiseAndLag();
   testStandingRobotDoesNotDrift();
   testTrackingLagSensitivity();
+  testAngleDoesNotUndershootAtCompletionUnderSevereTrackingLag();
   testHeadingHoldRecoversDisturbance();
   testHeadingHoldOffLeavesDisturbanceStanding();
   testHeadingHoldClampedToVelocityCeiling();
