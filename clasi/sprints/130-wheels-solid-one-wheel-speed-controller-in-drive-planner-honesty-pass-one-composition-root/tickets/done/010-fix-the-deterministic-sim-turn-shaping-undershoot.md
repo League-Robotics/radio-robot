@@ -1,7 +1,7 @@
 ---
 id: '010'
 title: Fix the deterministic sim turn-shaping undershoot
-status: in-progress
+status: done
 use-cases:
 - SUC-005
 depends-on:
