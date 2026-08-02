@@ -2,10 +2,16 @@
 id: '130'
 title: 'Wheels-solid: one wheel-speed controller in Drive, planner honesty pass, one
   composition root'
-status: ticketing
+status: closed
 branch: sprint/130-wheels-solid-one-wheel-speed-controller-in-drive-planner-honesty-pass-one-composition-root
 worktree: false
-use-cases: [SUC-001, SUC-002, SUC-003, SUC-004, SUC-005, SUC-006]
+use-cases:
+- SUC-001
+- SUC-002
+- SUC-003
+- SUC-004
+- SUC-005
+- SUC-006
 issues:
 - wheel-speed-controller-moves-into-drive.md
 - planner-honesty-pass-50ms-period-tick-state-machine-limits-reduction.md

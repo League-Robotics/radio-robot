@@ -9,9 +9,7 @@ tovez  9906360200052820a8fdb5e413abb276000000006e052820   <- OURS
 vizev  99063602000528205560754f2f401c2f000000006e052820   <- NOT OURS. Never touch.
 ```
 
-`vizev` belongs to someone else and is running their own work (stakeholder,
-2026-08-01). Flashing it, driving it, or attaching a debugger to it is
-interfering with another person's robot.
+If you are doing mainline development, you are developing on `tovez`. However, you may be told that you can also deploy to other machines, but do not do this without specific instructions. 
 
 **Every default path currently leads to the WRONG robot**, verified 2026-08-01:
 
