@@ -117,7 +117,7 @@ float Drive::crawlDuty(float duty, float& carry) const {
 // the post-estop() stop re-assertion window (129-001, see below and
 // drive.h's own header) -- neither condition applies there (mode_ is
 // already Active, past boot), and the write is worth repeating.
-void Drive::tick(float speedLeft, float speedRight) {
+void Drive::tick(const Types::RobotState& state) {
   // Fail closed: with no calibration installed there is no honest
   // speed->duty conversion to make, so write nothing at all rather than
   // guess. A robot whose JSON is missing the
@@ -125,6 +125,13 @@ void Drive::tick(float speedLeft, float speedRight) {
   // return means a composition root that skipped setDutyPerSpeed(), and
   // standing still is the right answer to that.
   if (!calibrated_) return;
+
+  // 130-003: the interface now hands tick() the whole blackboard so a
+  // future controller stage can also read cmdAccel and the measured wheel
+  // sections below -- this ticket's own body still converts exactly the
+  // same two commanded speeds it always has, unchanged.
+  const float speedLeft = state.wheelLeft.cmdVelocity;
+  const float speedRight = state.wheelRight.cmdVelocity;
 
   const float commandLeft = correctedCommand(speedLeft, lastSpeedLeft_, true);
   const float commandRight =

@@ -1392,6 +1392,22 @@ void Planner::update(Types::RobotState& state) const {
   const float stagedRight = cmdRight_ + trimRight_;  // [mm/s]
   state.wheelLeft.cmdVelocity = stagedLeft;
   state.wheelRight.cmdVelocity = stagedRight;
+
+  // cmdAccel (130-003): a forward finite difference of the staged command
+  // across the one-tick interval that just elapsed, the same shape
+  // stageTrim()/stageDuty() already compute locally for their own accel
+  // feedforward (this is not new math, just the first time it survives
+  // past the tick it was computed in). Diffing the current, trimmed
+  // stagedLeft/Right against last tick's untrimmed cmdLeftPrevious_/
+  // cmdRightPrevious_ carries the same staged-vs-untrimmed asymmetry those
+  // two call sites already accept -- update() is const and cannot roll the
+  // history itself (that happens in tick(), the one mutating half of this
+  // class's own two-method contract), so it reads the previous generation
+  // rollCommandHistory() already aged for it.
+  const float dt = limits_.controlPeriod * 0.001f;  // [s]
+  state.wheelLeft.cmdAccel = (stagedLeft - cmdLeftPrevious_) / dt;
+  state.wheelRight.cmdAccel = (stagedRight - cmdRightPrevious_) / dt;
+
   // The real (124) Command section carries mode + the commanded twist, not
   // a move id -- completion/ack identity rides TickResult, never the state.
   state.command.moveActive = active_.occupied;

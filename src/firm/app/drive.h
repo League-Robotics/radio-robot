@@ -25,7 +25,17 @@
 //
 // Two-method contract, adopted from Motion::Planner (planner.h) so the two
 // motion deciders read the same way at their call sites:
-//   tick(speedLeft, speedRight)      -- DO THE WORK: shape and write duty.
+//   tick(const Types::RobotState&)   -- DO THE WORK: shape and write duty,
+//                                       reading whichever subsystem's
+//                                       cmdVelocity/cmdAccel the blackboard
+//                                       currently carries (130-003: the
+//                                       signature widened from two loose
+//                                       speed floats to the whole state so
+//                                       the forthcoming unified controller
+//                                       -- ticket 004 -- can also see
+//                                       cmdAccel and each wheel's measured
+//                                       sampleTime/freshness, without a
+//                                       second signature change).
 //   update(Types::RobotState&, now)  -- SAVE results into the blackboard:
 //                                       expire the armed command and
 //                                       publish this subsystem's targets,
@@ -135,11 +145,17 @@ class Drive {
   // --- The two-method contract ---
 
   // Convert the commanded wheel speeds to duty (per-wheel calibration ->
-  // crawl shaping -> quiet-at-zero) and write the leaves. Takes the speeds
-  // as parameters rather than reading its own targets: the loop hands it
-  // whichever subsystem's targets the blackboard currently carries, so
-  // there is one actuation path regardless of who decided the motion.
-  void tick(float speedLeft, float speedRight);  // [mm/s] [mm/s] signed
+  // crawl shaping -> quiet-at-zero) and write the leaves. Reads
+  // state.wheelLeft/Right.cmdVelocity rather than its own targets: the loop
+  // hands it whichever subsystem's targets the blackboard currently
+  // carries, so there is one actuation path regardless of who decided the
+  // motion. Takes the whole RobotState (130-003), not just the two speed
+  // floats, so cmdAccel and the measured wheel sections (velocity/
+  // sampleTime/connected, already read via left_/right_ today) are all
+  // available at one call site for future controller stages (ticket 004)
+  // to consume -- this ticket wires the interface only; tick()'s own body
+  // still does exactly what it did before.
+  void tick(const Types::RobotState& state);
 
   // Expire an armed command whose deadline has passed (latching the
   // completion event), then publish this subsystem's targets into

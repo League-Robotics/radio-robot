@@ -54,10 +54,25 @@
 #include "app/drive.h"
 #include "devices/device_config.h"
 #include "devices/nezha_motor.h"
+#include "firm/types/robot_state.h"
 #include "scripted_i2c_hook.h"
 #include "sim_plant.h"
 
 namespace {
+
+// 130-003: Drive::tick() now takes the whole Types::RobotState (so the
+// forthcoming unified controller, ticket 004, can also read cmdAccel and
+// each wheel's measured sections) rather than two loose speed floats. This
+// harness's scenarios only ever need to stage a commanded velocity pair, so
+// this helper is the one place that builds the RobotState tick() reads --
+// every call site below stays exactly as readable as it was with the old
+// two-float signature.
+Types::RobotState wheelCmd(float vLeft, float vRight) {  // [mm/s] x2
+  Types::RobotState state;
+  state.wheelLeft.cmdVelocity = vLeft;
+  state.wheelRight.cmdVelocity = vRight;
+  return state;
+}
 
 // --- Hand-rolled assertion plumbing (see app_telemetry_harness.cpp) ------
 
@@ -207,10 +222,11 @@ void scenarioSetDutyStagesRawValues() {
   const float dutyLeft = 0.18f;
   const float dutyRight = 0.06f;
   // tick() takes the commanded SPEEDS directly now (command-ingestion-ring-
-  // buffered-comms-subsystem-routing-two-stops.md §4): the loop hands it
-  // whichever subsystem's targets the blackboard carries, so there is one
-  // actuation path regardless of who decided the motion.
-  drive.tick(dutyLeft, dutyRight);
+  // buffered-comms-subsystem-routing-two-stops.md §4), via the whole
+  // RobotState (130-003): the loop hands it whichever subsystem's targets
+  // the blackboard carries, so there is one actuation path regardless of
+  // who decided the motion.
+  drive.tick(wheelCmd(dutyLeft, dutyRight));
 
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
@@ -243,13 +259,13 @@ void scenarioStopZeroesBothTargetsWithinOneCycle() {
   drive.setDutyPerSpeed(1.0f, 1.0f);
   // Drive a nonzero pair first, so the zero write below is a real
   // transition, not "duty was never nonzero to begin with."
-  drive.tick(0.12f, 0.09f);
+  drive.tick(wheelCmd(0.12f, 0.09f));
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs);
   checkTrue(left.appliedDuty() != 0.0f, "setup: left duty is nonzero before the zero pair");
   checkTrue(right.appliedDuty() != 0.0f, "setup: right duty is nonzero before the zero pair");
 
-  drive.tick(0.0f, 0.0f);
+  drive.tick(wheelCmd(0.0f, 0.0f));
 
   runOneCycleAtZeroPosition(left, bus, wireAddr, kPastWriteThrottleUs + 20000);
   runOneCycleAtZeroPosition(right, bus, wireAddr, kPastWriteThrottleUs + 20000);
@@ -283,7 +299,7 @@ void scenarioEstopReassertsStopWhileWheelsStillMoving() {
 
   // Drive a nonzero pair first -- one real setDuty() call each, landing a
   // nonzero writtenLeft_/writtenRight_ baseline.
-  drive.tick(0.5f, 0.5f);
+  drive.tick(wheelCmd(0.5f, 0.5f));
   checkTrue(left.setDutyCalls == 1 && right.setDutyCalls == 1,
             "setup: the nonzero pair actually reached both leaves");
 
@@ -300,7 +316,7 @@ void scenarioEstopReassertsStopWhileWheelsStillMoving() {
   right.setMockVelocity(60.0f);
   const int callsBeforeReassert = left.setDutyCalls;
   for (int i = 0; i < 5; ++i) {
-    drive.tick(0.0f, 0.0f);
+    drive.tick(wheelCmd(0.0f, 0.0f));
   }
   checkTrue(left.setDutyCalls == callsBeforeReassert + 5,
             "each tick() while still moving re-issues setDuty(0) on the left leaf -- the "
@@ -316,10 +332,10 @@ void scenarioEstopReassertsStopWhileWheelsStillMoving() {
   left.setMockVelocity(0.0f);
   right.setMockVelocity(0.0f);
   for (int i = 0; i < 40; ++i) {
-    drive.tick(0.0f, 0.0f);
+    drive.tick(wheelCmd(0.0f, 0.0f));
   }
   const int callsAfterSettle = left.setDutyCalls;
-  drive.tick(0.0f, 0.0f);
+  drive.tick(wheelCmd(0.0f, 0.0f));
   checkTrue(left.setDutyCalls == callsAfterSettle,
             "once at rest and the enforce window has elapsed, the quiet shortcut resumes on "
             "the left leaf");

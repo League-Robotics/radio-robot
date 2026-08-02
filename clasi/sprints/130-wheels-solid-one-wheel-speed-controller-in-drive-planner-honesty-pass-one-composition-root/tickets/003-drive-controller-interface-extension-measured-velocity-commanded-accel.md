@@ -1,9 +1,11 @@
 ---
 id: '003'
 title: 'Drive controller interface extension: measured velocity + commanded accel'
-status: open
-use-cases: [SUC-001]
-depends-on: ['002']
+status: done
+use-cases:
+- SUC-001
+depends-on:
+- '002'
 github-issue: ''
 issue: wheel-speed-controller-moves-into-drive.md
 completes_issue: true
@@ -33,16 +35,16 @@ never hand-wired twice.
 
 ## Acceptance Criteria
 
-- [ ] `Types::RobotState::Wheel::cmdAccel` field added (`// [mm/s^2]`
+- [x] `Types::RobotState::Wheel::cmdAccel` field added (`// [mm/s^2]`
       unit tag); `Motion::Planner` publishes it beside `cmdVelocity`
       every tick.
-- [ ] `App::Drive::tick()`'s signature is extended to see measured wheel
+- [x] `App::Drive::tick()`'s signature is extended to see measured wheel
       velocity + commanded accel (e.g. via `const Types::RobotState&`),
       with sample-time/freshness gating available for future stages to
       consume.
-- [ ] Zero behavior change: all existing bench/sim acceptance tests pass
+- [x] Zero behavior change: all existing bench/sim acceptance tests pass
       unchanged — this ticket changes no control logic.
-- [ ] `composeRobot()` (ticket 002) is the only place this interface is
+- [x] `composeRobot()` (ticket 002) is the only place this interface is
       wired for both sim and hardware — no duplicate wiring in
       `main.cpp`/`SimHarness` directly.
 

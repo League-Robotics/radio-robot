@@ -509,7 +509,7 @@ void RobotLoop::cycle() {
   // cycle -- one actuation path regardless of which decider produced them
   // (one cycle of command-to-wheels latency, the same the planner's own
   // actuationDelay compensates for).
-  drive_.tick(state_.wheelLeft.cmdVelocity, state_.wheelRight.cmdVelocity);
+  drive_.tick(state_);
 
   motorL_.requestSample();  // brick latches ONE pending read per select
   runAndWait(kSettle, [&] {
