@@ -2,7 +2,7 @@
 id: '131'
 title: 'Observable over proxy: takeover vs estop, honest stop and pose, one period
   owner'
-status: planning-docs
+status: closed
 branch: sprint/131-observable-over-proxy-takeover-vs-estop-honest-stop-and-pose-one-period-owner
 worktree: false
 use-cases: []
