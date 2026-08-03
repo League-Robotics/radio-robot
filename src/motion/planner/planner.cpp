@@ -299,10 +299,15 @@ void Planner::rollCommandHistory() {
 //   Idle/Draining -> Stopping     activateNext() pops a Kind::Stop entry.
 //   Breakaway -> Tracking          the measured velocity/omega crosses OUT
 //                                 of the rest floor (settleRestVelocity/
-//                                 settleRestOmega below) -- one-way, like
-//                                 decelLatched: a Move that later coasts
-//                                 back through the floor has still left
-//                                 rest once.
+//                                 settleRestOmega below) -- one-way: a Move
+//                                 that later coasts back through the floor
+//                                 has still left rest once. (Unlike this
+//                                 transition, `decelLatched` -- planWheels()'s
+//                                 own doc comment -- is a CONDITIONAL latch
+//                                 as of 131-006: it releases when a later
+//                                 tick's fresh recomputation shows the Move
+//                                 was never truly braking, so it is no
+//                                 longer a clean analogy for "one-way.")
 //   {Breakaway,Tracking,Stopping}
 //     -> {Breakaway,Tracking,Stopping,Draining,Idle}
 //                                 a Move COMPLETES (see EVENTS below) and
@@ -434,8 +439,10 @@ TickResult Planner::tick(const Types::RobotState& state) {
     // going nowhere.
     if (!atRest) {
       // Left rest: arrival/stall detection is armed for the remainder of
-      // this Move. One-way, like decelLatched -- a Move that later coasts
-      // back through the rest floor has still left rest once.
+      // this Move. One-way -- a Move that later coasts back through the
+      // rest floor has still left rest once. (`decelLatched` is a
+      // DIFFERENT, conditional latch as of 131-006 -- see planWheels()'s
+      // own doc comment -- so it is no longer a clean "one-way" analogy.)
       lifecycle_ = MoveLifecycle::Tracking;
       active_.stallTicks = 0;  // moving: not stalled, wherever it is
     } else if (lifecycle_ == MoveLifecycle::Breakaway) {
@@ -1224,16 +1231,45 @@ void Planner::planWheels(float dt, const Measurement& measured) {
   }
 
   // Never accelerate at the end: once braking has begun, the command may
-  // fall or hold but never rise again. Deliberately non-INCREASING rather
-  // than strictly decreasing -- if a successor is queued mid-decel and
-  // lifts the boundary, holding is right and re-accelerating is not.
+  // fall or hold but never rise again -- UNLESS the current tick's own
+  // fresh recomputation (`raw` below, from profileStep()'s from-scratch
+  // feasibility test, before this block's own override) says the Move is
+  // genuinely back in Accel or Hold. 131-006: the latch used to be a pure
+  // one-way ratchet -- once Decel/Closing tripped it, EVERY later tick was
+  // clamped and forced to Decel for the rest of the Move, regardless of
+  // what that later tick's own honest recomputation found. But the
+  // Decel/Closing classification that trips the latch is driven by
+  // `remaining` (measured.plannedRemaining upstream), a PREDICTION over
+  // sample-age and actuationDelay (measure()'s own doc comment) -- not a
+  // certainty. A transient under-estimate (e.g. the plant lagging the
+  // commanded ramp, so the ZOH predict overstates real progress) could trip
+  // the latch on a tick that was never truly braking, and the old
+  // unconditional override then forbade recovery even once re-measurement
+  // showed real remaining rotation/distance -- directly contradicting
+  // profile.cpp's own "brake as hard as allowed and let re-measurement
+  // recover" comment at its `!feasible(floor)` branch: profileStep() DOES
+  // let re-measurement recover, every tick, on its own; the bug was this
+  // caller vetoing that recomputation once latched. Releasing the latch
+  // here, rather than adding a new hysteresis/deadband parameter, is the
+  // fix: profileStep()'s own from-scratch classification (Accel/Hold means
+  // "no, we should not still be braking") IS the "did this materially
+  // recover" signal the comment already promises.
+  //
+  // The never-re-accelerate-once-genuinely-braking guarantee is preserved:
+  // the latch still sets on Decel/Closing and still clamps/forces Decel
+  // while held, for a Move that really is finishing -- it now ALSO clears
+  // the instant a fresh recomputation disagrees, rather than never.
+  //
   // The clamp is the BINDING wheel's own previous command translated back
   // to shape space (previousWheel[binding]/magnitude[binding]), the same
   // per-wheel-actual quantity profileStep() was just fed for it -- not the
   // old axisPerLambda-rescaled scalar, for the same reason planWheels()
   // stopped feeding that to profileStep() above.
   StepPhase raw = phase[binding];
-  if (active_.decelLatched) {
+  if (active_.decelLatched &&
+      (raw == StepPhase::Accel || raw == StepPhase::Hold)) {
+    active_.decelLatched = false;
+  } else if (active_.decelLatched) {
     const float previousLambdaBinding = magnitude[binding] > kUnitEpsilon
         ? previousWheel[binding] / magnitude[binding]
         : 0.0f;

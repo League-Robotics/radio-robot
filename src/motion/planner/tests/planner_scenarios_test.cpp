@@ -113,6 +113,35 @@ void testAngleExact() {
   CHECK_NEAR(plant.positionLeft, -plant.positionRight, 1e-4);
 }
 
+// 131-006: planner_tests had no Angle scenario above 90 degrees at all --
+// TOUR_2's own 146-degree turn (the residual the ticket's own issue names)
+// went unexercised by this tier entirely. Same zero-error PerfectPlant
+// exactness gate as testAngleExact() above, just at a larger angle: proves
+// the discrete-exact landing guarantee (and the decelLatched release fix's
+// own never-re-accelerate-once-genuinely-braking guarantee, which this
+// scenario never trips since a PerfectPlant never mispredicts) holds past
+// 90 degrees, not just at it.
+void testAngle146DegreesExact() {
+  Planner planner(benchLimits());
+  PerfectPlant plant;
+  Types::RobotState state;
+  uint32_t now = 0;
+  const float oneFortySix =
+      146.0f * static_cast<float>(M_PI) / 180.0f;  // [rad]
+  CHECK(planner.move(angleMove(4, oneFortySix, 2.0f), false));
+  bool completed = false;
+  for (int i = 0; i < 400 && !completed; ++i) {
+    completed = cycle(planner, state, plant, now, kPeriod).completed;
+  }
+  CHECK(completed);
+  for (int i = 0; i < 10; ++i) cycle(planner, state, plant, now, kPeriod);
+  // EXACT heading: (right - left) / track == 146deg in radians; mirrored.
+  const float heading =
+      (plant.positionRight - plant.positionLeft) / 100.0f;
+  CHECK_NEAR(heading, oneFortySix, 1e-5);
+  CHECK_NEAR(plant.positionLeft, -plant.positionRight, 1e-4);
+}
+
 void testSameAxisChainExactAndCarried() {
   // Two same-direction distance legs: total EXACTLY 800, and the boundary
   // is crossed at speed (no land-at-zero dip between legs).
@@ -476,6 +505,7 @@ int main() {
   testDistanceExact();
   testDistanceExactBackward();
   testAngleExact();
+  testAngle146DegreesExact();
   testSameAxisChainExactAndCarried();
   testOrthogonalChainExact();
   testTimeoutReported();
