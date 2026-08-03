@@ -450,15 +450,26 @@ def render_chart(runs: "list[Run]", path: pathlib.Path, *, subtitle: str,
         # Direct end-of-line labels carry the acceptance number itself, so
         # the percentage is readable without a second y-scale (the skill's
         # one-axis rule -- a right-hand % scale would be a dual axis).
-        # Both labels sit BELOW their line-end: above would collide with
-        # the commanded reference whenever a wheel lands close to 100%.
-        for value, color in ((run.delivered_left, COLOR_LEFT),
-                             (run.delivered_right, COLOR_RIGHT)):
+        # Labels sit BELOW their line-end (above would collide with the
+        # commanded reference whenever a wheel lands close to 100%) and are
+        # pushed apart when the two wheels land within a label's height of
+        # each other -- which is exactly what a healthy, balanced robot
+        # does, so the collision case is the COMMON one, not the edge case.
+        ends = sorted(((run.delivered_left, COLOR_LEFT),
+                       (run.delivered_right, COLOR_RIGHT)),
+                      key=lambda pair: pair[0], reverse=True)
+        minimum_gap = 0.075 * profile.distance
+        placed: "float | None" = None
+        for value, color in ends:
             if value != value:
                 continue
+            anchor_y = value
+            if placed is not None and placed - anchor_y < minimum_gap:
+                anchor_y = placed - minimum_gap
+            placed = anchor_y
             percent = value / profile.distance * 100.0
             ax.annotate(f"{percent:.1f}%",
-                        xy=(span, value), xytext=(-6, -13),
+                        xy=(span, anchor_y), xytext=(-6, -13),
                         textcoords="offset points", ha="right", va="top",
                         fontsize=11, fontweight="bold", color=color)
         ax.set_ylabel(f"travel  [mm]   (commanded {profile.distance:.0f} mm)")
