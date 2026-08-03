@@ -1,5 +1,6 @@
 // drive.cpp -- App::Drive implementation. See drive.h's file header for the
 // controller's three responsibilities and the tick/update contract.
+#include <algorithm>
 #include <cmath>
 
 #include "app/drive.h"
@@ -174,33 +175,56 @@ float Drive::crawlDuty(float duty, float& carry) const {
   return std::copysign(crawlPulse_, duty);
 }
 
-// Wheels-solid speed floor (Open Question 2, resolved 130-004): a nonzero
-// commanded speed below vMin is ROUNDED UP to vMin, sign preserved, rather
-// than silently zeroed or refused. This mirrors the project's own
-// established fix for the analogous duty-domain problem (sprint 114's
-// deadband dead-zone/boost fix: a sub-deadband duty command used to be
-// zeroed outright, which stalled the wheel at the terminal approach of a
-// move -- fixed by boosting to copysign(deadband, cmd) instead). Refusing
-// the command outright here would reproduce that exact bug class one
-// layer up, in the velocity domain, with a silently stalled wheel and no
-// diagnostic signal. `vMin <= 0` (uncalibrated / no population floor
-// configured yet) makes this a no-op, so a robot JSON that hasn't run
-// ticket 001's sweep behaves exactly as before.
+// Wheels-solid speed floor (Open Question 2, resolved 130-004; REVISED
+// 131-003 post-shipment -- see drive.h's own file header and sprint 131
+// sprint.md's "Revision -- Ticket 003's speed-floor semantics" for the
+// measurement that invalidated the originally-shipped common-mode-only
+// design and the full rationale for this replacement). A nonzero wheel
+// pair whose dominant (larger-magnitude) wheel sits below vMin is scaled
+// UP so the dominant wheel reaches exactly vMin, rather than silently
+// stalling. This mirrors the project's own established fix for the
+// analogous duty-domain problem (sprint 114's deadband dead-zone/boost
+// fix: a sub-deadband duty command used to be zeroed outright, which
+// stalled the wheel at the terminal approach of a move -- fixed by
+// boosting to copysign(deadband, cmd) instead). Refusing the command
+// outright here would reproduce that exact bug class one layer up, in the
+// velocity domain, with a silently stalled wheel and no diagnostic signal.
+// `vMin <= 0` (uncalibrated / no population floor configured yet) makes
+// this a no-op, so a robot JSON that hasn't run ticket 001's sweep behaves
+// exactly as before.
 //
-// 131-003 (issue A-speed-floor-snaps-the-planner-differential.md): this
-// function's own body/constants are UNCHANGED -- only WHAT tick() passes
-// as `commanded` changed. tick() now calls this with the two wheels'
-// COMMON-MODE speed only (0.5*(cmdVelocityLeft + cmdVelocityRight)),
-// never with a raw per-wheel cmdVelocity that may itself be a
-// common-mode-plus-differential sum -- see tick()'s own doc comment for
-// the recombination and sprint 131 Design Rationale Decision 4 for why
-// the planner does not get its own vMin awareness instead.
-float Drive::applySpeedFloor(float commanded) const {
-  if (commanded == 0.0f) return 0.0f;  // stop is stop, never boosted
-  if (bounds_.vMin <= 0.0f) return commanded;
-  const float magnitude = std::fabs(commanded);
-  if (magnitude >= bounds_.vMin) return commanded;
-  return std::copysign(bounds_.vMin, commanded);
+// The scale is RATIO-PRESERVING, computed from the raw wheel pair
+// directly -- no common-mode/differential decomposition (the superseded
+// 131-003 design): `dominantMag = max(|rawLeft|, |rawRight|)`; if nonzero
+// and below vMin, both wheels are multiplied by `vMin / dominantMag`,
+// which lands the dominant wheel at exactly vMin while preserving the
+// EXACT commanded ratio between the two wheels -- a symmetric pivot
+// (equal-and-opposite wheels, e.g. every Angle Move) is boosted
+// symmetrically to exactly (-vMin, +vMin), bit-identical to the
+// pre-131-003 per-wheel-independent floor for that case; an asymmetric arc
+// keeps its commanded curvature instead of being flattened toward 1:1 (the
+// old per-wheel-independent floor's own latent defect) or left
+// unboundedly distorted (the superseded common-mode-only floor's own
+// latent defect). This is the same dominant-wheel/ratio-locked idiom
+// `Planner::planWheels()` already uses internally for its own
+// accel-ceiling tie-break (planner.cpp, the `dominant`/`other` tie-break
+// near its ratio-lock computation) -- reused, not new. A wheel
+// raw-commanded exactly 0.0f is exactly 0.0f afterward regardless of the
+// scale factor applied (`0 * scale == 0` in IEEE-754 for any finite
+// scale), so "stop is stop" holds for a genuine full stop without a
+// special case, and a raw-zero wheel produced by vector cancellation
+// (part of an active, asymmetric command) also stays exactly zero rather
+// than being driven nonzero.
+void Drive::applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
+                            float& speedRight) const {
+  speedLeft = rawLeft;
+  speedRight = rawRight;
+  if (bounds_.vMin <= 0.0f) return;  // uncalibrated: no-op, same as before
+  const float dominantMag = std::max(std::fabs(rawLeft), std::fabs(rawRight));
+  if (dominantMag <= 0.0f || dominantMag >= bounds_.vMin) return;
+  const float scale = bounds_.vMin / dominantMag;
+  speedLeft = rawLeft * scale;
+  speedRight = rawRight * scale;
 }
 
 // Stage B -- the fast PID (small authority, never carries standing error
@@ -318,46 +342,52 @@ void Drive::tick(const Types::RobotState& state) {
   // standing still is the right answer to that.
   if (!calibrated_) return;
 
-  // Wheels-solid speed floor (Open Question 2), 131-003 (issue
-  // A-speed-floor-snaps-the-planner-differential.md): applied to the
-  // COMMON-MODE component of the two wheels' commanded speed ONLY, so
-  // every stage below (classification, the map, the fast PID, the
-  // adaptation gate) sees the SAME effective per-wheel target -- but a
-  // small differential steering correction is no longer indistinguishable
-  // from a small travel command. Before this ticket the floor ran on each
-  // wheel's already-summed cmdVelocity, so it could not tell a 3 mm/s
-  // heading-hold trim (Planner::applyHeadingHold(), planner.cpp) from a
-  // 3 mm/s travel command -- both got rounded up to vMin independently,
-  // turning a steering correction into a lurch. Reconstruct the common
-  // mode and the differential arithmetically -- matching
-  // applyHeadingHold()'s own mixing convention exactly (`cmdLeft_ =
-  // profiled - differential; cmdRight_ = profiled + differential`) --
-  // floor ONLY the common-mode magnitude via the existing, UNCHANGED
-  // applySpeedFloor(), then recombine. applySpeedFloor()'s own "stop is
-  // stop" guard (commanded == 0.0f never boosted) means a genuine full
-  // stop (both raw wheel commands exactly 0.0f) still recombines to
-  // exactly (0.0f, 0.0f): commonMode and differential are both 0.0f,
-  // flooredCommon stays 0.0f unboosted, so speedLeft/speedRight are each
-  // 0.0f - 0.0f and 0.0f + 0.0f. A near-zero (but nonzero) common mode --
-  // e.g. a Distance Move's terminal approach -- still receives the
-  // existing boost-to-vMin treatment exactly as before; only the
-  // differential riding on top of it is new-exempt from the floor. The
-  // planner does NOT get its own vMin awareness this ticket (deferred,
-  // sprint 131 Design Rationale Decision 4 -- review C1's terminal-taper
-  // mismatch waits on the same loaded-actuation-floor bench measurement
-  // as vMin/biasMax themselves). The result feeds the rest of tick()
-  // exactly where speedLeft/speedRight were read before this ticket --
-  // Stage A's/Stage B's own commanded-zero guards (correctedCommand()'s
-  // `desired == 0.0f`, below, and the `speedLeft == 0.0f` check ahead of
-  // fastPid()) therefore keep reading the SAME recombined value and so
-  // cannot disagree with each other by construction.
-  const float commonMode = 0.5f * (state.wheelLeft.cmdVelocity +
-                                    state.wheelRight.cmdVelocity);  // [mm/s]
-  const float differential = 0.5f * (state.wheelRight.cmdVelocity -
-                                      state.wheelLeft.cmdVelocity);  // [mm/s]
-  const float flooredCommon = applySpeedFloor(commonMode);
-  const float speedLeft = flooredCommon - differential;
-  const float speedRight = flooredCommon + differential;
+  // Wheels-solid speed floor (Open Question 2), 131-003 REVISED
+  // post-shipment (issue A-speed-floor-snaps-the-planner-differential.md;
+  // full history in sprint 131 sprint.md's "Revision -- Ticket 003's
+  // speed-floor semantics"): a RATIO-PRESERVING SCALE applied to the raw
+  // wheel pair directly, computed once in applySpeedFloor() so every stage
+  // below (classification, the map, the fast PID, the adaptation gate)
+  // sees the SAME effective per-wheel target. The originally-shipped
+  // design decomposed the pair into common-mode/differential and floored
+  // only the common mode -- correct for a differential trim riding on an
+  // already-profiled travel speed (Planner::applyHeadingHold()), but WRONG
+  // for `Planner::planWheels()`'s ratio-locked output on a pure pivot
+  // (every Angle Move), whose common mode is EXACTLY zero by construction:
+  // the floor never engaged, and the turn's own sub-breakaway ramp-in/
+  // ramp-out passed through undelivered, measurably undershooting the
+  // turn. The ratio-preserving scale fixes this without needing to tell
+  // the two cases apart: `dominantMag = max(|cmdVelocityLeft|,
+  // |cmdVelocityRight|)`; if nonzero and below vMin, BOTH wheels scale by
+  // `vMin / dominantMag`, landing the dominant wheel at exactly vMin while
+  // preserving the exact commanded ratio -- a symmetric pivot boosts to
+  // exactly (-vMin, +vMin) (bit-identical to the pre-131-003
+  // per-wheel-independent floor for that case); an already-above-floor
+  // differential trim (the one reachable real-world case) passes through
+  // unchanged, because its dominant wheel already clears vMin; an
+  // asymmetric arc keeps its commanded curvature instead of being
+  // flattened toward 1:1 or left unboundedly distorted. Acknowledged
+  // tradeoff (unreachable on any shipped robot profile -- see the sprint.md
+  // Revision): a differential trim riding on an exactly-/near-zero
+  // common-mode component is now ALSO scaled up toward vMin, reverting to
+  // the pre-131-003 behavior for that one sub-case. `applySpeedFloor()`'s
+  // own "stop is stop" property (`0 * scale == 0` for any finite scale)
+  // means a genuine full stop (both raw wheel commands exactly 0.0f)
+  // always yields exactly (0.0f, 0.0f), and a raw-zero wheel produced by
+  // vector cancellation (part of an active, asymmetric command) also
+  // stays exactly zero. The planner does NOT get its own vMin awareness
+  // this ticket (deferred, sprint 131 Design Rationale Decision 4 -- review
+  // C1's terminal-taper mismatch waits on the same loaded-actuation-floor
+  // bench measurement as vMin/biasMax themselves). The result feeds the
+  // rest of tick() exactly where speedLeft/speedRight were read before
+  // this ticket -- Stage A's/Stage B's own commanded-zero guards
+  // (correctedCommand()'s `desired == 0.0f`, below, and the
+  // `speedLeft == 0.0f` check ahead of fastPid()) therefore keep reading
+  // the SAME post-floor value and so cannot disagree with each other by
+  // construction.
+  float speedLeft, speedRight;  // [mm/s] x2, post-floor
+  applySpeedFloor(state.wheelLeft.cmdVelocity, state.wheelRight.cmdVelocity,
+                 speedLeft, speedRight);
 
   // Stage A: the calibrated conversion map (correctedCommand()) plus
   // Stage C's bias -- v_corrected = map(v_cmd) + bias (drive.h's own

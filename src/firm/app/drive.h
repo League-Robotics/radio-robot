@@ -59,20 +59,34 @@
 //                                baseline below; the breakaway dead zone
 //                                stays feedforward-owned, never
 //                                rediscovered by the adaptive bias.
-//      Wheels-solid contract enforcement: a sub-vMin nonzero COMMON-MODE
-//      command is rounded UP to vMin (applySpeedFloor(), Open Question 2 --
-//      matches the project's own established boost-to-breakaway fix
-//      rather than silently stalling the wheel). 131-003 (issue
-//      A-speed-floor-snaps-the-planner-differential.md): the floor applies
-//      to the common-mode component of the two wheels' commanded speed
-//      ONLY -- tick() reconstructs common-mode/differential arithmetically
-//      from cmdVelocity before flooring, then recombines, so a small
-//      differential steering correction (Planner::applyHeadingHold()) rides
-//      through unfloored instead of being independently rounded up to vMin
-//      on each wheel. See tick()'s own doc comment (drive.cpp) for the
-//      recombination and sprint 131 Design Rationale Decision 4 for why the
-//      planner does not gain its own vMin awareness this ticket. A
-//      sustained large error
+//      Wheels-solid contract enforcement: a sub-vMin nonzero wheel PAIR is
+//      scaled UP so its dominant (larger-magnitude) wheel reaches vMin
+//      (applySpeedFloor(), Open Question 2 -- matches the project's own
+//      established boost-to-breakaway fix rather than silently stalling
+//      the wheel). 131-003, REVISED post-shipment (issue
+//      A-speed-floor-snaps-the-planner-differential.md; sprint 131
+//      sprint.md's "Revision -- Ticket 003's speed-floor semantics" has the
+//      full history): the floor is a RATIO-PRESERVING SCALE applied to the
+//      raw wheel pair directly, not a common-mode/differential
+//      decomposition -- `dominantMag = max(|cmdVelocityLeft|,
+//      |cmdVelocityRight|)`; if nonzero and below vMin, BOTH wheels are
+//      scaled by `vMin / dominantMag`, preserving their exact commanded
+//      ratio, so the dominant wheel lands at exactly vMin; otherwise the
+//      raw pair passes through unchanged. The originally-shipped
+//      common-mode-only floor (Design Rationale Decision 4, now
+//      superseded) never engaged during a pure pivot -- `Planner::
+//      planWheels()`'s ratio-locked output for an Angle Move has an
+//      EXACTLY zero common mode by construction, so the entire turn's
+//      commanded magnitude passed through unfloored and measurably
+//      regressed turn accuracy. The ratio-preserving scale fixes that
+//      (a symmetric pivot scales both wheels to vMin identically, matching
+//      the pre-131-003 per-wheel-independent floor) while still leaving an
+//      already-above-floor differential trim (Planner::applyHeadingHold(),
+//      the one reachable real-world case) untouched, because its dominant
+//      wheel already clears vMin. See tick()'s own doc comment (drive.cpp)
+//      for the full computation and sprint 131 Design Rationale Decision 4
+//      / its Revision for why the planner does not gain its own vMin
+//      awareness this ticket. A sustained large error
 //      while BOTH bias and the fast PID sit pinned at their configured
 //      authority raises a deficit-flag policy (deficitLeft()/Right()) --
 //      the robot runs slow, loudly, never silently. `Motion::Planner`
@@ -411,9 +425,16 @@ class Drive {
   void adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
                 bool fresh, float dt) const;
 
-  // Wheels-solid speed floor (Open Question 2, resolved -- see this
-  // file's own header). A stop (0.0f exactly) is never floored.
-  float applySpeedFloor(float commanded) const;
+  // Wheels-solid speed floor (Open Question 2, resolved; REVISED 131-003 --
+  // see this file's own header). A ratio-preserving scale on the raw wheel
+  // pair, written into speedLeft/speedRight: if the dominant (larger-
+  // magnitude) of rawLeft/rawRight is nonzero and below vMin, both wheels
+  // are scaled by the same factor so the dominant wheel lands at exactly
+  // vMin; otherwise the pair passes through unchanged. A wheel raw-commanded
+  // exactly 0.0f is exactly 0.0f afterward regardless of scaling
+  // (`0 * scale == 0`), so "stop is stop" holds without a special case.
+  void applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
+                       float& speedRight) const;
 
   // Sustained-condition latch for the deficit-flag policy -- mutates
   // `since`/`latched` in place. See drive.cpp's own doc comment.
