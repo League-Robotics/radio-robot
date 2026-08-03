@@ -2,7 +2,7 @@
 the binary twist/config/stop plane).
 
 Unit coverage for the PURE (no I/O, no hardware) helper in
-`src/tests/bench/rig_dev.py` — `waveform()` — plus the `Rig` class's own
+`src/tests/dev/rig_dev.py` — `waveform()` — plus the `Rig` class's own
 forwarding contract, exercised against fake `conn`/`proto` objects (never a
 real `SerialConnection`/serial port, matching the project's own
 `_FakeFastConn`-style precedent in `test_twist_stop_ack_matcher.py`).
@@ -10,11 +10,17 @@ real `SerialConnection`/serial port, matching the project's own
 (124-009, robot-state-blackboard-...md, issue's own "TelemetrySecondary
 dies") along with the functions themselves.
 
-`src/tests/bench/` is "HITL CLI tools, not pytest-collected" (`tests/CLAUDE.md`),
-so this test loads `rig_dev.py` directly by file path via `importlib`
-rather than a package import, mirroring `test_device_bus_bringup_bench.py`'s
-own precedent (before its retirement, 104-006) for testing a `src/tests/bench/`
-script's pure logic in isolation.
+`rig_dev.py` moved to `src/tests/dev/` (2026-08-03 cleanup) along with the
+rest of the coupled-rig family, which is quarantined by standing stakeholder
+rule. The module's PURE helper is still worth covering — `waveform()` is real
+logic and this test is real coverage — so the test stays in the collected
+`unit/` suite and follows the file to its new home.
+
+Neither `src/tests/dev/` nor `src/tests/bench/` is pytest-collected (both are
+HITL CLI tools per `src/tests/CLAUDE.md`), so this test loads `rig_dev.py`
+directly by file path via `importlib` rather than a package import, mirroring
+`test_device_bus_bringup_bench.py`'s own precedent (before its retirement,
+104-006).
 """
 
 from __future__ import annotations
@@ -26,7 +32,7 @@ import pytest
 
 from robot_radio.robot.protocol import AckEntry, TLMFrame
 
-_BENCH_SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "bench" / "rig_dev.py"
+_BENCH_SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "dev" / "rig_dev.py"
 
 
 def _load_bench_module():

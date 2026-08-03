@@ -114,9 +114,14 @@ Three never-combined domains, plus two flat "kept categories":
   that can actually fail badly. Merging them either contaminates the
   unattended CI gate with hardware/camera dependencies or dilutes the
   hardware runs with sim-only assumptions.
-- **`bench/` and `playfield/` are HITL CLI tools, not pytest tests** —
-  nothing under either directory is pytest-collected; run them directly
-  (`uv run python src/tests/bench/dev_exercise.py --port ...`).
+- **`bench/`, `playfield/`, and `dev/` are HITL CLI tools, not pytest
+  tests** — nothing under any of the three is pytest-collected; run them
+  directly (`uv run python src/tests/bench/twist_drive.py --port ...`).
+  `bench/` holds current tools and standing gates; `dev/` (added
+  2026-08-03) holds development scratch that no longer earns its keep and
+  carries no maintenance obligation — see `src/tests/dev/CLAUDE.md`. Each
+  keeps its captured CSV/PNG in its own `output/` (dev) or alongside the
+  producing tool (bench), never mixed into an unrelated directory.
 - **`tests_old/`/`source_old/` (now under `src/archive/`) are excluded
   from collection (`norecursedirs`) and must never be touched by
   anything under `src/tests/`.** They are historical reference only.

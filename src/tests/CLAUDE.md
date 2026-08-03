@@ -54,7 +54,13 @@ one CI gate:
   or the radio relay. HITL (human-in-the-loop): a person is present to
   hand-load wheels, watch for runaways, and read dashboards. These are
   **Python CLI tools, not pytest tests** — nothing here is pytest-collected.
-  Drives the robot via the `DEV` command family (`docs/protocol-v2.md` §16).
+  Drives the robot over the **protocol-v5 binary plane** via `NezhaProtocol`
+  (`docs/protocol-v5.md`) — bounded `Move`s with ack-ring completion. (This
+  line used to name the `DEV` command family from `docs/protocol-v2.md` §16;
+  that plane has had no firmware handler since the 102-107 rebuild, and every
+  script that still drove it moved to `dev/` on 2026-08-03.)
+  **`bench/` holds things we use persistently** — current tools and standing
+  gates. Scratch does not belong here; it belongs in `dev/`.
 - **`playfield/`** — runs against a real robot driving on the camera-covered
   playfield (never call it "the floor" — see
   `.clasi/knowledge/playfield-not-floor.md`; driving off the table is a
@@ -77,6 +83,16 @@ HITL/camera setup onto the CI sim gate (impossible to run unattended).
   (e.g. `robot_radio` protocol parsing). Skeleton only this ticket.
 - **`tools/`** — test tooling/helpers shared across domains. Skeleton only
   this ticket.
+- **`dev/`** — development scratch (added 2026-08-03). Scripts, notebooks,
+  and captured artifacts written to answer one question during one
+  investigation and since retired: the quarantined coupled-rig family, the
+  dead `DEV`/protocol-v2 plane tools, and superseded run outputs. **Nothing
+  in `dev/` is collected, gates anything, or carries a maintenance
+  obligation**; a broken file there blocks nothing and the sweep may prune
+  it. See `src/tests/dev/CLAUDE.md` for what is there and why each piece
+  stopped working. This is the "development stock" half of the
+  standing-vs-development policy — the standing lists live in
+  `clasi/issues/later/system-test-tests-outside-the-system-test-taxonomy-and-tiers.md`.
 
 ## How to run
 
@@ -89,8 +105,14 @@ no-hardware gate. `src/tests/bench/` and `src/tests/playfield/` are HITL CLI too
 invoked directly, e.g.:
 
 ```
-uv run python src/tests/bench/dev_exercise.py --port /dev/cu.usbmodem2121102
+uv run python src/tests/bench/radio_bench_gate.py --port /dev/cu.usbmodemRELAY123
+uv run python src/tests/bench/twist_drive.py --port /dev/cu.usbmodem2121202
 ```
+
+Take the port from `mbdeploy list` **for that session only** — port numbers
+move on every re-enumeration, and more than one robot shares the hub. Address
+the robot by UID wherever a tool accepts a target
+(`.claude/rules/hardware-bench-testing.md`).
 
 `tests_old/` and `source_old/` are excluded from collection
 (`norecursedirs`) and must never be touched by anything under `tests/`.

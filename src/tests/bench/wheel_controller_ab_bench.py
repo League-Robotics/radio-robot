@@ -35,7 +35,7 @@ silently -- see the module-level `STAND_UNMEASURABLE` note printed at the
 end of a run):
   - "WHEELS teleop under applied drag holds its commanded speed" -- applying
     a real disturbance load needs a coupled friction rig
-    (src/tests/bench/pid_hold_speed.py's own rig, quarantined this session
+    (src/tests/dev/pid_hold_speed.py's own rig, quarantined this session
     per project convention -- "rig" only on explicit stakeholder request)
     or a second person's hand on the wheel; neither is available in this
     autonomous bench session. Deferred, not faked.
