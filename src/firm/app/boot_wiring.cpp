@@ -5,8 +5,8 @@
 
 namespace App {
 
-RobotGraph::Resolved RobotGraph::resolve(const BootOverrides& overrides) {
-  Resolved r;
+RobotGraph::BootValues RobotGraph::bakeBootValues(const BootOverrides& overrides) {
+  BootValues r;
 
   msg::MotorConfig motorConfigs[Config::kMotorConfigCount];
   Config::defaultMotorConfigs(motorConfigs);
@@ -35,9 +35,6 @@ RobotGraph::Resolved RobotGraph::resolve(const BootOverrides& overrides) {
   r.trackWidth =
       overrides.trackWidth ? *overrides.trackWidth : effectiveTrackWidth(r.drivetrainConfig);
 
-  r.driveConfig = Config::defaultDriveConfig();
-  r.wheelControllerConfig = Config::defaultWheelControllerConfig();
-
   // PlannerLimits below is the plant-validated tuning baked from the
   // active robot JSON's own `planner` section (see bootPlannerLimits()'s
   // own doc comment for the full provenance and the limit-cycle erratum
@@ -56,19 +53,19 @@ RobotGraph::RobotGraph(Devices::I2CBus& bus, const Devices::Clock& clock, Device
                        Transport& serialTransport, Transport& radioTransport,
                        Config::TuningStore* tuningStore, const char* banner, const char* idLine,
                        const BootOverrides& overrides)
-    : resolved_(resolve(overrides)),
-      trackWidth_(resolved_.trackWidth),
-      motorL_(bus, resolved_.motorCfgL),
-      motorR_(bus, resolved_.motorCfgR),
+    : bootValues_(bakeBootValues(overrides)),
+      trackWidth_(bootValues_.trackWidth),
+      motorL_(bus, bootValues_.motorCfgL),
+      motorR_(bus, bootValues_.motorCfgR),
       armorL_(motorL_),
       armorR_(motorR_),
-      realOtos_(bus, resolved_.otosConfig),
-      color_(bus, resolved_.colorConfig),
-      line_(bus, resolved_.lineConfig),
+      realOtos_(bus, bootValues_.otosConfig),
+      color_(bus, bootValues_.colorConfig),
+      line_(bus, bootValues_.lineConfig),
       comms_(serialTransport, radioTransport, banner, idLine),
       tlm_(comms_),
-      drive_(armorL_, armorR_, resolved_.trackWidth),
-      odom_(resolved_.trackWidth, armorL_.position(), armorR_.position()),
+      drive_(armorL_, armorR_, bootValues_.trackWidth),
+      odom_(bootValues_.trackWidth, armorL_.position(), armorR_.position()),
 #ifdef FAKE_OTOS
       // FAKE_OTOS (120-002, sprint's own "confined, acceptable" exception --
       // unify-sim-and-robot-composition-roots.md item 5): a bench build
@@ -77,12 +74,12 @@ RobotGraph::RobotGraph(Devices::I2CBus& bus, const Devices::Clock& clock, Device
       // macro at this composition root. Never defined for HOST_BUILD/sim
       // (src/sim/CMakeLists.txt never adds -DFAKE_OTOS), so this branch
       // only ever compiles into an opt-in ARM bench image.
-      fakeOtos_(odom_, armorL_, armorR_, resolved_.trackWidth),
+      fakeOtos_(odom_, armorL_, armorR_, bootValues_.trackWidth),
       otos_(fakeOtos_),
 #else
       otos_(realOtos_),
 #endif
-      planner_(resolved_.plannerLimits),
+      planner_(bootValues_.plannerLimits),
       preamble_(armorL_, armorR_, otos_, color_, line_, clock),
       configurator_(drive_, armorL_, armorR_, otos_, planner_, tuningStore),
       robotLoop_(bus, armorL_, armorR_, otos_, color_, line_, comms_, tlm_, drive_, configurator_,
@@ -94,15 +91,28 @@ RobotGraph::RobotGraph(Devices::I2CBus& bus, const Devices::Clock& clock, Device
   // src/sim/CMakeLists.txt's own APP_SOURCES comment).
   App::setDebugSink(&comms_);
 
-  // Shaping/drive/rotation calibration -- installed AFTER every member
-  // above is constructed, exactly as main.cpp's own pre-130-002 sequence
-  // did (planner.applyShaperLimits() / drive.setDutyPerSpeed() /
-  // robotLoop.setRotationCalibration() all called only once their targets
-  // already exist).
-  installShaperLimits(planner_, resolved_.plannerLimits);
-  installDriveCalibration(drive_, resolved_.driveConfig);
-  installWheelController(drive_, resolved_.wheelControllerConfig);
-  installRotationCalibration(robotLoop_, resolved_.drivetrainConfig);
+  // 132-006 (the-configuration-object.md): loadBaked() + install() replace
+  // the old resolve()-fed installShaperLimits()/installDriveCalibration()/
+  // installWheelController() sequence -- Configurator now owns the
+  // Config::Robot those three read from (config/boot_config.h's newer
+  // Config::default*Group() functions, 132-005), and fans it out itself.
+  // Both calls run AFTER every member above is constructed, exactly as the
+  // pre-132-006 install*Calibration() calls did.
+  configurator_.loadBaked();
+  configurator_.install();
+
+  // installRotationCalibration() stays a direct call, not routed through
+  // Configurator::install(): RobotLoop already depends on Configurator
+  // (routeCommand()'s CONFIG arm), so the reverse reference would be
+  // circular, and rotation calibration's real home is RobotLoop's own
+  // configure(const Config::Robot&) (ticket 007, "Subsystem configure()
+  // consumers ... RobotLoop for geometry/rotation" -- sprint.md Step 3).
+  // Data source retargeted from bootValues_.drivetrainConfig to
+  // configurator_.config().geometry would need a signature change to
+  // installRotationCalibration() (boot_calibration.h, out of this
+  // ticket's file scope) -- left for ticket 007, which owns that
+  // migration anyway.
+  installRotationCalibration(robotLoop_, bootValues_.drivetrainConfig);
 }
 
 void RobotGraph::loadPersistedTuning() {

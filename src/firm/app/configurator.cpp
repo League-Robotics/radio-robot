@@ -2,6 +2,8 @@
 // for the module's boundary.
 #include "app/configurator.h"
 
+#include "config/boot_config.h"
+
 namespace App {
 
 namespace {
@@ -192,6 +194,63 @@ void Configurator::reapplyPersistedTuning(const Config::TuningSnapshot& snapshot
 
   persistedTuning_ = snapshot;
   lastPersistedBlob_ = Config::serializeSnapshot(persistedTuning_);
+}
+
+// loadBaked() -- see configurator.h's own doc comment. One assignment per
+// msg::ConfigGroupTarget, straight from the generated, robot-JSON-baked
+// defaults (132-005) -- no derivation of its own.
+void Configurator::loadBaked() {
+  config_.geometry = Config::defaultGeometryGroup();
+  config_.motors = Config::defaultMotorsGroup();
+  config_.drive = Config::defaultDriveGroup();
+  config_.wheelControl = Config::defaultWheelControlGroup();
+  config_.planner = Config::defaultPlannerGroup();
+  config_.otos = Config::defaultOtosGroup();
+  config_.estimator = Config::defaultEstimatorGroup();
+}
+
+// install() -- see configurator.h's own doc comment. Ports
+// installShaperLimits()/installDriveCalibration()/installWheelController()'s
+// bodies (boot_calibration.cpp, pre-132-006) unchanged in BEHAVIOR, reading
+// config_'s NEW group fields (populated by loadBaked(), immediately above)
+// instead of the OLD resolve()-computed Motion::PlannerLimits/
+// Config::DriveBootConfig/Config::WheelControllerBootConfig structs those
+// free functions used to take as parameters. Both old and new structs are
+// baked from the SAME robot-JSON `_require()` paths (132-005's own
+// completion note), so this is a relocation, not a behavior change.
+void Configurator::install() {
+  planner_.applyShaperLimits(config_.planner.a_max, config_.planner.a_decel,
+                              config_.planner.alpha_max, config_.planner.alpha_decel,
+                              config_.planner.jerk_max, config_.planner.yaw_jerk_max);
+
+  // MEASURED, NOT CONFIGURED (stakeholder, 2026-07-31): one baked constant
+  // for both wheels, deliberately ignoring config_.drive.duty_per_speed_left/
+  // right -- see Drive::kDutyPerSpeed's own doc comment (drive.h). Ticket
+  // 009 owns whether this reverses; not this ticket's call to make.
+  drive_.setDutyPerSpeed(Drive::kDutyPerSpeed, Drive::kDutyPerSpeed);
+  drive_.setWheelCorrection(
+      config_.drive.wheel_gain_left_accel, config_.drive.wheel_intercept_left_accel,
+      config_.drive.wheel_gain_left_decel, config_.drive.wheel_intercept_left_decel,
+      config_.drive.wheel_gain_right_accel, config_.drive.wheel_intercept_right_accel,
+      config_.drive.wheel_gain_right_decel, config_.drive.wheel_intercept_right_decel);
+  drive_.setCrawlPulse(config_.drive.crawl_pulse);
+
+  Drive::ControlGains gains;
+  gains.kp = config_.wheelControl.pid_kp;
+  gains.ki = config_.wheelControl.pid_ki;
+  gains.iMax = config_.wheelControl.pid_i_max;
+  gains.kaff = config_.wheelControl.pid_kaff;
+  gains.pidMax = config_.wheelControl.pid_max;
+  drive_.setControlGains(gains);
+
+  Drive::AdaptationBounds bounds;
+  bounds.vMin = config_.wheelControl.v_min;
+  bounds.biasMax = config_.wheelControl.bias_max;
+  bounds.tauAdapt = config_.wheelControl.tau_adapt;
+  bounds.aSteady = config_.wheelControl.a_steady;
+  bounds.deficitThreshold = config_.wheelControl.deficit_threshold;
+  bounds.deficitWindow = config_.wheelControl.deficit_window;
+  drive_.setAdaptationBounds(bounds);
 }
 
 }  // namespace App

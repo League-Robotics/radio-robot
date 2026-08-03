@@ -354,6 +354,13 @@ class SimHarness {
   App::Drive& drive() { return graph_.drive(); }
   Motion::Planner& planner() { return graph_.planner(); }
 
+  // configurator -- 132-006: App::Configurator now owns the one
+  // Config::Robot instance (config()/loadBaked()/install(), configurator.h)
+  // -- exposed the same way drive()/planner() already are, so a test can
+  // read back what composeRobot() baked without reaching into graph_
+  // itself (private).
+  App::Configurator& configurator() { return graph_.configurator(); }
+
   // Concrete TestSim::SimClock&, not Devices::Clock& -- callers need the
   // setMicros()/advanceMicros() stepping surface only the concrete fake
   // exposes.
