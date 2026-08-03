@@ -1,9 +1,22 @@
 ---
-status: pending
+status: done
 priority: high
+sprint: '132'
 ---
 
 # There is no way to ask the robot what constants it is running
+
+> **CLOSED AS ABSORBED, 2026-08-03 — the gap is still open.** No read-back
+> exists yet. This issue's fix is now a step of
+> [[the-configuration-object]]: the configuration subsystem owns one
+> `Config::Robot`, and `config()` / `GetConfig` returns it, so read-back is a
+> property of that design rather than a separate feature. Because the object
+> holds RAW file values, a read-back can be diffed directly against the robot
+> JSON — which is the check this issue asked for.
+>
+> The evidence below (the ~1.6x duty-sweep error, the three unobservable layers
+> of tuning truth) is carried into that issue's Cause section so it is not lost.
+> Kept here as provenance.
 
 ## Description
 
