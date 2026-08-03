@@ -7,15 +7,12 @@ or the fully-qualified form:
 """
 
 from robot_radio.config.robot_config import (
-    CalibrationConfig,
     ConnectionConfig,
-    DriveConfig,
     EncodersConfig,
     GeometryConfig,
     GripperConfig,
     IdentityConfig,
     OffsetXY,
-    OffsetXYYaw,
     RobotConfig,
     VisionConfig,
     WheelsConfig,
@@ -24,16 +21,19 @@ from robot_radio.config.robot_config import (
     load_robot_config,
 )
 
+# 132-020: CalibrationConfig/ControlConfig/(old-shape) DriveConfig/
+# OffsetXYYaw are gone -- their fields now live on robot_config.py's
+# generated-shape groups (Geometry/Motors/Drive/WheelControl/Planner/Otos/
+# Estimator), not as standalone hand-written classes. See
+# robot_config.py's own module docstring.
+
 __all__ = [
-    "CalibrationConfig",
     "ConnectionConfig",
-    "DriveConfig",
     "EncodersConfig",
     "GeometryConfig",
     "GripperConfig",
     "IdentityConfig",
     "OffsetXY",
-    "OffsetXYYaw",
     "RobotConfig",
     "VisionConfig",
     "WheelsConfig",
