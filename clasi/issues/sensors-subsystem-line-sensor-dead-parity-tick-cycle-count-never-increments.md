@@ -2,7 +2,35 @@
 status: pending
 ---
 
-# Line sensor is 100% dead: `cycleCount_` never increments, so `kFlagLinePresent` can never go live
+# Line sensor is 100% dead: decide increment-or-delete, and give perception pacing an owner
+
+**Merged 2026-08-02** with `sensors-subsystem-owns-line-color-tick-flipflop.md`
+(closed): they are one decision, not two. Re-verified in the tree the same day
+(2026-08-02 review, Part 1) — `cycleCount_` declared `robot_loop.h:201`, tested
+`robot_loop.cpp:544`, incremented nowhere, since `8a691651` (07-26). The
+preamble still spends boot I2C probing a sensor that will never be read.
+
+## The merged half — perception pacing has no owner
+
+`robot_loop.cpp` alternates line/color inline in the loop body:
+
+```cpp
+const bool tickedLine = (cycleCount_ % 2) == 1;  // first cycle ticks line
+if (tickedLine) line_.tick(nowUs); else color_.tick(nowUs);
+```
+
+The flip-flop, `packLine()`/`packColor()`, and publication all live inline in
+`RobotLoop` — bus-budget policy leaking into the loop. A `Sensors` subsystem
+should own the cursor and the pacing budget, exposing a single `tick(nowUs)`;
+the loop then has no knowledge of which sensor runs on which cycle, and the
+alternation has one owner if the schedule ever changes.
+
+**Sequence the two halves together**: whether the line sensor exists at all
+(increment-or-delete) determines what the Sensors subsystem is pacing. Deleting
+the sensor makes the flip-flop moot; keeping it makes the subsystem the right
+home for the added I2C transaction's budget.
+
+
 
 **Source:** code review 2026-07-30, `doc-rot-and-minor-sweep-from-2026-07-30-review.md`
 §"Small decisions to record" (01 MINOR §5) — deferred out of 128-009 (a

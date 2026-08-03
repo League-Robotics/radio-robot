@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Surface I2C error/re-entrancy counts through Devices::I2CBus so kFlagFaultI2CNak can go live

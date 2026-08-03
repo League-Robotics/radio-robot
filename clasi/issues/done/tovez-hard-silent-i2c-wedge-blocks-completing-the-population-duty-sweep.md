@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 priority: high
 tickets:
 - 130-001

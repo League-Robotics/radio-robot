@@ -35,7 +35,32 @@ The fix gated that branch on `profileVelocity_` also reaching the rest floor
 roughly the same ~10 deg is not established — a residual that does NOT scale with
 angle suggests a second, additive mechanism rather than more of the same one.
 
-Worth checking specifically:
+### Leading hypothesis (2026-08-02 review, F10) — `decelLatched` is a one-way trap
+
+The review proposes a specific, angle-independent mechanism that matches this
+residual's signature. Once any tick's `profileStep()` returns Decel/Closing,
+`active_.decelLatched` clamps every later λ to min and **never lets it rise**
+for the Move's remainder (`planner.cpp:1232-1240`). But the closing step
+triggers off `plannedRemaining` — a *prediction* over sample-age +
+actuationDelay (`planner.cpp:756-824`). One transient under-estimate drives
+the command to ~0, the latch forbids recovery (directly contradicting
+`profile.cpp:102-104`'s own "let re-measurement recover" comment), and the
+0.5 s stall backstop completes the Move wherever it parked, `settled=false`.
+
+That is **additive and angle-independent** — which is exactly why the residual
+does not scale with angle. Nothing currently exercises a transient
+misprediction against the latch, and `planner_tests` has no Angle scenario
+above 90 deg at all.
+
+**Fingerprint to look for on the single-step harness:** a stall-event
+completion, with no timeout, on that turn.
+
+**Proposed fix if confirmed:** release the latch when measured remaining rises
+materially above the closing envelope — i.e. make re-measurement recover, as
+the comment already promises — and add the missing scenarios (large angles,
+tour-shaped chains under `NoisyPlant` lag).
+
+Also worth checking:
 - whether the large angle crosses a shaper phase boundary the 90 deg case does not
   (jerk-limited segment never reaching constant-velocity cruise, or a decel ramp
   that starts before the accel ramp finishes);

@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 # Land the systest firmware changes: DBG inbound arm, wedge injection, sim cleartext plane

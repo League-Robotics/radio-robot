@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 ---
 
 NOTE: THis is tied to clasi/issues/line-sensor-dead-parity-tick-cycle-count-never-increments.md

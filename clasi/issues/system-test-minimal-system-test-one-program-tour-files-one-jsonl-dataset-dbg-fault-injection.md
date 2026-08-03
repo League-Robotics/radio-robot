@@ -3,7 +3,41 @@ status: pending
 extends: square-tour-is-the-one-system-test-sim-bench-playfield.md
 ---
 
-# Minimal system test: one program, tour files, one JSONL dataset, DBG fault injection
+# Minimal system test: remaining phases — hardware tier, goldens, convergence
+
+## STATUS 2026-08-02 — phases 1 and 3 have LANDED; this issue is now the remainder
+
+Verified in the tree: `src/tests/system/` exists with `systest.py`, `tourfile.py`,
+`recorder.py`, `runner.py`, `signals.py`, `goldens.py`, and four tours
+(`square`, `square_cw`, `circle`, `fault_wedge`). The DBG inbound firmware half
+merged at `d08264dc`. `src/tests/system/CLAUDE.md` records the
+no-new-system-tests rule, which was the umbrella charter's other ask. 47 sim
+datasets in `out/`. The 2026-08-02 review (S2) calls the rails
+"production-quality and merely awaiting a hardware tier."
+
+**Remaining, in order:**
+
+| Phase | State |
+|---|---|
+| 1. Sim runner end-to-end | **DONE** |
+| 3. DBG inbound + wedge + `fault_wedge.tour` | **DONE** (merged `d08264dc`) |
+| 2. **Hardware parity** — `backends.py` extraction, `SerialConnection` rx/tx taps, tlm bracketing, `--port` bench runs | **NOT STARTED** — `systest.py:52` still prints "tier not wired yet (sim only)" |
+| 4. **Golden wiring** — plot/compare/bless against a `goldens/` dir, first stakeholder-blessed sim goldens | **PARTIAL** — `goldens.py` and `signals.py` exist with real callers; no `goldens/` directory, nothing blessed |
+| 5. **Fault set + convergence** — freeze/nak tours; retire the three legacy square drivers and the `sim/system/` sweep (walking each deleted test's coverage first; keep `test_sim_wire_loopback.py`, relocated) | **NOT STARTED** |
+| 6. **Playfield tier** — aprilcam-backed `CAMFIX` (median-of-7 at rest, lights check first), geofence + `estop()` on failure | **NOT STARTED** |
+
+Phase 2 is the one that unblocks the rest: a blessed hardware square-tour
+dataset is simultaneously the first cross-tier golden and the first input to
+the sim error-model fit the 2026-08-02 review's Part 5 asks for. It is also
+gated on the robot working again — see [[next-physical-bench-session-checklist]].
+
+The umbrella charter (`system-test-square-tour-is-the-one-system-test-sim-bench-playfield.md`)
+was moved to `later/` in the 2026-08-02 triage: its operative rule is now
+recorded in `src/tests/system/CLAUDE.md` and its mechanism is this file. It
+stays readable as the reference for the three-tier definition, the golden-trace
+process rules, and the deletion list.
+
+The original charter text follows unchanged.
 
 ## Description
 
