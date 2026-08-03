@@ -77,7 +77,7 @@ a genuine `lastFreshUs_` (advances only on a successful collect) and make
 - [x] No regression: a healthy, connected wheel with Stage B gains at
       their shipped default (0, disabling the stage) shows bit-identical
       behavior to before this ticket.
-- [ ] Full sim suite stays green.
+- [x] Full sim suite stays green.
 
 ## Testing
 
@@ -215,19 +215,24 @@ note about the commanded-zero guard and freshness gating; `motor.h`'s
   `motor.sampleTime()` generically through the `Devices::Motor` interface
   and needed no change.
 
-**Not verified / explicitly deferred**:
+**Full suite — verified by the team-lead at the ticket boundary** (not by
+this ticket's own implementer, per the explicit instruction below):
 
 - **Full `src/tests/sim` suite**: per the team-lead's own explicit
   instruction for this ticket ("Do not run the full suite yourself... I
   will run the full suite at the ticket boundary"), the full suite was
-  NOT run by this ticket. The "Full sim suite stays green" acceptance
-  criterion above is left UNCHECKED for that reason — it is not something
-  this ticket confirmed directly, only inferred from the targeted runs
-  above plus the no-regression check against every affected existing
-  scenario. The baseline to beat, per the team-lead, is 001's own
-  measured **460 passed, 1 xfailed, 2 xpassed, 0 failed** (the 1
-  xfailed/2 xpassed are the pre-existing, unrelated
-  `B-app-robot-loop-harness-never-compiled.md` rows, not touched here).
+  NOT run by this ticket's implementer. The "Full sim suite stays green"
+  acceptance criterion was left UNCHECKED at hand-off for that reason — it
+  had only been inferred from the targeted runs above plus the
+  no-regression check against every affected existing scenario, not
+  confirmed directly.
+  The team-lead then ran the full suite at the ticket boundary and
+  reported: **460 passed, 1 xfailed, 2 xpassed in 170.95s** — identical to
+  the post-001 baseline (`460 passed, 1 xfailed, 2 xpassed, 0 failed`), no
+  regressions. The 1 xfailed/2 xpassed are the pre-existing, unrelated
+  `B-app-robot-loop-harness-never-compiled.md` rows, not touched here. The
+  criterion above is now checked off on the strength of THIS run, not the
+  implementer's own (which never happened, by design).
 - **Hardware/bench acceptance**: not attempted. `tovez` has been wedged
   since 2026-08-01 per the team-lead's own instruction and
   `.claude/rules/hardware-bench-testing.md`; sim-tier acceptance is this
