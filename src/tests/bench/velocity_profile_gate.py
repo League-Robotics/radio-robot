@@ -70,6 +70,7 @@ import pathlib
 import sys
 import time
 from dataclasses import dataclass, field
+from statistics import median
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
@@ -178,6 +179,7 @@ class Run:
     samples: "list[Sample]" = field(default_factory=list)
     issued_distance: float = 0.0  # [mm] integral of what was actually SENT
     faults: "list[str]" = field(default_factory=list)
+    notes: "list[str]" = field(default_factory=list)
 
     def _final(self, pick) -> float:
         return pick(self.samples[-1]) if self.samples else float("nan")
@@ -206,6 +208,21 @@ class Run:
     @property
     def ratio_right(self) -> float:
         return self.delivered_right / self.profile.distance
+
+    def plateau_tracking(self) -> "tuple[float, float]":
+        """Median measured speed per wheel over the commanded PLATEAU only,
+        as a fraction of that plateau. Not gated -- reported because it
+        separates the two ways a run can miss its distance: a loop that
+        never reaches its setpoint (this number is below 1.0 and the
+        shortfall is just its integral) versus one that tracks fine and
+        then mismanages the ends (this number is ~1.0 but the ratio is
+        not)."""
+        plateau = [s for s in self.samples
+                   if abs(s.commanded - self.profile.peak) < 1e-6]
+        if not plateau or self.profile.peak <= 0:
+            return (float("nan"), float("nan"))
+        return (median(s.velocity_left for s in plateau) / self.profile.peak,
+                median(s.velocity_right for s in plateau) / self.profile.peak)
 
 
 def ratios(run: Run) -> "list[tuple[str, float]]":
@@ -243,20 +260,35 @@ def _frame_velocities(frame) -> "tuple[float, float]":
     return (0.0, 0.0)
 
 
+# Bits that invalidate a distance measurement: a frozen encoder makes the
+# delivered number a fiction, and a deficit bit means the controller ran out
+# of authority -- either way the ratio must not be reported as a clean pass.
+_GATING_FAULTS = (
+    ("wheel_frozen_left", "fault_wheel_frozen_left"),
+    ("wheel_frozen_right", "fault_wheel_frozen_right"),
+    ("wheel_deficit_left", "fault_wheel_deficit_left"),
+    ("wheel_deficit_right", "fault_wheel_deficit_right"),
+    ("i2c_nak_timeout", "fault_i2c_nak_timeout"),
+)
+
+# Surfaced but NOT gated. `wedge_latch` (flags bit 7) is the RAW,
+# unconditional stuck-encoder latch, which by its own firmware
+# documentation "also fires on a healthy robot merely parked at rest" --
+# and this gate parks the robot at rest for a whole baseline window before
+# every profile, so it latches on every otherwise-clean run. The
+# motion-qualified stall detector is `wheel_frozen_*` (bits 19/20), which
+# IS gated above.
+_INFORMATIONAL_FAULTS = (
+    ("wedge_latch", "fault_wedge_latch"),
+)
+
+
 def _fault_names(frame) -> "list[str]":
-    """Fault/event bits that invalidate a distance measurement. A wedged or
-    frozen encoder makes the delivered number a fiction, and a deficit bit
-    means the controller ran out of authority -- either way the ratio must
-    not be reported as a clean pass."""
-    checks = (
-        ("wedge_latch", "fault_wedge_latch"),
-        ("wheel_frozen_left", "fault_wheel_frozen_left"),
-        ("wheel_frozen_right", "fault_wheel_frozen_right"),
-        ("wheel_deficit_left", "fault_wheel_deficit_left"),
-        ("wheel_deficit_right", "fault_wheel_deficit_right"),
-        ("i2c_nak_timeout", "fault_i2c_nak_timeout"),
-    )
-    return [label for label, attr in checks if getattr(frame, attr, False)]
+    return [label for label, attr in _GATING_FAULTS if getattr(frame, attr, False)]
+
+
+def _note_names(frame) -> "list[str]":
+    return [label for label, attr in _INFORMATIONAL_FAULTS if getattr(frame, attr, False)]
 
 
 def stream_profile(transport, profile: Profile, *, tick: float, lease: float,
@@ -306,6 +338,7 @@ def stream_profile(transport, profile: Profile, *, tick: float, lease: float,
             if positions is None:
                 continue
             run.faults.extend(f for f in _fault_names(frame) if f not in run.faults)
+            run.notes.extend(n for n in _note_names(frame) if n not in run.notes)
             if anchor is None:
                 anchor = float(frame.t)
             t_rel = (float(frame.t) - anchor) / 1000.0
@@ -415,16 +448,18 @@ def render_chart(runs: "list[Run]", path: pathlib.Path, *, subtitle: str,
                    linestyle=":", alpha=0.6, zorder=2)
 
         # Direct end-of-line labels carry the acceptance number itself, so
-        # the percentage is readable without a second y-scale.
-        for value, color, offset in ((run.delivered_left, COLOR_LEFT, 1.0),
-                                     (run.delivered_right, COLOR_RIGHT, -1.0)):
+        # the percentage is readable without a second y-scale (the skill's
+        # one-axis rule -- a right-hand % scale would be a dual axis).
+        # Both labels sit BELOW their line-end: above would collide with
+        # the commanded reference whenever a wheel lands close to 100%.
+        for value, color in ((run.delivered_left, COLOR_LEFT),
+                             (run.delivered_right, COLOR_RIGHT)):
             if value != value:
                 continue
             percent = value / profile.distance * 100.0
             ax.annotate(f"{percent:.1f}%",
-                        xy=(span, value), xytext=(-6, 11 * offset),
-                        textcoords="offset points", ha="right",
-                        va="bottom" if offset > 0 else "top",
+                        xy=(span, value), xytext=(-6, -13),
+                        textcoords="offset points", ha="right", va="top",
                         fontsize=11, fontweight="bold", color=color)
         ax.set_ylabel(f"travel  [mm]   (commanded {profile.distance:.0f} mm)")
         ax.set_xlabel("time  [s]     shaded = after the command reached zero")
@@ -505,9 +540,9 @@ def _args() -> argparse.Namespace:
                    help="[s] pause between profiles (default 1.5)")
     p.add_argument("--tolerance", type=float, default=0.05,
                    help="PASS band on the delivered/commanded ratio (default 0.05 == +-5%%)")
-    p.add_argument("--chart", default=str(_REPO_ROOT / "src" / "tests" / "bench" / "out"
+    p.add_argument("--chart", default=str(_REPO_ROOT / "src" / "tests" / "bench" / "output"
                                           / "velocity_profile_gate.png"))
-    p.add_argument("--csv", default=str(_REPO_ROOT / "src" / "tests" / "bench" / "out"
+    p.add_argument("--csv", default=str(_REPO_ROOT / "src" / "tests" / "bench" / "output"
                                         / "velocity_profile_gate.csv"))
     p.add_argument("--no-chart", action="store_true")
     return p.parse_args()
@@ -591,8 +626,13 @@ def main() -> int:
             runs.append(run)
             if run.faults:
                 print(f"    FAULTS OBSERVED: {', '.join(run.faults)}")
+            if run.notes:
+                print(f"    (informational, not gated: {', '.join(run.notes)})")
             at_end_left, at_end_right = run.delivered_at_command_end()
+            track_left, track_right = run.plateau_tracking()
             print(f"    samples: {len(run.samples)}")
+            print(f"    plateau tracking vs {profile.peak:.0f} mm/s commanded: "
+                  f"left {track_left * 100:.1f}%   right {track_right * 100:.1f}%")
             print(f"    left : {run.delivered_left:8.1f} mm  "
                   f"({run.ratio_left * 100:6.1f}%)   at command end "
                   f"{at_end_left:8.1f} mm")
@@ -626,6 +666,10 @@ def main() -> int:
             imbalance = run.delivered_left / run.delivered_right
             print(f"  {run.profile.name:>10}  {'L/R':>6}  imbalance {imbalance:.4f} "
                   f"({(imbalance - 1.0) * 100:+.1f}%)  [reported, not gated]")
+        track_left, track_right = run.plateau_tracking()
+        print(f"  {run.profile.name:>10}  {'track':>6}  plateau speed reached: "
+              f"L {track_left * 100:.1f}%  R {track_right * 100:.1f}% of commanded "
+              f"[reported, not gated]")
 
     if runs and not args.no_chart:
         target = "sim" if args.sim else (args.port or DEFAULT_PORT)
