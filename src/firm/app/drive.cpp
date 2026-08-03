@@ -1,5 +1,6 @@
 // drive.cpp -- App::Drive implementation. See drive.h's file header for the
 // controller's three responsibilities and the tick/update contract.
+#include <algorithm>
 #include <cmath>
 
 #include "app/drive.h"
@@ -18,18 +19,34 @@ void Drive::command(float vLeft, float vRight, float duration,
   commandActive_ = true;
 }
 
-void Drive::estop() {
+void Drive::takeover() {
   targetLeft_ = 0.0f;
   targetRight_ = 0.0f;
   commandActive_ = false;
   // completionPending_ is deliberately NOT set: a discarded command does
-  // not complete (drive.h's own estop() doc comment). An ALREADY-latched
-  // completion from a command that expired normally this cycle is left
-  // alone -- it describes something that really happened.
+  // not complete (drive.h's own estop() doc comment, which this shares). An
+  // ALREADY-latched completion from a command that expired normally this
+  // cycle is left alone -- it describes something that really happened.
+
+  // Deliberately NOT touched (131-001, see drive.h's own header): Stage B's
+  // integrators, Stage C's bias, the deficit latch, and
+  // stopEnforceCountdown_. This is an ownership handover, not a safety
+  // event -- the plant did not change, only the writer did, so there is
+  // nothing here to reset and no "verify the wheels actually reached rest"
+  // window to arm.
+}
+
+void Drive::estop() {
+  // Shared with takeover() (131-001, see drive.h's own header): zero
+  // targets, disarm the WHEELS command.
+  takeover();
 
   // Arm the stop re-assertion window (129-001, see drive.h's own header):
   // the next kStopEnforceTicks tick() calls re-issue the zero duty write
-  // instead of taking the quiet-at-zero shortcut below.
+  // instead of taking the quiet-at-zero shortcut below. NOT part of
+  // takeover()'s shared half -- this window's whole purpose is verifying a
+  // commanded STOP is actually observed at rest, which only applies to a
+  // genuine safety stop, not an ownership handover.
   stopEnforceCountdown_ = kStopEnforceTicks;
 
   // Stage B/C reset (130-004, see drive.h's own header) -- part of the
@@ -39,7 +56,9 @@ void Drive::estop() {
   // moment to stop trusting whatever the slow adaptation had learned
   // about the PRIOR load condition. The deficit-flag latch resets too --
   // a stop is a fresh start, not a continuation of whatever deficit was
-  // accumulating before it.
+  // accumulating before it. NOT shared with takeover() (131-001) -- an
+  // ownership handover must KEEP exactly this state, which is the whole
+  // point of the split.
   pidIntegralLeft_ = 0.0f;
   pidIntegralRight_ = 0.0f;
   biasLeft_ = 0.0f;
@@ -109,6 +128,25 @@ void Drive::setWheelCorrection(float gLA, float iLA, float gLD, float iLD,
 // or a nonzero bias would creep a stopped wheel forward/back -- the
 // exact defect this same guard already prevents for the map's own
 // intercept.
+//
+// 131-001 (sprint 131 Design Rationale Decision 2, review C3): `bias` is
+// applied in the MAGNITUDE domain, following `desired`'s CURRENT sign --
+// NOT as a body-frame-fixed additive term added after copysign(). Once
+// takeover() (131-001) stops resetting bias on every MOVE, a bias learned
+// under sustained motion in ONE direction becomes long-lived enough to be
+// exercised across a direction reversal for the first time; a fixed
+// additive term would then REDUCE a reverse command's magnitude whenever
+// the converged bias is positive (learned while under-delivering forward),
+// exactly backwards from what Stage C is for. Folding bias into the
+// magnitude before restoring the sign means a bias that boosts one
+// direction boosts the other too -- the physical droop it corrects is a
+// property of the wheel's instantaneous load, not which way it is
+// currently being asked to turn (130-004's own one-bias-per-wheel
+// rationale, unchanged). Never let the correction invert the commanded
+// direction (same "don't flip sign" posture as applySpeedFloor()'s own
+// doc comment below): a bias whose magnitude exceeds the commanded
+// magnitude means the correction hasn't converged usefully yet, not that
+// the wheel should reverse.
 float Drive::correctedCommand(float desired, float previous, bool leftWheel,
                               float bias) const {
   if (desired == 0.0f) return 0.0f;  // stop is stop; never offset it (map OR bias)
@@ -119,7 +157,9 @@ float Drive::correctedCommand(float desired, float previous, bool leftWheel,
   const float magnitude =
       (std::fabs(desired) - corrIntercept_[w][d]) / corrGain_[w][d];
   if (magnitude <= 0.0f) return 0.0f;  // below the intercept: unreachable
-  return std::copysign(magnitude, desired) + bias;
+  const float correctedMagnitude = magnitude + bias;
+  if (correctedMagnitude <= 0.0f) return 0.0f;  // never flip direction; not converged yet
+  return std::copysign(correctedMagnitude, desired);
 }
 
 float Drive::crawlDuty(float duty, float& carry) const {
@@ -135,24 +175,56 @@ float Drive::crawlDuty(float duty, float& carry) const {
   return std::copysign(crawlPulse_, duty);
 }
 
-// Wheels-solid speed floor (Open Question 2, resolved 130-004): a nonzero
-// commanded speed below vMin is ROUNDED UP to vMin, sign preserved, rather
-// than silently zeroed or refused. This mirrors the project's own
-// established fix for the analogous duty-domain problem (sprint 114's
-// deadband dead-zone/boost fix: a sub-deadband duty command used to be
-// zeroed outright, which stalled the wheel at the terminal approach of a
-// move -- fixed by boosting to copysign(deadband, cmd) instead). Refusing
-// the command outright here would reproduce that exact bug class one
-// layer up, in the velocity domain, with a silently stalled wheel and no
-// diagnostic signal. `vMin <= 0` (uncalibrated / no population floor
-// configured yet) makes this a no-op, so a robot JSON that hasn't run
-// ticket 001's sweep behaves exactly as before.
-float Drive::applySpeedFloor(float commanded) const {
-  if (commanded == 0.0f) return 0.0f;  // stop is stop, never boosted
-  if (bounds_.vMin <= 0.0f) return commanded;
-  const float magnitude = std::fabs(commanded);
-  if (magnitude >= bounds_.vMin) return commanded;
-  return std::copysign(bounds_.vMin, commanded);
+// Wheels-solid speed floor (Open Question 2, resolved 130-004; REVISED
+// 131-003 post-shipment -- see drive.h's own file header and sprint 131
+// sprint.md's "Revision -- Ticket 003's speed-floor semantics" for the
+// measurement that invalidated the originally-shipped common-mode-only
+// design and the full rationale for this replacement). A nonzero wheel
+// pair whose dominant (larger-magnitude) wheel sits below vMin is scaled
+// UP so the dominant wheel reaches exactly vMin, rather than silently
+// stalling. This mirrors the project's own established fix for the
+// analogous duty-domain problem (sprint 114's deadband dead-zone/boost
+// fix: a sub-deadband duty command used to be zeroed outright, which
+// stalled the wheel at the terminal approach of a move -- fixed by
+// boosting to copysign(deadband, cmd) instead). Refusing the command
+// outright here would reproduce that exact bug class one layer up, in the
+// velocity domain, with a silently stalled wheel and no diagnostic signal.
+// `vMin <= 0` (uncalibrated / no population floor configured yet) makes
+// this a no-op, so a robot JSON that hasn't run ticket 001's sweep behaves
+// exactly as before.
+//
+// The scale is RATIO-PRESERVING, computed from the raw wheel pair
+// directly -- no common-mode/differential decomposition (the superseded
+// 131-003 design): `dominantMag = max(|rawLeft|, |rawRight|)`; if nonzero
+// and below vMin, both wheels are multiplied by `vMin / dominantMag`,
+// which lands the dominant wheel at exactly vMin while preserving the
+// EXACT commanded ratio between the two wheels -- a symmetric pivot
+// (equal-and-opposite wheels, e.g. every Angle Move) is boosted
+// symmetrically to exactly (-vMin, +vMin), bit-identical to the
+// pre-131-003 per-wheel-independent floor for that case; an asymmetric arc
+// keeps its commanded curvature instead of being flattened toward 1:1 (the
+// old per-wheel-independent floor's own latent defect) or left
+// unboundedly distorted (the superseded common-mode-only floor's own
+// latent defect). This is the same dominant-wheel/ratio-locked idiom
+// `Planner::planWheels()` already uses internally for its own
+// accel-ceiling tie-break (planner.cpp, the `dominant`/`other` tie-break
+// near its ratio-lock computation) -- reused, not new. A wheel
+// raw-commanded exactly 0.0f is exactly 0.0f afterward regardless of the
+// scale factor applied (`0 * scale == 0` in IEEE-754 for any finite
+// scale), so "stop is stop" holds for a genuine full stop without a
+// special case, and a raw-zero wheel produced by vector cancellation
+// (part of an active, asymmetric command) also stays exactly zero rather
+// than being driven nonzero.
+void Drive::applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
+                            float& speedRight) const {
+  speedLeft = rawLeft;
+  speedRight = rawRight;
+  if (bounds_.vMin <= 0.0f) return;  // uncalibrated: no-op, same as before
+  const float dominantMag = std::max(std::fabs(rawLeft), std::fabs(rawRight));
+  if (dominantMag <= 0.0f || dominantMag >= bounds_.vMin) return;
+  const float scale = bounds_.vMin / dominantMag;
+  speedLeft = rawLeft * scale;
+  speedRight = rawRight * scale;
 }
 
 // Stage B -- the fast PID (small authority, never carries standing error
@@ -270,12 +342,52 @@ void Drive::tick(const Types::RobotState& state) {
   // standing still is the right answer to that.
   if (!calibrated_) return;
 
-  // Wheels-solid speed floor (Open Question 2) -- applied FIRST, so
-  // every stage below (classification, the map, the fast PID, the
-  // adaptation gate) sees the SAME effective target: whichever speed we
-  // actually decided to drive at, not the raw sub-floor request.
-  const float speedLeft = applySpeedFloor(state.wheelLeft.cmdVelocity);
-  const float speedRight = applySpeedFloor(state.wheelRight.cmdVelocity);
+  // Wheels-solid speed floor (Open Question 2), 131-003 REVISED
+  // post-shipment (issue A-speed-floor-snaps-the-planner-differential.md;
+  // full history in sprint 131 sprint.md's "Revision -- Ticket 003's
+  // speed-floor semantics"): a RATIO-PRESERVING SCALE applied to the raw
+  // wheel pair directly, computed once in applySpeedFloor() so every stage
+  // below (classification, the map, the fast PID, the adaptation gate)
+  // sees the SAME effective per-wheel target. The originally-shipped
+  // design decomposed the pair into common-mode/differential and floored
+  // only the common mode -- correct for a differential trim riding on an
+  // already-profiled travel speed (Planner::applyHeadingHold()), but WRONG
+  // for `Planner::planWheels()`'s ratio-locked output on a pure pivot
+  // (every Angle Move), whose common mode is EXACTLY zero by construction:
+  // the floor never engaged, and the turn's own sub-breakaway ramp-in/
+  // ramp-out passed through undelivered, measurably undershooting the
+  // turn. The ratio-preserving scale fixes this without needing to tell
+  // the two cases apart: `dominantMag = max(|cmdVelocityLeft|,
+  // |cmdVelocityRight|)`; if nonzero and below vMin, BOTH wheels scale by
+  // `vMin / dominantMag`, landing the dominant wheel at exactly vMin while
+  // preserving the exact commanded ratio -- a symmetric pivot boosts to
+  // exactly (-vMin, +vMin) (bit-identical to the pre-131-003
+  // per-wheel-independent floor for that case); an already-above-floor
+  // differential trim (the one reachable real-world case) passes through
+  // unchanged, because its dominant wheel already clears vMin; an
+  // asymmetric arc keeps its commanded curvature instead of being
+  // flattened toward 1:1 or left unboundedly distorted. Acknowledged
+  // tradeoff (unreachable on any shipped robot profile -- see the sprint.md
+  // Revision): a differential trim riding on an exactly-/near-zero
+  // common-mode component is now ALSO scaled up toward vMin, reverting to
+  // the pre-131-003 behavior for that one sub-case. `applySpeedFloor()`'s
+  // own "stop is stop" property (`0 * scale == 0` for any finite scale)
+  // means a genuine full stop (both raw wheel commands exactly 0.0f)
+  // always yields exactly (0.0f, 0.0f), and a raw-zero wheel produced by
+  // vector cancellation (part of an active, asymmetric command) also
+  // stays exactly zero. The planner does NOT get its own vMin awareness
+  // this ticket (deferred, sprint 131 Design Rationale Decision 4 -- review
+  // C1's terminal-taper mismatch waits on the same loaded-actuation-floor
+  // bench measurement as vMin/biasMax themselves). The result feeds the
+  // rest of tick() exactly where speedLeft/speedRight were read before
+  // this ticket -- Stage A's/Stage B's own commanded-zero guards
+  // (correctedCommand()'s `desired == 0.0f`, below, and the
+  // `speedLeft == 0.0f` check ahead of fastPid()) therefore keep reading
+  // the SAME post-floor value and so cannot disagree with each other by
+  // construction.
+  float speedLeft, speedRight;  // [mm/s] x2, post-floor
+  applySpeedFloor(state.wheelLeft.cmdVelocity, state.wheelRight.cmdVelocity,
+                 speedLeft, speedRight);
 
   // Stage A: the calibrated conversion map (correctedCommand()) plus
   // Stage C's bias -- v_corrected = map(v_cmd) + bias (drive.h's own
@@ -290,6 +402,25 @@ void Drive::tick(const Types::RobotState& state) {
   lastSpeedLeft_ = speedLeft;
   lastSpeedRight_ = speedRight;
 
+  // Wheel-measurement freshness gate (moved ahead of Stage B, 131-002,
+  // issue A-commanded-zero-leaks-through-stage-b.md): the SAME fresh/
+  // connected/non-frozen conjunct Stage C already computed, now shared by
+  // both stages. A failed encoder collect MANUFACTURES velocity = 0
+  // (Devices::NezhaMotor::collectEncoder()'s own doc comment,
+  // nezha_motor.cpp) rather than reporting the read as missing, so
+  // without this gate Stage B would wind its integrator toward closing a
+  // gap against a wheel it cannot actually see. `sampleTime` now reflects
+  // NezhaMotor's genuine `lastFreshUs_` (131-002, nezha_motor.h) -- the
+  // last SUCCESSFUL collect, not merely the last tick() attempt -- so
+  // this age check cannot be fooled by a wedged bus stamping "fresh" on a
+  // dead reading.
+  const bool freshLeft = state.wheelLeft.connected && !state.health.wheelFrozenLeft &&
+                        sampleAge(state.time.cycleStart, state.wheelLeft.sampleTime) <=
+                            kMaxSampleAge;
+  const bool freshRight = state.wheelRight.connected && !state.health.wheelFrozenRight &&
+                         sampleAge(state.time.cycleStart, state.wheelRight.sampleTime) <=
+                             kMaxSampleAge;
+
   // Stage B: the fast PID, small authority, on wheel-speed error.
   // cyclePeriod is last cycle's measured period [us] -- consistent with
   // every other value tick() reads here being "as of last cycle"
@@ -300,10 +431,33 @@ void Drive::tick(const Types::RobotState& state) {
   const float errRight = speedRight - state.wheelRight.velocity;
   const bool steadyLeft = std::fabs(state.wheelLeft.cmdAccel) < bounds_.aSteady;
   const bool steadyRight = std::fabs(state.wheelRight.cmdAccel) < bounds_.aSteady;
-  const float pidLeft = fastPid(pidIntegralLeft_, errLeft, state.wheelLeft.cmdAccel,
-                                dt, steadyLeft);
-  const float pidRight = fastPid(pidIntegralRight_, errRight, state.wheelRight.cmdAccel,
-                                 dt, steadyRight);
+
+  // Commanded-zero guard (131-002): correctedCommand()'s own
+  // `desired == 0.0f` guard (Stage A, above) has NO effect here -- Stage B
+  // is a fully separate computation reading the wheel's MEASURED
+  // velocity, and a wheel that has not yet physically coasted to rest
+  // keeps a nonzero err after its commanded speed reaches exactly 0
+  // (steadyLeft/Right can go true the instant the deceleration itself
+  // ends, well before the wheel actually stops -- the integrator would
+  // then resume winding against the residual coast-down error). Skip
+  // fastPid() OUTRIGHT for a commanded-zero wheel: no P/feedforward/clamp
+  // math runs, and the integrator is left completely untouched (frozen,
+  // not reset) -- "stop is stop" through Stage B too, matching
+  // correctedCommand()'s own guard and applySpeedFloor()'s own guard.
+  // Otherwise, additionally require this wheel's freshness (computed
+  // above) before the integrator may accumulate -- folded into the SAME
+  // `steady` parameter fastPid() already gates on, so a stale/
+  // disconnected/frozen reading freezes it exactly like the existing
+  // !steady case, rather than winding against a manufactured
+  // zero-velocity reading.
+  const float pidLeft = (speedLeft == 0.0f)
+      ? 0.0f
+      : fastPid(pidIntegralLeft_, errLeft, state.wheelLeft.cmdAccel, dt,
+                steadyLeft && freshLeft);
+  const float pidRight = (speedRight == 0.0f)
+      ? 0.0f
+      : fastPid(pidIntegralRight_, errRight, state.wheelRight.cmdAccel, dt,
+                steadyRight && freshRight);
   lastPidLeft_ = pidLeft;
   lastPidRight_ = pidRight;
 
@@ -319,13 +473,7 @@ void Drive::tick(const Types::RobotState& state) {
   // consumer). Computed AFTER this tick's duty (bias changes by at most
   // dt/tauAdapt per cycle, so the update lands on the NEXT tick's Stage
   // A, never stepping this tick's own output -- the bumpless-transfer
-  // property).
-  const bool freshLeft = state.wheelLeft.connected && !state.health.wheelFrozenLeft &&
-                        sampleAge(state.time.cycleStart, state.wheelLeft.sampleTime) <=
-                            kMaxSampleAge;
-  const bool freshRight = state.wheelRight.connected && !state.health.wheelFrozenRight &&
-                         sampleAge(state.time.cycleStart, state.wheelRight.sampleTime) <=
-                             kMaxSampleAge;
+  // property). freshLeft/Right computed once, above, shared with Stage B.
   adaptBias(biasLeft_, errLeft, state.wheelLeft.cmdAccel, std::fabs(speedLeft),
            freshLeft, dt);
   adaptBias(biasRight_, errRight, state.wheelRight.cmdAccel, std::fabs(speedRight),

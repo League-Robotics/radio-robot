@@ -137,7 +137,7 @@ void scenarioStraightLineAccumulatesDistanceNoHeadingChange() {
   // Both wheels advance the SAME 50mm -- vL == vR analog.
   driveToPosition(left, bus, wireAddr, 50.0f, 20000);
   driveToPosition(right, bus, wireAddr, 50.0f, 20000);
-  odom.integrate(left.position(), right.position());
+  odom.integrate(left.position(), right.position(), 0, 0);
 
   float expectedDist = 0.0f, expectedHeadingDelta = 0.0f;
   BodyKinematics::forward(50.0f, 50.0f, trackWidth, expectedDist, expectedHeadingDelta);
@@ -176,7 +176,7 @@ void scenarioPureRotationAccumulatesHeadingNoTranslation() {
   const float d = 31.4f;  // [mm]
   driveToPosition(left, bus, wireAddr, -d, 20000);
   driveToPosition(right, bus, wireAddr, d, 20000);
-  odom.integrate(left.position(), right.position());
+  odom.integrate(left.position(), right.position(), 0, 0);
 
   float expectedDist = 0.0f, expectedHeadingDelta = 0.0f;
   BodyKinematics::forward(-d, d, trackWidth, expectedDist, expectedHeadingDelta);
@@ -211,7 +211,7 @@ void scenarioBaselineSeededFromLeafPositionAtConstruction() {
   driveToPosition(right, bus, wireAddr, 500.0f, 20000);
 
   Motion::Odometry odom(200.0f, left.position(), right.position());
-  odom.integrate(left.position(), right.position());  // no further motion since construction -- delta must be 0
+  odom.integrate(left.position(), right.position(), 0, 0);  // no further motion since construction -- delta must be 0
 
   checkNear(odom.x(), 0.0f, 1e-3f, "x stays 0 -- the pre-existing leaf position is NOT counted as first-cycle motion");
   checkNear(odom.theta(), 0.0f, 1e-6f, "theta stays 0 for the same reason");
@@ -251,10 +251,10 @@ void scenarioPathLengthAccumulatesStraightLineTravel() {
   // sample rather than being rejected as an implausible glitch.
   driveToPosition(left, bus, wireAddr, 25.0f, 20000);
   driveToPosition(right, bus, wireAddr, 25.0f, 20000);
-  odom.integrate(left.position(), right.position());
+  odom.integrate(left.position(), right.position(), 0, 0);
   driveToPosition(left, bus, wireAddr, 50.0f, 60000);
   driveToPosition(right, bus, wireAddr, 50.0f, 60000);
-  odom.integrate(left.position(), right.position());
+  odom.integrate(left.position(), right.position(), 0, 0);
 
   checkNear(odom.pathLength(), 50.0f, 1e-3f, "pathLength() accumulates the true straight-line distance across two integrate() calls");
 }
@@ -278,7 +278,7 @@ void scenarioPathLengthInPlaceTurnContributesApproximatelyZero() {
   const float d = 31.4f;  // [mm]
   driveToPosition(left, bus, wireAddr, -d, 20000);
   driveToPosition(right, bus, wireAddr, d, 20000);
-  odom.integrate(left.position(), right.position());
+  odom.integrate(left.position(), right.position(), 0, 0);
 
   checkNear(odom.pathLength(), 0.0f, 1e-3f, "an in-place turn contributes ~0 to pathLength() -- zero net forward travel");
 }
@@ -303,10 +303,10 @@ void scenarioPathLengthReverseTravelAccumulatesNotCancels() {
   // (nezha_motor.cpp) -- see the straight-line scenario's comment above.
   driveToPosition(left, bus, wireAddr, 40.0f, 20000);
   driveToPosition(right, bus, wireAddr, 40.0f, 20000);
-  odom.integrate(left.position(), right.position());
+  odom.integrate(left.position(), right.position(), 0, 0);
   driveToPosition(left, bus, wireAddr, 0.0f, 60000);
   driveToPosition(right, bus, wireAddr, 0.0f, 60000);
-  odom.integrate(left.position(), right.position());
+  odom.integrate(left.position(), right.position(), 0, 0);
 
   checkNear(odom.x(), 0.0f, 1e-3f, "sanity: net x() returns to ~0 after forward-then-reverse over the same ground");
   checkNear(odom.pathLength(), 80.0f, 1e-3f, "pathLength() accumulates |distance| -- forward+reverse ADDS to ~80mm, doesn't cancel to 0");
@@ -327,7 +327,7 @@ void scenarioPathLengthNotZeroedByReset() {
 
   driveToPosition(left, bus, wireAddr, 60.0f, 20000);
   driveToPosition(right, bus, wireAddr, 60.0f, 20000);
-  odom.integrate(left.position(), right.position());
+  odom.integrate(left.position(), right.position(), 0, 0);
   checkNear(odom.pathLength(), 60.0f, 1e-3f, "setup: pathLength() accumulated 60mm before reset()");
 
   odom.reset(0.0f, 0.0f, 0.0f, left.position(), right.position());
@@ -339,10 +339,82 @@ void scenarioPathLengthNotZeroedByReset() {
   // accumulating correctly (no phantom jump) for motion AFTER the reset().
   driveToPosition(left, bus, wireAddr, 90.0f, 60000);
   driveToPosition(right, bus, wireAddr, 90.0f, 60000);
-  odom.integrate(left.position(), right.position());
+  odom.integrate(left.position(), right.position(), 0, 0);
   checkNear(odom.pathLength(), 90.0f, 1e-3f, "pathLength() continues accumulating correctly after reset() re-anchors the delta baseline");
 }
 
+// ===========================================================================
+// 4. 131-004 (position-rebaseline-destroys-the-pose.md): a per-wheel
+//    positionEpoch change re-anchors THAT wheel's delta baseline (crediting
+//    zero delta for the rebaseline call), instead of differencing across
+//    App::RobotLoop::publishWheel()'s ~30,000mm software rebaseline jump.
+//    Left and right are tracked independently -- one wheel rebaselining
+//    does not perturb the other's normal diff the same cycle.
+// ===========================================================================
+
+void scenarioEpochChangeReAnchorsThatWheelOnlyLeavesTheOtherDiffingNormally() {
+  beginScenario("Odometry::integrate(): a wheel's positionEpoch change re-anchors ONLY that wheel, "
+                "crediting zero delta -- the other wheel keeps differencing normally");
+
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
+  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+
+  const float trackWidth = 200.0f;  // [mm]
+  Motion::Odometry odom(trackWidth, left.position(), right.position());
+
+  // Ordinary cycle, epoch unchanged (0, 0): both wheels advance 40mm.
+  driveToPosition(left, bus, wireAddr, 40.0f, 20000);
+  driveToPosition(right, bus, wireAddr, 40.0f, 20000);
+  odom.integrate(left.position(), right.position(), 0, 0);
+  checkNear(odom.x(), 40.0f, 1e-3f, "ordinary cycle: x accumulates the real 40mm common delta");
+
+  // Left wheel "rebaselines" -- App::RobotLoop::publishWheel() re-anchors
+  // Devices::Motor::position() near 0 the SAME cycle it bumps positionEpoch
+  // (odometry.h's own file header); driveToPosition() here stands in for
+  // that (this harness's real NezhaMotor leaves have no rebaseline concept
+  // of their own -- Odometry only ever sees the (position, epoch) pair
+  // RobotLoop hands it, regardless of how that pair came to be). Right
+  // wheel continues its OWN normal travel (40 -> 70, a genuine +30mm) with
+  // its epoch unchanged. Without the epoch-aware re-anchor this would
+  // compute deltaLeft = 0 - 40 = -40 (a phantom -40mm on the left wheel,
+  // the same class of corruption the real ~30,000mm jump produces, just
+  // scaled down for a tractable test).
+  driveToPosition(left, bus, wireAddr, 0.0f, 60000);
+  driveToPosition(right, bus, wireAddr, 70.0f, 60000);
+  odom.integrate(left.position(), right.position(), /*leftEpoch=*/1, /*rightEpoch=*/0);
+
+  float expectedDist = 0.0f, expectedHeadingDelta = 0.0f;
+  // deltaLeft credited as 0 (re-anchored), deltaRight the real +30mm.
+  BodyKinematics::forward(0.0f, 30.0f, trackWidth, expectedDist, expectedHeadingDelta);
+  // Independent midpoint-arc integration (odometry.cpp's own formula):
+  // theta_ was exactly 0 before this call (the first cycle was straight),
+  // so midTheta is just half this call's own headingDelta.
+  const float midTheta = expectedHeadingDelta * 0.5f;
+  const float expectedX = 40.0f + expectedDist * std::cos(midTheta);
+  checkNear(odom.x(), expectedX, 1e-3f,
+            "epoch-change cycle: x advances by ONLY the right wheel's real delta -- no phantom "
+            "jump from the left wheel's rebaseline");
+  checkNear(odom.theta(), expectedHeadingDelta, 1e-3f,
+            "epoch-change cycle: theta reflects ONLY the real (0, +30) delta pair, not the raw "
+            "(-40, +30) pair the rebaseline would otherwise have produced");
+
+  // Next, ordinary cycle: left's baseline is now anchored at 0.0f (the
+  // rebaselined value), so a genuine continuing move from there diffs
+  // normally again -- no "catch-up" double-count of the eaten cycle.
+  const float thetaBeforeNextCycle = odom.theta();
+  driveToPosition(left, bus, wireAddr, 10.0f, 100000);
+  driveToPosition(right, bus, wireAddr, 100.0f, 100000);
+  odom.integrate(left.position(), right.position(), 1, 0);
+  float nextDist = 0.0f, nextHeadingDelta = 0.0f;
+  BodyKinematics::forward(10.0f, 30.0f, trackWidth, nextDist, nextHeadingDelta);  // 10-0, 100-70
+  checkNear(odom.theta(), thetaBeforeNextCycle + nextHeadingDelta, 1e-3f,
+            "post-rebaseline cycle: theta advances by the ordinary (10, 30) delta pair off the "
+            "re-anchored baseline -- no phantom catch-up from the eaten cycle");
+}
 
 }  // namespace
 
@@ -354,6 +426,7 @@ int main() {
   scenarioPathLengthInPlaceTurnContributesApproximatelyZero();
   scenarioPathLengthReverseTravelAccumulatesNotCancels();
   scenarioPathLengthNotZeroedByReset();
+  scenarioEpochChangeReAnchorsThatWheelOnlyLeavesTheOtherDiffingNormally();
 
   if (g_failureCount == 0) {
     std::printf("OK: all Motion::Odometry scenarios passed\n");

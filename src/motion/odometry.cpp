@@ -14,11 +14,25 @@ Odometry::Odometry(float trackWidth, float initialLeftPosition, float initialRig
       lastLeft_(initialLeftPosition),
       lastRight_(initialRightPosition) {}
 
-void Odometry::integrate(float leftPosition, float rightPosition) {
-  float deltaLeft = leftPosition - lastLeft_;
-  float deltaRight = rightPosition - lastRight_;
+void Odometry::integrate(float leftPosition, float rightPosition, uint8_t leftEpoch,
+                          uint8_t rightEpoch) {
+  // 131-004: a per-wheel epoch change means THIS wheel's raw position just
+  // jumped by a software rebaseline (Devices::Motor::rebaseline(), called
+  // from App::RobotLoop::publishWheel()) -- re-anchor that wheel's own
+  // baseline to the incoming (already-rebaselined) position instead of
+  // differencing across the jump, crediting zero delta for it this call.
+  // The other wheel, if its epoch is unchanged, diffs normally -- the two
+  // sides are independent (each publishWheel() call rebaselines at most one
+  // wheel at a time, but nothing here assumes that).
+  const bool leftRebaselined = (leftEpoch != lastLeftEpoch_);
+  const bool rightRebaselined = (rightEpoch != lastRightEpoch_);
+
+  float deltaLeft = leftRebaselined ? 0.0f : (leftPosition - lastLeft_);
+  float deltaRight = rightRebaselined ? 0.0f : (rightPosition - lastRight_);
   lastLeft_ = leftPosition;
   lastRight_ = rightPosition;
+  lastLeftEpoch_ = leftEpoch;
+  lastRightEpoch_ = rightEpoch;
 
   float distance = 0.0f;     // [mm] this cycle's body-frame forward travel
   float headingDelta = 0.0f; // [rad] this cycle's heading change

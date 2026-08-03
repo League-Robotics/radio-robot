@@ -102,6 +102,13 @@ ProfileResult profileStep(float remaining, float previous, float cruise,
   // staircase from v-delta is exactly the tail of the staircase from v);
   // if we were handed an infeasible state (e.g. a replace at speed into a
   // short Move), brake as hard as allowed and let re-measurement recover.
+  // This function already honors that promise every tick, from scratch --
+  // 131-006 fixed the one place it was NOT honored: Planner::planWheels()'s
+  // `decelLatched` used to override this fresh recomputation unconditionally
+  // once tripped, vetoing exactly the recovery this comment describes. It
+  // now releases instead, letting THIS function's own from-scratch Accel/
+  // Hold classification stand (planner.cpp's own doc comment at that call
+  // site has the full mechanism).
   if (!feasible(floor)) return {floor, false, StepPhase::Decel};
   float lo = floor;
   float hi = ceiling;

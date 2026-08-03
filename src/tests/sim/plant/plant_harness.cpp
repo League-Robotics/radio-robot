@@ -310,7 +310,7 @@ std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles
     motorRight.tick(nowUs);
     otos.tick(nowUs);
 
-    odom.integrate(motorLeft.position(), motorRight.position());
+    odom.integrate(motorLeft.position(), motorRight.position(), 0, 0);
 
     trace.push_back(CycleSample{
         motorLeft.position(), motorRight.position(),

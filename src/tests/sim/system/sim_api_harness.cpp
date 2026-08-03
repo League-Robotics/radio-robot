@@ -312,47 +312,61 @@ void scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic() {
 // ===========================================================================
 // 5. Virtual-cycle-timing diagnostic (105-004 AC #3) -- PROMOTED (106-001
 //    AC #2) from an observational report to a hard pass/fail regression
-//    assertion on the schedule's own NUMBERS: a future change that re-adds
-//    105-004's diagnosed defect (the settle/clearance windows stacking
-//    additively under the final pace block instead of being absorbed into
-//    kCycle's stated total) fails this checkTrue -- and therefore fails
-//    `uv run python -m pytest` -- not just a future bench session.
+//    assertion on the schedule's own NUMBERS: a future change that
+//    re-introduces an unabsorbed, additive pacing block fails this
+//    checkTrue -- and therefore fails `uv run python -m pytest` -- not
+//    just a future bench session.
 //
-//    The expected numbers below mirror robot_loop.cpp's OWN current
-//    kSettle/kClear/kCycle/kPace (anonymous-namespace/internal-linkage, not
-//    importable -- duplicated here per this codebase's established
-//    per-file fixture-duplication convention; see the coding-standards
-//    rule's "grep-ability" rationale for why this file keeps its own
-//    copy rather than reaching into robot_loop.cpp's internals).
-//    118 (loop schedule truth) restored kSettle=kClear=4/kCycle=40/kPace=28
-//    -- 106-001's original figures -- undoing the 111-002 retarget
-//    (2026-07-19) to kSettle=kClear=0/kCycle=20/kPace=20 that commit
-//    5f5a2ba7 forced onto this schedule (zeroing kSettle/kClear made the
-//    vendor's still-mandatory 4ms settle happen as a *blocking* sleep
-//    hidden inside motorL_.tick()/motorR_.tick() instead of a visible,
-//    budgeted runAndWait window -- see
-//    clasi/issues/restore-the-interleaved-request-settle-tick-loop-schedule.md).
-//    130-007 then raised kCycle 40 -> 50 (one 50ms control period
-//    everywhere; kSettle/kClear are unchanged at 4/4, so kPace grows to
-//    50-12=38) -- this is exactly the kind of change the note below warns
-//    about: whoever next changes robot_loop.cpp's timing constants must
-//    update these four to match, the same way any other duplicated-constant
-//    fixture in this codebase does.
+//    131-005 REWRITE (2026-08-02): the trailing pacing block's own wait
+//    changed from a FIXED, precomputed budget (the deleted `kPace = kCycle
+//    - kWindows`, a gap relative to that block's own entry mark) to an
+//    ABSOLUTE end-of-cycle deadline (state_.time.cycleStart + kCycle) --
+//    see robot_loop.cpp's own runAndWaitUntil()/cycle() call site and
+//    robot_loop.h's kCycle doc comment for the defect this fixes (130-011
+//    measured a rock-stable 54ms delivered period against a 50ms nominal,
+//    traced to the OLD relative-gap scheme letting each block's own
+//    rounding/overrun re-add on top of the next block's fixed budget
+//    instead of being absorbed by it).
+//
+//    That change makes this scenario's OLD expected numbers (kPace=38,
+//    "virtualCycleMillis == kCycle") the WRONG thing to assert now, for a
+//    reason specific to THIS harness rather than to the fix itself:
+//    TestSim::SimHarness's own paired SimClock/SimSleeper (sim_clock.h)
+//    never advances the fake clock from a sleepMillis() call -- only an
+//    explicit setMicros()/advanceMicros() call moves it, and SimHarness's
+//    own step() makes exactly ONE such call, BEFORE cycle() runs, never
+//    between its four internal pacing blocks (see TickingSleeper's own
+//    header comment, app_robot_loop_harness.cpp's SUC-006 scenario, for
+//    the identical limitation documented against a different test). So
+//    from THIS fake clock's perspective, ZERO time ever elapses between
+//    cycleStart and the trailing block's own deadline check, regardless of
+//    what the three earlier blocks' bodies did -- the absolute-deadline
+//    wait therefore always computes the FULL kCycle=50ms remaining here,
+//    not kCycle-minus-windows. That is a property of this fake clock, not
+//    a regression in the fix: 131-005's own new host-build unit test
+//    (src/tests/sim/unit/app_robot_loop_pacing_harness.cpp) uses a Sleeper
+//    that DOES advance its paired clock on every sleepMillis() call (an
+//    injected, jittery one), and is where the actual mean-converges-to-
+//    kCycle claim is proven -- this scenario cannot prove it and no longer
+//    tries to.
+//
+//    What THIS scenario keeps verifying, and still genuinely can: exactly
+//    four Sleeper::sleepMillis() calls per cycle (the schedule's own
+//    SHAPE, unaffected by which of the two pacing schemes computed the
+//    trailing call's own argument) and no direct yield() call.
 // ===========================================================================
 
 void scenarioVirtualCycleTimingDiagnostic() {
-  beginScenario("timing: virtual-cycle schedule is exactly kSettle+kClear+kSettle+kPace == kCycle (106-001)");
+  beginScenario("timing: virtual-cycle schedule makes exactly 4 sleepMillis() calls per cycle; "
+                "the trailing call targets kCycle directly (131-005 absolute-deadline pacing)");
 
   TestSim::SimHarness sim;
   TestSupport::configureSimForBenchTest(sim);
   sim.boot();
 
   // Reproduces the deleted SimApi::measureOneCycle()'s own deltas directly
-  // off Devices::Sleeper (sim.sleeper(), added to SimHarness by this
-  // ticket) -- same formula as the original CycleTimingReport: the three
-  // non-final settle/clear blocks (robot_loop.cpp's own kSettle/kClear,
-  // duplicated below) plus the observed final pace block equal the whole
-  // cycle's virtual schedule.
+  // off Devices::Sleeper (sim.sleeper(), added to SimHarness by ticket
+  // 106-001).
   TestSim::SimSleeper& sleeper = sim.sleeper();
   int sleepsBefore = sleeper.sleepCount();
   int yieldsBefore = sleeper.yieldCount();
@@ -362,35 +376,37 @@ void scenarioVirtualCycleTimingDiagnostic() {
   int sleepCount = sleeper.sleepCount() - sleepsBefore;
   uint32_t lastSleepMillis = sleeper.lastSleepMillis();
   int yieldCount = sleeper.yieldCount() - yieldsBefore;
-  // robot_loop.cpp's own current kSettle/kClear/kCycle/kPace (see this
-  // scenario's own file-header comment above for the duplication
-  // rationale and the 118 restore note). 130-007: kCycle 40 -> 50 (one
-  // 50ms control period everywhere); kSettle/kClear are UNCHANGED at 4/4,
-  // so kPace grows from 28 to 38.
+  // robot_loop.cpp's own current kSettle/kClear/RobotLoop::kCycle (see
+  // this scenario's own file-header comment for the duplication rationale
+  // and the 131-005 REWRITE note). kPace (kCycle - kWindows) is GONE from
+  // production code as of 131-005 -- the trailing block no longer
+  // computes a fixed budget of its own, so there is no local mirror of it
+  // to duplicate here any more.
   constexpr uint32_t kSettle = 4;  // [ms] mirrors robot_loop.cpp's own kSettle
   constexpr uint32_t kClear = 4;   // [ms] mirrors robot_loop.cpp's own kClear
-  constexpr uint32_t kCycle = 50;  // [ms] mirrors robot_loop.cpp's own kCycle
-  constexpr uint32_t kWindows = 2 * kSettle + kClear;  // [ms] the 3 settle/clear blocks' own total
-  constexpr uint32_t kPace = kCycle - kWindows;        // [ms] mirrors robot_loop.cpp's own kPace
-  uint32_t virtualCycleMillis = kWindows + lastSleepMillis;
+  constexpr uint32_t kCycle = 50;  // [ms] mirrors robot_loop.cpp's own RobotLoop::kCycle
 
   checkTrue(sleepCount == 4,
-            "exactly 4 Sleeper::sleepMillis() calls per cycle() (3 runAndWait blocks + final pace block)");
-  checkTrue(lastSleepMillis == kPace,
-            "the final (perception+odometry+pace) block requests exactly kPace=38ms "
-            "(kCycle=50ms minus the 12ms already consumed by the 3 settle/clear windows -- "
-            "NOT a fresh, unabsorbed kCycle=50ms on top of them)");
+            "exactly 4 Sleeper::sleepMillis() calls per cycle() (3 runAndWait blocks + the "
+            "trailing runAndWaitUntil() block)");
+  checkTrue(lastSleepMillis == kCycle,
+            "the trailing block's own sleepMillis() call requests kCycle=50ms under THIS "
+            "harness's fake clock -- see this scenario's own file-header 131-005 REWRITE note: "
+            "SimHarness's SimClock/SimSleeper pair never advances BETWEEN a cycle's own four "
+            "pacing blocks, so the absolute deadline (cycleStart+kCycle) always reads ZERO "
+            "elapsed at the trailing block regardless of the three earlier blocks' own "
+            "requested sleeps -- a property of this fake clock, not of the fix. "
+            "app_robot_loop_pacing_harness.cpp's own injected-jitter test is where the actual "
+            "convergence-to-kCycle claim is proven");
   checkTrue(yieldCount == 0, "RobotLoop::cycle() never calls Sleeper::yield() directly");
-  checkTrue(virtualCycleMillis == kCycle,
-            "derived total virtual schedule == 12ms (settle/clear/settle) + 38ms (pace) == 50ms == kCycle -- "
-            "proves the three windows are absorbed into the 50ms budget, not additive on top of it (118, "
-            "restoring 106-001; 130-007 raised the budget itself 40->50)");
 
   std::printf(
-      "  TIMING: sleepCount=%d lastSleepMillis=%ums yieldCount=%d virtualCycleMillis=%ums "
-      "(== kCycle=50ms/~20Hz design target, 130-007 -- see this scenario's own file-header comment for the "
-      "118 restore of 106-001's original kSettle/kClear figures)\n",
-      sleepCount, static_cast<unsigned>(lastSleepMillis), yieldCount, static_cast<unsigned>(virtualCycleMillis));
+      "  TIMING: sleepCount=%d lastSleepMillis=%ums yieldCount=%d (kSettle=%ums kClear=%ums "
+      "kCycle=%ums -- 131-005: the trailing block targets kCycle directly as an absolute "
+      "deadline; see this scenario's own REWRITE note for why lastSleepMillis==kCycle here "
+      "rather than the old kCycle-kWindows)\n",
+      sleepCount, static_cast<unsigned>(lastSleepMillis), yieldCount,
+      static_cast<unsigned>(kSettle), static_cast<unsigned>(kClear), static_cast<unsigned>(kCycle));
 }
 
 // ===========================================================================
@@ -402,6 +418,86 @@ void scenarioVirtualCycleTimingDiagnostic() {
 //    app_robot_loop_harness.cpp's identical note).
 // ===========================================================================
 
+// ===========================================================================
+// 7. 131-001 (SUC-131-001, sprint success criteria): a chained, multi-leg
+//    MOVE sequence (2+ legs, "equivalent to a tour") holds a converged
+//    Stage C bias across EVERY leg boundary -- through the REAL
+//    RobotLoop::handleMove() call site (robot_loop.cpp:227), not a
+//    hand-invoked App::Drive::takeover() call (that unit-level proof
+//    already lives in app_drive_harness.cpp's own
+//    scenarioBiasPersistsAcrossChainedTakeoverBoundaries()).
+//    configureSimForBenchTest() installs the EXACT calibration inverse of
+//    this plant's own linear response (bench_test_config.cpp), so Stage C
+//    would have nothing to close by default -- this scenario deliberately
+//    re-installs a DELIBERATELY WRONG (20% low) duty-per-speed calibration
+//    on top of it, giving Stage C a real, nonzero error to adapt against
+//    under the REAL WheelPlant physics, mirroring app_drive_harness.cpp's
+//    own hand-simulated `plantGain` scenarios but through the real
+//    plant/planner/RobotLoop stack instead of a hand-rolled one.
+// ===========================================================================
+
+void scenarioBiasPersistsAcrossChainedMoveLegs() {
+  beginScenario("131-001: a chained, multi-leg MOVE sequence (2+ legs) holds a converged Stage C "
+                "bias across every leg boundary -- RobotLoop::handleMove()'s drive_.takeover() "
+                "call does not reset it, unlike the drive_.estop() call it replaces");
+
+  TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
+
+  // Deliberately mis-calibrate Stage A below the REAL plant's linear
+  // response (configureSimForBenchTest() installs the EXACT inverse,
+  // 1/kDefaultDutyVelMax) -- 80% of the true value under-predicts the duty
+  // needed for a given commanded speed, so the wheel genuinely
+  // under-delivers and Stage C has a real, nonzero error to close.
+  const float trueKff = 1.0f / TestSim::kDefaultDutyVelMax;
+  sim.drive().setDutyPerSpeed(trueKff * 0.8f, trueKff * 0.8f);
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.vMin = 0.0f;
+  bounds.biasMax = 80.0f;   // [mm/s]
+  bounds.tauAdapt = 1.0f;   // [s] -- converges within a few seconds of virtual cruise
+  bounds.aSteady = 1.0e6f;  // effectively unshaped, matching configureSimForBenchTest()'s own
+                            // unshaped shaper ceilings -- always "steady" outside the one-cycle
+                            // ramp instant
+  sim.drive().setAdaptationBounds(bounds);
+
+  sim.boot();
+
+  // Leg 1: a long TIME-stop cruise, long enough for Stage C to converge
+  // well away from 0 under the deliberate 20% under-calibration above.
+  sim.injectMove(/*v_x=*/200.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
+                 /*stopValue=*/8000.0f, /*timeout=*/20000.0f, /*replace=*/true, /*id=*/1,
+                 /*corrId=*/1);
+  sim.step(160);  // 160 * 50ms == 8s of virtual cruise -- comfortably past tauAdapt=1s
+  (void)sim.drainTelemetry();
+
+  const float biasAfterLeg1 = sim.drive().biasLeft();
+  checkTrue(std::fabs(biasAfterLeg1) > 5.0f,
+            "setup: Stage C genuinely converged away from 0 under the deliberate mis-calibration");
+
+  // Leg 2 -- a SECOND, chained MOVE (a fresh id; leg 1's own TIME stop
+  // condition has already ended it). This is the EXACT RobotLoop::
+  // handleMove() call site this ticket changes (robot_loop.cpp:227):
+  // drive_.takeover(), not drive_.estop().
+  sim.injectMove(180.0f, 0.0f, 0.0f, TestSupport::MoveStopKind::kTime, /*stopValue=*/8000.0f,
+                 /*timeout=*/20000.0f, /*replace=*/true, /*id=*/2, /*corrId=*/2);
+  sim.step(1);  // the cycle handleMove() actually runs on
+  checkFloatGe(std::fabs(sim.drive().biasLeft()), 5.0f,
+               "leg boundary 1: bias did NOT reset to 0 at the SECOND leg's own handleMove()/"
+               "takeover() call");
+
+  sim.step(40);  // ~2s further into leg 2
+
+  // Leg 3 -- a THIRD chained MOVE (2+ leg boundaries, "equivalent to a
+  // tour" per this ticket's own acceptance criterion).
+  sim.injectMove(160.0f, 0.0f, 0.0f, TestSupport::MoveStopKind::kTime, /*stopValue=*/8000.0f,
+                 /*timeout=*/20000.0f, /*replace=*/true, /*id=*/3, /*corrId=*/3);
+  sim.step(1);
+  checkFloatGe(std::fabs(sim.drive().biasLeft()), 5.0f,
+               "leg boundary 2: bias STILL has not reset to 0 at the THIRD leg's boundary -- 2+ "
+               "chained legs, no reset anywhere along the tour");
+}
+
 }  // namespace
 
 int main() {
@@ -410,6 +506,7 @@ int main() {
   scenarioStopAcksAndClearsActive();
   scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic();
   scenarioVirtualCycleTimingDiagnostic();
+  scenarioBiasPersistsAcrossChainedMoveLegs();
 
   if (g_failureCount == 0) {
     std::printf("OK: all sim_api scenarios passed\n");

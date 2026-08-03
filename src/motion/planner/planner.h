@@ -172,8 +172,19 @@ class Planner {
     // scaling the old per-Kind Angle case applied after profiling.
     float axisPerLambda = 1.0f;
     MovePhase phase = MovePhase::Idle;
-    // Once braking has begun it never un-begins: "a move accelerates at
-    // the start and decelerates at the end, never the reverse."
+    // Braking never un-begins WHILE it remains genuine: "a move accelerates
+    // at the start and decelerates at the end, never the reverse" -- but
+    // 131-006 makes this a conditional latch, not a pure one-way ratchet.
+    // Set on a Decel/Closing step (planWheels()'s own doc comment has the
+    // full mechanism); cleared -- not merely overridden for one tick, but
+    // released so the fresh classification stands -- the instant a LATER
+    // tick's own from-scratch profileStep() recomputation says Accel or
+    // Hold, i.e. re-measurement shows the Move was never truly braking
+    // (a transient plannedRemaining under-estimate tripped it, not a real
+    // decision to land). See planWheels()'s own doc comment at this field's
+    // read site for the full rationale and profile.cpp's "let
+    // re-measurement recover" comment this now honors at the caller level
+    // too.
     bool decelLatched = false;
   };
 

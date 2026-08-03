@@ -33,7 +33,13 @@
 //                                stiction does not stick-slip (the
 //                                documented 2-3 Hz duty-domain limit
 //                                cycle this design avoids by construction,
-//                                not by tuning). Reset on estop().
+//                                not by tuning). Reset on estop(). Skipped
+//                                OUTRIGHT (output forced 0, integrator
+//                                untouched) at commanded-zero, and its
+//                                integrator only accumulates on a fresh/
+//                                connected/non-frozen measurement -- same
+//                                shape as the steady gate below (131-002,
+//                                see tick()'s own doc comment, drive.cpp).
 //        Stage C (slow)      -- bounded adaptation of ONE parameter, the
 //                                map's additive `bias` -- NEVER the
 //                                slope. Runs only when steady
@@ -53,10 +59,34 @@
 //                                baseline below; the breakaway dead zone
 //                                stays feedforward-owned, never
 //                                rediscovered by the adaptive bias.
-//      Wheels-solid contract enforcement: a sub-vMin nonzero command is
-//      rounded UP to vMin (applySpeedFloor(), Open Question 2 --
-//      matches the project's own established boost-to-breakaway fix
-//      rather than silently stalling the wheel); a sustained large error
+//      Wheels-solid contract enforcement: a sub-vMin nonzero wheel PAIR is
+//      scaled UP so its dominant (larger-magnitude) wheel reaches vMin
+//      (applySpeedFloor(), Open Question 2 -- matches the project's own
+//      established boost-to-breakaway fix rather than silently stalling
+//      the wheel). 131-003, REVISED post-shipment (issue
+//      A-speed-floor-snaps-the-planner-differential.md; sprint 131
+//      sprint.md's "Revision -- Ticket 003's speed-floor semantics" has the
+//      full history): the floor is a RATIO-PRESERVING SCALE applied to the
+//      raw wheel pair directly, not a common-mode/differential
+//      decomposition -- `dominantMag = max(|cmdVelocityLeft|,
+//      |cmdVelocityRight|)`; if nonzero and below vMin, BOTH wheels are
+//      scaled by `vMin / dominantMag`, preserving their exact commanded
+//      ratio, so the dominant wheel lands at exactly vMin; otherwise the
+//      raw pair passes through unchanged. The originally-shipped
+//      common-mode-only floor (Design Rationale Decision 4, now
+//      superseded) never engaged during a pure pivot -- `Planner::
+//      planWheels()`'s ratio-locked output for an Angle Move has an
+//      EXACTLY zero common mode by construction, so the entire turn's
+//      commanded magnitude passed through unfloored and measurably
+//      regressed turn accuracy. The ratio-preserving scale fixes that
+//      (a symmetric pivot scales both wheels to vMin identically, matching
+//      the pre-131-003 per-wheel-independent floor) while still leaving an
+//      already-above-floor differential trim (Planner::applyHeadingHold(),
+//      the one reachable real-world case) untouched, because its dominant
+//      wheel already clears vMin. See tick()'s own doc comment (drive.cpp)
+//      for the full computation and sprint 131 Design Rationale Decision 4
+//      / its Revision for why the planner does not gain its own vMin
+//      awareness this ticket. A sustained large error
 //      while BOTH bias and the fast PID sit pinned at their configured
 //      authority raises a deficit-flag policy (deficitLeft()/Right()) --
 //      the robot runs slow, loudly, never silently. `Motion::Planner`
@@ -73,6 +103,36 @@
 // until it is OBSERVED (the encoder actually reads at rest), not until it
 // is merely sent once. Do not fold this back into a single unconditional
 // write.
+//
+// takeover() vs estop() (131-001, sprint 131 Design Rationale Decisions 1/2
+// -- closes the sprint-130 midpoint review's finding #1 / post-130 review
+// F5): before this ticket, RobotLoop::handleMove() called estop() to make
+// the planner take over motion, and estop() (130-004) ALSO zeroed Stage
+// B's integrators, Stage C's bias, and the deficit latch -- so every
+// accepted MOVE cold-started adaptation, and Stage C (tauAdapt tens of
+// seconds) could never converge on the path it exists to serve. takeover()
+// is the ownership-handover verb: zero targets, disarm WHEELS -- KEEP
+// everything Stage B/C learned, because the plant did not change, only the
+// writer did. estop() stays the full-reset safety verb, reserved for the
+// ESTOP wire verb and genuine panic paths, and is now implemented ON TOP
+// OF takeover() (the shared "zero targets, disarm" part), adding only the
+// learned-state reset and the stop-reassertion window on top. Two
+// distinctly-named methods, not one estop(bool resetLearnedState) --
+// Motion::Planner's own tick()/update() two-method contract already
+// established this project's preference for named verbs over parameterized
+// ones at this exact architectural layer (Decision 1).
+//
+// This split makes a converged bias long-lived across MOVE boundaries for
+// the first time, which in turn makes correctedCommand()'s bias
+// application direction-sensitive for the first time: a bias learned under
+// sustained forward motion must still HELP (not hurt) a subsequent reverse
+// command. correctedCommand() applies `bias` as a magnitude-domain
+// correction that follows the CURRENT commanded direction (`desired`'s
+// sign), not a fixed additive term -- see its own doc comment (drive.cpp)
+// and Decision 2. This preserves 130-004's one-bias-per-wheel model (no
+// per-direction split: the physical droop this trim corrects is a
+// property of the wheel's instantaneous load, not which side of a ramp it
+// arrived from) while making the correction help regardless of direction.
 //
 // Two-method contract, adopted from Motion::Planner (planner.h) so the two
 // motion deciders read the same way at their call sites:
@@ -181,6 +241,16 @@ class Drive {
   // correction at the planning layer, and this stage's live bench
   // tuning is ticket 006's job, on hardware -- not a judgment call this
   // ticket can make with tovez hard-silent.
+  //
+  // 131-002: two further gates apply to this stage regardless of the
+  // gain values configured here -- a commanded-zero wheel skips
+  // fastPid() OUTRIGHT (no P/feedforward/clamp math runs, integrator
+  // untouched), and the integrator only ACCUMULATES on a fresh/
+  // connected/non-frozen measurement (the same conjunct Stage C's
+  // adaptBias() already required) -- a stale/disconnected/frozen
+  // reading freezes it exactly like the existing steady gate, rather
+  // than winding against a manufactured zero-velocity reading. See
+  // tick()'s own doc comment (drive.cpp) for the full rationale.
   struct ControlGains {
     float kp = 0.0f;      // [1] dimensionless: mm/s of PID output per mm/s of error
     float ki = 0.0f;      // [1/s]
@@ -244,10 +314,32 @@ class Drive {
   void command(float vLeft, float vRight, float duration, uint32_t moveId,
                uint32_t now);  // [mm/s] [mm/s] [ms] -- now [ms]
 
+  // Ownership handover: another subsystem is about to command the wheels
+  // (RobotLoop::handleMove(), the moment a MOVE is accepted -- 131-001).
+  // Zero the targets and disarm the WHEELS command, exactly like estop()'s
+  // own "zero targets, disarm" half -- but deliberately leave Stage B's
+  // integrators (pidIntegralLeft_/Right_), Stage C's bias (biasLeft_/
+  // Right_), the deficit latch (deficitSinceLeft_/Right_, deficitLeft_/
+  // Right_), and the stop re-assertion countdown (stopEnforceCountdown_)
+  // completely untouched: the plant did not change, only the writer did,
+  // and there is no "verify the wheels actually reached rest" safety
+  // concern the way there is for a genuine estop -- the new owner is about
+  // to command motion again next cycle. See this file's own header
+  // (Decisions 1/2) for the full rationale, and estop()'s own doc comment
+  // for the contrasting full-reset verb.
+  void takeover();
+
   // Halt now: zero the targets, disarm, and emit NO completion ack for the
   // discarded command (the ESTOP path -- the host asked for a stop, not for
-  // a report that the thing it cancelled finished). Also the takeover path
-  // RobotLoop uses when a MOVE hands motion to the planner.
+  // a report that the thing it cancelled finished) -- PLUS a full reset of
+  // every learned/latched control-loop value (Stage B's integrators, Stage
+  // C's bias, the deficit latch) and the stop re-assertion window (this
+  // file's own LOAD-BEARING comment above). Reserved for the ESTOP wire
+  // verb (RobotLoop::handleEstop()) and genuine panic paths -- NOT the
+  // ownership-handover path (a MOVE taking over from WHEELS, or vice
+  // versa), which uses takeover() instead so a converged Stage C bias
+  // survives across legs of a chained tour (131-001, this file's own
+  // header).
   void estop();
 
   // True while an armed command is running -- i.e. while Drive, not the
@@ -317,6 +409,12 @@ class Drive {
   // persistent state (pidIntegralLeft_/Right_ below), mutated in place.
   // `steady` gates the integrator exactly like Motion::WheelTrim's own
   // Hold-phase gate (wheel_trim.cpp) -- see drive.cpp's own doc comment.
+  // 131-002: the caller folds this wheel's freshness into `steady` too
+  // (steady && fresh), so a stale/disconnected/frozen reading freezes the
+  // integrator through this SAME parameter -- fastPid() itself knows
+  // nothing about freshness, only "may I integrate right now." tick()'s
+  // own commanded-zero guard skips calling this function entirely rather
+  // than passing a flag through it -- see tick()'s own doc comment.
   float fastPid(float& integral, float err, float aCmd, float dt,
                bool steady) const;
 
@@ -327,9 +425,16 @@ class Drive {
   void adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
                 bool fresh, float dt) const;
 
-  // Wheels-solid speed floor (Open Question 2, resolved -- see this
-  // file's own header). A stop (0.0f exactly) is never floored.
-  float applySpeedFloor(float commanded) const;
+  // Wheels-solid speed floor (Open Question 2, resolved; REVISED 131-003 --
+  // see this file's own header). A ratio-preserving scale on the raw wheel
+  // pair, written into speedLeft/speedRight: if the dominant (larger-
+  // magnitude) of rawLeft/rawRight is nonzero and below vMin, both wheels
+  // are scaled by the same factor so the dominant wheel lands at exactly
+  // vMin; otherwise the pair passes through unchanged. A wheel raw-commanded
+  // exactly 0.0f is exactly 0.0f afterward regardless of scaling
+  // (`0 * scale == 0`), so "stop is stop" holds without a special case.
+  void applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
+                       float& speedRight) const;
 
   // Sustained-condition latch for the deficit-flag policy -- mutates
   // `since`/`latched` in place. See drive.cpp's own doc comment.

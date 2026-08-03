@@ -29,6 +29,7 @@
 #include "tests/test_support.h"
 
 using Motion::Move;
+using Motion::MovePhase;
 using Motion::Planner;
 using Motion::PlannerLimits;
 using Motion::TickResult;
@@ -383,6 +384,178 @@ void testAngleDoesNotUndershootAtCompletionUnderSevereTrackingLag() {
   CHECK(error >= -gate);
 }
 
+// ---- 131-006: decelLatched releases on a re-measured rise ----
+//
+// Motion::Planner::planWheels()'s `decelLatched` used to be a pure one-way
+// ratchet: once any tick's profileStep() classified the binding wheel
+// Decel/Closing, EVERY later tick was clamped to that decision and forced
+// to Decel for the rest of the Move -- even when a LATER tick's own
+// from-scratch recomputation showed the Move was never actually running
+// out of room. That directly contradicted profile.cpp's own "brake as hard
+// as allowed and let re-measurement recover" comment: profileStep() always
+// re-derives its answer from scratch every tick, but the old caller-side
+// latch vetoed that recomputation once tripped.
+//
+// The trip condition reads `measured.plannedRemaining`
+// (planner.cpp's own measure()), a PREDICTION over sample-age and
+// actuationDelay -- exact while the plant holds a steady commanded
+// velocity and samples land every cycle, but transiently WRONG the moment
+// a sample goes stale: the predicted forward advance (commanded velocity
+// times the growing sample age) is subtracted from a FROZEN
+// anchoredRemaining every tick until the next fresh sample lands, so
+// plannedRemaining dips throughout a stale window and pops back up the
+// instant a fresh sample arrives. At a sample staleness aggressive enough
+// -- a fresh sample only every 8th cycle here, beyond dirtyPlant()'s own
+// every-OTHER-cycle convention (this file's own module header already
+// documents sampleDivisor as a knob for exactly this: "a fresh sample
+// lands only every other 50ms cycle... this tier proves the planner
+// survives repeats anyway") -- that dip is large enough to transiently
+// fail profileStep()'s own feasibility test mid-CRUISE, well before the
+// Move is anywhere near its target. trackingLag is left at 1.0 (perfect
+// tracking) deliberately, to isolate the sample-staleness misprediction
+// this ticket's own issue names from the separate tracking-lag defect
+// testTrackingLagSensitivity()/testAngleDoesNotUndershootAt
+// CompletionUnderSevereTrackingLag() above already cover. No velocity
+// noise is injected either -- the LCG in NoisyPlant::noise() is
+// deterministic, but this scenario does not need it to make its point,
+// and leaving it out keeps the repro minimal.
+void testAngle146DegreesRecoversFromTransientDecelLatchTrip() {
+  PlannerLimits limits = noisyLimits();
+  Planner planner(limits);
+  NoisyPlant plant;
+  plant.sampleDivisor = 8;    // fresh sample only every 8th cycle
+  plant.delayedActuation = true;
+  plant.trackingLag = 1.0f;  // perfect tracking -- isolates staleness alone
+
+  const float oneFortySix = 146.0f * static_cast<float>(M_PI) / 180.0f;  // [rad]
+  const float cruiseOmega = 1.0f;  // [rad/s] slow enough that one stale
+                                    // sample's predicted advance is a
+                                    // meaningful fraction of the reachable
+                                    // window
+  CHECK(planner.move(angleMove(6, oneFortySix, cruiseOmega), false));
+
+  Types::RobotState state;
+  uint32_t now = 0;
+  MovePhase previousPhase = MovePhase::Idle;
+  float previousSpeed = 0.0f;  // [mm/s] |cmdVelocity| the tick before a recovery
+  float recoveredSpeed = 0.0f;  // [mm/s] |cmdVelocity| ON the recovery tick
+  bool sawRecovery = false;
+  bool completed = false;
+  TickResult result;
+  int completionTick = -1;
+  for (int i = 0; i < 400 && !completed; ++i) {
+    const float speedBefore = std::fabs(state.wheelLeft.cmdVelocity);
+    result = cycle(planner, state, plant, now, limits.plant.controlPeriod);
+    const MovePhase phase = planner.phase();
+    // THE FINGERPRINT: a tick that was genuinely Decel reverts to
+    // Accel/Hold WITHOUT the Move completing in between. A Move that is
+    // honestly approaching its target only ever decelerates FURTHER
+    // (remaining shrinks monotonically); reverting means the tick that set
+    // Decel was itself a transient misprediction, not a real decision to
+    // brake -- exactly the case profile.cpp's own comment promises
+    // recovers, and the pre-131-006 latch unconditionally forbade. Without
+    // the release fix this branch is unreachable: planWheels() would force
+    // `raw` to Decel and clamp lambda to the frozen previous command for
+    // as long as decelLatched holds, so planner.phase() could never read
+    // back Accel/Hold until the NEXT Move activation resets it.
+    if (!result.completed && previousPhase == MovePhase::Decel &&
+        (phase == MovePhase::Accel || phase == MovePhase::Hold)) {
+      sawRecovery = true;
+      previousSpeed = speedBefore;
+      recoveredSpeed = std::fabs(state.wheelLeft.cmdVelocity);
+    }
+    previousPhase = phase;
+    if (result.completed) {
+      completed = true;
+      completionTick = i;
+    }
+  }
+  CHECK(completed);
+  CHECK(!result.timedOut);
+  CHECK(sawRecovery);
+  // Not just a phase LABEL flip: the command actually climbed back toward
+  // cruise on the recovery tick, proving the latch's clamp -- not merely
+  // its `raw` override -- released.
+  CHECK(recoveredSpeed > previousSpeed + 1.0f);
+
+  const float heading =
+      (plant.positionRight - plant.positionLeft) / limits.plant.trackWidth;
+  const float error = heading - oneFortySix;  // [rad] signed
+  std::printf("  turn 146 deg, transient decel-latch trip (sampleDivisor=8): "
+              "completion tick=%d error %+.5f rad (%+.2f deg)\n",
+              completionTick, error,
+              error * (180.0f / static_cast<float>(M_PI)));
+  // Bounded, not exact -- an 8-cycle-stale sample is a deliberately harsher
+  // scenario than dirtyPlant()'s own every-other-cycle convention. The
+  // point of this test is that the Move recovers and completes close to
+  // target via a genuine profile-complete/settle event rather than parking
+  // short via the 0.5s stall backstop (kStallWindow, planner.cpp) -- a
+  // stalled completion this far from target would miss by an order of
+  // magnitude more than this bound, not by a few degrees.
+  CHECK(std::fabs(error) <= 15.0f * (static_cast<float>(M_PI) / 180.0f));
+}
+
+// 131-006: a chained leg -> 146-degree-turn -> leg sequence under the SAME
+// dirtyPlant()/noisyLimits() this file's other chain test
+// (testChainUnderNoiseAndLag) already uses -- proves the release fix does
+// not regress ordinary (non-pathological) noisy-plant chaining now that
+// the large-angle/chained gap in this tier's own coverage is closed. Each
+// segment is held to its own established per-axis exactness tolerance
+// (one cruise interval's worth, matching every other test in this file),
+// not a single combined bound, so a regression in any ONE segment cannot
+// hide behind another segment's own slack.
+void testChainedLegTurnLegUnderNoiseAndLag() {
+  const PlannerLimits limits = noisyLimits();
+  Planner planner(limits);
+  NoisyPlant plant = dirtyPlant();
+  Types::RobotState state;
+  uint32_t now = 0;
+
+  const float oneFortySix = 146.0f * static_cast<float>(M_PI) / 180.0f;  // [rad]
+  CHECK(planner.move(distanceMove(20, 500.0f, kCruise), false));
+  CHECK(planner.move(angleMove(21, oneFortySix, kCruiseOmega), false));
+  CHECK(planner.move(distanceMove(22, 300.0f, kCruise), false));
+
+  float pathAtLeg1 = 0.0f;
+  float pathAtTurn = 0.0f;
+  float headingAtTurn = 0.0f;
+  int completions = 0;
+  for (int i = 0; i < 1200 && completions < 3; ++i) {
+    const TickResult r = cycle(planner, state, plant, now, kPeriod);
+    if (r.completed) {
+      CHECK(!r.timedOut);
+      ++completions;
+      if (completions == 1) {
+        pathAtLeg1 = 0.5f * (plant.positionLeft + plant.positionRight);
+      } else if (completions == 2) {
+        pathAtTurn = 0.5f * (plant.positionLeft + plant.positionRight);
+        headingAtTurn =
+            (plant.positionRight - plant.positionLeft) / limits.plant.trackWidth;
+      }
+    }
+  }
+  CHECK(completions == 3);
+  for (int i = 0; i < 12; ++i) cycle(planner, state, plant, now, kPeriod);
+  const float pathFinal = 0.5f * (plant.positionLeft + plant.positionRight);
+
+  const float legError = std::fabs(pathAtLeg1 - 500.0f);              // [mm]
+  const float turnError = std::fabs(headingAtTurn - oneFortySix);     // [rad]
+  const float secondLegError = std::fabs((pathFinal - pathAtTurn) - 300.0f);  // [mm]
+
+  const float linearGate = kCruise * kPeriod * 0.001f;       // [mm] one cruise interval
+  const float angularGate = kCruiseOmega * kPeriod * 0.001f;  // [rad] one cruise interval
+  std::printf("  chain leg(500mm)->turn(146deg)->leg(300mm), noisy+stale+lagged:\n"
+              "    leg 1 error %.3f mm (gate %.1f mm)\n"
+              "    turn error %.5f rad / %.2f deg (gate %.3f rad)\n"
+              "    leg 2 error %.3f mm (gate %.1f mm)\n",
+              legError, linearGate, turnError,
+              turnError * (180.0f / static_cast<float>(M_PI)), angularGate,
+              secondLegError, linearGate);
+  CHECK(legError <= linearGate);
+  CHECK(turnError <= angularGate);
+  CHECK(secondLegError <= linearGate);
+}
+
 // ---- item 2: settle-confirm completion (M1) -- DELETED by 130-008 ----
 //
 // The six tests that used to live here (zero-error coincidence on a
@@ -517,6 +690,8 @@ int main() {
   testStandingRobotDoesNotDrift();
   testTrackingLagSensitivity();
   testAngleDoesNotUndershootAtCompletionUnderSevereTrackingLag();
+  testAngle146DegreesRecoversFromTransientDecelLatchTrip();
+  testChainedLegTurnLegUnderNoiseAndLag();
   testHeadingHoldRecoversDisturbance();
   testHeadingHoldOffLeavesDisturbanceStanding();
   testHeadingHoldClampedToVelocityCeiling();

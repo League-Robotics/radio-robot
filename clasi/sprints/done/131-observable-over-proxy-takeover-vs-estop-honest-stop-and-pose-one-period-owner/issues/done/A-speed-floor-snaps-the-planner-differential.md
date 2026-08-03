@@ -1,6 +1,9 @@
 ---
-status: pending
+status: done
 priority: high
+sprint: '131'
+tickets:
+- 131-003
 ---
 
 # `applySpeedFloor()` snaps the planner's differential correction up to vMin — a 3 mm/s trim becomes a ~100 mm/s lurch

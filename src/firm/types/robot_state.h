@@ -91,7 +91,13 @@ struct RobotState {
   // increments each time RobotLoop calls the wheel's existing
   // Devices::Motor::rebaseline() as its raw position nears the wire's
   // sint32/zigzag bound; NOT touched by Devices::Motor/NezhaMotor/
-  // MotorArmor themselves.
+  // MotorArmor themselves. Readers (131-004, position-rebaseline-destroys-
+  // the-pose.md): Motion::Odometry::integrate() and the planner's
+  // Motion::PoseTracker::integrate() both take this field per-wheel and
+  // re-anchor their own delta baseline on a change, instead of
+  // differencing across the rebaseline's ~30,000mm jump -- this is no
+  // longer wire-projection-only (App::Telemetry still also copies it onto
+  // the wire, unchanged).
   struct Wheel {
     float position = 0.0f;      // [mm] Devices::Motor::position()
     float velocity = 0.0f;      // [mm/s] signed, Devices::Motor::velocity()
@@ -179,7 +185,9 @@ struct RobotState {
   // --- Pose --- writer: Motion::Odometry::integrate() (dead-reckoned
   // world pose) plus the same-cycle fused body-frame twist
   // (BodyKinematics::forward() over both wheels' current velocities,
-  // computed inline in RobotLoop's own kPace block). Encoder-only -- never
+  // computed inline in RobotLoop::cycle()'s own trailing pacing block --
+  // 131-005 renamed this from a fixed "kPace" budget to an absolute
+  // end-of-cycle deadline; the block itself is unchanged). Encoder-only -- never
   // OTOS-blended (that blend lives one level up, in `estimate` below).
   // Odometry is the SOLE writer -- no other subsystem may assign into this
   // section. An OTOS-fused pose belongs in `estimate` below, never here.

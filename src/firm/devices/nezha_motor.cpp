@@ -217,6 +217,18 @@ void NezhaMotor::tick(uint64_t nowUs)
     lastPosition_ = pos;
     lastTickUs_ = nowUs;
 
+    // Genuine freshness (131-002, issue A-commanded-zero-leaks-through-
+    // stage-b.md): advance lastFreshUs_ ONLY when THIS tick's collect
+    // actually succeeded -- connected_ was just set by collectEncoder()
+    // above, reflecting both halves of the split-phase transaction. On a
+    // failed collect this is left untouched, so sampleTime() (which
+    // returns lastFreshUs_, not lastTickUs_) continues to report the
+    // last SUCCESSFUL read's timestamp rather than "fresh" on a
+    // disconnected/glitching bus.
+    if (connected_) {
+        lastFreshUs_ = nowUs;
+    }
+
     // 2. Mode dispatch. Mode::Active writes the staged raw duty via
     // writeShapedDuty(); Mode::Neutral writes 0 via writeShapedDuty();
     // Mode::None dispatches nothing.
@@ -535,7 +547,19 @@ void NezhaMotor::softRebaseline()
         encOffset_ += static_cast<int32_t>(rawDeltaF);
     }
     lastPosition_ = 0.0f;
-    velocity_ = 0.0f;
+    // 131-004 (position-rebaseline-destroys-the-pose.md secondary defect):
+    // velocity_ is deliberately NOT zeroed here. This is a SOFTWARE-only
+    // re-anchor of the position baseline -- the plant has not stopped, and
+    // velocity_ already holds this cycle's genuinely-computed rate (tick()
+    // runs before RobotLoop::publishWheel() calls rebaseline(), so
+    // velocity_ is current). Zeroing it made the wheel report 0 mm/s for
+    // 1-2 cycles mid-motion purely because of the software re-anchor, which
+    // Stage B would act on (see A-commanded-zero-leaks-through-stage-b.md).
+    // hasLastTick_ = false below already makes the NEXT tick() treat this
+    // as a fresh baseline-only anchor (no velocity computed THAT tick,
+    // mirroring the boot-anchor case) -- velocity_ naturally holds its last
+    // real value across exactly the boundary cycle, then updates normally
+    // from the new (rebaselined) baseline on the tick after.
     hasLastTick_ = false;
     lastGoodRawEnc_ = 0;
 }

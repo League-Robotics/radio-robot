@@ -1,6 +1,9 @@
 ---
-status: pending
+status: done
 priority: high
+sprint: '131'
+tickets:
+- 131-002
 ---
 
 # "Stop is stop" has a Stage-B-sized hole, and Stage B has no freshness gate

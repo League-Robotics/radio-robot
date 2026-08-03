@@ -5,6 +5,13 @@
 // heading blend). Plain hand-fed values in, plain values out -- no devices,
 // no clock, no RobotState dependency (the Planner is the one place the
 // blackboard is read/written).
+//
+// 131-004 (position-rebaseline-destroys-the-pose.md): PoseTracker::
+// integrate() now also takes each wheel's positionEpoch, mirroring
+// Motion::Odometry::integrate() (src/motion/odometry.h) -- the identical
+// re-anchor-on-epoch-change contract, applied to the planner's own
+// x_/y_/heading_ ledger (which otherwise fed the SAME raw, rebaseline-
+// discontinuous wheel positions into an identical bare-delta computation).
 #pragma once
 
 #include <cstdint>
@@ -51,7 +58,16 @@ class PoseTracker {
   void configure(float trackWidth) { trackWidth_ = trackWidth; }  // [mm]
 
   // Fold the delta since the previous call into the pose. First call seeds.
-  void integrate(float leftPosition, float rightPosition);  // [mm]
+  //
+  // leftEpoch/rightEpoch (131-004): each wheel's current
+  // Types::RobotState::Wheel::positionEpoch -- see Motion::Odometry::
+  // integrate()'s own doc comment (odometry.h) for the full contract. A
+  // per-wheel epoch change re-anchors THAT wheel's lastLeft_/lastRight_ to
+  // the incoming position, crediting zero delta for it this call, tracked
+  // independently per side. A caller with no rebaseline concept passes a
+  // stable (0, 0).
+  void integrate(float leftPosition, float rightPosition, uint8_t leftEpoch,
+                 uint8_t rightEpoch);  // [mm] [mm]
 
   // v1 complementary blend: heading += weight * (otosHeading - heading),
   // shortest-way wrapped.
@@ -62,6 +78,11 @@ class PoseTracker {
   float heading() const { return heading_; }  // [rad] unwrapped
   float pathLength() const { return pathLength_; }  // [mm] unsigned
 
+  // Does NOT touch lastLeftEpoch_/lastRightEpoch_ (131-004) -- see
+  // Motion::Odometry::reset()'s own doc comment (odometry.h) for why: a
+  // pose teleport is orthogonal to the hardware rebaseline epoch, and a
+  // coincident mismatch costs at most one harmless zero-delta re-anchor to
+  // the position already just reset to.
   void reset(float x, float y, float heading);  // [mm] [mm] [rad]
 
  private:
@@ -73,6 +94,12 @@ class PoseTracker {
   float lastLeft_ = 0.0f;      // [mm]
   float lastRight_ = 0.0f;     // [mm]
   bool seeded_ = false;
+
+  // 131-004: mirrors Motion::Odometry's own lastLeftEpoch_/lastRightEpoch_
+  // (odometry.h) -- initialized to 0 to match a fresh
+  // Types::RobotState::Wheel::positionEpoch's own starting value.
+  uint8_t lastLeftEpoch_ = 0;
+  uint8_t lastRightEpoch_ = 0;
 };
 
 }  // namespace Motion

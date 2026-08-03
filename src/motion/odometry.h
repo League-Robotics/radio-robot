@@ -20,7 +20,21 @@
 // caller (App::RobotLoop) at the exact point in the cycle this class used to
 // read them itself. Zero behavior change: the values flowing into
 // integrate() are identical, just handed in rather than pulled.
+//
+// 131-004 (position-rebaseline-destroys-the-pose.md): integrate() now also
+// takes each wheel's positionEpoch (Types::RobotState::Wheel::positionEpoch)
+// -- App::RobotLoop::publishWheel() bumps a wheel's epoch the same cycle it
+// calls Devices::Motor::rebaseline(), which re-anchors that wheel's raw
+// position (a ~30,000mm software-only jump). Before this ticket, integrate()
+// differenced blindly across that jump -- a wheel's positionEpoch changing
+// makes THIS wheel's delta for THIS call exactly zero (re-anchoring
+// lastLeft_/lastRight_ to the incoming position instead of diffing against
+// the pre-rebaseline baseline); left and right are tracked independently, so
+// one wheel rebaselining does not perturb the other's normal diff that same
+// cycle.
 #pragma once
+
+#include <cstdint>
 
 namespace Motion {
 
@@ -50,7 +64,19 @@ class Odometry {
   // fabsf(distance) into pathLength_ unconditionally, every call -- see
   // pathLength()'s own doc comment. Call once per loop cycle, after both
   // leaves' own tick() has run that cycle.
-  void integrate(float leftPosition, float rightPosition);  // [mm] [mm]
+  //
+  // leftEpoch/rightEpoch (131-004): each wheel's current
+  // Types::RobotState::Wheel::positionEpoch. Compared per-wheel against the
+  // epoch last seen (lastLeftEpoch_/lastRightEpoch_, below) -- when a
+  // wheel's epoch has changed since the last call, THAT wheel's delta for
+  // this call is zero (its lastLeft_/lastRight_ baseline re-anchors to the
+  // incoming position instead of differencing across the rebaseline jump);
+  // the other wheel, if its own epoch is unchanged, diffs normally. A
+  // caller with no rebaseline concept (a direct unit test, a harness that
+  // never calls Devices::Motor::rebaseline()) passes a stable literal (0,
+  // 0) and sees unchanged behavior -- see this file's own header.
+  void integrate(float leftPosition, float rightPosition, uint8_t leftEpoch,
+                 uint8_t rightEpoch);  // [mm] [mm]
 
   float x() const { return x_; }          // [mm]
   float y() const { return y_; }          // [mm]
@@ -85,7 +111,13 @@ class Odometry {
   // today by the host simulator's teleport-to-origin
   // (src/sim/sim_harness.h SimHarness::setTruePose()). Additive: no
   // existing caller's behaviour changes unless it calls reset(). Does NOT
-  // touch pathLength() -- see that accessor's own doc comment above.
+  // touch pathLength() -- see that accessor's own doc comment above. Also
+  // does NOT touch lastLeftEpoch_/lastRightEpoch_ (131-004) -- reset() is a
+  // pose teleport, orthogonal to the hardware rebaseline epoch; a caller
+  // that reset() at the same instant a wheel's epoch happened to change
+  // sees at most one extra zero-delta integrate() call afterward (the
+  // epoch mismatch re-anchors that wheel to the position it was ALREADY
+  // just reset to -- a harmless no-op, never a discontinuity).
   void reset(float x, float y, float theta, float leftPosition, float rightPosition);  // [mm] [mm] [rad] [mm] [mm]
 
  private:
@@ -93,6 +125,15 @@ class Odometry {
 
   float lastLeft_ = 0.0f;   // [mm] delta baseline -- see constructor comment
   float lastRight_ = 0.0f;  // [mm]
+
+  // 131-004: the last positionEpoch seen per wheel, so integrate() can tell
+  // "this wheel just rebaselined" from "ordinary cycle" independently per
+  // side. Initialized to 0 to match the constructor's own implicit
+  // assumption (a fresh Types::RobotState::Wheel::positionEpoch starts at
+  // 0) -- a caller that never rebaselines and always passes (0, 0) never
+  // sees a mismatch.
+  uint8_t lastLeftEpoch_ = 0;
+  uint8_t lastRightEpoch_ = 0;
 
   float x_ = 0.0f;      // [mm]
   float y_ = 0.0f;      // [mm]

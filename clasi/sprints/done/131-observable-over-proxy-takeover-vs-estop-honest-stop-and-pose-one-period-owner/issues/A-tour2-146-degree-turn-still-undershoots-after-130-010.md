@@ -1,6 +1,9 @@
 ---
-status: pending
+status: in-progress
 priority: high
+sprint: '131'
+tickets:
+- 131-006
 ---
 
 # TOUR_2's 146-degree turn still undershoots ~10 deg after the 130-010 completion fix

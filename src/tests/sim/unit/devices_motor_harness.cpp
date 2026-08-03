@@ -944,12 +944,19 @@ void scenarioExplicitZeroWriteShapingIsPassThrough() {
 }
 
 // sampleTime() (124-002, protocol-v5 §B2 prerequisite) -- 125-003: with the
-// freshness gate deleted, sampleTime() now simply reports the nowUs of the
-// most recent tick() call (see nezha_motor.h's own doc comment) -- this is
-// the accessor the wire's `enc_left`/`enc_right` age fields read; ticket
-// 004's App::WheelObserver will restore a real per-sample age.
+// freshness gate deleted, sampleTime() simply reported the nowUs of the most
+// recent tick() call. 131-002 (issue A-commanded-zero-leaks-through-stage-
+// b.md) narrowed that: sampleTime() now returns lastFreshUs_, which advances
+// ONLY on a tick whose collect actually succeeded -- on the HEALTHY path
+// this scenario exercises (every collect below succeeds), that is still
+// indistinguishable from "the most recent tick() call's own nowUs," so this
+// scenario's own assertions are unchanged; see
+// scenarioSampleTimeHoldsLastSuccessfulCollectAcrossFailedCollects() below
+// for the failed-collect contrast. This is the accessor the wire's
+// `enc_left`/`enc_right` age fields read; ticket 004's App::WheelObserver
+// will restore a real per-sample estimator on top of it.
 void scenarioSampleTimeReflectsMostRecentTick() {
-  beginScenario("sampleTime() reflects the most recent tick() call's own nowUs");
+  beginScenario("sampleTime() reflects the most recent tick() call's own nowUs (healthy path)");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
@@ -972,6 +979,145 @@ void scenarioSampleTimeReflectsMostRecentTick() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the run");
 }
 
+// 12. NEW (131-002, issue A-commanded-zero-leaks-through-stage-b.md): a
+//     failed encoder collect (connected_ false -- the scripted read below
+//     NAKs, so collectEncoder()'s own `connected_ = pendingEncRequestOk_ &&
+//     (readResult == kOk)` comes back false) must NOT advance sampleTime().
+//     lastFreshUs_ holds the last SUCCESSFUL collect's timestamp across one
+//     or more failing ticks in a row, then resumes advancing once a collect
+//     succeeds again. Contrasts directly with
+//     scenarioSampleTimeReflectsMostRecentTick() above, which covers the
+//     healthy path where every collect succeeds. velocity_'s own diffing
+//     behavior is untouched by this fix (not re-asserted here beyond the
+//     existing scenarios above) -- this scenario is scoped to the
+//     freshness timestamp only, per the ticket's own acceptance criterion.
+void scenarioSampleTimeHoldsLastSuccessfulCollectAcrossFailedCollects() {
+  beginScenario("sampleTime() holds the last successful collect's timestamp across failed "
+                "collects (131-002)");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();
+  Devices::NezhaMotor motor(plant, cfg);
+
+  // Baseline: a genuinely successful collect at nowUs=0.
+  scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
+  motor.requestSample();
+  motor.tick(0);
+  checkTrue(motor.connected(), "baseline collect succeeds");
+  checkTrue(motor.sampleTime() == 0, "sampleTime() reflects the baseline successful collect");
+
+  // A second successful collect advances sampleTime() normally -- confirms
+  // the healthy reference behavior before introducing the failure below.
+  scriptEncoderRequestCollect(bus, wireAddr, 5.0f);
+  motor.requestSample();
+  motor.tick(20000);
+  checkTrue(motor.connected(), "second collect also succeeds");
+  checkTrue(motor.sampleTime() == 20000, "sampleTime() advances on a second successful collect");
+
+  // A failed collect: requestEncoder()'s own 0x46 write succeeds
+  // (pendingEncRequestOk_ true), but the read collectEncoder() performs
+  // NAKs -- connected_ becomes false. Must NOT advance sampleTime(), across
+  // TWO consecutive failing ticks.
+  uint8_t garbage[4] = {0, 0, 0, 0};
+  bus.queueWrite(wireAddr, /*status=*/0);              // requestEncoder()'s 0x46 write succeeds
+  bus.queueRead(wireAddr, garbage, 4, /*status=*/-5);  // collectEncoder()'s read NAKs
+  motor.requestSample();
+  motor.tick(40000);
+  checkTrue(!motor.connected(), "the scripted read failure reports disconnected");
+  checkTrue(motor.sampleTime() == 20000,
+            "sampleTime() holds the LAST SUCCESSFUL collect's timestamp across a failed collect, "
+            "not the failed attempt's own nowUs (40000)");
+
+  bus.queueWrite(wireAddr, /*status=*/0);
+  bus.queueRead(wireAddr, garbage, 4, /*status=*/-5);
+  motor.requestSample();
+  motor.tick(60000);
+  checkTrue(!motor.connected(), "a second consecutive failed collect also reports disconnected");
+  checkTrue(motor.sampleTime() == 20000,
+            "sampleTime() still holds the last successful collect's timestamp across TWO "
+            "consecutive failing ticks");
+
+  // A subsequent successful collect resumes advancing sampleTime() normally.
+  scriptEncoderRequestCollect(bus, wireAddr, 8.0f);
+  motor.requestSample();
+  motor.tick(80000);
+  checkTrue(motor.connected(), "collect recovers");
+  checkTrue(motor.sampleTime() == 80000,
+            "sampleTime() resumes advancing once the collect succeeds again");
+}
+
+// 131-004 (position-rebaseline-destroys-the-pose.md secondary defect):
+// rebaseline()/softRebaseline() re-anchors position() to 0.0f but must NOT
+// zero velocity() -- this is a SOFTWARE-only re-anchor of the position
+// baseline mid-motion, not a real stop, and velocity_ already holds THIS
+// cycle's own genuinely-computed rate (tick() always runs before
+// App::RobotLoop::publishWheel() calls rebaseline() the same cycle).
+// Before this ticket, softRebaseline() also wrote velocity_ = 0.0f, so a
+// wheel reported 0 mm/s for 1-2 cycles purely because of the re-anchor --
+// which Stage B would act on as a genuine stop
+// (A-commanded-zero-leaks-through-stage-b.md).
+void scenarioRebaselinePreservesVelocityAcrossTheBoundary() {
+  beginScenario("rebaseline() preserves velocity() across the software re-anchor (131-004)");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor motor(plant, baseNezhaConfig());
+
+  // Two paired cycles establish a real, nonzero velocity -- mirrors
+  // scenarioRequestCollectPairingYieldsExpectedPositionVelocity() above.
+  scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
+  motor.requestSample();
+  motor.tick(0);
+
+  scriptEncoderRequestCollect(bus, wireAddr, 10.0f);
+  motor.requestSample();
+  motor.tick(20000);  // 20ms later
+
+  checkFloatEq(motor.velocity(), 500.0f, "velocity established pre-rebaseline (10mm / 20ms)",
+               1e-6f);
+
+  // Simulates App::RobotLoop::publishWheel() calling rebaseline() this same
+  // cycle, once this tick's own already-collected position crosses the
+  // rebaseline margin.
+  motor.rebaseline();
+
+  checkFloatEq(motor.position(), 0.0f, "rebaseline() re-anchors position() to 0", 1e-6f);
+  checkTrue(motor.velocity() != 0.0f,
+            "velocity() is NOT zeroed by rebaseline() -- it still holds the last genuinely "
+            "computed value across the boundary cycle (was zeroed pre-131-004)");
+  checkFloatEq(motor.velocity(), 500.0f,
+               "velocity() is UNCHANGED by rebaseline(), not merely nonzero -- it holds exactly "
+               "this cycle's own already-computed rate",
+               1e-6f);
+
+  // The first post-rebaseline tick's own collect is a fresh baseline-only
+  // anchor off the rebaselined position (hasLastTick_ was reset to false
+  // by rebaseline()) -- no velocity is (re-)computed THAT tick either,
+  // mirroring the boot-anchor case
+  // (scenarioVelocityReadsZeroUntilTwoValidSamplesCollected() above):
+  // velocity() simply continues holding its last real value.
+  scriptEncoderRequestCollect(bus, wireAddr, 0.5f);
+  motor.requestSample();
+  motor.tick(40000);
+  checkFloatEq(motor.velocity(), 500.0f,
+               "the first post-rebaseline tick is a baseline-only anchor -- velocity() still "
+               "holds its last real value, not yet re-derived from the new baseline",
+               1e-6f);
+
+  // The SECOND post-rebaseline tick resumes computing a real difference
+  // quotient off the new (rebaselined) baseline.
+  scriptEncoderRequestCollect(bus, wireAddr, 1.5f);
+  motor.requestSample();
+  motor.tick(60000);
+  checkFloatEq(motor.velocity(), 50.0f,
+               "velocity() resumes a real difference quotient off the rebaselined baseline "
+               "(1.0mm / 20ms) once a second post-rebaseline sample lands",
+               1e-6f);
+}
+
 }  // namespace
 
 int main() {
@@ -988,6 +1134,8 @@ int main() {
   scenarioReconfigureGuardedWholeConfigReplacement();
   scenarioExplicitZeroWriteShapingIsPassThrough();
   scenarioSampleTimeReflectsMostRecentTick();
+  scenarioSampleTimeHoldsLastSuccessfulCollectAcrossFailedCollects();
+  scenarioRebaselinePreservesVelocityAcrossTheBoundary();
 
   if (g_failureCount == 0) {
     std::printf("OK: all devices motor scenarios passed\n");

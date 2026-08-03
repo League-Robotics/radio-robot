@@ -65,7 +65,9 @@ void testBreakawayThenTracking() {
 
   // Next tick: a fresh, genuinely-moving sample lands (the accel ramp's
   // first step is well above the 5 mm/s rest floor on a perfect plant),
-  // so the Move has measurably left rest -- one-way, like decelLatched.
+  // so the Move has measurably left rest -- one-way (unlike `decelLatched`,
+  // which 131-006 made a conditional latch -- see planner.cpp's
+  // Planner::planWheels() doc comment).
   cycle(planner, state, plant, now, kPeriod);
   CHECK(planner.lifecycle() == MoveLifecycle::Tracking);
 }

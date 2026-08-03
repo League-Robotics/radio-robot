@@ -1,6 +1,9 @@
 ---
-status: pending
+status: done
 priority: high
+sprint: '131'
+tickets:
+- 131-001
 ---
 
 # Ownership handover is implemented as `estop()`: every accepted MOVE wipes the wheel controller's learned state

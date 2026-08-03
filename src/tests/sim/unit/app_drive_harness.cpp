@@ -612,6 +612,211 @@ void scenarioFastPidSteadyGateAndAntiWindup() {
 }
 
 // ===========================================================================
+// 131-002 (issue A-commanded-zero-leaks-through-stage-b.md): commanded-zero
+// through Stage B, and Stage B's own freshness gate. correctedCommand()'s
+// `desired == 0.0f` guard (Stage A) has NO effect on Stage B -- fastPid() is
+// a fully separate computation on MEASURED velocity, so a wheel that has not
+// yet coasted to rest keeps a nonzero err even after its commanded speed
+// reaches exactly 0. The two scenarios below prove: (1) a commanded-zero
+// wheel writes exactly 0 duty every tick regardless of a pre-wound
+// integrator, and that integrator is FROZEN (not reset) across the whole
+// zero period; (2) a stale/disconnected/frozen wheel's integrator likewise
+// stays frozen rather than winding against a manufactured zero-velocity
+// reading (the same freshness conjunct Stage C's adaptBias() already uses).
+// ===========================================================================
+
+// 9. Commanded speed exactly 0.0f -> Stage B's contribution and the written
+//    duty are exactly 0.0 every tick, no matter how long, regardless of the
+//    integrator's retained value -- and the integrator is FROZEN (not
+//    reset): re-commanding the ORIGINAL nonzero speed/error afterward
+//    resumes from at least the pre-zero pid value, never from scratch.
+void scenarioCommandedZeroForcesStageBToZeroAndFreezesIntegrator() {
+  beginScenario("Stage B: commanded-zero forces the contribution and written duty to exactly 0.0, "
+                "and FREEZES (does not reset) the integrator across the zero period (131-002)");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
+
+  App::Drive::ControlGains gains;
+  gains.kp = 0.05f;
+  gains.ki = 0.5f;
+  gains.iMax = 50.0f;
+  gains.kaff = 0.0f;
+  gains.pidMax = 40.0f;  // reachable within this test's winding budget (see Phase 1 below)
+  drive.setControlGains(gains);
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.aSteady = 50.0f;  // [mm/s^2] -- cmdAccel always 0 below, so always "steady"
+  // tauAdapt left at 0 (all-zero default) -- Stage C stays off, isolating Stage B.
+  drive.setAdaptationBounds(bounds);
+
+  const float cmd = 200.0f;  // [mm/s] commanded cruise speed
+  uint32_t now = 1000;
+
+  // Phase 1: wind the integrator to a known, comfortably-nonzero value
+  // (pins at pidMax=40 well within 10 cycles -- see
+  // scenarioFastPidSteadyGateAndAntiWindup()'s own arithmetic, identical
+  // gains/error) under a persistent, steady error.
+  for (int i = 0; i < 10; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = cmd;
+    state.wheelLeft.velocity = 0.0f;  // stalled: a large, persistent error
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;  // [us] -- dt = 0.05s
+    drive.tick(state);
+    now += 50;
+  }
+  const float pidBeforeZero = drive.pidLeft();
+  checkTrue(pidBeforeZero > 1.0f,
+           "setup: the integrator actually wound up to a nonzero value before the zero period");
+
+  // Phase 2: command exactly zero for many ticks -- Stage B's contribution
+  // and the written duty must be EXACTLY zero every single tick, regardless
+  // of the integrator's retained (nonzero) value.
+  for (int i = 0; i < 20; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = 0.0f;
+    state.wheelLeft.velocity = 0.0f;
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;
+    drive.tick(state);
+    checkFloatEq(drive.pidLeft(), 0.0f,
+                "commanded-zero: Stage B's contribution is exactly 0.0, every tick");
+    checkFloatEq(left.lastDutyCmd, 0.0f,
+                "commanded-zero: written duty is exactly 0.0, every tick");
+    now += 50;
+  }
+
+  // Phase 3: re-command the ORIGINAL nonzero speed/error for exactly one
+  // tick. If the integrator had been RESET to 0 during the zero period, this
+  // tick's pid would be far below pidBeforeZero (starting from scratch). It
+  // is instead FROZEN at its pre-zero value throughout Phase 2, so this
+  // tick's pid must be at least pidBeforeZero.
+  Types::RobotState resumeState;
+  resumeState.wheelLeft.cmdVelocity = cmd;
+  resumeState.wheelLeft.velocity = 0.0f;
+  resumeState.wheelLeft.connected = true;
+  resumeState.wheelLeft.sampleTime = now - 10;
+  resumeState.time.cycleStart = now;
+  resumeState.time.cyclePeriod = 50000;
+  drive.tick(resumeState);
+  checkTrue(drive.pidLeft() >= pidBeforeZero - 1e-3f,
+           "resumed motion: pid picks up from at least the pre-zero value -- the integrator was "
+           "FROZEN across the commanded-zero period, not reset to 0");
+}
+
+// 10. A stale/disconnected/frozen wheel's Stage B integrator stays FROZEN
+//     (never winds), sharing the SAME freshness conjunct Stage C's
+//     adaptBias() already required (connected/wheelFrozenLeft/sampleTime
+//     age) -- exercised as three independent failure modes, each proven by
+//     the p-term-only value staying IDENTICAL across many ticks under a
+//     persistent error (mirrors scenarioFastPidSteadyGateAndAntiWindup()'s
+//     own ramping-phase proof technique).
+void scenarioStaleDisconnectedOrFrozenWheelFreezesStageBIntegrator() {
+  beginScenario("Stage B: a stale/disconnected/frozen wheel's integrator stays FROZEN, never "
+                "winding against a manufactured reading (131-002)");
+
+  App::Drive::ControlGains gains;
+  gains.kp = 0.05f;
+  gains.ki = 0.5f;
+  gains.iMax = 50.0f;
+  gains.kaff = 0.0f;
+  gains.pidMax = 40.0f;
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.aSteady = 50.0f;  // [mm/s^2]
+
+  const float cmd = 200.0f;  // [mm/s]
+  const float kExpectedPOnly = gains.kp * cmd;  // 10.0 -- integrator frozen at 0, no feed term
+
+  // (a) disconnected -- state.wheelLeft.connected == false throughout.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setControlGains(gains);
+    drive.setAdaptationBounds(bounds);
+
+    uint32_t now = 1000;
+    for (int i = 0; i < 20; ++i) {
+      Types::RobotState state;
+      state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.velocity = 0.0f;  // manufactured zero on a failed collect -- large "error"
+      state.wheelLeft.connected = false;  // disconnected -- NOT fresh
+      state.wheelLeft.sampleTime = now - 10;
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;
+      drive.tick(state);
+      checkFloatEq(drive.pidLeft(), kExpectedPOnly,
+                  "disconnected: pid is p-term only, no integral growth -- Stage B never winds "
+                  "against a disconnected wheel");
+      now += 50;
+    }
+  }
+
+  // (b) stale sample age -- connected, but sampleTime()'s implied age
+  //     exceeds kMaxSampleAge (200ms), the same "not fresh" conjunct via a
+  //     different failure mode.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setControlGains(gains);
+    drive.setAdaptationBounds(bounds);
+
+    uint32_t now = 1000;
+    for (int i = 0; i < 20; ++i) {
+      Types::RobotState state;
+      state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.velocity = 0.0f;
+      state.wheelLeft.connected = true;
+      state.wheelLeft.sampleTime = 0;  // ancient -- age (cycleStart - 0) always >> 200ms here
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;
+      drive.tick(state);
+      checkFloatEq(drive.pidLeft(), kExpectedPOnly,
+                  "stale sample age: pid is p-term only, no integral growth");
+      now += 50;
+    }
+  }
+
+  // (c) frozen (Health::wheelFrozenLeft) -- the third fresh conjunct.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setControlGains(gains);
+    drive.setAdaptationBounds(bounds);
+
+    uint32_t now = 1000;
+    for (int i = 0; i < 20; ++i) {
+      Types::RobotState state;
+      state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.velocity = 0.0f;
+      state.wheelLeft.connected = true;
+      state.wheelLeft.sampleTime = now - 10;  // fresh BY AGE ...
+      state.health.wheelFrozenLeft = true;    // ... but frozen -- still NOT fresh
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;
+      drive.tick(state);
+      checkFloatEq(drive.pidLeft(), kExpectedPOnly,
+                  "frozen wheel: pid is p-term only, no integral growth");
+      now += 50;
+    }
+  }
+}
+
+// ===========================================================================
 // 8. 130-005 AC#2: a WHEELS teleop command and a planner Move both reach the
 // SAME Drive controller path -- Drive's tick() reads only state.wheelLeft/
 // Right.cmdVelocity/cmdAccel/velocity, with NO knowledge of which subsystem
@@ -723,6 +928,658 @@ void scenarioWheelsAndMoveReachIdenticalDriveBehavior() {
            "bias actually adapted over the run on both paths (not a no-op check)");
 }
 
+// ===========================================================================
+// 9. 131-001 (SUC-131-001, sprint 131 Design Rationale Decisions 1/2):
+// Drive::takeover() vs Drive::estop() -- takeover() preserves Stage B's
+// integrator, Stage C's bias, and the deficit latch (an ownership handover,
+// not a safety event); estop() still fully resets all three (a genuine
+// panic path). Both verbs' distinct post-conditions are asserted side by
+// side in this ONE scenario, per this ticket's own testing plan -- a
+// regression guard against a future edit silently re-merging them.
+// ===========================================================================
+
+void scenarioTakeoverPreservesLearnedStateEstopFullyResets() {
+  beginScenario("131-001: takeover() preserves Stage B's integrator, Stage C's bias, and the "
+                "deficit latch; estop() still fully resets all three -- both verbs' distinct "
+                "post-conditions side by side");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
+
+  App::Drive::ControlGains gains;
+  gains.kp = 0.5f;
+  gains.ki = 2.0f;
+  gains.iMax = 40.0f;
+  gains.pidMax = 40.0f;
+  drive.setControlGains(gains);
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.biasMax = 60.0f;
+  bounds.tauAdapt = 0.3f;
+  bounds.aSteady = 100.0f;
+  bounds.deficitThreshold = 1.0f;  // deliberately tiny -- trips easily under a persistent error
+  bounds.deficitWindow = 10.0f;    // [ms] -- a couple of 50ms ticks is already past this
+  drive.setAdaptationBounds(bounds);
+
+  // A real WHEELS-style armed command, so takeover()/estop()'s "disarm" half
+  // has something genuine to disarm (owns() true beforehand).
+  drive.command(200.0f, 200.0f, /*duration=*/100000.0f, /*moveId=*/1, /*now=*/500);
+  checkTrue(drive.owns(), "setup: a WHEELS command is armed (owns() true) before either verb");
+
+  // Drive a sustained, deliberately unclosable error (plant held at 0
+  // velocity throughout, cmd=200) so Stage B's integrator winds up, Stage
+  // C's bias saturates, and the deficit latch trips -- all THREE pieces of
+  // "learned state" land at a known, nonzero/true value before either verb
+  // is exercised.
+  uint32_t now = 1000;
+  for (int i = 0; i < 200; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = 200.0f;
+    state.wheelLeft.velocity = 0.0f;  // stalled -- persistent, unclosable error
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;
+    drive.tick(state);
+    now += 50;
+  }
+
+  const float biasBefore = drive.biasLeft();
+  checkTrue(std::fabs(biasBefore) > 1.0f, "setup: bias genuinely adapted away from 0");
+  checkTrue(drive.deficitLeft(), "setup: the deficit flag latched under the sustained, unclosable error");
+  checkTrue(std::fabs(drive.pidLeft()) > 1.0f, "setup: Stage B's fast PID output is genuinely nonzero");
+
+  // --- Phase 1: takeover() -- learned state must be UNCHANGED. ---
+  drive.takeover();
+  checkFloatEq(drive.targetLeft(), 0.0f, "takeover() zeroes targetLeft_");
+  checkFloatEq(drive.targetRight(), 0.0f, "takeover() zeroes targetRight_");
+  checkTrue(!drive.owns(), "takeover() disarms the WHEELS command (owns() false)");
+  checkFloatEq(drive.biasLeft(), biasBefore, "takeover() leaves biasLeft_ UNCHANGED");
+  checkTrue(drive.deficitLeft(), "takeover() leaves the deficit latch UNCHANGED (still true)");
+
+  // --- Phase 2: estop() -- the SAME learned state must now be fully reset,
+  // in contrast to Phase 1 above. ---
+  drive.estop();
+  checkFloatEq(drive.targetLeft(), 0.0f, "estop() also zeroes targetLeft_");
+  checkFloatEq(drive.targetRight(), 0.0f, "estop() also zeroes targetRight_");
+  checkTrue(!drive.owns(), "estop() also disarms the WHEELS command");
+  checkFloatEq(drive.biasLeft(), 0.0f, "estop() resets biasLeft_ to 0 -- distinct from takeover()");
+  checkTrue(!drive.deficitLeft(), "estop() clears the deficit latch -- distinct from takeover()");
+
+  // A subsequent tick() under the SAME stalled/unreachable conditions
+  // confirms Stage B's integrator was genuinely zeroed too: the very next
+  // tick's pid is p-term only (integral fresh at 0, feed/kaff==0 here),
+  // not still carrying whatever the pre-estop() integrator had wound up to.
+  Types::RobotState state;
+  state.wheelLeft.cmdVelocity = 200.0f;
+  state.wheelLeft.velocity = 0.0f;
+  state.wheelLeft.connected = true;
+  state.wheelLeft.sampleTime = now - 10;
+  state.time.cycleStart = now;
+  state.time.cyclePeriod = 50000;
+  drive.tick(state);
+  // p-only (integral freshly 0) is kp*200 == 100, which exceeds pidMax (40)
+  // and is clamped there -- the SAME clamp the pre-estop() saturated
+  // integrator was already pinned against, so this single-tick check can't
+  // distinguish "integral still 40-ish" from "integral genuinely 0" by
+  // magnitude alone. checkIntegralGenuinelyZeroed() below does that
+  // properly, by comparing against a FRESH Drive that never wound up at
+  // all.
+  checkFloatEq(drive.pidLeft(), gains.pidMax,
+              "estop() leaves the fast PID pinned at +pidMax on the very next tick (p-term alone "
+              "already exceeds pidMax under this persistent error)");
+
+  // The real proof that pidIntegralLeft_ was genuinely zeroed (not just
+  // "still clamped, coincidentally at the same value"): a FRESH Drive,
+  // whose integrator was NEVER wound up, produces the IDENTICAL pid output
+  // under the identical one-tick input -- if estop() had left the old
+  // integral in place, the post-estop() drive would clamp at the same
+  // +pidMax too (since pidMax dominates either way at this error size), so
+  // this comparison instead uses a smaller error where the unclamped p+i
+  // sum is observable.
+  MockMotor freshLeft;
+  MockMotor freshRight;
+  App::Drive freshDrive(freshLeft, freshRight, trackWidth);
+  freshDrive.setDutyPerSpeed(1.0f, 1.0f);
+  freshDrive.setControlGains(gains);
+  freshDrive.setAdaptationBounds(bounds);
+  Types::RobotState smallErrState;
+  smallErrState.wheelLeft.cmdVelocity = 10.0f;  // small enough that p+i stays well under pidMax
+  smallErrState.wheelLeft.velocity = 0.0f;
+  smallErrState.wheelLeft.connected = true;
+  smallErrState.wheelLeft.sampleTime = now - 10;
+  smallErrState.time.cycleStart = now;
+  smallErrState.time.cyclePeriod = 50000;
+  freshDrive.tick(smallErrState);
+
+  drive.estop();  // re-zero drive's integrator again (Phase 2 already did this once above)
+  drive.tick(smallErrState);
+  checkFloatEq(drive.pidLeft(), freshDrive.pidLeft(),
+              "post-estop() pid under a small error matches a NEVER-wound-up fresh Drive exactly -- "
+              "the integrator was genuinely zeroed, not merely re-clamped to the same ceiling");
+}
+
+// ===========================================================================
+// 10. 131-001: takeover() must not touch the estop()-armed stop-reassertion
+// countdown (stopEnforceCountdown_, 129-001) either -- it has no public
+// getter, so this scenario observes it INDIRECTLY through tick()'s own
+// re-assertion behavior (scenario 3 above establishes that mechanism):
+// consume part of an estop()-armed countdown, call takeover(), then confirm
+// EXACTLY the remaining ticks still force a write (neither reset to 0 --
+// which would go quiet immediately -- nor re-armed to the full
+// kStopEnforceTicks -- which would force MORE writes than remain).
+// ===========================================================================
+
+void scenarioTakeoverDoesNotTouchStopReassertionCountdown() {
+  beginScenario("131-001: takeover() leaves the estop()-armed stop-reassertion countdown "
+                "untouched -- neither reset to 0 nor re-armed");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);
+
+  drive.tick(wheelCmd(0.5f, 0.5f));  // a real nonzero write, so estop() below is a genuine transition
+  drive.estop();                    // arms stopEnforceCountdown_ = kStopEnforceTicks (30, drive.h)
+
+  left.setMockVelocity(0.0f);   // at rest throughout -- isolates the COUNTDOWN half of enforceStop
+  right.setMockVelocity(0.0f);  // from the wheelsMoving half (scenario 3 above covers that half)
+
+  constexpr int kStopEnforceTicks = 30;  // drive.h's own kStopEnforceTicks -- duplicated per this
+                                          // codebase's established fixture convention (private, no
+                                          // accessor) -- see e.g. sim_api_harness.cpp's kSettle/kClear.
+  const int kConsumed = 5;
+  for (int i = 0; i < kConsumed; ++i) drive.tick(wheelCmd(0.0f, 0.0f));
+
+  drive.takeover();  // must NOT touch stopEnforceCountdown_
+
+  // If takeover() left the countdown alone, exactly (kStopEnforceTicks -
+  // kConsumed) more tick() calls re-issue setDuty(0) before the
+  // quiet-at-zero shortcut resumes; landing anywhere else (0 more -- reset
+  // to 0; kStopEnforceTicks more -- re-armed) falsifies the AC.
+  const int kRemaining = kStopEnforceTicks - kConsumed;
+  int callsBefore = left.setDutyCalls;
+  for (int i = 0; i < kRemaining; ++i) drive.tick(wheelCmd(0.0f, 0.0f));
+  checkTrue(left.setDutyCalls == callsBefore + kRemaining,
+           "the remaining (kStopEnforceTicks - already-consumed) re-assertion ticks still fire "
+           "after takeover() -- the countdown was neither reset nor re-armed");
+
+  callsBefore = left.setDutyCalls;
+  drive.tick(wheelCmd(0.0f, 0.0f));  // one more, past the countdown -- quiet shortcut should resume
+  checkTrue(left.setDutyCalls == callsBefore,
+           "the quiet-at-zero shortcut resumes exactly when the ORIGINAL estop()-armed countdown "
+           "would have elapsed -- confirms takeover() didn't re-arm it");
+}
+
+// ===========================================================================
+// 11. 131-001 (review C3, Design Rationale Decision 2): a bias converged
+// under sustained FORWARD motion must not REDUCE a subsequent REVERSE
+// command's magnitude relative to bias==0 -- the sign-aware, magnitude-
+// domain bias fix in correctedCommand().
+// ===========================================================================
+
+void scenarioReversalAfterConvergedForwardBiasDoesNotReduceMagnitude() {
+  beginScenario("131-001 (review C3, Decision 2): a bias converged under sustained FORWARD motion "
+                "does not reduce a subsequent REVERSE command's magnitude relative to bias==0");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity: duty == corrected command
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.biasMax = 60.0f;
+  bounds.tauAdapt = 0.3f;
+  bounds.aSteady = 100.0f;
+  drive.setAdaptationBounds(bounds);
+
+  // Converge bias forward under a known under-delivering plant (mirrors
+  // scenarioBiasConvergesUnderKnownPlantGainError above).
+  const float cmd = 200.0f;
+  const float plantGain = 0.8f;
+  uint32_t now = 1000;
+  float measured = plantGain * cmd;
+  for (int i = 0; i < 400; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = cmd;
+    state.wheelLeft.velocity = measured;
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;
+    drive.tick(state);
+    measured = plantGain * (cmd + drive.biasLeft());
+    now += 50;
+  }
+  const float convergedBias = drive.biasLeft();
+  checkTrue(convergedBias > 5.0f, "setup: a genuinely positive bias converged under forward motion");
+
+  // Freeze Stage C (tauAdapt=0, the "0 = off" convention) so the reverse
+  // command below exercises ONLY correctedCommand()'s bias application,
+  // not further adaptation.
+  App::Drive::AdaptationBounds frozen;  // tauAdapt=0 default -- adaptation off, bias held
+  drive.setAdaptationBounds(frozen);
+  checkFloatEq(drive.biasLeft(), convergedBias,
+              "setup: freezing adaptationBounds does not itself reset the already-converged bias");
+
+  // A second, otherwise-identical Drive with bias == 0 (adaptation was
+  // never on) -- the uncorrected baseline this scenario compares against.
+  MockMotor left0;
+  MockMotor right0;
+  App::Drive driveZeroBias(left0, right0, trackWidth);
+  driveZeroBias.setDutyPerSpeed(1.0f, 1.0f);
+  driveZeroBias.setAdaptationBounds(frozen);
+
+  const float reverseCmd = -150.0f;
+  Types::RobotState reverseState;
+  reverseState.wheelLeft.cmdVelocity = reverseCmd;
+  reverseState.wheelLeft.velocity = 0.0f;
+  reverseState.wheelLeft.connected = true;
+  reverseState.wheelLeft.sampleTime = now - 10;
+  reverseState.time.cycleStart = now;
+  reverseState.time.cyclePeriod = 50000;
+
+  drive.tick(reverseState);
+  driveZeroBias.tick(reverseState);
+
+  const float reverseMagnitudeWithBias = std::fabs(left.lastDutyCmd);
+  const float reverseMagnitudeUncorrected = std::fabs(left0.lastDutyCmd);
+  checkTrue(reverseMagnitudeWithBias >= reverseMagnitudeUncorrected - 1e-3f,
+           "the reverse command's magnitude with the forward-converged bias is NOT reduced "
+           "relative to bias==0 -- the fix must not make reverse magnitude worse than uncorrected");
+  // Not a trivially-passing check: the corrected magnitude is measurably
+  // BOOSTED (bias > 0 helps, matching Decision 2's own physical claim), not
+  // merely "equal by coincidence."
+  checkTrue(reverseMagnitudeWithBias > reverseMagnitudeUncorrected + 1.0f,
+           "the bias genuinely BOOSTS the reverse command's magnitude (not just a no-op pass)");
+}
+
+// ===========================================================================
+// 12. 131-001 (sprint success criteria): a converged Stage C bias survives
+// MULTIPLE chained takeover() calls (2+ leg boundaries, equivalent to a
+// tour) -- never resets to 0 at any boundary. See also
+// src/tests/sim/system/sim_api_harness.cpp's own chained-MOVE scenario for
+// the same property proven through the REAL RobotLoop::handleMove() call
+// site over the full composition root.
+// ===========================================================================
+
+void scenarioBiasPersistsAcrossChainedTakeoverBoundaries() {
+  beginScenario("131-001: a converged Stage C bias survives THREE chained takeover() calls (2+ "
+                "leg boundaries, equivalent to a tour) -- never resets to 0 at any boundary");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.biasMax = 60.0f;
+  bounds.tauAdapt = 0.4f;
+  bounds.aSteady = 100.0f;
+  drive.setAdaptationBounds(bounds);
+
+  const float cmd = 200.0f;
+  const float plantGain = 0.8f;
+  uint32_t now = 1000;
+  float measured = plantGain * cmd;
+
+  auto runLeg = [&](int cycles) {
+    for (int i = 0; i < cycles; ++i) {
+      Types::RobotState state;
+      state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.velocity = measured;
+      state.wheelLeft.connected = true;
+      state.wheelLeft.sampleTime = now - 10;
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;
+      drive.tick(state);
+      measured = plantGain * (cmd + drive.biasLeft());
+      now += 50;
+    }
+  };
+
+  // Leg 1: converge bias away from 0.
+  runLeg(300);
+  const float biasAfterLeg1 = drive.biasLeft();
+  checkTrue(std::fabs(biasAfterLeg1) > 5.0f, "leg 1: bias converged away from 0");
+
+  // Leg boundary 1 -- a MOVE arrives; RobotLoop::handleMove() calls
+  // drive_.takeover() (this IS that call, hand-invoked here).
+  drive.takeover();
+  checkFloatEq(drive.biasLeft(), biasAfterLeg1, "leg boundary 1: bias UNCHANGED across takeover()");
+
+  // Leg 2: bias holds (it does not re-converge from 0 -- it was already there).
+  runLeg(20);
+  checkTrue(std::fabs(drive.biasLeft()) > 5.0f,
+           "leg 2: bias still away from 0 (never dropped to 0 at the boundary)");
+  const float biasAfterLeg2 = drive.biasLeft();
+
+  // Leg boundary 2 -- a second chained MOVE.
+  drive.takeover();
+  checkFloatEq(drive.biasLeft(), biasAfterLeg2,
+              "leg boundary 2: bias UNCHANGED across the SECOND takeover()");
+
+  // Leg 3.
+  runLeg(20);
+  checkTrue(std::fabs(drive.biasLeft()) > 5.0f,
+           "leg 3: bias still away from 0 across BOTH leg boundaries -- 2+ legs, equivalent to a "
+           "tour, no reset anywhere");
+}
+
+// ===========================================================================
+// 13-17. 131-003 REVISED post-shipment (SUC-131-003, issue
+// A-speed-floor-snaps-the-planner-differential.md): applySpeedFloor() is a
+// RATIO-PRESERVING SCALE on the raw wheel pair directly -- no common-mode/
+// differential decomposition (the originally-shipped design, commit
+// `29578345`, superseded because it measurably regressed turn accuracy; see
+// sprint 131 sprint.md's "Revision -- Ticket 003's speed-floor semantics").
+// `dominantMag = max(|rawLeft|, |rawRight|)`; below vMin and nonzero, BOTH
+// wheels scale by `vMin / dominantMag`. All scenarios below drive tick()
+// directly with dutyPerSpeed=(1,1) (identity: duty == corrected command,
+// this file's own established convention) and all-zero ControlGains/
+// AdaptationBounds.tauAdapt (Stage B/C both inert -- see
+// scenarioSetDutyStagesRawValues()'s own precedent), so MockMotor::
+// lastDutyCmd reflects the post-floor speedLeft/speedRight EXACTLY,
+// isolating the floor's own arithmetic from every other stage. Only
+// AdaptationBounds.vMin is set (a test-local 100.0f mm/s -- NOT this
+// robot's real, LOW-CONFIDENCE 99.7 figure; ticket 131-003 is
+// semantics-only and must not entangle a test constant with the
+// production one).
+// ===========================================================================
+
+// 13. AC#1 (unchanged numbers from the superseded implementation -- see
+// sprint.md Revision point 2): a small differential trim riding on a
+// common-mode speed AT the vMin boundary produces a PROPORTIONAL per-wheel
+// split (the differential passes through whole). The dominant wheel (103)
+// already clears vMin (100), so NO scaling applies at all -- the raw pair
+// passes through completely unchanged, unlike the OLD (pre-131-003)
+// per-wheel-independent floor, which would have independently boosted the
+// sub-floor left wheel (97) and eaten half the trim.
+void scenarioDifferentialTrimAtFloorBoundaryStaysProportional() {
+  beginScenario("131-003 AC#1: a differential trim on a common-mode speed AT the vMin boundary "
+                "produces a proportional per-wheel split (the OLD per-wheel floor ate half the "
+                "trim here; the ratio-preserving scale doesn't engage at all since the dominant "
+                "wheel already clears vMin)");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.vMin = 100.0f;  // [mm/s] test-local floor -- NOT tovez.json's real 99.7
+  drive.setAdaptationBounds(bounds);
+
+  // Deliberately chosen so the OLD per-wheel floor bites: raw left (97) is
+  // BELOW vMin (100) and would have been independently boosted to exactly
+  // 100 -- eating the correction down to a 3 mm/s split (100 vs 103) instead
+  // of the commanded 6 mm/s split (97 vs 103). The dominant wheel (103, the
+  // larger magnitude of the two raw commands) is already AT/above vMin, so
+  // the ratio-preserving scale is a no-op here -- the fix is entirely in
+  // WHAT the floor looks at (the raw pair's dominant wheel, not each wheel
+  // independently), not in re-tuning vMin itself.
+  const float commonMode = 100.0f;    // [mm/s] -- AT the floor
+  const float differential = 3.0f;    // [mm/s] -- "a few mm/s" heading-hold trim
+  const float cmdLeft = commonMode - differential;   // 97
+  const float cmdRight = commonMode + differential;  // 103 -- the dominant wheel
+
+  drive.tick(wheelCmd(cmdLeft, cmdRight));
+
+  checkFloatEq(left.lastDutyCmd, cmdLeft,
+              "left wheel: the differential passes through proportionally -- duty matches the "
+              "RAW (unscaled) commanded value, the dominant (right) wheel was already at the "
+              "floor so no scaling applied");
+  checkFloatEq(right.lastDutyCmd, cmdRight,
+              "right wheel: same -- proportional, not floor-snapped");
+  checkFloatEq(right.lastDutyCmd - left.lastDutyCmd, 2.0f * differential,
+              "the per-wheel split equals the full commanded differential (6 mm/s) -- NOT the "
+              "3 mm/s split the OLD per-wheel-independent floor would have left after boosting "
+              "only the sub-floor left wheel");
+
+  // A second, healthier-margin case (dominant wheel comfortably above the
+  // floor) as a plain sanity check that pass-through holds in the ordinary
+  // case too, not just at the adversarial boundary above.
+  MockMotor left2;
+  MockMotor right2;
+  App::Drive drive2(left2, right2, trackWidth);
+  drive2.setDutyPerSpeed(1.0f, 1.0f);
+  drive2.setAdaptationBounds(bounds);
+  const float cruiseCommon = 150.0f;  // [mm/s] comfortably above vMin
+  drive2.tick(wheelCmd(cruiseCommon - differential, cruiseCommon + differential));
+  checkFloatEq(left2.lastDutyCmd, cruiseCommon - differential,
+              "healthy-margin case: left wheel duty matches the raw commanded value exactly");
+  checkFloatEq(right2.lastDutyCmd, cruiseCommon + differential,
+              "healthy-margin case: right wheel duty matches the raw commanded value exactly");
+}
+
+// 14. NEW, the direct regression-fix proof at the unit level (sprint.md
+// Revision point 1): a symmetric pivot -- equal-and-opposite wheel commands,
+// the EXACT shape Planner::planWheels() emits for every Angle Move -- with
+// both wheels below vMin is boosted to exactly (-vMin, +vMin). This is
+// bit-identical to what the pre-131-003 per-wheel-independent floor produced
+// for this case (both wheels have equal magnitude, so flooring the pair as a
+// whole and flooring each wheel independently coincide), and is exactly the
+// case the superseded common-mode-only floor got wrong: a pure pivot's
+// common mode is EXACTLY zero, so that design's floor never engaged here at
+// all.
+void scenarioSymmetricPivotBelowFloorBoostsToExactVMin() {
+  beginScenario("131-003 (revised): a symmetric pivot (equal-and-opposite wheel commands, the "
+                "shape planWheels() emits for an Angle Move) with both wheels below vMin is "
+                "boosted to exactly (-vMin, +vMin) -- the direct regression-fix proof; the "
+                "superseded common-mode-only floor never engaged here since a pivot's common "
+                "mode is exactly zero");
+
+  MockMotor left;
+  MockMotor right;
+  App::Drive drive(left, right, 200.0f);
+  drive.setDutyPerSpeed(1.0f, 1.0f);
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.vMin = 100.0f;  // [mm/s] test-local floor
+  drive.setAdaptationBounds(bounds);
+
+  const float lambda = 40.0f;  // [mm/s] -- a pivot's own sub-floor ramp magnitude
+  drive.tick(wheelCmd(-lambda, lambda));  // unit = (-1, +1): a pure in-place rotation
+
+  checkFloatEq(left.lastDutyCmd, -bounds.vMin,
+              "left wheel boosted to exactly -vMin -- bit-identical to the pre-131-003 "
+              "per-wheel-independent floor for a symmetric pivot");
+  checkFloatEq(right.lastDutyCmd, bounds.vMin,
+              "right wheel boosted to exactly +vMin, same");
+  checkFloatEq(right.lastDutyCmd, -left.lastDutyCmd,
+              "the ratio is preserved exactly (equal and opposite) -- not flattened, not "
+              "distorted, just scaled up to the floor");
+}
+
+// 15. NEW (sprint.md Revision point 3): an asymmetric pair below vMin is
+// scaled to preserve its ratio exactly, not flattened toward 1:1 (what the
+// OLD pre-131-003 per-wheel-independent floor would have produced: both
+// wheels independently boosted to vMin, i.e. 100/100) and not left
+// arbitrarily distorted (a failure mode the superseded common-mode-only
+// floor could produce depending on sign, since it never bounded how much it
+// distorted an asymmetric differential riding on a sub-floor common mode).
+void scenarioAsymmetricPairBelowFloorPreservesRatio() {
+  beginScenario("131-003 (revised): an asymmetric pair below vMin (20/80 at a test-local "
+                "vMin=100) is scaled to preserve its ratio exactly (25/100), not flattened "
+                "toward 1:1 like the OLD per-wheel floor, and not left distorted like the "
+                "superseded common-mode-only floor");
+
+  MockMotor left;
+  MockMotor right;
+  App::Drive drive(left, right, 200.0f);
+  drive.setDutyPerSpeed(1.0f, 1.0f);
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.vMin = 100.0f;  // [mm/s] test-local floor
+  drive.setAdaptationBounds(bounds);
+
+  const float rawLeft = 20.0f;   // [mm/s] -- the sub-dominant wheel
+  const float rawRight = 80.0f;  // [mm/s] -- the dominant wheel, still below vMin
+  drive.tick(wheelCmd(rawLeft, rawRight));
+
+  // scale = vMin / dominantMag = 100 / 80 = 1.25
+  checkFloatEq(left.lastDutyCmd, 25.0f,
+              "left wheel scaled from 20 to 25 (x1.25) -- NOT flattened to 100 (the old "
+              "per-wheel floor) and not arbitrarily distorted (the superseded floor)");
+  checkFloatEq(right.lastDutyCmd, 100.0f,
+              "right (dominant) wheel lands at exactly vMin");
+  checkFloatEq(right.lastDutyCmd / left.lastDutyCmd, rawRight / rawLeft,
+              "the commanded ratio (4:1) is preserved exactly after scaling");
+}
+
+// 16. REVISED (sprint.md Revision's "Acknowledged, deliberate tradeoff",
+// flips the superseded implementation's own AC#2): a differential trim
+// riding on an exactly-zero common-mode component NO LONGER passes through
+// unfloored -- it is now ALSO scaled up toward vMin, same as any other
+// sub-floor pair, because a zero-common-mode differential is
+// indistinguishable (as a raw wheel pair) from a symmetric pivot, and this
+// is exactly the case scenario 14 above proves must be boosted. This is an
+// intentional, accepted reversion for the one sub-case that is currently
+// UNREACHABLE on any shipped robot profile (no robot JSON combines a
+// nonzero wheel_v_min with a nonzero heading_hold_gain) -- see this
+// function's own beginScenario() text and sprint.md's Revision section for
+// the full acceptance reasoning. Sub-case B (a plain sub-floor travel
+// command, no differential) is unchanged from the superseded implementation
+// -- it was always boosted to vMin and still is.
+void scenarioDifferentialWithNearZeroCommonModeNowBoostedTowardVMin() {
+  beginScenario("131-003 (revised, was AC#2): a differential trim with a near-zero common mode "
+                "is now ALSO boosted toward vMin -- reverting to pre-131-003 behavior for this "
+                "one sub-case, accepted because it is unreachable on any shipped robot profile "
+                "(see sprint.md's Revision section) and because Drive cannot tell a zero-common- "
+                "mode differential apart from a symmetric pivot (scenario 14) from the raw wheel "
+                "pair alone");
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.vMin = 100.0f;  // [mm/s] test-local floor -- NOT tovez.json's real 99.7
+
+  // Sub-case A: common mode EXACTLY zero, small differential trim -- raw
+  // pair (-3, +3) is bit-identical in shape to scenario 14's symmetric
+  // pivot (just a smaller magnitude), so it is boosted the same way: both
+  // wheels scaled by vMin/3 to land at exactly (-vMin, +vMin).
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setAdaptationBounds(bounds);
+
+    const float differential = 3.0f;  // [mm/s]
+    drive.tick(wheelCmd(-differential, differential));
+
+    checkFloatEq(left.lastDutyCmd, -bounds.vMin,
+                "zero common mode: the differential is now boosted to exactly -vMin, same "
+                "treatment as a symmetric pivot (scenario 14) -- this is the accepted, "
+                "unreachable-on-any-shipped-profile tradeoff, not an oversight");
+    checkFloatEq(right.lastDutyCmd, bounds.vMin,
+                "zero common mode: same, right wheel boosted to exactly +vMin");
+  }
+
+  // Sub-case B: a small NONZERO common mode (no differential at all -- a
+  // plain sub-floor travel command) still gets boosted to vMin, sign
+  // preserved -- UNCHANGED from the superseded implementation and from
+  // applySpeedFloor()'s original per-wheel behavior alike, since both
+  // wheels carry the same magnitude here regardless of which algorithm is
+  // in effect.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setAdaptationBounds(bounds);
+
+    const float subFloorCommon = 5.0f;  // [mm/s] -- below vMin, no differential
+    drive.tick(wheelCmd(subFloorCommon, subFloorCommon));
+
+    checkFloatEq(left.lastDutyCmd, bounds.vMin,
+                "no differential: boost-to-vMin is UNCHANGED -- both wheels boosted to +vMin");
+    checkFloatEq(right.lastDutyCmd, bounds.vMin,
+                "same, right wheel");
+  }
+}
+
+// 17. REVISED (sprint.md Revision point 5, the ratio-preserving scale's own
+// "stop is stop" strengthening): a wheel whose RAW cmdVelocity is exactly
+// 0.0f -- because it is the incidental product of vector cancellation, part
+// of an active, asymmetric command -- now stays at EXACTLY 0.0f after
+// scaling (`0 * scale == 0` in IEEE-754 for any finite scale), where the
+// superseded common-mode/differential design would have driven it nonzero
+// and had to specially justify that as "intentional." This is a
+// simplification, not a loss of coverage: the OTHER wheel of the same pair
+// still gets boosted normally, proving the scale genuinely ran (this isn't
+// "nothing happened"), while the raw-zero wheel itself provably never
+// moves. A GENUINE full stop (BOTH raw wheel commands exactly 0.0f) is
+// unaffected and still recombines to exactly (0.0f, 0.0f) -- "stop is stop"
+// holds, same as always.
+void scenarioRawZeroWheelStaysZeroUnderRatioPreservingScale() {
+  beginScenario("131-003 (revised): a wheel whose RAW command is exactly 0.0f from vector "
+                "cancellation now STAYS at exactly 0.0f even though the pair is scaled up (0 * "
+                "scale == 0) -- simpler than the superseded implementation's own "
+                "intentionally-driven-nonzero case -- while a GENUINE full stop (both wheels "
+                "raw zero) still recombines to exactly (0.0, 0.0)");
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.vMin = 100.0f;  // [mm/s] test-local floor
+
+  // Sub-case A: raw pair (0, 50) -- the left wheel's raw command happens to
+  // be exactly zero (e.g. the incidental result of some upstream vector
+  // cancellation), the right wheel is nonzero but below vMin. The dominant
+  // wheel (50) is below vMin, so the pair IS scaled (by vMin/50 == 2) -- but
+  // 0 * 2 == 0 exactly, so the left wheel stays at exactly zero while the
+  // right wheel is boosted to exactly vMin. Under the superseded
+  // common-mode/differential design this same raw pair (common mode 25,
+  // differential 25) would have driven the left wheel to a nonzero 50 --
+  // this scenario proves the new algorithm does NOT do that.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setAdaptationBounds(bounds);
+
+    const float rawLeft = 0.0f;   // [mm/s] -- exactly zero, from vector cancellation
+    const float rawRight = 50.0f;  // [mm/s] -- the dominant wheel, below vMin
+
+    drive.tick(wheelCmd(rawLeft, rawRight));
+
+    checkFloatEq(left.lastDutyCmd, 0.0f,
+                "the raw-zero left wheel stays at EXACTLY 0.0 duty even though the pair is "
+                "scaled up -- 0 * scale == 0 always, unlike the superseded implementation which "
+                "drove this wheel nonzero");
+    checkFloatEq(right.lastDutyCmd, bounds.vMin,
+                "the right (dominant) wheel IS boosted to exactly vMin, proving the scale "
+                "genuinely ran -- this isn't a case where nothing happened");
+  }
+
+  // Sub-case B: contrast -- a GENUINE full stop (both wheels' raw command
+  // exactly 0.0f) still recombines to exactly (0.0, 0.0): dominantMag is
+  // exactly 0.0f, so applySpeedFloor()'s own "dominantMag <= 0.0f" guard
+  // passes the pair through completely unscaled -- unaffected by this
+  // ticket (see also scenarioStopZeroesBothTargetsWithinOneCycle() above,
+  // which proves this same invariant through a full NezhaMotor round trip).
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setAdaptationBounds(bounds);
+
+    drive.tick(wheelCmd(0.0f, 0.0f));
+
+    checkFloatEq(left.lastDutyCmd, 0.0f,
+                "genuine full stop: left wheel writes EXACTLY 0.0 duty, unaffected by the "
+                "ratio-preserving scale");
+    checkFloatEq(right.lastDutyCmd, 0.0f,
+                "genuine full stop: right wheel writes EXACTLY 0.0 duty");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -733,7 +1590,18 @@ int main() {
   scenarioBiasClampHoldsAgainstDivergentError();
   scenarioBumplessTransferAcrossBiasUpdate();
   scenarioFastPidSteadyGateAndAntiWindup();
+  scenarioCommandedZeroForcesStageBToZeroAndFreezesIntegrator();
+  scenarioStaleDisconnectedOrFrozenWheelFreezesStageBIntegrator();
   scenarioWheelsAndMoveReachIdenticalDriveBehavior();
+  scenarioTakeoverPreservesLearnedStateEstopFullyResets();
+  scenarioTakeoverDoesNotTouchStopReassertionCountdown();
+  scenarioReversalAfterConvergedForwardBiasDoesNotReduceMagnitude();
+  scenarioBiasPersistsAcrossChainedTakeoverBoundaries();
+  scenarioDifferentialTrimAtFloorBoundaryStaysProportional();
+  scenarioSymmetricPivotBelowFloorBoostsToExactVMin();
+  scenarioAsymmetricPairBelowFloorPreservesRatio();
+  scenarioDifferentialWithNearZeroCommonModeNowBoostedTowardVMin();
+  scenarioRawZeroWheelStaysZeroUnderRatioPreservingScale();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Drive scenarios passed\n");
