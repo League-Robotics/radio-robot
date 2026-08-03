@@ -497,6 +497,37 @@ def render_chart(runs: "list[Run]", path: pathlib.Path, *, subtitle: str,
     plt.close(figure)
 
 
+SUMMARY_COLUMNS = ("board", "run", "profile", "wheel", "commanded", "delivered",
+                   "ratio", "plateau_tracking", "delivered_at_command_end",
+                   "issued_distance", "faults", "notes")
+
+
+def append_summary(runs: "list[Run]", path: pathlib.Path, *, board: str,
+                   run_tag: str) -> None:
+    """APPEND one row per profile per wheel to a shared summary CSV -- the
+    machine-readable spine of a multi-board survey, where each gate
+    invocation contributes rows to one growing table rather than leaving 30
+    separate per-run CSVs to be reconciled by hand. Header is written only
+    when the file is new, so concurrent survey legs can append safely."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fresh = not path.exists() or path.stat().st_size == 0
+    with open(path, "a", newline="") as handle:
+        writer = csv.writer(handle)
+        if fresh:
+            writer.writerow(SUMMARY_COLUMNS)
+        for run in runs:
+            track_left, track_right = run.plateau_tracking()
+            at_end_left, at_end_right = run.delivered_at_command_end()
+            per_wheel = (("left", run.delivered_left, run.ratio_left, track_left, at_end_left),
+                         ("right", run.delivered_right, run.ratio_right, track_right, at_end_right))
+            for wheel, delivered, ratio, tracking, at_end in per_wheel:
+                writer.writerow([
+                    board, run_tag, run.profile.name, wheel,
+                    f"{run.profile.distance:.2f}", f"{delivered:.2f}", f"{ratio:.5f}",
+                    f"{tracking:.5f}", f"{at_end:.2f}", f"{run.issued_distance:.2f}",
+                    "|".join(run.faults), "|".join(run.notes)])
+
+
 def write_csv(runs: "list[Run]", path: pathlib.Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with open(path, "w", newline="") as handle:
@@ -556,6 +587,14 @@ def _args() -> argparse.Namespace:
     p.add_argument("--csv", default=str(_REPO_ROOT / "src" / "tests" / "bench" / "output"
                                         / "velocity_profile_gate.csv"))
     p.add_argument("--no-chart", action="store_true")
+    p.add_argument("--summary-csv", default=None,
+                   help="APPEND one row per profile per wheel to this shared CSV "
+                        "(multi-board surveys: every leg appends to one table)")
+    p.add_argument("--board", default=None,
+                   help="board identity recorded in --summary-csv (default: the "
+                        "device name reported in the connect banner, or 'sim')")
+    p.add_argument("--run", dest="run_tag", default="1",
+                   help="run identity recorded in --summary-csv, e.g. cold/warm1")
     return p.parse_args()
 
 
@@ -571,7 +610,7 @@ def _open_sim(args):
     # motion command and produces a silent all-zero trace.
     sim.configure_from_robot(config)
     print(f"  sim connected: firmware={sim.firmware_version()} track_width={track_width}")
-    return sim, sim.disconnect
+    return sim, sim.disconnect, "sim"
 
 
 def _open_hardware(args):
@@ -584,8 +623,9 @@ def _open_hardware(args):
     if info.get("status") not in ("connected", "already_connected"):
         raise RuntimeError(f"connect failed: {info}")
     announcement = info.get("announcement") or {}
+    device_name = announcement.get("device_name") or "unknown"
     print(f"  connected: {port}  mode={info.get('mode')}  "
-          f"device={announcement.get('device_name')}  role={announcement.get('role')}")
+          f"device={device_name}  role={announcement.get('role')}")
     proto = NezhaProtocol(conn)
     # Telemetry is silent at idle by design -- without this the baseline
     # window sees nothing and the run aborts before it starts.
@@ -600,7 +640,7 @@ def _open_hardware(args):
             print(f"  WARN: tlmOff() failed during cleanup: {exc}")
         conn.disconnect()
 
-    return proto, close
+    return proto, close, device_name
 
 
 def main() -> int:
@@ -625,7 +665,8 @@ def main() -> int:
               f"{profile.peak:.1f} mm/s  ramp {profile.ramp:.2f} s  "
               f"area {profile.distance:.1f} mm")
 
-    transport, close = (_open_sim(args) if args.sim else _open_hardware(args))
+    transport, close, device_name = (_open_sim(args) if args.sim else _open_hardware(args))
+    board = args.board or device_name
     runs: "list[Run]" = []
     try:
         for index, profile in enumerate(profiles):
@@ -695,6 +736,10 @@ def main() -> int:
         csv_path = pathlib.Path(args.csv)
         write_csv(runs, csv_path)
         print(f"  csv:   {csv_path}")
+        if args.summary_csv:
+            summary_path = pathlib.Path(args.summary_csv)
+            append_summary(runs, summary_path, board=board, run_tag=args.run_tag)
+            print(f"  summary appended ({board}/{args.run_tag}): {summary_path}")
 
     print(f"\n  {'PASS' if ok else 'FAIL'}")
     return 0 if ok else 1
