@@ -14,7 +14,7 @@ odometry; blue is the left wheel, green the right.
 
 ## 1. Baseline — ~85 s tour
 
-![baseline](../../src/tests/bench/square_tour_bench.png)
+![baseline](../../src/tests/bench/output/square_tour_bench.png)
 
 | | |
 |---|---|
@@ -45,7 +45,7 @@ why it survived so long.
 
 ## 2. Host fixes — 52.9 s
 
-![host fixes](../../src/tests/bench/square_tour_bench4.png)
+![host fixes](../../src/tests/bench/output/square_tour_bench4.png)
 
 | | |
 |---|---|
@@ -68,7 +68,7 @@ it: that part lives in firmware.
 
 ## 3. Arrival fix — 50.9 s, and better on every accuracy axis
 
-![arrival fix](../../src/tests/bench/square_tour_bench5.png)
+![arrival fix](../../src/tests/bench/output/square_tour_bench5.png)
 
 | | |
 |---|---|
@@ -129,7 +129,7 @@ hypothesis.
 
 ## 4. Arrival fix, repeat run
 
-![arrival fix repeat](../../src/tests/bench/square_tour_bench6.png)
+![arrival fix repeat](../../src/tests/bench/output/square_tour_bench6.png)
 
 | | |
 |---|---|
@@ -193,7 +193,7 @@ time. That answers open question #2 in
 ```bash
 uv run python src/tests/bench/square_tour.py \
     --port /dev/cu.usbmodem2121102 --no-geofence \
-    --chart src/tests/bench/square_tour_bench.png
+    --chart src/tests/bench/output/square_tour_bench.png
 ```
 
 `--no-geofence` is required on the stand: the geofence fails closed when it

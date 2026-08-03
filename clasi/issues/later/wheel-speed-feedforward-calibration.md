@@ -147,9 +147,9 @@ and report it as hardware asymmetry (this is how the ~10% figure arose).
 ```bash
 # Robot on the stand, wheels free, freshly charged.
 uv run python src/tests/bench/speed_map.py --port /dev/cu.usbmodem2121102 \
-    --out src/tests/bench/speed_map.csv
+    --out src/tests/bench/output/speed_map.csv
 uv run python src/tests/bench/speed_map.py --port /dev/cu.usbmodem2121102 \
-    --out src/tests/bench/speed_map2.csv
+    --out src/tests/bench/output/speed_map2.csv
 ```
 
 Each invocation runs 3 orderings × 2 rounds = 300 ack-verified trials in

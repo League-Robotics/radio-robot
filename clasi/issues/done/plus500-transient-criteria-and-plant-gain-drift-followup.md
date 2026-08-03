@@ -12,7 +12,7 @@ wheel-speed controller) re-verified the 06-issue's own +500-button
 acceptance spec on real hardware (tovez, firmware v0.20260801.18,
 2026-08-02). Full data/scripts:
 `src/tests/bench/wheel_controller_ab_bench.{py,csv,png}`,
-`src/tests/bench/bias_convergence_150.{csv,png}`.
+`src/tests/bench/output/bias_convergence_150.{csv,png}`.
 
 ### Finding 1 — +500 transient criteria fail at shipped gains; a real Stage B sweep may fix it
 

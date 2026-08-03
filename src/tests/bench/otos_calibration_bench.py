@@ -2116,7 +2116,7 @@ def runAcceptanceMode(args: argparse.Namespace) -> int:
         simSummary = checkSimSuiteAndFusionWeights(args.robot_json)
         results["7_sim_and_fusion"] = bool(simSummary.get("ok"))
 
-        chartPath = args.chart or "src/tests/bench/otos_calibration_bench_acceptance.png"
+        chartPath = args.chart or "src/tests/bench/output/otos_calibration_bench_acceptance.png"
         writeAcceptanceChart(distSummary, headSummary, tourResult, chartPath)
 
         print("\n=== CONSOLIDATED ACCEPTANCE REPORT (issue otos-telemetry-bring-up-and-"
@@ -2212,7 +2212,7 @@ def buildArgParser() -> argparse.ArgumentParser:
                         "(each rep is one leg or turn per direction, ping-ponged)")
     p.add_argument("--chart", default=None,
                    help="output PNG path, --mode acceptance (default: "
-                        "src/tests/bench/otos_calibration_bench_acceptance.png)")
+                        "src/tests/bench/output/otos_calibration_bench_acceptance.png)")
     return p
 
 

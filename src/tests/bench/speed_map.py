@@ -109,7 +109,7 @@ def runPass(proto, order, label, rnd, rows, moveIdSeed):
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--port", default=DEFAULT_PORT)
-    p.add_argument("--out", default="src/tests/bench/speed_map.csv")
+    p.add_argument("--out", default="src/tests/bench/output/speed_map.csv")
     args = p.parse_args()
 
     conn = SerialConnection(port=args.port)

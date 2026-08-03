@@ -185,7 +185,7 @@ which prints a PASS/FAIL line per scenario. See
 [src/tests/bench/](../../src/tests/bench/) for the rest of the bench-script
 catalog (`tlm_log.py` for a flat CSV telemetry capture,
 `move_accuracy_bench.py`/`turn_prediction_capture.py` for accuracy
-characterization, `otos_drift.py`/`velocity_step_response.py` for sensor/PID
+characterization, `velocity_step_response.py` for sensor/PID
 characterization).
 
 ## Safety notes

@@ -99,7 +99,7 @@ def main() -> int:
     conn.disconnect()
 
     import csv
-    with open("src/tests/bench/speed_sweep.csv", "w", newline="") as f:
+    with open("src/tests/bench/output/speed_sweep.csv", "w", newline="") as f:
         w = csv.writer(f)
         w.writerow(["cmd", "meanL", "rippleL", "meanR", "rippleR"])  # [mm/s]
         w.writerows(results)
@@ -130,8 +130,8 @@ def main() -> int:
     ax.legend(fontsize=9)
     ax.grid(True, alpha=0.3)
     fig.tight_layout()
-    fig.savefig("src/tests/bench/speed_sweep.png", dpi=130)
-    print("wrote src/tests/bench/speed_sweep.{csv,png}")
+    fig.savefig("src/tests/bench/output/speed_sweep.png", dpi=130)
+    print("wrote src/tests/bench/output/speed_sweep.{csv,png}")
     return 0
 
 

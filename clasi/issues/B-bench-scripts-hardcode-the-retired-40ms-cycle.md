@@ -3,7 +3,7 @@ status: pending
 priority: medium
 ---
 
-# Three live bench scripts still hardcode the retired 40 ms cycle, with comments claiming it equals `kCycle`
+# Two live bench scripts still hardcode the retired 40 ms cycle, with comments claiming it equals `kCycle`
 
 ## Description
 
@@ -13,9 +13,12 @@ scripts. That did not happen — verified still present today:
 
 ```
 src/tests/bench/square_tour.py:105            CYCLE_S = 0.04    # [s] one SimLoop.step() -- App::RobotLoop::kCycle
-src/tests/bench/curve_stream.py:79            POLL_SLICE = 0.04 # [s] one SimLoop cycle (App::RobotLoop::kCycle)
 src/tests/bench/turn_prediction_capture.py:94 _CYCLE_S = 0.04   # [s] ... matches firmware's
 ```
+
+(Was three. `curve_stream.py` was the third; it was deleted in the 2026-08-03
+bench cull -- path-following is deferred to `later/` and the script had no
+remaining consumer.)
 
 `kCycle` is 50 (and delivers 54 — see
 [[A-nominal-50ms-vs-delivered-54ms]]). Every cycle-derived number in these
@@ -26,7 +29,7 @@ wrong.
 
 `square_tour.py` is the vehicle for ticket 011's bench re-verification gate.
 A gate that scores against 25%-wrong cycle math is not a gate. Any conclusion
-drawn from those three scripts since the 40→50 cutover should be re-checked
+drawn from those scripts since the 40→50 cutover should be re-checked
 before it is trusted — including timing figures quoted in
 `square_tour.py`'s own header comments (`:229-255`).
 
@@ -39,14 +42,14 @@ post-mortem's root cause 1 is about. Take the period from a single source:
 - ideally the config read-back ([[A-no-firmware-to-host-config-readback]]),
 - otherwise the generated boot config the host already parses,
 
-and delete the local literal in all three. Then grep for other copies —
-these three were found by a review, not by a search, so there may be more.
+and delete the local literal in both. Then grep for other copies —
+these were found by a review, not by a search, so there may be more.
 
 ## Verification
 
 - `grep -rn "0\.04\b" src/tests/bench/ src/tests/system/` finds no
   cycle-period literal.
-- The three scripts derive the period from one shared source and agree with the
+- Both scripts derive the period from one shared source and agree with the
   firmware.
 - `square_tour.py`'s header timing figures are recomputed or removed.
 

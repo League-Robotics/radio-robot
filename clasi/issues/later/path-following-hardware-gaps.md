@@ -44,7 +44,7 @@ On the robot (stand, direct USB, firmware `0.20260731.1` with the relaxed
 hand-off flashed): **19 of 71 segments completed**, mean per-boundary minimum
 11.1 mm/s, **16 of 18 boundaries landed fully at rest**, and the wheel-speed
 trace shows two brief bursts of motion separated by **45 seconds of complete
-stillness** (`src/tests/bench/curve_stream_hardware.png`).
+stillness** (`src/tests/bench/output/curve_stream_hardware.png`).
 
 That is not the "stops at every boundary" shape — it is the robot not executing
 most of what it was sent. The streaming loop (`stream_segments()`) is
