@@ -8,6 +8,7 @@
 
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "messages/robot_config.h"
 
 namespace Config {
 
@@ -300,5 +301,40 @@ struct PlannerBootConfig {
 // The boot PlannerBootConfig default -- see PlannerBootConfig's own doc
 // comment above and gen_boot_config.py's planner_config_for_config().
 PlannerBootConfig defaultPlannerLimits();
+
+// ---------------------------------------------------------------------------
+// Config::Robot group defaults (132-005, sprint 132 "configuration
+// discipline: one owned object, live wire config with read-back, patch-
+// surface retirement, JSON reshape, and per-wheel drive calibration").
+//
+// Seven no-argument functions, one per msg::ConfigGroupTarget
+// (messages/robot_config.h, generated from src/protos/robot_config.proto
+// by ticket 002) -- the same robot-JSON `_require()`/`_get()` mappings
+// gen_boot_config.py already performs above, retargeted onto the NEW
+// generated group struct layout instead of the hand-declared *BootConfig
+// structs above. See gen_boot_config.py's own module docstring
+// ("132-005") for why this is ADDITIVE for this ticket, not a replacement:
+// boot_wiring.cpp/boot_calibration.cpp/main.cpp still call the functions
+// above every boot; ticket 006 ("Configurator owns Config::Robot") is what
+// retargets RobotGraph's composition root onto these instead, via
+// `Configurator::loadBaked()`.
+//
+// Every consumer group in msg::ConfigGroupTarget gets one function here:
+// Geometry/Motors/Drive/WheelControl/Planner/Otos/Estimator. Motors'
+// travel_calib_left/right and fwd_sign_left/right are the drive-pair-only
+// slice of the per-port arrays defaultMotorConfigs() above bakes (no
+// per-port array in this schema -- see robot_config.proto's own header
+// checklist). Planner's trailing shaper_* fields are the currently-dead
+// Config::ShaperBootConfig surface, carried here on the same "every
+// _require() call site gets a schema field today" posture
+// robot_config.proto documents, flagged there for ticket-015 deletion.
+// ---------------------------------------------------------------------------
+msg::Geometry defaultGeometryGroup();
+msg::Motors defaultMotorsGroup();
+msg::Drive defaultDriveGroup();
+msg::WheelControl defaultWheelControlGroup();
+msg::Planner defaultPlannerGroup();
+msg::Otos defaultOtosGroup();
+msg::Estimator defaultEstimatorGroup();
 
 }  // namespace Config
