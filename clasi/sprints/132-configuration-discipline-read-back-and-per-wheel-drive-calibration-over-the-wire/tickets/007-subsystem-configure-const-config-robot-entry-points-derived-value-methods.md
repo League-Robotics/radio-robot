@@ -1,7 +1,7 @@
 ---
 id: '007'
 title: Subsystem configure(const Config::Robot&) entry points + derived-value methods
-status: open
+status: in-progress
 use-cases:
 - SUC-002
 - SUC-006
