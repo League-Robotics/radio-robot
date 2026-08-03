@@ -1,5 +1,6 @@
 ---
 status: pending
+priority: medium
 ---
 
 # VisionConfig.robot_tag_id must fail closed, not default to the field-origin tag

@@ -1,6 +1,6 @@
 ---
 status: pending
-priority: medium
+priority: high
 ---
 
 # TOUR_2's 146-degree turn still undershoots ~10 deg after the 130-010 completion fix

@@ -1,6 +1,7 @@
 ---
 status: pending
-extends: square-tour-is-the-one-system-test-sim-bench-playfield.md
+priority: medium
+extends: later/system-test-square-tour-is-the-one-system-test-sim-bench-playfield.md
 ---
 
 # Minimal system test: remaining phases — hardware tier, goldens, convergence

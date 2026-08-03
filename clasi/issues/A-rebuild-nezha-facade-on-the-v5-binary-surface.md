@@ -1,5 +1,6 @@
 ---
 status: pending
+priority: high
 ---
 
 # Rebuild the Nezha driver facade on the protocol-v5 binary surface, with one pose owner and no private-field reach-around

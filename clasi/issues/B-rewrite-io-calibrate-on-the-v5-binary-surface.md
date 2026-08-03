@@ -1,5 +1,6 @@
 ---
 status: pending
+priority: medium
 ---
 
 # Rewrite `rogo calibrate distance`/`turns` on the v5 binary surface

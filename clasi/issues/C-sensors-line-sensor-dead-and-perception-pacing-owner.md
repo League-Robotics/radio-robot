@@ -1,5 +1,6 @@
 ---
 status: pending
+priority: low
 ---
 
 # Line sensor is 100% dead: decide increment-or-delete, and give perception pacing an owner
