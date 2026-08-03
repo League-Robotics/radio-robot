@@ -74,6 +74,36 @@
 // is merely sent once. Do not fold this back into a single unconditional
 // write.
 //
+// takeover() vs estop() (131-001, sprint 131 Design Rationale Decisions 1/2
+// -- closes the sprint-130 midpoint review's finding #1 / post-130 review
+// F5): before this ticket, RobotLoop::handleMove() called estop() to make
+// the planner take over motion, and estop() (130-004) ALSO zeroed Stage
+// B's integrators, Stage C's bias, and the deficit latch -- so every
+// accepted MOVE cold-started adaptation, and Stage C (tauAdapt tens of
+// seconds) could never converge on the path it exists to serve. takeover()
+// is the ownership-handover verb: zero targets, disarm WHEELS -- KEEP
+// everything Stage B/C learned, because the plant did not change, only the
+// writer did. estop() stays the full-reset safety verb, reserved for the
+// ESTOP wire verb and genuine panic paths, and is now implemented ON TOP
+// OF takeover() (the shared "zero targets, disarm" part), adding only the
+// learned-state reset and the stop-reassertion window on top. Two
+// distinctly-named methods, not one estop(bool resetLearnedState) --
+// Motion::Planner's own tick()/update() two-method contract already
+// established this project's preference for named verbs over parameterized
+// ones at this exact architectural layer (Decision 1).
+//
+// This split makes a converged bias long-lived across MOVE boundaries for
+// the first time, which in turn makes correctedCommand()'s bias
+// application direction-sensitive for the first time: a bias learned under
+// sustained forward motion must still HELP (not hurt) a subsequent reverse
+// command. correctedCommand() applies `bias` as a magnitude-domain
+// correction that follows the CURRENT commanded direction (`desired`'s
+// sign), not a fixed additive term -- see its own doc comment (drive.cpp)
+// and Decision 2. This preserves 130-004's one-bias-per-wheel model (no
+// per-direction split: the physical droop this trim corrects is a
+// property of the wheel's instantaneous load, not which side of a ramp it
+// arrived from) while making the correction help regardless of direction.
+//
 // Two-method contract, adopted from Motion::Planner (planner.h) so the two
 // motion deciders read the same way at their call sites:
 //   tick(const Types::RobotState&)   -- DO THE WORK: shape and write duty,
@@ -244,10 +274,32 @@ class Drive {
   void command(float vLeft, float vRight, float duration, uint32_t moveId,
                uint32_t now);  // [mm/s] [mm/s] [ms] -- now [ms]
 
+  // Ownership handover: another subsystem is about to command the wheels
+  // (RobotLoop::handleMove(), the moment a MOVE is accepted -- 131-001).
+  // Zero the targets and disarm the WHEELS command, exactly like estop()'s
+  // own "zero targets, disarm" half -- but deliberately leave Stage B's
+  // integrators (pidIntegralLeft_/Right_), Stage C's bias (biasLeft_/
+  // Right_), the deficit latch (deficitSinceLeft_/Right_, deficitLeft_/
+  // Right_), and the stop re-assertion countdown (stopEnforceCountdown_)
+  // completely untouched: the plant did not change, only the writer did,
+  // and there is no "verify the wheels actually reached rest" safety
+  // concern the way there is for a genuine estop -- the new owner is about
+  // to command motion again next cycle. See this file's own header
+  // (Decisions 1/2) for the full rationale, and estop()'s own doc comment
+  // for the contrasting full-reset verb.
+  void takeover();
+
   // Halt now: zero the targets, disarm, and emit NO completion ack for the
   // discarded command (the ESTOP path -- the host asked for a stop, not for
-  // a report that the thing it cancelled finished). Also the takeover path
-  // RobotLoop uses when a MOVE hands motion to the planner.
+  // a report that the thing it cancelled finished) -- PLUS a full reset of
+  // every learned/latched control-loop value (Stage B's integrators, Stage
+  // C's bias, the deficit latch) and the stop re-assertion window (this
+  // file's own LOAD-BEARING comment above). Reserved for the ESTOP wire
+  // verb (RobotLoop::handleEstop()) and genuine panic paths -- NOT the
+  // ownership-handover path (a MOVE taking over from WHEELS, or vice
+  // versa), which uses takeover() instead so a converged Stage C bias
+  // survives across legs of a chained tour (131-001, this file's own
+  // header).
   void estop();
 
   // True while an armed command is running -- i.e. while Drive, not the

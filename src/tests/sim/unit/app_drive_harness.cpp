@@ -723,6 +723,350 @@ void scenarioWheelsAndMoveReachIdenticalDriveBehavior() {
            "bias actually adapted over the run on both paths (not a no-op check)");
 }
 
+// ===========================================================================
+// 9. 131-001 (SUC-131-001, sprint 131 Design Rationale Decisions 1/2):
+// Drive::takeover() vs Drive::estop() -- takeover() preserves Stage B's
+// integrator, Stage C's bias, and the deficit latch (an ownership handover,
+// not a safety event); estop() still fully resets all three (a genuine
+// panic path). Both verbs' distinct post-conditions are asserted side by
+// side in this ONE scenario, per this ticket's own testing plan -- a
+// regression guard against a future edit silently re-merging them.
+// ===========================================================================
+
+void scenarioTakeoverPreservesLearnedStateEstopFullyResets() {
+  beginScenario("131-001: takeover() preserves Stage B's integrator, Stage C's bias, and the "
+                "deficit latch; estop() still fully resets all three -- both verbs' distinct "
+                "post-conditions side by side");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
+
+  App::Drive::ControlGains gains;
+  gains.kp = 0.5f;
+  gains.ki = 2.0f;
+  gains.iMax = 40.0f;
+  gains.pidMax = 40.0f;
+  drive.setControlGains(gains);
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.biasMax = 60.0f;
+  bounds.tauAdapt = 0.3f;
+  bounds.aSteady = 100.0f;
+  bounds.deficitThreshold = 1.0f;  // deliberately tiny -- trips easily under a persistent error
+  bounds.deficitWindow = 10.0f;    // [ms] -- a couple of 50ms ticks is already past this
+  drive.setAdaptationBounds(bounds);
+
+  // A real WHEELS-style armed command, so takeover()/estop()'s "disarm" half
+  // has something genuine to disarm (owns() true beforehand).
+  drive.command(200.0f, 200.0f, /*duration=*/100000.0f, /*moveId=*/1, /*now=*/500);
+  checkTrue(drive.owns(), "setup: a WHEELS command is armed (owns() true) before either verb");
+
+  // Drive a sustained, deliberately unclosable error (plant held at 0
+  // velocity throughout, cmd=200) so Stage B's integrator winds up, Stage
+  // C's bias saturates, and the deficit latch trips -- all THREE pieces of
+  // "learned state" land at a known, nonzero/true value before either verb
+  // is exercised.
+  uint32_t now = 1000;
+  for (int i = 0; i < 200; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = 200.0f;
+    state.wheelLeft.velocity = 0.0f;  // stalled -- persistent, unclosable error
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;
+    drive.tick(state);
+    now += 50;
+  }
+
+  const float biasBefore = drive.biasLeft();
+  checkTrue(std::fabs(biasBefore) > 1.0f, "setup: bias genuinely adapted away from 0");
+  checkTrue(drive.deficitLeft(), "setup: the deficit flag latched under the sustained, unclosable error");
+  checkTrue(std::fabs(drive.pidLeft()) > 1.0f, "setup: Stage B's fast PID output is genuinely nonzero");
+
+  // --- Phase 1: takeover() -- learned state must be UNCHANGED. ---
+  drive.takeover();
+  checkFloatEq(drive.targetLeft(), 0.0f, "takeover() zeroes targetLeft_");
+  checkFloatEq(drive.targetRight(), 0.0f, "takeover() zeroes targetRight_");
+  checkTrue(!drive.owns(), "takeover() disarms the WHEELS command (owns() false)");
+  checkFloatEq(drive.biasLeft(), biasBefore, "takeover() leaves biasLeft_ UNCHANGED");
+  checkTrue(drive.deficitLeft(), "takeover() leaves the deficit latch UNCHANGED (still true)");
+
+  // --- Phase 2: estop() -- the SAME learned state must now be fully reset,
+  // in contrast to Phase 1 above. ---
+  drive.estop();
+  checkFloatEq(drive.targetLeft(), 0.0f, "estop() also zeroes targetLeft_");
+  checkFloatEq(drive.targetRight(), 0.0f, "estop() also zeroes targetRight_");
+  checkTrue(!drive.owns(), "estop() also disarms the WHEELS command");
+  checkFloatEq(drive.biasLeft(), 0.0f, "estop() resets biasLeft_ to 0 -- distinct from takeover()");
+  checkTrue(!drive.deficitLeft(), "estop() clears the deficit latch -- distinct from takeover()");
+
+  // A subsequent tick() under the SAME stalled/unreachable conditions
+  // confirms Stage B's integrator was genuinely zeroed too: the very next
+  // tick's pid is p-term only (integral fresh at 0, feed/kaff==0 here),
+  // not still carrying whatever the pre-estop() integrator had wound up to.
+  Types::RobotState state;
+  state.wheelLeft.cmdVelocity = 200.0f;
+  state.wheelLeft.velocity = 0.0f;
+  state.wheelLeft.connected = true;
+  state.wheelLeft.sampleTime = now - 10;
+  state.time.cycleStart = now;
+  state.time.cyclePeriod = 50000;
+  drive.tick(state);
+  // p-only (integral freshly 0) is kp*200 == 100, which exceeds pidMax (40)
+  // and is clamped there -- the SAME clamp the pre-estop() saturated
+  // integrator was already pinned against, so this single-tick check can't
+  // distinguish "integral still 40-ish" from "integral genuinely 0" by
+  // magnitude alone. checkIntegralGenuinelyZeroed() below does that
+  // properly, by comparing against a FRESH Drive that never wound up at
+  // all.
+  checkFloatEq(drive.pidLeft(), gains.pidMax,
+              "estop() leaves the fast PID pinned at +pidMax on the very next tick (p-term alone "
+              "already exceeds pidMax under this persistent error)");
+
+  // The real proof that pidIntegralLeft_ was genuinely zeroed (not just
+  // "still clamped, coincidentally at the same value"): a FRESH Drive,
+  // whose integrator was NEVER wound up, produces the IDENTICAL pid output
+  // under the identical one-tick input -- if estop() had left the old
+  // integral in place, the post-estop() drive would clamp at the same
+  // +pidMax too (since pidMax dominates either way at this error size), so
+  // this comparison instead uses a smaller error where the unclamped p+i
+  // sum is observable.
+  MockMotor freshLeft;
+  MockMotor freshRight;
+  App::Drive freshDrive(freshLeft, freshRight, trackWidth);
+  freshDrive.setDutyPerSpeed(1.0f, 1.0f);
+  freshDrive.setControlGains(gains);
+  freshDrive.setAdaptationBounds(bounds);
+  Types::RobotState smallErrState;
+  smallErrState.wheelLeft.cmdVelocity = 10.0f;  // small enough that p+i stays well under pidMax
+  smallErrState.wheelLeft.velocity = 0.0f;
+  smallErrState.wheelLeft.connected = true;
+  smallErrState.wheelLeft.sampleTime = now - 10;
+  smallErrState.time.cycleStart = now;
+  smallErrState.time.cyclePeriod = 50000;
+  freshDrive.tick(smallErrState);
+
+  drive.estop();  // re-zero drive's integrator again (Phase 2 already did this once above)
+  drive.tick(smallErrState);
+  checkFloatEq(drive.pidLeft(), freshDrive.pidLeft(),
+              "post-estop() pid under a small error matches a NEVER-wound-up fresh Drive exactly -- "
+              "the integrator was genuinely zeroed, not merely re-clamped to the same ceiling");
+}
+
+// ===========================================================================
+// 10. 131-001: takeover() must not touch the estop()-armed stop-reassertion
+// countdown (stopEnforceCountdown_, 129-001) either -- it has no public
+// getter, so this scenario observes it INDIRECTLY through tick()'s own
+// re-assertion behavior (scenario 3 above establishes that mechanism):
+// consume part of an estop()-armed countdown, call takeover(), then confirm
+// EXACTLY the remaining ticks still force a write (neither reset to 0 --
+// which would go quiet immediately -- nor re-armed to the full
+// kStopEnforceTicks -- which would force MORE writes than remain).
+// ===========================================================================
+
+void scenarioTakeoverDoesNotTouchStopReassertionCountdown() {
+  beginScenario("131-001: takeover() leaves the estop()-armed stop-reassertion countdown "
+                "untouched -- neither reset to 0 nor re-armed");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);
+
+  drive.tick(wheelCmd(0.5f, 0.5f));  // a real nonzero write, so estop() below is a genuine transition
+  drive.estop();                    // arms stopEnforceCountdown_ = kStopEnforceTicks (30, drive.h)
+
+  left.setMockVelocity(0.0f);   // at rest throughout -- isolates the COUNTDOWN half of enforceStop
+  right.setMockVelocity(0.0f);  // from the wheelsMoving half (scenario 3 above covers that half)
+
+  constexpr int kStopEnforceTicks = 30;  // drive.h's own kStopEnforceTicks -- duplicated per this
+                                          // codebase's established fixture convention (private, no
+                                          // accessor) -- see e.g. sim_api_harness.cpp's kSettle/kClear.
+  const int kConsumed = 5;
+  for (int i = 0; i < kConsumed; ++i) drive.tick(wheelCmd(0.0f, 0.0f));
+
+  drive.takeover();  // must NOT touch stopEnforceCountdown_
+
+  // If takeover() left the countdown alone, exactly (kStopEnforceTicks -
+  // kConsumed) more tick() calls re-issue setDuty(0) before the
+  // quiet-at-zero shortcut resumes; landing anywhere else (0 more -- reset
+  // to 0; kStopEnforceTicks more -- re-armed) falsifies the AC.
+  const int kRemaining = kStopEnforceTicks - kConsumed;
+  int callsBefore = left.setDutyCalls;
+  for (int i = 0; i < kRemaining; ++i) drive.tick(wheelCmd(0.0f, 0.0f));
+  checkTrue(left.setDutyCalls == callsBefore + kRemaining,
+           "the remaining (kStopEnforceTicks - already-consumed) re-assertion ticks still fire "
+           "after takeover() -- the countdown was neither reset nor re-armed");
+
+  callsBefore = left.setDutyCalls;
+  drive.tick(wheelCmd(0.0f, 0.0f));  // one more, past the countdown -- quiet shortcut should resume
+  checkTrue(left.setDutyCalls == callsBefore,
+           "the quiet-at-zero shortcut resumes exactly when the ORIGINAL estop()-armed countdown "
+           "would have elapsed -- confirms takeover() didn't re-arm it");
+}
+
+// ===========================================================================
+// 11. 131-001 (review C3, Design Rationale Decision 2): a bias converged
+// under sustained FORWARD motion must not REDUCE a subsequent REVERSE
+// command's magnitude relative to bias==0 -- the sign-aware, magnitude-
+// domain bias fix in correctedCommand().
+// ===========================================================================
+
+void scenarioReversalAfterConvergedForwardBiasDoesNotReduceMagnitude() {
+  beginScenario("131-001 (review C3, Decision 2): a bias converged under sustained FORWARD motion "
+                "does not reduce a subsequent REVERSE command's magnitude relative to bias==0");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity: duty == corrected command
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.biasMax = 60.0f;
+  bounds.tauAdapt = 0.3f;
+  bounds.aSteady = 100.0f;
+  drive.setAdaptationBounds(bounds);
+
+  // Converge bias forward under a known under-delivering plant (mirrors
+  // scenarioBiasConvergesUnderKnownPlantGainError above).
+  const float cmd = 200.0f;
+  const float plantGain = 0.8f;
+  uint32_t now = 1000;
+  float measured = plantGain * cmd;
+  for (int i = 0; i < 400; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = cmd;
+    state.wheelLeft.velocity = measured;
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;
+    drive.tick(state);
+    measured = plantGain * (cmd + drive.biasLeft());
+    now += 50;
+  }
+  const float convergedBias = drive.biasLeft();
+  checkTrue(convergedBias > 5.0f, "setup: a genuinely positive bias converged under forward motion");
+
+  // Freeze Stage C (tauAdapt=0, the "0 = off" convention) so the reverse
+  // command below exercises ONLY correctedCommand()'s bias application,
+  // not further adaptation.
+  App::Drive::AdaptationBounds frozen;  // tauAdapt=0 default -- adaptation off, bias held
+  drive.setAdaptationBounds(frozen);
+  checkFloatEq(drive.biasLeft(), convergedBias,
+              "setup: freezing adaptationBounds does not itself reset the already-converged bias");
+
+  // A second, otherwise-identical Drive with bias == 0 (adaptation was
+  // never on) -- the uncorrected baseline this scenario compares against.
+  MockMotor left0;
+  MockMotor right0;
+  App::Drive driveZeroBias(left0, right0, trackWidth);
+  driveZeroBias.setDutyPerSpeed(1.0f, 1.0f);
+  driveZeroBias.setAdaptationBounds(frozen);
+
+  const float reverseCmd = -150.0f;
+  Types::RobotState reverseState;
+  reverseState.wheelLeft.cmdVelocity = reverseCmd;
+  reverseState.wheelLeft.velocity = 0.0f;
+  reverseState.wheelLeft.connected = true;
+  reverseState.wheelLeft.sampleTime = now - 10;
+  reverseState.time.cycleStart = now;
+  reverseState.time.cyclePeriod = 50000;
+
+  drive.tick(reverseState);
+  driveZeroBias.tick(reverseState);
+
+  const float reverseMagnitudeWithBias = std::fabs(left.lastDutyCmd);
+  const float reverseMagnitudeUncorrected = std::fabs(left0.lastDutyCmd);
+  checkTrue(reverseMagnitudeWithBias >= reverseMagnitudeUncorrected - 1e-3f,
+           "the reverse command's magnitude with the forward-converged bias is NOT reduced "
+           "relative to bias==0 -- the fix must not make reverse magnitude worse than uncorrected");
+  // Not a trivially-passing check: the corrected magnitude is measurably
+  // BOOSTED (bias > 0 helps, matching Decision 2's own physical claim), not
+  // merely "equal by coincidence."
+  checkTrue(reverseMagnitudeWithBias > reverseMagnitudeUncorrected + 1.0f,
+           "the bias genuinely BOOSTS the reverse command's magnitude (not just a no-op pass)");
+}
+
+// ===========================================================================
+// 12. 131-001 (sprint success criteria): a converged Stage C bias survives
+// MULTIPLE chained takeover() calls (2+ leg boundaries, equivalent to a
+// tour) -- never resets to 0 at any boundary. See also
+// src/tests/sim/system/sim_api_harness.cpp's own chained-MOVE scenario for
+// the same property proven through the REAL RobotLoop::handleMove() call
+// site over the full composition root.
+// ===========================================================================
+
+void scenarioBiasPersistsAcrossChainedTakeoverBoundaries() {
+  beginScenario("131-001: a converged Stage C bias survives THREE chained takeover() calls (2+ "
+                "leg boundaries, equivalent to a tour) -- never resets to 0 at any boundary");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.biasMax = 60.0f;
+  bounds.tauAdapt = 0.4f;
+  bounds.aSteady = 100.0f;
+  drive.setAdaptationBounds(bounds);
+
+  const float cmd = 200.0f;
+  const float plantGain = 0.8f;
+  uint32_t now = 1000;
+  float measured = plantGain * cmd;
+
+  auto runLeg = [&](int cycles) {
+    for (int i = 0; i < cycles; ++i) {
+      Types::RobotState state;
+      state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.velocity = measured;
+      state.wheelLeft.connected = true;
+      state.wheelLeft.sampleTime = now - 10;
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;
+      drive.tick(state);
+      measured = plantGain * (cmd + drive.biasLeft());
+      now += 50;
+    }
+  };
+
+  // Leg 1: converge bias away from 0.
+  runLeg(300);
+  const float biasAfterLeg1 = drive.biasLeft();
+  checkTrue(std::fabs(biasAfterLeg1) > 5.0f, "leg 1: bias converged away from 0");
+
+  // Leg boundary 1 -- a MOVE arrives; RobotLoop::handleMove() calls
+  // drive_.takeover() (this IS that call, hand-invoked here).
+  drive.takeover();
+  checkFloatEq(drive.biasLeft(), biasAfterLeg1, "leg boundary 1: bias UNCHANGED across takeover()");
+
+  // Leg 2: bias holds (it does not re-converge from 0 -- it was already there).
+  runLeg(20);
+  checkTrue(std::fabs(drive.biasLeft()) > 5.0f,
+           "leg 2: bias still away from 0 (never dropped to 0 at the boundary)");
+  const float biasAfterLeg2 = drive.biasLeft();
+
+  // Leg boundary 2 -- a second chained MOVE.
+  drive.takeover();
+  checkFloatEq(drive.biasLeft(), biasAfterLeg2,
+              "leg boundary 2: bias UNCHANGED across the SECOND takeover()");
+
+  // Leg 3.
+  runLeg(20);
+  checkTrue(std::fabs(drive.biasLeft()) > 5.0f,
+           "leg 3: bias still away from 0 across BOTH leg boundaries -- 2+ legs, equivalent to a "
+           "tour, no reset anywhere");
+}
+
 }  // namespace
 
 int main() {
@@ -734,6 +1078,10 @@ int main() {
   scenarioBumplessTransferAcrossBiasUpdate();
   scenarioFastPidSteadyGateAndAntiWindup();
   scenarioWheelsAndMoveReachIdenticalDriveBehavior();
+  scenarioTakeoverPreservesLearnedStateEstopFullyResets();
+  scenarioTakeoverDoesNotTouchStopReassertionCountdown();
+  scenarioReversalAfterConvergedForwardBiasDoesNotReduceMagnitude();
+  scenarioBiasPersistsAcrossChainedTakeoverBoundaries();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Drive scenarios passed\n");

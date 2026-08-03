@@ -402,6 +402,86 @@ void scenarioVirtualCycleTimingDiagnostic() {
 //    app_robot_loop_harness.cpp's identical note).
 // ===========================================================================
 
+// ===========================================================================
+// 7. 131-001 (SUC-131-001, sprint success criteria): a chained, multi-leg
+//    MOVE sequence (2+ legs, "equivalent to a tour") holds a converged
+//    Stage C bias across EVERY leg boundary -- through the REAL
+//    RobotLoop::handleMove() call site (robot_loop.cpp:227), not a
+//    hand-invoked App::Drive::takeover() call (that unit-level proof
+//    already lives in app_drive_harness.cpp's own
+//    scenarioBiasPersistsAcrossChainedTakeoverBoundaries()).
+//    configureSimForBenchTest() installs the EXACT calibration inverse of
+//    this plant's own linear response (bench_test_config.cpp), so Stage C
+//    would have nothing to close by default -- this scenario deliberately
+//    re-installs a DELIBERATELY WRONG (20% low) duty-per-speed calibration
+//    on top of it, giving Stage C a real, nonzero error to adapt against
+//    under the REAL WheelPlant physics, mirroring app_drive_harness.cpp's
+//    own hand-simulated `plantGain` scenarios but through the real
+//    plant/planner/RobotLoop stack instead of a hand-rolled one.
+// ===========================================================================
+
+void scenarioBiasPersistsAcrossChainedMoveLegs() {
+  beginScenario("131-001: a chained, multi-leg MOVE sequence (2+ legs) holds a converged Stage C "
+                "bias across every leg boundary -- RobotLoop::handleMove()'s drive_.takeover() "
+                "call does not reset it, unlike the drive_.estop() call it replaces");
+
+  TestSim::SimHarness sim;
+  TestSupport::configureSimForBenchTest(sim);
+
+  // Deliberately mis-calibrate Stage A below the REAL plant's linear
+  // response (configureSimForBenchTest() installs the EXACT inverse,
+  // 1/kDefaultDutyVelMax) -- 80% of the true value under-predicts the duty
+  // needed for a given commanded speed, so the wheel genuinely
+  // under-delivers and Stage C has a real, nonzero error to close.
+  const float trueKff = 1.0f / TestSim::kDefaultDutyVelMax;
+  sim.drive().setDutyPerSpeed(trueKff * 0.8f, trueKff * 0.8f);
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.vMin = 0.0f;
+  bounds.biasMax = 80.0f;   // [mm/s]
+  bounds.tauAdapt = 1.0f;   // [s] -- converges within a few seconds of virtual cruise
+  bounds.aSteady = 1.0e6f;  // effectively unshaped, matching configureSimForBenchTest()'s own
+                            // unshaped shaper ceilings -- always "steady" outside the one-cycle
+                            // ramp instant
+  sim.drive().setAdaptationBounds(bounds);
+
+  sim.boot();
+
+  // Leg 1: a long TIME-stop cruise, long enough for Stage C to converge
+  // well away from 0 under the deliberate 20% under-calibration above.
+  sim.injectMove(/*v_x=*/200.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
+                 /*stopValue=*/8000.0f, /*timeout=*/20000.0f, /*replace=*/true, /*id=*/1,
+                 /*corrId=*/1);
+  sim.step(160);  // 160 * 50ms == 8s of virtual cruise -- comfortably past tauAdapt=1s
+  (void)sim.drainTelemetry();
+
+  const float biasAfterLeg1 = sim.drive().biasLeft();
+  checkTrue(std::fabs(biasAfterLeg1) > 5.0f,
+            "setup: Stage C genuinely converged away from 0 under the deliberate mis-calibration");
+
+  // Leg 2 -- a SECOND, chained MOVE (a fresh id; leg 1's own TIME stop
+  // condition has already ended it). This is the EXACT RobotLoop::
+  // handleMove() call site this ticket changes (robot_loop.cpp:227):
+  // drive_.takeover(), not drive_.estop().
+  sim.injectMove(180.0f, 0.0f, 0.0f, TestSupport::MoveStopKind::kTime, /*stopValue=*/8000.0f,
+                 /*timeout=*/20000.0f, /*replace=*/true, /*id=*/2, /*corrId=*/2);
+  sim.step(1);  // the cycle handleMove() actually runs on
+  checkFloatGe(std::fabs(sim.drive().biasLeft()), 5.0f,
+               "leg boundary 1: bias did NOT reset to 0 at the SECOND leg's own handleMove()/"
+               "takeover() call");
+
+  sim.step(40);  // ~2s further into leg 2
+
+  // Leg 3 -- a THIRD chained MOVE (2+ leg boundaries, "equivalent to a
+  // tour" per this ticket's own acceptance criterion).
+  sim.injectMove(160.0f, 0.0f, 0.0f, TestSupport::MoveStopKind::kTime, /*stopValue=*/8000.0f,
+                 /*timeout=*/20000.0f, /*replace=*/true, /*id=*/3, /*corrId=*/3);
+  sim.step(1);
+  checkFloatGe(std::fabs(sim.drive().biasLeft()), 5.0f,
+               "leg boundary 2: bias STILL has not reset to 0 at the THIRD leg's boundary -- 2+ "
+               "chained legs, no reset anywhere along the tour");
+}
+
 }  // namespace
 
 int main() {
@@ -410,6 +490,7 @@ int main() {
   scenarioStopAcksAndClearsActive();
   scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic();
   scenarioVirtualCycleTimingDiagnostic();
+  scenarioBiasPersistsAcrossChainedMoveLegs();
 
   if (g_failureCount == 0) {
     std::printf("OK: all sim_api scenarios passed\n");

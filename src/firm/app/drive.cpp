@@ -18,18 +18,34 @@ void Drive::command(float vLeft, float vRight, float duration,
   commandActive_ = true;
 }
 
-void Drive::estop() {
+void Drive::takeover() {
   targetLeft_ = 0.0f;
   targetRight_ = 0.0f;
   commandActive_ = false;
   // completionPending_ is deliberately NOT set: a discarded command does
-  // not complete (drive.h's own estop() doc comment). An ALREADY-latched
-  // completion from a command that expired normally this cycle is left
-  // alone -- it describes something that really happened.
+  // not complete (drive.h's own estop() doc comment, which this shares). An
+  // ALREADY-latched completion from a command that expired normally this
+  // cycle is left alone -- it describes something that really happened.
+
+  // Deliberately NOT touched (131-001, see drive.h's own header): Stage B's
+  // integrators, Stage C's bias, the deficit latch, and
+  // stopEnforceCountdown_. This is an ownership handover, not a safety
+  // event -- the plant did not change, only the writer did, so there is
+  // nothing here to reset and no "verify the wheels actually reached rest"
+  // window to arm.
+}
+
+void Drive::estop() {
+  // Shared with takeover() (131-001, see drive.h's own header): zero
+  // targets, disarm the WHEELS command.
+  takeover();
 
   // Arm the stop re-assertion window (129-001, see drive.h's own header):
   // the next kStopEnforceTicks tick() calls re-issue the zero duty write
-  // instead of taking the quiet-at-zero shortcut below.
+  // instead of taking the quiet-at-zero shortcut below. NOT part of
+  // takeover()'s shared half -- this window's whole purpose is verifying a
+  // commanded STOP is actually observed at rest, which only applies to a
+  // genuine safety stop, not an ownership handover.
   stopEnforceCountdown_ = kStopEnforceTicks;
 
   // Stage B/C reset (130-004, see drive.h's own header) -- part of the
@@ -39,7 +55,9 @@ void Drive::estop() {
   // moment to stop trusting whatever the slow adaptation had learned
   // about the PRIOR load condition. The deficit-flag latch resets too --
   // a stop is a fresh start, not a continuation of whatever deficit was
-  // accumulating before it.
+  // accumulating before it. NOT shared with takeover() (131-001) -- an
+  // ownership handover must KEEP exactly this state, which is the whole
+  // point of the split.
   pidIntegralLeft_ = 0.0f;
   pidIntegralRight_ = 0.0f;
   biasLeft_ = 0.0f;
@@ -109,6 +127,25 @@ void Drive::setWheelCorrection(float gLA, float iLA, float gLD, float iLD,
 // or a nonzero bias would creep a stopped wheel forward/back -- the
 // exact defect this same guard already prevents for the map's own
 // intercept.
+//
+// 131-001 (sprint 131 Design Rationale Decision 2, review C3): `bias` is
+// applied in the MAGNITUDE domain, following `desired`'s CURRENT sign --
+// NOT as a body-frame-fixed additive term added after copysign(). Once
+// takeover() (131-001) stops resetting bias on every MOVE, a bias learned
+// under sustained motion in ONE direction becomes long-lived enough to be
+// exercised across a direction reversal for the first time; a fixed
+// additive term would then REDUCE a reverse command's magnitude whenever
+// the converged bias is positive (learned while under-delivering forward),
+// exactly backwards from what Stage C is for. Folding bias into the
+// magnitude before restoring the sign means a bias that boosts one
+// direction boosts the other too -- the physical droop it corrects is a
+// property of the wheel's instantaneous load, not which way it is
+// currently being asked to turn (130-004's own one-bias-per-wheel
+// rationale, unchanged). Never let the correction invert the commanded
+// direction (same "don't flip sign" posture as applySpeedFloor()'s own
+// doc comment below): a bias whose magnitude exceeds the commanded
+// magnitude means the correction hasn't converged usefully yet, not that
+// the wheel should reverse.
 float Drive::correctedCommand(float desired, float previous, bool leftWheel,
                               float bias) const {
   if (desired == 0.0f) return 0.0f;  // stop is stop; never offset it (map OR bias)
@@ -119,7 +156,9 @@ float Drive::correctedCommand(float desired, float previous, bool leftWheel,
   const float magnitude =
       (std::fabs(desired) - corrIntercept_[w][d]) / corrGain_[w][d];
   if (magnitude <= 0.0f) return 0.0f;  // below the intercept: unreachable
-  return std::copysign(magnitude, desired) + bias;
+  const float correctedMagnitude = magnitude + bias;
+  if (correctedMagnitude <= 0.0f) return 0.0f;  // never flip direction; not converged yet
+  return std::copysign(correctedMagnitude, desired);
 }
 
 float Drive::crawlDuty(float duty, float& carry) const {

@@ -215,7 +215,7 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
   // A retried enqueue whose original ack was lost carries this same id under
   // a fresh corr_id. Ack it as success -- the move genuinely is enqueued,
   // running, or done, and an error would make the host abandon a move that
-  // actually executed. Returning here also skips the drive_.estop() below,
+  // actually executed. Returning here also skips the drive_.takeover() below,
   // which would otherwise disturb a planner move already in flight, and
   // precedes any `replace` handling, so a duplicate cannot restart a move
   // mid-flight.
@@ -224,7 +224,12 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
     return;
   }
 
-  drive_.estop();  // the planner takes over motion (one owner at a time)
+  // 131-001: takeover(), not estop() -- the planner takes over motion (one
+  // owner at a time), but Drive's learned state (Stage B's integrators,
+  // Stage C's bias, the deficit latch) survives the handover, so a
+  // chained tour's adaptation is not cold-started on every leg (drive.h's
+  // own header, Decisions 1/2).
+  drive_.takeover();
   const bool accepted = planner_.move(m, move.replace);
   // Only a real accept is recorded: an ERR_FULL move never ran, and the host
   // is entitled to send it again once the queue drains.
