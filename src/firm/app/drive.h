@@ -33,7 +33,13 @@
 //                                stiction does not stick-slip (the
 //                                documented 2-3 Hz duty-domain limit
 //                                cycle this design avoids by construction,
-//                                not by tuning). Reset on estop().
+//                                not by tuning). Reset on estop(). Skipped
+//                                OUTRIGHT (output forced 0, integrator
+//                                untouched) at commanded-zero, and its
+//                                integrator only accumulates on a fresh/
+//                                connected/non-frozen measurement -- same
+//                                shape as the steady gate below (131-002,
+//                                see tick()'s own doc comment, drive.cpp).
 //        Stage C (slow)      -- bounded adaptation of ONE parameter, the
 //                                map's additive `bias` -- NEVER the
 //                                slope. Runs only when steady
@@ -211,6 +217,16 @@ class Drive {
   // correction at the planning layer, and this stage's live bench
   // tuning is ticket 006's job, on hardware -- not a judgment call this
   // ticket can make with tovez hard-silent.
+  //
+  // 131-002: two further gates apply to this stage regardless of the
+  // gain values configured here -- a commanded-zero wheel skips
+  // fastPid() OUTRIGHT (no P/feedforward/clamp math runs, integrator
+  // untouched), and the integrator only ACCUMULATES on a fresh/
+  // connected/non-frozen measurement (the same conjunct Stage C's
+  // adaptBias() already required) -- a stale/disconnected/frozen
+  // reading freezes it exactly like the existing steady gate, rather
+  // than winding against a manufactured zero-velocity reading. See
+  // tick()'s own doc comment (drive.cpp) for the full rationale.
   struct ControlGains {
     float kp = 0.0f;      // [1] dimensionless: mm/s of PID output per mm/s of error
     float ki = 0.0f;      // [1/s]
@@ -369,6 +385,12 @@ class Drive {
   // persistent state (pidIntegralLeft_/Right_ below), mutated in place.
   // `steady` gates the integrator exactly like Motion::WheelTrim's own
   // Hold-phase gate (wheel_trim.cpp) -- see drive.cpp's own doc comment.
+  // 131-002: the caller folds this wheel's freshness into `steady` too
+  // (steady && fresh), so a stale/disconnected/frozen reading freezes the
+  // integrator through this SAME parameter -- fastPid() itself knows
+  // nothing about freshness, only "may I integrate right now." tick()'s
+  // own commanded-zero guard skips calling this function entirely rather
+  // than passing a flag through it -- see tick()'s own doc comment.
   float fastPid(float& integral, float err, float aCmd, float dt,
                bool steady) const;
 

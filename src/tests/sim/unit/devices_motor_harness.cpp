@@ -944,12 +944,19 @@ void scenarioExplicitZeroWriteShapingIsPassThrough() {
 }
 
 // sampleTime() (124-002, protocol-v5 §B2 prerequisite) -- 125-003: with the
-// freshness gate deleted, sampleTime() now simply reports the nowUs of the
-// most recent tick() call (see nezha_motor.h's own doc comment) -- this is
-// the accessor the wire's `enc_left`/`enc_right` age fields read; ticket
-// 004's App::WheelObserver will restore a real per-sample age.
+// freshness gate deleted, sampleTime() simply reported the nowUs of the most
+// recent tick() call. 131-002 (issue A-commanded-zero-leaks-through-stage-
+// b.md) narrowed that: sampleTime() now returns lastFreshUs_, which advances
+// ONLY on a tick whose collect actually succeeded -- on the HEALTHY path
+// this scenario exercises (every collect below succeeds), that is still
+// indistinguishable from "the most recent tick() call's own nowUs," so this
+// scenario's own assertions are unchanged; see
+// scenarioSampleTimeHoldsLastSuccessfulCollectAcrossFailedCollects() below
+// for the failed-collect contrast. This is the accessor the wire's
+// `enc_left`/`enc_right` age fields read; ticket 004's App::WheelObserver
+// will restore a real per-sample estimator on top of it.
 void scenarioSampleTimeReflectsMostRecentTick() {
-  beginScenario("sampleTime() reflects the most recent tick() call's own nowUs");
+  beginScenario("sampleTime() reflects the most recent tick() call's own nowUs (healthy path)");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
@@ -972,6 +979,75 @@ void scenarioSampleTimeReflectsMostRecentTick() {
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the run");
 }
 
+// 12. NEW (131-002, issue A-commanded-zero-leaks-through-stage-b.md): a
+//     failed encoder collect (connected_ false -- the scripted read below
+//     NAKs, so collectEncoder()'s own `connected_ = pendingEncRequestOk_ &&
+//     (readResult == kOk)` comes back false) must NOT advance sampleTime().
+//     lastFreshUs_ holds the last SUCCESSFUL collect's timestamp across one
+//     or more failing ticks in a row, then resumes advancing once a collect
+//     succeeds again. Contrasts directly with
+//     scenarioSampleTimeReflectsMostRecentTick() above, which covers the
+//     healthy path where every collect succeeds. velocity_'s own diffing
+//     behavior is untouched by this fix (not re-asserted here beyond the
+//     existing scenarios above) -- this scenario is scoped to the
+//     freshness timestamp only, per the ticket's own acceptance criterion.
+void scenarioSampleTimeHoldsLastSuccessfulCollectAcrossFailedCollects() {
+  beginScenario("sampleTime() holds the last successful collect's timestamp across failed "
+                "collects (131-002)");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::MotorConfig cfg = baseNezhaConfig();
+  Devices::NezhaMotor motor(plant, cfg);
+
+  // Baseline: a genuinely successful collect at nowUs=0.
+  scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
+  motor.requestSample();
+  motor.tick(0);
+  checkTrue(motor.connected(), "baseline collect succeeds");
+  checkTrue(motor.sampleTime() == 0, "sampleTime() reflects the baseline successful collect");
+
+  // A second successful collect advances sampleTime() normally -- confirms
+  // the healthy reference behavior before introducing the failure below.
+  scriptEncoderRequestCollect(bus, wireAddr, 5.0f);
+  motor.requestSample();
+  motor.tick(20000);
+  checkTrue(motor.connected(), "second collect also succeeds");
+  checkTrue(motor.sampleTime() == 20000, "sampleTime() advances on a second successful collect");
+
+  // A failed collect: requestEncoder()'s own 0x46 write succeeds
+  // (pendingEncRequestOk_ true), but the read collectEncoder() performs
+  // NAKs -- connected_ becomes false. Must NOT advance sampleTime(), across
+  // TWO consecutive failing ticks.
+  uint8_t garbage[4] = {0, 0, 0, 0};
+  bus.queueWrite(wireAddr, /*status=*/0);              // requestEncoder()'s 0x46 write succeeds
+  bus.queueRead(wireAddr, garbage, 4, /*status=*/-5);  // collectEncoder()'s read NAKs
+  motor.requestSample();
+  motor.tick(40000);
+  checkTrue(!motor.connected(), "the scripted read failure reports disconnected");
+  checkTrue(motor.sampleTime() == 20000,
+            "sampleTime() holds the LAST SUCCESSFUL collect's timestamp across a failed collect, "
+            "not the failed attempt's own nowUs (40000)");
+
+  bus.queueWrite(wireAddr, /*status=*/0);
+  bus.queueRead(wireAddr, garbage, 4, /*status=*/-5);
+  motor.requestSample();
+  motor.tick(60000);
+  checkTrue(!motor.connected(), "a second consecutive failed collect also reports disconnected");
+  checkTrue(motor.sampleTime() == 20000,
+            "sampleTime() still holds the last successful collect's timestamp across TWO "
+            "consecutive failing ticks");
+
+  // A subsequent successful collect resumes advancing sampleTime() normally.
+  scriptEncoderRequestCollect(bus, wireAddr, 8.0f);
+  motor.requestSample();
+  motor.tick(80000);
+  checkTrue(motor.connected(), "collect recovers");
+  checkTrue(motor.sampleTime() == 80000,
+            "sampleTime() resumes advancing once the collect succeeds again");
+}
+
 }  // namespace
 
 int main() {
@@ -988,6 +1064,7 @@ int main() {
   scenarioReconfigureGuardedWholeConfigReplacement();
   scenarioExplicitZeroWriteShapingIsPassThrough();
   scenarioSampleTimeReflectsMostRecentTick();
+  scenarioSampleTimeHoldsLastSuccessfulCollectAcrossFailedCollects();
 
   if (g_failureCount == 0) {
     std::printf("OK: all devices motor scenarios passed\n");

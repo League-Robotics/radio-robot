@@ -102,8 +102,12 @@ class Motor {
 
   // The nowUs of the tick() call that produced the CURRENTLY-cached
   // position()/velocity() reading — the last ACCEPTED fresh sample's own
-  // timestamp, never "now" at call time (NezhaMotor's lastFreshUs_ is the
-  // reference implementation). Lets a caller compute a real per-sample age
+  // timestamp, never "now" at call time. IMPLEMENTED (131-002 — this
+  // comment used to promise a lastFreshUs_ field that did not yet exist;
+  // it now does): NezhaMotor::lastFreshUs_ (nezha_motor.h) advances only
+  // when that tick's collectEncoder() actually succeeded, and
+  // NezhaMotor::sampleTime() returns exactly that field, not every
+  // tick() call's own nowUs. Lets a caller compute a real per-sample age
   // instead of stamping every reading with the same cycle's now — see
   // protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md §B2.
   virtual uint64_t sampleTime() const = 0;  // [us]

@@ -612,6 +612,211 @@ void scenarioFastPidSteadyGateAndAntiWindup() {
 }
 
 // ===========================================================================
+// 131-002 (issue A-commanded-zero-leaks-through-stage-b.md): commanded-zero
+// through Stage B, and Stage B's own freshness gate. correctedCommand()'s
+// `desired == 0.0f` guard (Stage A) has NO effect on Stage B -- fastPid() is
+// a fully separate computation on MEASURED velocity, so a wheel that has not
+// yet coasted to rest keeps a nonzero err even after its commanded speed
+// reaches exactly 0. The two scenarios below prove: (1) a commanded-zero
+// wheel writes exactly 0 duty every tick regardless of a pre-wound
+// integrator, and that integrator is FROZEN (not reset) across the whole
+// zero period; (2) a stale/disconnected/frozen wheel's integrator likewise
+// stays frozen rather than winding against a manufactured zero-velocity
+// reading (the same freshness conjunct Stage C's adaptBias() already uses).
+// ===========================================================================
+
+// 9. Commanded speed exactly 0.0f -> Stage B's contribution and the written
+//    duty are exactly 0.0 every tick, no matter how long, regardless of the
+//    integrator's retained value -- and the integrator is FROZEN (not
+//    reset): re-commanding the ORIGINAL nonzero speed/error afterward
+//    resumes from at least the pre-zero pid value, never from scratch.
+void scenarioCommandedZeroForcesStageBToZeroAndFreezesIntegrator() {
+  beginScenario("Stage B: commanded-zero forces the contribution and written duty to exactly 0.0, "
+                "and FREEZES (does not reset) the integrator across the zero period (131-002)");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
+
+  App::Drive::ControlGains gains;
+  gains.kp = 0.05f;
+  gains.ki = 0.5f;
+  gains.iMax = 50.0f;
+  gains.kaff = 0.0f;
+  gains.pidMax = 40.0f;  // reachable within this test's winding budget (see Phase 1 below)
+  drive.setControlGains(gains);
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.aSteady = 50.0f;  // [mm/s^2] -- cmdAccel always 0 below, so always "steady"
+  // tauAdapt left at 0 (all-zero default) -- Stage C stays off, isolating Stage B.
+  drive.setAdaptationBounds(bounds);
+
+  const float cmd = 200.0f;  // [mm/s] commanded cruise speed
+  uint32_t now = 1000;
+
+  // Phase 1: wind the integrator to a known, comfortably-nonzero value
+  // (pins at pidMax=40 well within 10 cycles -- see
+  // scenarioFastPidSteadyGateAndAntiWindup()'s own arithmetic, identical
+  // gains/error) under a persistent, steady error.
+  for (int i = 0; i < 10; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = cmd;
+    state.wheelLeft.velocity = 0.0f;  // stalled: a large, persistent error
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;  // [us] -- dt = 0.05s
+    drive.tick(state);
+    now += 50;
+  }
+  const float pidBeforeZero = drive.pidLeft();
+  checkTrue(pidBeforeZero > 1.0f,
+           "setup: the integrator actually wound up to a nonzero value before the zero period");
+
+  // Phase 2: command exactly zero for many ticks -- Stage B's contribution
+  // and the written duty must be EXACTLY zero every single tick, regardless
+  // of the integrator's retained (nonzero) value.
+  for (int i = 0; i < 20; ++i) {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = 0.0f;
+    state.wheelLeft.velocity = 0.0f;
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;
+    drive.tick(state);
+    checkFloatEq(drive.pidLeft(), 0.0f,
+                "commanded-zero: Stage B's contribution is exactly 0.0, every tick");
+    checkFloatEq(left.lastDutyCmd, 0.0f,
+                "commanded-zero: written duty is exactly 0.0, every tick");
+    now += 50;
+  }
+
+  // Phase 3: re-command the ORIGINAL nonzero speed/error for exactly one
+  // tick. If the integrator had been RESET to 0 during the zero period, this
+  // tick's pid would be far below pidBeforeZero (starting from scratch). It
+  // is instead FROZEN at its pre-zero value throughout Phase 2, so this
+  // tick's pid must be at least pidBeforeZero.
+  Types::RobotState resumeState;
+  resumeState.wheelLeft.cmdVelocity = cmd;
+  resumeState.wheelLeft.velocity = 0.0f;
+  resumeState.wheelLeft.connected = true;
+  resumeState.wheelLeft.sampleTime = now - 10;
+  resumeState.time.cycleStart = now;
+  resumeState.time.cyclePeriod = 50000;
+  drive.tick(resumeState);
+  checkTrue(drive.pidLeft() >= pidBeforeZero - 1e-3f,
+           "resumed motion: pid picks up from at least the pre-zero value -- the integrator was "
+           "FROZEN across the commanded-zero period, not reset to 0");
+}
+
+// 10. A stale/disconnected/frozen wheel's Stage B integrator stays FROZEN
+//     (never winds), sharing the SAME freshness conjunct Stage C's
+//     adaptBias() already required (connected/wheelFrozenLeft/sampleTime
+//     age) -- exercised as three independent failure modes, each proven by
+//     the p-term-only value staying IDENTICAL across many ticks under a
+//     persistent error (mirrors scenarioFastPidSteadyGateAndAntiWindup()'s
+//     own ramping-phase proof technique).
+void scenarioStaleDisconnectedOrFrozenWheelFreezesStageBIntegrator() {
+  beginScenario("Stage B: a stale/disconnected/frozen wheel's integrator stays FROZEN, never "
+                "winding against a manufactured reading (131-002)");
+
+  App::Drive::ControlGains gains;
+  gains.kp = 0.05f;
+  gains.ki = 0.5f;
+  gains.iMax = 50.0f;
+  gains.kaff = 0.0f;
+  gains.pidMax = 40.0f;
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.aSteady = 50.0f;  // [mm/s^2]
+
+  const float cmd = 200.0f;  // [mm/s]
+  const float kExpectedPOnly = gains.kp * cmd;  // 10.0 -- integrator frozen at 0, no feed term
+
+  // (a) disconnected -- state.wheelLeft.connected == false throughout.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setControlGains(gains);
+    drive.setAdaptationBounds(bounds);
+
+    uint32_t now = 1000;
+    for (int i = 0; i < 20; ++i) {
+      Types::RobotState state;
+      state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.velocity = 0.0f;  // manufactured zero on a failed collect -- large "error"
+      state.wheelLeft.connected = false;  // disconnected -- NOT fresh
+      state.wheelLeft.sampleTime = now - 10;
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;
+      drive.tick(state);
+      checkFloatEq(drive.pidLeft(), kExpectedPOnly,
+                  "disconnected: pid is p-term only, no integral growth -- Stage B never winds "
+                  "against a disconnected wheel");
+      now += 50;
+    }
+  }
+
+  // (b) stale sample age -- connected, but sampleTime()'s implied age
+  //     exceeds kMaxSampleAge (200ms), the same "not fresh" conjunct via a
+  //     different failure mode.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setControlGains(gains);
+    drive.setAdaptationBounds(bounds);
+
+    uint32_t now = 1000;
+    for (int i = 0; i < 20; ++i) {
+      Types::RobotState state;
+      state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.velocity = 0.0f;
+      state.wheelLeft.connected = true;
+      state.wheelLeft.sampleTime = 0;  // ancient -- age (cycleStart - 0) always >> 200ms here
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;
+      drive.tick(state);
+      checkFloatEq(drive.pidLeft(), kExpectedPOnly,
+                  "stale sample age: pid is p-term only, no integral growth");
+      now += 50;
+    }
+  }
+
+  // (c) frozen (Health::wheelFrozenLeft) -- the third fresh conjunct.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setControlGains(gains);
+    drive.setAdaptationBounds(bounds);
+
+    uint32_t now = 1000;
+    for (int i = 0; i < 20; ++i) {
+      Types::RobotState state;
+      state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.velocity = 0.0f;
+      state.wheelLeft.connected = true;
+      state.wheelLeft.sampleTime = now - 10;  // fresh BY AGE ...
+      state.health.wheelFrozenLeft = true;    // ... but frozen -- still NOT fresh
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;
+      drive.tick(state);
+      checkFloatEq(drive.pidLeft(), kExpectedPOnly,
+                  "frozen wheel: pid is p-term only, no integral growth");
+      now += 50;
+    }
+  }
+}
+
+// ===========================================================================
 // 8. 130-005 AC#2: a WHEELS teleop command and a planner Move both reach the
 // SAME Drive controller path -- Drive's tick() reads only state.wheelLeft/
 // Right.cmdVelocity/cmdAccel/velocity, with NO knowledge of which subsystem
@@ -1077,6 +1282,8 @@ int main() {
   scenarioBiasClampHoldsAgainstDivergentError();
   scenarioBumplessTransferAcrossBiasUpdate();
   scenarioFastPidSteadyGateAndAntiWindup();
+  scenarioCommandedZeroForcesStageBToZeroAndFreezesIntegrator();
+  scenarioStaleDisconnectedOrFrozenWheelFreezesStageBIntegrator();
   scenarioWheelsAndMoveReachIdenticalDriveBehavior();
   scenarioTakeoverPreservesLearnedStateEstopFullyResets();
   scenarioTakeoverDoesNotTouchStopReassertionCountdown();

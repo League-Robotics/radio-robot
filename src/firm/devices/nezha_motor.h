@@ -134,18 +134,24 @@ class NezhaMotor : public Motor {
 
   bool connected() const override { return connected_; }
 
-  // Motor::sampleTime() override -- every tick() call is treated as
-  // fresh, so this simply returns lastTickUs_, the nowUs of the most
-  // recent tick() call -- the encoder characterization says this is the
-  // truth on the clean schedule (fresh sample every cycle; docs/design/
-  // encoder-refresh-characterization.md), not a degraded placeholder.
-  uint64_t sampleTime() const override { return lastTickUs_; }  // [us]
+  // Motor::sampleTime() override -- returns lastFreshUs_ (131-002, issue
+  // A-commanded-zero-leaks-through-stage-b.md), which advances ONLY when
+  // this leaf's own tick() step 1 collect actually SUCCEEDED (connected_
+  // true), NOT merely on every tick() call -- see lastFreshUs_'s own
+  // field comment below. On the clean schedule (fresh sample every
+  // cycle; docs/design/encoder-refresh-characterization.md) this is
+  // indistinguishable from "every tick() call," which is what this
+  // accessor used to return outright (lastTickUs_) -- but on a
+  // disconnected/glitching bus it now correctly HOLDS the last genuine
+  // reading's timestamp instead of reporting a failed collect as fresh.
+  uint64_t sampleTime() const override { return lastFreshUs_; }  // [us]
 
   // tick() — the leaf's 2-step contract (see nezha_motor.cpp; MotorArmor's
   // own tick() wraps this with its own decorator-level steps):
   //   1. sample + cache this motor's own encoder (device-specific), and
   //      compute a naive per-tick velocity from it (see this file's own
-  //      header).
+  //      header); advance lastFreshUs_ (131-002) only when this collect
+  //      genuinely succeeded.
   //   2. mode dispatch — Mode::Active writes the staged raw duty via
   //      writeShapedDuty(); Mode::Neutral writes 0 via writeShapedDuty();
   //      Mode::None dispatches nothing.
@@ -173,6 +179,16 @@ class NezhaMotor : public Motor {
   float lastPosition_ = 0.0f;          // [mm]
   float velocity_ = 0.0f;              // [mm/s] naive per-tick difference quotient (see this file's own header)
   uint64_t lastTickUs_ = 0;            // [us] this leaf's own time seam — see file header
+  // Genuine freshness (131-002, issue A-commanded-zero-leaks-through-
+  // stage-b.md): advances ONLY when THIS tick's collectEncoder() actually
+  // succeeded (connected_ true) -- unlike lastTickUs_ above, which stamps
+  // every tick() call regardless of collect outcome. sampleTime() (above)
+  // returns THIS field, not lastTickUs_, so a caller's freshness/age
+  // computation (App::Drive's Stage B/C gates, drive.cpp; Telemetry's own
+  // age fields) tells the truth about the last SUCCESSFUL read on a
+  // disconnected/glitching bus, instead of reading "fresh" off a tick
+  // that never actually collected anything.
+  uint64_t lastFreshUs_ = 0;           // [us]
   bool hasLastTick_ = false;
   bool connected_ = false;
 

@@ -217,6 +217,18 @@ void NezhaMotor::tick(uint64_t nowUs)
     lastPosition_ = pos;
     lastTickUs_ = nowUs;
 
+    // Genuine freshness (131-002, issue A-commanded-zero-leaks-through-
+    // stage-b.md): advance lastFreshUs_ ONLY when THIS tick's collect
+    // actually succeeded -- connected_ was just set by collectEncoder()
+    // above, reflecting both halves of the split-phase transaction. On a
+    // failed collect this is left untouched, so sampleTime() (which
+    // returns lastFreshUs_, not lastTickUs_) continues to report the
+    // last SUCCESSFUL read's timestamp rather than "fresh" on a
+    // disconnected/glitching bus.
+    if (connected_) {
+        lastFreshUs_ = nowUs;
+    }
+
     // 2. Mode dispatch. Mode::Active writes the staged raw duty via
     // writeShapedDuty(); Mode::Neutral writes 0 via writeShapedDuty();
     // Mode::None dispatches nothing.

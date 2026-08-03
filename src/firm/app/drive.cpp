@@ -329,6 +329,25 @@ void Drive::tick(const Types::RobotState& state) {
   lastSpeedLeft_ = speedLeft;
   lastSpeedRight_ = speedRight;
 
+  // Wheel-measurement freshness gate (moved ahead of Stage B, 131-002,
+  // issue A-commanded-zero-leaks-through-stage-b.md): the SAME fresh/
+  // connected/non-frozen conjunct Stage C already computed, now shared by
+  // both stages. A failed encoder collect MANUFACTURES velocity = 0
+  // (Devices::NezhaMotor::collectEncoder()'s own doc comment,
+  // nezha_motor.cpp) rather than reporting the read as missing, so
+  // without this gate Stage B would wind its integrator toward closing a
+  // gap against a wheel it cannot actually see. `sampleTime` now reflects
+  // NezhaMotor's genuine `lastFreshUs_` (131-002, nezha_motor.h) -- the
+  // last SUCCESSFUL collect, not merely the last tick() attempt -- so
+  // this age check cannot be fooled by a wedged bus stamping "fresh" on a
+  // dead reading.
+  const bool freshLeft = state.wheelLeft.connected && !state.health.wheelFrozenLeft &&
+                        sampleAge(state.time.cycleStart, state.wheelLeft.sampleTime) <=
+                            kMaxSampleAge;
+  const bool freshRight = state.wheelRight.connected && !state.health.wheelFrozenRight &&
+                         sampleAge(state.time.cycleStart, state.wheelRight.sampleTime) <=
+                             kMaxSampleAge;
+
   // Stage B: the fast PID, small authority, on wheel-speed error.
   // cyclePeriod is last cycle's measured period [us] -- consistent with
   // every other value tick() reads here being "as of last cycle"
@@ -339,10 +358,33 @@ void Drive::tick(const Types::RobotState& state) {
   const float errRight = speedRight - state.wheelRight.velocity;
   const bool steadyLeft = std::fabs(state.wheelLeft.cmdAccel) < bounds_.aSteady;
   const bool steadyRight = std::fabs(state.wheelRight.cmdAccel) < bounds_.aSteady;
-  const float pidLeft = fastPid(pidIntegralLeft_, errLeft, state.wheelLeft.cmdAccel,
-                                dt, steadyLeft);
-  const float pidRight = fastPid(pidIntegralRight_, errRight, state.wheelRight.cmdAccel,
-                                 dt, steadyRight);
+
+  // Commanded-zero guard (131-002): correctedCommand()'s own
+  // `desired == 0.0f` guard (Stage A, above) has NO effect here -- Stage B
+  // is a fully separate computation reading the wheel's MEASURED
+  // velocity, and a wheel that has not yet physically coasted to rest
+  // keeps a nonzero err after its commanded speed reaches exactly 0
+  // (steadyLeft/Right can go true the instant the deceleration itself
+  // ends, well before the wheel actually stops -- the integrator would
+  // then resume winding against the residual coast-down error). Skip
+  // fastPid() OUTRIGHT for a commanded-zero wheel: no P/feedforward/clamp
+  // math runs, and the integrator is left completely untouched (frozen,
+  // not reset) -- "stop is stop" through Stage B too, matching
+  // correctedCommand()'s own guard and applySpeedFloor()'s own guard.
+  // Otherwise, additionally require this wheel's freshness (computed
+  // above) before the integrator may accumulate -- folded into the SAME
+  // `steady` parameter fastPid() already gates on, so a stale/
+  // disconnected/frozen reading freezes it exactly like the existing
+  // !steady case, rather than winding against a manufactured
+  // zero-velocity reading.
+  const float pidLeft = (speedLeft == 0.0f)
+      ? 0.0f
+      : fastPid(pidIntegralLeft_, errLeft, state.wheelLeft.cmdAccel, dt,
+                steadyLeft && freshLeft);
+  const float pidRight = (speedRight == 0.0f)
+      ? 0.0f
+      : fastPid(pidIntegralRight_, errRight, state.wheelRight.cmdAccel, dt,
+                steadyRight && freshRight);
   lastPidLeft_ = pidLeft;
   lastPidRight_ = pidRight;
 
@@ -358,13 +400,7 @@ void Drive::tick(const Types::RobotState& state) {
   // consumer). Computed AFTER this tick's duty (bias changes by at most
   // dt/tauAdapt per cycle, so the update lands on the NEXT tick's Stage
   // A, never stepping this tick's own output -- the bumpless-transfer
-  // property).
-  const bool freshLeft = state.wheelLeft.connected && !state.health.wheelFrozenLeft &&
-                        sampleAge(state.time.cycleStart, state.wheelLeft.sampleTime) <=
-                            kMaxSampleAge;
-  const bool freshRight = state.wheelRight.connected && !state.health.wheelFrozenRight &&
-                         sampleAge(state.time.cycleStart, state.wheelRight.sampleTime) <=
-                             kMaxSampleAge;
+  // property). freshLeft/Right computed once, above, shared with Stage B.
   adaptBias(biasLeft_, errLeft, state.wheelLeft.cmdAccel, std::fabs(speedLeft),
            freshLeft, dt);
   adaptBias(biasRight_, errRight, state.wheelRight.cmdAccel, std::fabs(speedRight),
