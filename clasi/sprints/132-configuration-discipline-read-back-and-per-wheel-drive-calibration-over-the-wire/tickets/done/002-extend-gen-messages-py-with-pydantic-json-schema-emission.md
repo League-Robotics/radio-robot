@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Extend gen_messages.py with pydantic + JSON Schema emission
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-005
@@ -34,18 +34,18 @@ get pydantic + JSON Schema).
 
 ## Acceptance Criteria
 
-- [ ] Running the extended `gen_messages.py` against `robot_config.proto`
+- [x] Running the extended `gen_messages.py` against `robot_config.proto`
       produces a C++ header with one struct per robot-config group
       (`Geometry`/`Motors`/`Drive`/`WheelControl`/`Planner`/`Otos`/
       `Estimator`), field names/types matching the schema.
-- [ ] The same run produces a pydantic `BaseModel` class per group (all
+- [x] The same run produces a pydantic `BaseModel` class per group (all
       10, host-only included).
-- [ ] The same run produces a JSON Schema document declaring all 10
+- [x] The same run produces a JSON Schema document declaring all 10
       groups.
-- [ ] Host-only groups (`Identity`/`Connection`/`Vision`) do **not**
+- [x] Host-only groups (`Identity`/`Connection`/`Vision`) do **not**
       appear in the generated C++ output.
-- [ ] Generated C++ output compiles under `HOST_BUILD`.
-- [ ] This ticket does not yet wire the generated header into anything
+- [x] Generated C++ output compiles under `HOST_BUILD`.
+- [x] This ticket does not yet wire the generated header into anything
       (`Config::Robot`'s assembly is tickets 005/006) — its own
       acceptance is that the three artifacts generate correctly in
       isolation.

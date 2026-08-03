@@ -446,6 +446,25 @@ message Estimator {
 // one frame (sprint.md Design Rationale Decision 3) -- every op below is
 // necessarily per-ConfigGroupTarget, never per-object; a host aggregates a
 // full read-back by iterating every target's own GetConfig/ConfigSnapshot.
+//
+// TICKET 002's OWN CALL -- `body`'s `(max_count)`: gen_messages.py's
+// existing `bytes`-field emission (095-005) already turns an unsized
+// `bytes` field into a fixed `uint8_t body_[64]` + `uint8_t body_count`
+// with a stderr WARNING, so this was never a blocking gap -- but 64 is
+// too small for the largest live robot-config group (measured via
+// gen_messages.py's own `_worst_case_message_size()`, 2026-08-03: Planner
+// is the worst case at 117 B of encoded content, against Motors=72,
+// Drive=55, WheelControl=55, Geometry=30, Otos=25, Estimator=16). Sizing
+// `(max_count)` at 220 ties `body`'s own capacity directly to
+// `kEncodeScratchCap` (wire.cpp:684) -- the SAME ceiling every nested-
+// message encode in this codebase is already implicitly bounded by --
+// rather than to today's specific worst-field-count group, so a future
+// field added to any one group cannot silently outgrow `body` without
+// also tripping the scratch-buffer ceiling everything else already
+// shares. (Not wired into CommandEnvelope's own `cmd` oneof yet -- see
+// this file's own header comment -- so this has no effect on the 240 B
+// `_ENVELOPE_BUDGET_BYTES` static_assert today; that wiring is a later
+// ticket's job.)
 // ===========================================================================
 
 // SetConfigGroup -- push a whole group's worth of values in one frame.
@@ -455,7 +474,7 @@ message Estimator {
 // ERR_NOT_LIVE for a boot-only target rather than silently no-op'ing.
 message SetConfigGroup {
   ConfigGroupTarget target = 1;
-  bytes             body   = 2;  // encoded `target`'s own generated group message
+  bytes             body   = 2 [(max_count) = 220];  // encoded `target`'s own generated group message
 }
 
 // GetConfig -- request a read-back of one group.
@@ -467,7 +486,7 @@ message GetConfig {
 // group, encoded the same way SetConfigGroup.body is.
 message ConfigSnapshot {
   ConfigGroupTarget target = 1;
-  bytes             body   = 2;
+  bytes             body   = 2 [(max_count) = 220];
 }
 
 // SetConfigField -- set exactly one field inside one group, addressed by

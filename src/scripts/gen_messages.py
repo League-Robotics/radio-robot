@@ -13,10 +13,43 @@ Flags
 -----
 --dry-run        Print what would be written without touching the filesystem.
 --emit-inventory Write docs/design/message-inventory.md (traceability table).
+
+Emission modes (132-002)
+-------------------------
+Beyond the C++ wire-message header above, this script now also emits, from
+`src/protos/robot_config.proto`'s SAME field-descriptor walk, two more
+targets scoped to that one schema's 10 groups (3 host-only: Identity/
+Connection/Vision; 7 robot-config: Geometry/Motors/Drive/WheelControl/
+Planner/Otos/Estimator):
+
+  - a pydantic `BaseModel` class per group, ALL 10 (host-only included) —
+    `src/host/robot_radio/config/robot_config_generated.py`.
+  - a JSON Schema document declaring all 10 groups —
+    `data/robots/robot_config.schema.json`.
+
+The C++ path skips a message carrying `option (host_only) = true`
+(`options.proto`) — those 3 groups exist purely for the two host-side
+targets above; the other 7 get a C++ struct AND a wire codec, exactly like
+every other message this generator has always emitted.
+
+Why here, not a separate generator (sprint 132 sprint.md Design Rationale
+Decision 1): `Config::Robot`'s group members ARE the generated wire-message
+C++ structs (`decodeInto`/`encodeInto` already write through an arbitrary
+`base + offset`, so a `Config::Robot.drive` sub-struct is a valid decode
+target with zero adapter code) — once the "C++ target" IS the wire target,
+a second generator producing a competing C++ type for the same schema would
+reintroduce the two-definitions drift this whole design exists to kill
+(`check_config_sync.py`'s reason for existing, deleted by ticket 004). Both
+new emission modes share `_group_field_rows()`, the same one-walk-many-
+targets shape `_build_field_table()`/`_emit_message()` already establish
+for the C++ side, so a field added to a robot_config.proto group reaches
+all three generated targets from one edit, never two independently
+hand-maintained ones.
 """
 
 import argparse
 import os
+import re
 import sys
 import tempfile
 from collections import deque
@@ -35,6 +68,36 @@ HOST_COMMANDS_OUT = (
     REPO_ROOT / "src" / "host" / "robot_radio" / "io" / "wire_commands.py"
 )
 
+# 132-002: robot_config.proto's two NEW generated targets (sprint 132
+# "configuration discipline" Step 1 — the same field-descriptor walk that
+# already emits robot_config.proto's C++ groups also emits a pydantic
+# BaseModel per group and a JSON Schema document). Deliberately NOT
+# src/host/robot_radio/config/robot_config.py — that file is still the
+# actively-imported, hand-written loader/validator (get_robot_config(),
+# list_robots(), derived-field computation) this ticket does not touch or
+# wire anything into (its own acceptance criterion: "does not yet wire the
+# generated header into anything ... generate correctly in isolation");
+# a later ticket (per sprint.md's own "What Changed" list, no ticket number
+# assigned) does the actual swap-in. GENERATED_ROBOT_CONFIG_PYDANTIC_OUT is
+# a new, standalone file for exactly that reason.
+#
+# data/robots/robot_config.schema.json, by contrast, has ZERO runtime
+# consumers today (confirmed: no `jsonschema` load of it anywhere in
+# src/, no `$schema` reference read back) — it is a pure documentation
+# artifact whose own `$comment` already names a baking pipeline deleted in
+# the 077 rebuild. sprint.md's own "What Changed" list names this exact
+# path as "generated, replacing the hand-maintained file" with no ticket
+# number attached, and ticket 002 is the only ticket whose acceptance
+# criteria mention JSON Schema generation at all — so this ticket writes
+# there directly. The result documents the END-STATE grouped shape while
+# data/robots/*.json itself stays old-shaped until ticket 017's reshape —
+# exactly the "broken in the middle, up-front-flagged" gap sprint.md's own
+# Design Rationale Decision 2 already names as expected, not a regression.
+GENERATED_ROBOT_CONFIG_PYDANTIC_OUT = (
+    REPO_ROOT / "src" / "host" / "robot_radio" / "config" / "robot_config_generated.py"
+)
+ROBOT_CONFIG_JSON_SCHEMA_OUT = REPO_ROOT / "data" / "robots" / "robot_config.schema.json"
+
 # ---------------------------------------------------------------------------
 # Extension field numbers defined in options.proto
 # ---------------------------------------------------------------------------
@@ -52,6 +115,12 @@ _FIELD_OPT_SCALE     = 50007
 # vs. EnumValueOptions are different extended message types). Used by
 # commands.proto's Verb enum (124-001, command-name registry).
 _ENUM_VALUE_OPT_BINARY = 50100
+
+# Extension field number for the (host_only) MESSAGE option (options.proto)
+# -- a fourth independent number space (MessageOptions vs. FieldOptions vs.
+# EnumValueOptions). Used by robot_config.proto's Identity/Connection/Vision
+# group messages (132-001/132-002, sprint 132 "configuration discipline").
+_MESSAGE_OPT_HOST_ONLY = 50200
 
 # The required proto3 zero value for commands.proto's Verb enum -- never a
 # real wire verb, excluded from every generated registry row (firmware
@@ -621,6 +690,57 @@ def _read_verb_binary_flag(value) -> bool:
     cleartext)."""
     opts = _parse_enum_value_options(value)
     return bool(opts.get(_ENUM_VALUE_OPT_BINARY, 0))
+
+
+def _parse_message_options(md) -> dict:
+    """Parse a DescriptorProto's serialized MessageOptions extension bytes
+    into {field_number: raw_value}.
+
+    Mirrors `_parse_enum_value_options()`'s own varint-walk exactly, but over
+    `md.options` (MessageOptions) rather than `value.options`
+    (EnumValueOptions) -- a third independent extension-number space
+    (options.proto's own comment on `(host_only)`, 132-001).
+    """
+    import struct
+
+    raw = md.options.SerializeToString()
+    pos = 0
+    out: dict = {}
+    while pos < len(raw):
+        tag, pos = _read_varint(raw, pos)
+        field_num = tag >> 3
+        wire_type = tag & 7
+        if wire_type == 0:  # varint (bool options: host_only)
+            val, pos = _read_varint(raw, pos)
+            out[field_num] = val
+        elif wire_type == 1:  # fixed64
+            (val,) = struct.unpack_from("<d", raw, pos)
+            pos += 8
+            out[field_num] = val
+        elif wire_type == 2:  # length-delimited
+            vlen, pos = _read_varint(raw, pos)
+            out[field_num] = raw[pos:pos + vlen]
+            pos += vlen
+        elif wire_type == 5:  # fixed32
+            (val,) = struct.unpack_from("<f", raw, pos)
+            pos += 4
+            out[field_num] = val
+        else:
+            break
+    return out
+
+
+def _read_message_host_only(md) -> bool:
+    """Return whether a message's (host_only) MessageOptions extension is
+    set true (default false). 132-002: robot_config.proto's Identity/
+    Connection/Vision groups carry `option (host_only) = true` -- those
+    groups generate a pydantic BaseModel + JSON Schema definition (both
+    emission modes below) but never a C++ struct (`_emit_file()`'s message
+    loop skips them) and never a wire codec (they are outside
+    `_compute_layout_check_structs()`'s CommandEnvelope/ReplyEnvelope
+    reachability walk regardless, so no separate skip is needed there)."""
+    opts = _parse_message_options(md)
+    return bool(opts.get(_MESSAGE_OPT_HOST_ONLY, 0))
 
 
 # ---------------------------------------------------------------------------
@@ -2728,8 +2848,16 @@ def _emit_file(fd, file_messages: dict, file_enums: dict,
         if is_commands and ed.name == "Verb":
             _emit_verb_registry_cpp(ed, lines)
 
-    # Emit messages in this file
+    # Emit messages in this file. 132-002: a message carrying
+    # `option (host_only) = true` (robot_config.proto's Identity/Connection/
+    # Vision groups) is skipped here -- it still generates a pydantic
+    # BaseModel + JSON Schema definition (see _render_pydantic_module()/
+    # _render_json_schema_doc() below, which walk robot_config.proto's
+    # messages independently of this per-proto-file C++ emission loop), but
+    # never a C++ struct (options.proto's own (host_only) doc comment).
     for md in fd.message_type:
+        if _read_message_host_only(md):
+            continue
         want_setters = md.name in _SETTER_TYPES
         _emit_message(md, want_setters, lines, all_enums)
 
@@ -2803,6 +2931,263 @@ def _emit_inventory(file_descriptors) -> str:
 
 class GenMessagesError(RuntimeError):
     """Raised by _run_codegen_pipeline() on a codegen pipeline failure."""
+
+
+# ---------------------------------------------------------------------------
+# 132-002: pydantic + JSON Schema emission modes for robot_config.proto's
+# 10 groups (3 host-only + 7 robot-config) — sprint 132 "configuration
+# discipline" Step 1 (sprint.md Design Rationale Decision 1: this generator
+# is EXTENDED with new emission modes rather than built as a second,
+# competing generator — see this file's own module docstring addendum).
+# Both emission modes below render from the SAME `_group_field_rows()`
+# per-group field list, so neither can independently drift from the other
+# or from the C++ groups `_emit_file()` emits from the identical `md.field`
+# walk (one field-descriptor source, three targets).
+# ---------------------------------------------------------------------------
+
+_ROBOT_CONFIG_PROTO_NAME = "robot_config.proto"
+
+# robot_config.proto also declares 4 wire ENVELOPE messages
+# (SetConfigGroup/GetConfig/ConfigSnapshot/SetConfigField) alongside its 10
+# GROUP messages. An envelope message carries a `ConfigGroupTarget` plus a
+# `bytes body` or a `(field, value)` pair — it has no group-shaped field set
+# of its own, so both emission modes below exclude it by name, the same way
+# the C++ side never treats it as a "group" either.
+_CONFIG_ENVELOPE_MESSAGE_NAMES = frozenset(
+    ["SetConfigGroup", "GetConfig", "ConfigSnapshot", "SetConfigField"]
+)
+
+
+def _robot_config_groups(fd):
+    """Return robot_config.proto's 10 GROUP message descriptors (3
+    host-only, 7 robot-config), in the file's own declaration order,
+    excluding the 4 wire envelope messages the same file also declares."""
+    return [md for md in fd.message_type if md.name not in _CONFIG_ENVELOPE_MESSAGE_NAMES]
+
+
+def _group_field_rows(md) -> list:
+    """Walk one robot_config.proto GROUP message's fields into a flat,
+    order-preserving list of scalar field descriptors — the ONE walk both
+    `_render_pydantic_module()` and `_render_json_schema_doc()` render from,
+    so a field added to a group necessarily reaches both outputs together.
+
+    Every group message robot_config.proto declares today is flat scalars
+    only (no oneof, no proto3 `optional`, no repeated/message/enum field —
+    confirmed by reading the file). This walk raises rather than silently
+    guessing at an unreached shape, the same "flag, don't guess" posture
+    `_build_field_table()`'s own kOpt/TYPE_STRING branch already takes for
+    an unreached optional-string field.
+    """
+    rows: list = []
+    for field in md.field:
+        if field.HasField("oneof_index"):
+            raise GenMessagesError(
+                f"gen_messages pydantic/JSON-Schema codegen: {md.name}.{field.name} "
+                f"is a oneof/proto3-optional field — the group field-descriptor "
+                f"walk (132-002) only supports flat scalar fields today; extend "
+                f"_group_field_rows() before adding a field of this shape to a "
+                f"robot_config.proto group.")
+        if field.label == _LABEL_REPEATED or field.type in (_TYPE_MESSAGE, _TYPE_ENUM):
+            raise GenMessagesError(
+                f"gen_messages pydantic/JSON-Schema codegen: {md.name}.{field.name} "
+                f"is repeated/message/enum — the group field-descriptor walk "
+                f"(132-002) only supports flat scalar fields today; extend "
+                f"_group_field_rows() before adding a field of this shape to a "
+                f"robot_config.proto group.")
+        rows.append({
+            "name": field.name,
+            "number": field.number,
+            "type": field.type,
+            "min": _read_bound(field, _FIELD_OPT_MIN),
+            "max": _read_bound(field, _FIELD_OPT_MAX),
+            "abs_max": _read_bound(field, _FIELD_OPT_ABS_MAX),
+        })
+    return rows
+
+
+def _python_scalar_type(proto_type) -> str:
+    """Map a proto scalar field type to a Python/pydantic annotation — the
+    SAME shapes `_group_field_rows()` allows through."""
+    if proto_type in (_TYPE_FLOAT, _TYPE_DOUBLE):
+        return "float"
+    if proto_type in (_TYPE_INT32, _TYPE_SINT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64):
+        return "int"
+    if proto_type == _TYPE_BOOL:
+        return "bool"
+    if proto_type == _TYPE_STRING:
+        return "str"
+    if proto_type == _TYPE_BYTES:
+        return "bytes"
+    raise GenMessagesError(
+        f"gen_messages pydantic codegen: unsupported scalar proto type {proto_type!r}")
+
+
+def _python_default_literal(proto_type) -> str:
+    """Return a Python literal matching `_scalar_default()`'s C++ zero-value
+    convention, for the same field shapes `_python_scalar_type()` covers."""
+    if proto_type in (_TYPE_FLOAT, _TYPE_DOUBLE):
+        return "0.0"
+    if proto_type in (_TYPE_INT32, _TYPE_SINT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64):
+        return "0"
+    if proto_type == _TYPE_BOOL:
+        return "False"
+    if proto_type == _TYPE_STRING:
+        return '""'
+    if proto_type == _TYPE_BYTES:
+        return 'b""'
+    raise GenMessagesError(
+        f"gen_messages pydantic codegen: unsupported scalar proto type {proto_type!r}")
+
+
+_PYDANTIC_MODULE_BANNER = '''\
+"""robot_config_generated.py -- GENERATED pydantic BaseModel hierarchy (132-002).
+
+AUTO-GENERATED by scripts/gen_messages.py -- do not edit by hand.
+Source: protos/robot_config.proto -- Config::Robot's end-state 10-group
+schema (3 host-only: Identity/Connection/Vision; 7 robot-config: Geometry/
+Motors/Drive/WheelControl/Planner/Otos/Estimator), walked by the SAME
+field-descriptor pass that emits src/firm/messages/robot_config.h's C++
+group structs (host-only groups excluded there, included here — see
+options.proto's own (host_only) doc comment) and
+data/robots/robot_config.schema.json's JSON Schema document.
+
+One flat BaseModel class per group, field-for-field, no cross-field
+validation and no derived quantities (sprint 132 issue "the-configuration-
+object.md": "the object holds RAW file values" -- Config::Robot's own C++
+struct carries the identical constraint; derived quantities are Config::
+Robot METHODS, not schema fields).
+
+NOT yet imported by src/host/robot_radio/config/robot_config.py's actual
+loader/validator (get_robot_config()/list_robots()/derived-field
+computation) -- this module is a standalone generated artifact as of
+sprint 132 ticket 002; the swap-in is a later ticket's job (see
+scripts/gen_messages.py's own GENERATED_ROBOT_CONFIG_PYDANTIC_OUT comment).
+
+Regenerate: python3 src/scripts/gen_messages.py
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel
+
+'''
+
+
+def _render_pydantic_module(groups) -> str:
+    """Render GENERATED_ROBOT_CONFIG_PYDANTIC_OUT's full content from
+    robot_config.proto's 10 group message descriptors — one flat BaseModel
+    class per group, in the file's own declaration order (host-only groups
+    included, unlike the C++ emission path)."""
+    lines: list = [_PYDANTIC_MODULE_BANNER.rstrip("\n"), ""]
+    for md in groups:
+        rows = _group_field_rows(md)
+        lines.append(f"class {md.name}(BaseModel):")
+        if not rows:
+            lines.append("    pass")
+        for row in rows:
+            py_type = _python_scalar_type(row["type"])
+            default = _python_default_literal(row["type"])
+            lines.append(f"    {row['name']}: {py_type} = {default}")
+        lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def _json_type_for_proto(proto_type) -> str:
+    """Map a proto scalar field type to a JSON Schema `type` keyword — the
+    SAME shapes `_group_field_rows()` allows through (no group field is
+    `bytes` today, so that shape is deliberately unhandled here, matching
+    `_group_field_rows()`'s own "flag, don't guess" posture for anything
+    unreached by the current schema)."""
+    if proto_type in (_TYPE_FLOAT, _TYPE_DOUBLE):
+        return "number"
+    if proto_type in (_TYPE_INT32, _TYPE_SINT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64):
+        return "integer"
+    if proto_type == _TYPE_BOOL:
+        return "boolean"
+    if proto_type == _TYPE_STRING:
+        return "string"
+    raise GenMessagesError(
+        f"gen_messages JSON-Schema codegen: unsupported scalar proto type {proto_type!r}")
+
+
+def _snake_case(name: str) -> str:
+    """Convert a CapCamelCase group message name (e.g. "WheelControl") to
+    its lower_snake_case key (e.g. "wheel_control") — the shape ticket
+    017's reshaped robot JSON top-level keys are expected to use. Inverse
+    of `_cap_camel()` (snake -> Cap); JSON Schema's own top-level
+    `properties` keys are conventionally lower_snake_case, not a bare
+    CapCamel type name."""
+    s = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s)
+    return s.lower()
+
+
+def _render_json_schema_doc(groups) -> dict:
+    """Render a JSON Schema (draft-07, matching data/robots/
+    robot_config.schema.json's own pre-existing `$schema`) document
+    declaring robot_config.proto's 10 groups — one `definitions` entry +
+    one top-level `properties` entry per group, walked from the SAME
+    `_group_field_rows()` `_render_pydantic_module()` uses.
+
+    Bounds ((min)/(max)/(abs_max)) ARE carried into `minimum`/`maximum`
+    here (unlike the pydantic classes above, which stay pure SHAPE — no
+    Field(ge=.../le=...) — per sprint.md's Out of Scope note: "generated
+    struct SHAPE, hand-written baking BEHAVIOR", the same split the C++
+    side already has). JSON Schema's `minimum`/`maximum` are declarative
+    shape, not imperative validation code, so carrying them here does not
+    cross that line the way baking a pydantic validator would.
+    """
+    definitions: dict = {}
+    properties: dict = {}
+    for md in groups:
+        rows = _group_field_rows(md)
+        field_props: dict = {}
+        for row in rows:
+            prop: dict = {"type": _json_type_for_proto(row["type"])}
+            if row["abs_max"] is not None:
+                prop["minimum"] = -row["abs_max"]
+                prop["maximum"] = row["abs_max"]
+            else:
+                if row["min"] is not None:
+                    prop["minimum"] = row["min"]
+                if row["max"] is not None:
+                    prop["maximum"] = row["max"]
+            field_props[row["name"]] = prop
+        definitions[md.name] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": field_props,
+        }
+        properties[_snake_case(md.name)] = {"$ref": f"#/definitions/{md.name}"}
+
+    return {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": "robot_config.schema.json",
+        "title": "RobotConfig",
+        "description": (
+            "GENERATED by scripts/gen_messages.py from src/protos/robot_config.proto "
+            "-- do not edit by hand. Declares Config::Robot's end-state grouped "
+            "shape: 10 groups (identity/connection/vision host-only; geometry/"
+            "motors/drive/wheel_control/planner/otos/estimator robot-config), one "
+            "per top-level property below, generated from the SAME "
+            "field-descriptor walk gen_messages.py's C++/pydantic emission modes "
+            "share (sprint 132 ticket 002). data/robots/*.json does not yet "
+            "validate against this document -- the JSON reshape migration is "
+            "sprint 132 ticket 017, scheduled last by explicit stakeholder "
+            "direction (clasi/sprints/132-.../sprint.md Design Rationale "
+            "Decision 2)."
+        ),
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "definitions": definitions,
+    }
+
+
+def _render_json_schema_text(groups) -> str:
+    """JSON-serialize `_render_json_schema_doc()`'s output for a file write."""
+    import json
+    return json.dumps(_render_json_schema_doc(groups), indent=2) + "\n"
 
 
 def _run_codegen_pipeline():
@@ -2938,6 +3323,19 @@ def _run_codegen_pipeline():
         if verb_ed is not None:
             host_outputs[str(HOST_COMMANDS_OUT)] = _render_host_commands_module(verb_ed)
 
+    # ------------------------------------------------------------------
+    # 132-002: robot_config.proto's pydantic + JSON Schema emission modes.
+    # Both walk the SAME _group_field_rows() per-group field list (also the
+    # walk _emit_message() used above to emit outputs["robot_config.h"]'s
+    # C++ groups) -- one field-descriptor source, three targets, sprint.md
+    # Design Rationale Decision 1.
+    # ------------------------------------------------------------------
+    robot_config_fd = file_map.get(_ROBOT_CONFIG_PROTO_NAME)
+    if robot_config_fd is not None:
+        groups = _robot_config_groups(robot_config_fd)
+        host_outputs[str(GENERATED_ROBOT_CONFIG_PYDANTIC_OUT)] = _render_pydantic_module(groups)
+        host_outputs[str(ROBOT_CONFIG_JSON_SCHEMA_OUT)] = _render_json_schema_text(groups)
+
     return outputs, host_outputs, fds
 
 
@@ -2965,6 +3363,25 @@ def generate_command_registry() -> tuple[str, str]:
     """
     outputs, host_outputs, _fds = _run_codegen_pipeline()
     return outputs["commands.h"], host_outputs[str(HOST_COMMANDS_OUT)]
+
+
+def generate_robot_config_artifacts() -> tuple[str, str, str]:
+    """Run the codegen pipeline and return (robot_config_h_text,
+    pydantic_module_text, json_schema_text) -- ticket 002's three
+    generated robot_config.proto artifacts from one in-process run.
+
+    Public entry point for the 132-002 generation smoke test
+    (tests/unit/test_gen_messages_robot_config_emission.py), mirroring
+    `generate_command_registry()`'s own shape: all three texts come from
+    the SAME in-process run a real `python3 scripts/gen_messages.py`
+    invocation makes, not a re-derivation of it.
+    """
+    outputs, host_outputs, _fds = _run_codegen_pipeline()
+    return (
+        outputs["robot_config.h"],
+        host_outputs[str(GENERATED_ROBOT_CONFIG_PYDANTIC_OUT)],
+        host_outputs[str(ROBOT_CONFIG_JSON_SCHEMA_OUT)],
+    )
 
 
 # ---------------------------------------------------------------------------
