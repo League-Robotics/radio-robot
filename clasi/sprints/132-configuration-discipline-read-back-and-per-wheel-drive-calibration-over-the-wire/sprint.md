@@ -238,18 +238,30 @@ demonstration), then the hardware headline on `tovez`.
 this is the only place all of it must be simultaneously true; no individual
 ticket is judged against this list.)
 
-- **Full sim suite green** against the established baseline: **462 passed, 1
-  xfailed, 2 xpassed, 0 failed** (`uv run python -m pytest src/tests/sim -q`,
-  measured on `master` immediately pre-sprint, 2026-08-03). This corrects two
-  stale figures this document previously carried: the "484 passed / 2 known
+- **Full default-collection suite at or above the established baseline,
+  with no NEW failures beyond the seven already known.** Measured on
+  `master` immediately pre-sprint, 2026-08-03, against the project's full
+  default test collection (`testpaths = ["src/tests/sim",
+  "src/tests/unit", "src/tests/testgui"]`, i.e. plain `uv run python -m
+  pytest`, not the `src/tests/sim`-only slice): **7 failed, 1757 passed,
+  3 skipped, 9 xfailed, 4 xpassed**. This corrects TWO figures this
+  document previously carried in error: the earlier "484 passed / 2 known
   failures" count (stale — 22 tests were removed by the `src/tests/dev/`
-  reorganization since that figure was recorded, not a coverage loss caused
-  by this sprint) and [[A-seven-untriaged-failing-tests-poison-every-no-regressions-claim]]'s
-  premise of seven failing tests on a clean tree (also stale — the tree is
-  currently green; do not carry that issue's premise into any ticket's
-  acceptance criteria). The tree being genuinely green makes "no regressions
-  at the end of the sprint" an enforceable claim for the first time — ticket
-  018 asserts it precisely, against this exact command and count.
+  reorganization since that figure was recorded), and a subsequent
+  correction pass that reported "462 passed / 0 failed" — that number was
+  only the `src/tests/sim` SLICE, not the full default collection, and
+  its accompanying claim that
+  [[A-seven-untriaged-failing-tests-poison-every-no-regressions-claim]]
+  is stale was itself wrong: that issue is exactly accurate. The seven
+  failures are: 3× `test_gen_boot_config_planner.py` (a stale
+  `headingHoldGain` expectation, `2.0f` vs. the current `0.0`), 2×
+  `test_gui_button_acceptance.py` (tour 1/2), 1× `test_sim_loop.py::
+  test_flags_bit16_shaping_disabled_asserts_when_push_stripped`, 1×
+  `test_tour_closure_gate.py` (a 90° commanded turn achieving 76.92°).
+  These seven are the accepted baseline, not a target to fix as part of
+  this sprint — "no regressions" means the sprint introduces no EIGHTH
+  failure, not that these seven become zero. Ticket 018 asserts this
+  precisely, against the full default collection, not a slice of it.
 - **ARM build succeeds.** Several constraints here are `HOST_BUILD`-invisible,
   including `kEncodeScratchCap = 220` (`wire.cpp:684`) making `encode()`
   return 0 silently with no assert — add the `static_assert` and prove it
@@ -388,15 +400,24 @@ below, and none should be improvised during execution either.
 Each ticket's own acceptance is light: it compiles (`HOST_BUILD` at
 minimum; ARM where the ticket touches ARM-only code), its own unit coverage
 passes, its own artifact exists (a generated file, a new method, a deleted
-file actually gone). **The sim baseline is already established**, measured
-on `master` immediately pre-sprint (2026-08-03): `uv run python -m pytest
-src/tests/sim -q` → **462 passed, 1 xfailed, 2 xpassed, 0 failed**. The tree
-is genuinely green — do not re-run the full suite after every ticket; that
-is what tickets 018-019 are for. Ticket 018 additionally triages the 2
-`xpassed` tests (a test marked expected-to-fail that now passes is a quiet
-lie about what the suite proves) — either the `xfail` marker is stale and
-should come off, or there is a reason it stays that ticket 018 must state,
-not silently re-inherit.
+file actually gone). **The baseline is already established**, measured on
+`master` immediately pre-sprint (2026-08-03) against the full default test
+collection (plain `uv run python -m pytest`, `testpaths =
+["src/tests/sim", "src/tests/unit", "src/tests/testgui"]` — NOT the
+`src/tests/sim`-only slice, which undercounts what "no regressions" must
+actually cover): **7 failed, 1757 passed, 3 skipped, 9 xfailed, 4
+xpassed**. The seven failures are known and accepted going in — 3×
+`test_gen_boot_config_planner.py` (stale `headingHoldGain` expectation),
+2× `test_gui_button_acceptance.py` (tour 1/2), 1× `test_sim_loop.py::
+test_flags_bit16_shaping_disabled_asserts_when_push_stripped`, 1×
+`test_tour_closure_gate.py` (90° commanded → 76.92° achieved) — do not
+re-run the full suite after every ticket to chase them; that is what
+tickets 018-019 are for, and their job is proving no EIGHTH failure
+appears, not that these seven disappear. Ticket 018 additionally triages
+the 4 `xpassed` tests (a test marked expected-to-fail that now passes is
+a quiet lie about what the suite proves) — either the `xfail` marker is
+stale and should come off, or there is a reason it stays that ticket 018
+must state, not silently re-inherit.
 
 **Verification concentrates in the last three tickets**, exactly as
 directed:
@@ -1157,6 +1178,7 @@ Before tickets can be created, all of the following must be true:
 |---|-------|------------|
 | 001 | `robot_config.proto` — the one schema, end-state grouped shape + wire messages | — |
 | 002 | Extend `gen_messages.py` with pydantic + JSON Schema emission | 001 |
+| 020 | Wire `robot_config_generated.py`'s model into `robot_config.py` — keep behaviour, adopt the generated shape | 002 |
 | 003 | Generated parity guard (capi export + Python harness) | 002 |
 | 004 | Delete `check_config_sync.py` + allowlist + CI job | 003 |
 | 005 | Retarget baking — populate `Config::Robot` defaults from today's JSON shape | 002 |
@@ -1170,17 +1192,38 @@ Before tickets can be created, all of the following must be true:
 | 013 | Delete the `*ConfigPatch` surface, `PatchKind`, merge accumulator; reshape persisted tuning | 009, 010, 011, 012 |
 | 014 | Migrate host `NezhaProtocol` + `calibration/push.py` + TestGUI onto the new surface | 013 |
 | 015 | Firmware cleanup sweep (`kEncodeScratchCap` assert, trap 1 ordering fix, dead `ShaperBootConfig`/`CONFIG_PLANNER`/`CONFIG_WATCHDOG`) | 013 |
-| 016 | Host cleanup (`extra='forbid'`, drift assertions) | 013 |
+| 016 | Host cleanup (`extra='forbid'`, drift assertions) | 013, 020 |
 | 017 | JSON reshape — migration script + re-bake all three robot JSONs (scheduled last, per stakeholder direction) | 015, 016 |
 | 018 | Full-system verification (sim baseline, ARM build, both parity harnesses, read-back/bake-push/no-silent-no-op properties, 16→2 demo) | 017 |
 | 019 | Hardware bench acceptance on `tovez` — headline L/R gap closure, cold boot | 018 |
 
-Tickets execute serially in the order listed. This is a large ticket count
-for one sprint (19, against a typical handful) — deliberate and expected
-per this round's direction, not a planning oversight. Flagged honestly:
-this is the single largest sprint this project has planned, spanning
-firmware C++, Python codegen, host Python, the wire protocol, and hardware
-bench time; if execution finds the serial-dependency chain above
-unworkable in one continuous run, that is an execution-time judgment for
-whoever runs it, not a reason to have cut scope here against explicit
-stakeholder direction to the contrary.
+Tickets execute serially in the order listed (ticket 020's row sits where
+its dependency requires — right after 002 — not at the numeric end of the
+table; its number is an artifact of when it was created, not its
+execution position). This is a large ticket count for one sprint (20,
+against a typical handful) — deliberate and expected per this round's
+direction, not a planning oversight. Flagged honestly: this is the single
+largest sprint this project has planned, spanning firmware C++, Python
+codegen, host Python, the wire protocol, and hardware bench time; if
+execution finds the serial-dependency chain above unworkable in one
+continuous run, that is an execution-time judgment for whoever runs it,
+not a reason to have cut scope here against explicit stakeholder
+direction to the contrary.
+
+**Ticket 020 added mid-execution (coverage-gap fix).** Ticket 002's
+programmer generated the pydantic model into a new file,
+`robot_config_generated.py`, rather than replacing the hand-written
+`robot_config.py` — correct under 002's own acceptance criterion ("generate
+correctly in isolation"), but it left nothing importing the generated
+module and no ticket owning that wiring; only ticket 016 referenced the
+generated model at all, and it assumed the wiring already existed. Ticket
+020 closes that gap: `robot_config.py` keeps its behaviour (`get_robot_config()`,
+`list_robots()`, derived-field computation, env-var resolution) but its
+model classes now come from `robot_config_generated.py` — the same
+generated-shape/hand-written-behaviour split Design Rationale Decision 4
+already specifies. Ticket 016 (`extra='forbid'`) now depends on it, since
+`extra='forbid'` only makes sense once the generated model is the one
+actually in use. Tickets 001-002 were already done/committed and ticket
+003 was in progress when this gap surfaced; neither ticket 003's files
+nor any other `src/` code were touched making this correction — the fix
+is scoped to `clasi/` planning artifacts only.

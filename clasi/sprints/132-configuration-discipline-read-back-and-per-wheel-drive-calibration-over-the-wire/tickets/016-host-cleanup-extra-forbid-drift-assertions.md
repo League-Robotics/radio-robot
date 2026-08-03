@@ -6,6 +6,7 @@ use-cases:
 - SUC-001
 depends-on:
 - '013'
+- '020'
 github-issue: ''
 issue: the-configuration-object.md
 completes_issue: false

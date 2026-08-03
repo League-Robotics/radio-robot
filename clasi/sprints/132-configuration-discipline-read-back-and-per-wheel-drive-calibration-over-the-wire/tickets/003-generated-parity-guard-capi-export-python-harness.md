@@ -1,7 +1,7 @@
 ---
 id: '003'
 title: Generated parity guard (capi export + Python harness)
-status: open
+status: in-progress
 use-cases:
 - SUC-001
 depends-on:

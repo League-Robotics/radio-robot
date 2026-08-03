@@ -20,29 +20,57 @@ completes_issue: false
 
 The first of the two acceptance-concentrated closing tickets. This is
 where "no regressions" becomes a real, enforceable claim against the
-**corrected** pre-sprint baseline: **462 passed, 1 xfailed, 2 xpassed, 0
-failed** (`uv run python -m pytest src/tests/sim -q`, measured on
-`master` immediately pre-sprint, 2026-08-03). This corrects the stale
-"484 passed / 2 known failures" figure this document previously carried
-— 22 tests were removed by the `src/tests/dev/` reorganization since
-that figure was recorded, not a coverage loss caused by this sprint; the
-tree is genuinely green today, and
-[[A-seven-untriaged-failing-tests-poison-every-no-regressions-claim]]'s
-premise of seven failing tests on a clean tree is also stale — do not
-carry either stale premise forward.
+**corrected** pre-sprint baseline, measured on `master` immediately
+pre-sprint (2026-08-03) against the FULL DEFAULT test collection
+(`testpaths = ["src/tests/sim", "src/tests/unit", "src/tests/testgui"]`
+— plain `uv run python -m pytest`, not the `src/tests/sim`-only slice):
+
+```
+7 failed, 1757 passed, 3 skipped, 9 xfailed, 4 xpassed
+```
+
+This corrects TWO figures earlier versions of this ticket/`sprint.md`
+carried in error: the original "484 passed / 2 known failures" (stale —
+22 tests were removed by the `src/tests/dev/` reorganization since that
+figure was recorded), and a later correction that reported "462 passed /
+0 failed" against the `src/tests/sim` slice ONLY, with an accompanying
+claim that
+[[A-seven-untriaged-failing-tests-poison-every-no-regressions-claim]] is
+stale — that claim was **wrong**; the issue is exactly accurate. The
+seven known, accepted failures are:
+
+- 3× `test_gen_boot_config_planner.py` (a stale `headingHoldGain`
+  expectation, `2.0f` vs. the current `0.0`)
+- 2× `test_gui_button_acceptance.py` (tour 1/2)
+- 1× `test_sim_loop.py::test_flags_bit16_shaping_disabled_asserts_when_push_stripped`
+- 1× `test_tour_closure_gate.py` (a 90° commanded turn achieving 76.92°)
+
+**"No regressions" means no EIGHTH failure appears — it does not mean
+these seven become zero.** This ticket is not a mandate to fix them;
+fixing any of them is out of scope unless a specific ticket's own work
+happens to touch the exact code path (none currently does).
 
 Assemble and prove every Success Criteria property from `sprint.md` in
 one place.
 
 ## Acceptance Criteria
 
-- [ ] Full sim suite run: `uv run python -m pytest src/tests/sim -q` at
-      or above **462 passed, 0 failed**. Any count DROP is investigated
-      and explained, not silently accepted.
-- [ ] The 2 `xpassed` tests from the baseline are triaged: either their
-      `xfail` marker is removed (if genuinely fixed) or a documented
-      reason is recorded for why they stay marked — not silently
-      re-inherited. An xpass is a quiet lie about what the suite proves.
+- [ ] Full default-collection suite run: plain `uv run python -m pytest`
+      (NOT the `src/tests/sim`-only slice) shows **no more than 7
+      failed**, and any failure beyond the 7 named above (in the
+      Description) is investigated and explained, not silently accepted
+      as "close enough." A failure COUNT match (7) is not sufficient on
+      its own if the failing TESTS differ from the named seven — check
+      identity, not just count.
+- [ ] The passed/skipped/xfailed counts are compared against the
+      baseline (1757 passed, 3 skipped, 9 xfailed) and any drop in
+      `passed` or unexplained change in `skipped`/`xfailed` is
+      investigated, not silently accepted.
+- [ ] The 4 `xpassed` tests from the baseline are triaged: for each,
+      either its `xfail` marker is removed (if genuinely fixed) or a
+      documented reason is recorded for why it stays marked — not
+      silently re-inherited. An xpass is a quiet lie about what the
+      suite proves.
 - [ ] ARM build succeeds (full toolchain, not just `HOST_BUILD`).
 - [ ] The `kEncodeScratchCap` `static_assert` (ticket 015) is confirmed
       present and was demonstrated to fire.
@@ -77,9 +105,10 @@ one place.
   diff, and the bake/push parity comparison are themselves new,
   disposable verification scripts/tests if none already exist from
   earlier tickets.
-- **Verification command**: `uv run python -m pytest src/tests/sim -q`
-  plus the ARM build command plus each specific harness/demonstration
-  named above.
+- **Verification command**: `uv run python -m pytest` (full default
+  collection — `src/tests/sim` + `src/tests/unit` + `src/tests/testgui`,
+  NOT the `src/tests/sim`-only slice) plus the ARM build command plus
+  each specific harness/demonstration named above.
 
 ## Implementation Plan
 

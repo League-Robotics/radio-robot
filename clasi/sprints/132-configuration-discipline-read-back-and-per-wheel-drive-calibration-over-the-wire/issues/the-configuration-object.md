@@ -21,6 +21,7 @@ tickets:
 - 132-017
 - 132-018
 - 132-019
+- 132-020
 ---
 
 # The configuration object
