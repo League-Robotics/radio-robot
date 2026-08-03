@@ -1,0 +1,490 @@
+syntax = "proto3";
+
+package robot;
+
+import "options.proto";
+
+// ---------------------------------------------------------------------------
+// robot_config.proto -- the one schema (132-001, sprint 132 "configuration
+// discipline: one owned object, live wire config with read-back, patch-
+// surface retirement, JSON reshape, and per-wheel drive calibration").
+//
+// Declares `Config::Robot`'s complete END-STATE field set, authored directly
+// in the end-state CONSUMER-GROUPED shape -- NOT today's 13-section robot
+// JSON layout (clasi/sprints/132-.../sprint.md Design Rationale Decision 2).
+// Three host-only groups (Identity/Connection/Vision, marked `(host_only)`,
+// below) never cross the wire and never generate a C++ Config::Robot member;
+// seven robot-config groups (Geometry/Motors/Drive/WheelControl/Planner/
+// Otos/Estimator) each generate a C++ Config::Robot member AND a wire codec
+// (ticket 002), and each carries a `ConfigGroupTarget` enum value.
+//
+// This file REPLACES config.proto's curated `*ConfigPatch` messages
+// (`DrivetrainConfigPatch`/`MotorConfigPatch`/`OtosConfigPatch`/
+// `EstimatorConfigPatch`) and their own `ConfigTarget`/`BoundMotorSide`
+// enums -- config.proto itself is deleted wholesale by ticket 013 (patch-
+// surface retirement), not by this ticket. Ticket 001's own scope is schema
+// authorship only: it does not generate anything (ticket 002), does not
+// touch the robot JSON files (ticket 017), and does not wire this schema
+// into CommandEnvelope's own `cmd` oneof (a later ticket's job -- see
+// envelope.proto's own `ConfigDelta`/`config` arm, untouched by this file).
+//
+// NAMING NOTE -- `ConfigGroupTarget`, not `ConfigTarget`: config.proto ALSO
+// declares a top-level enum named `ConfigTarget` (with entirely different,
+// PatchKind-shaped values -- CONFIG_DRIVETRAIN/CONFIG_MOTOR_LEFT/
+// CONFIG_MOTOR_RIGHT/CONFIG_PLANNER/CONFIG_WATCHDOG/CONFIG_OTOS/
+// CONFIG_ESTIMATOR). protoc treats every top-level enum TYPE name, and
+// every enum VALUE name, as scoped to the whole `robot` package (C++
+// enum-scoping rules -- confirmed empirically: two same-named top-level
+// enums, or two enums with an overlapping bare value name, in files sharing
+// one package fail to compile even when neither file imports the other).
+// Sprint.md's own Problem section confirms config.proto's `ConfigTarget` is
+// "declared and used nowhere in current firmware or host code" -- dead
+// scaffolding -- but ticket 001's own file scope is `robot_config.proto`
+// (create) and `options.proto` (add `(host_only)`) ONLY; deleting or
+// renaming config.proto's enum is ticket 013's job (patch-surface
+// retirement), not this ticket's. `ConfigGroupTarget` is this file's own
+// non-colliding name for the SAME concept the sprint's own prose calls
+// `ConfigTarget` throughout (sprint.md's Configurator/install()/applyGroup()
+// pseudocode) -- ticket 013, once config.proto's own `ConfigTarget` is gone,
+// is the natural point to rename this enum to the shorter `ConfigTarget`
+// spelling if a later ticket wants that; not required by any acceptance
+// criterion of this ticket.
+//
+// FIELD-BY-FIELD CHECKLIST against gen_boot_config.py's actual `_require()`
+// (and, where noted, `_get()`) call sites -- src/scripts/gen_boot_config.py,
+// verified 2026-08-03. Every REQUIRED field has a schema field below; the
+// two soft (`_get()`, not `_require()`) per-port calibration functions are
+// included too because sprint.md's own ticket-001 mapping text names them
+// explicitly ("travel_calib/fwd_sign -> Motors"). Six fields are
+// DELIBERATELY EXCLUDED, each flagged with its own rationale (mirrors this
+// project's own "traceability gap, flagged not silently reconciled"
+// discipline -- see config.proto's own header comment for the precedent):
+//
+//   otos_boot_config_values()      -> Otos.offset_x/offset_y/offset_yaw/
+//                                      linear_scale/angular_scale
+//     geometry.odometry_offset_mm.{x,y,yaw_rad}, calibration.
+//     otos_linear_scale/otos_angular_scale -- 5 REQUIRED fields. Grouped
+//     under Otos, not Geometry, per this ticket's own explicit mapping
+//     ("OTOS scale/offset fields -> Otos") even though the JSON keys live
+//     partly under `geometry.*` today (ticket 017's JSON reshape is what
+//     actually moves the FILE's own section boundaries to match).
+//   vel_gains_for_config()         -> Motors.vel_kp/vel_ki/vel_kff/
+//                                      vel_i_max/vel_kaw/vel_filt_alpha
+//     control.vel_kp/vel_ki/vel_kff/vel_imax/vel_kaw/vel_filt -- 6 REQUIRED
+//     fields. Per-motor velocity-PID config, same consumer (Devices::Motor,
+//     via Configurator::install(MOTORS)) as travel_calib/fwd_sign/deadband/
+//     dwell below, so grouped with them under Motors.
+//   output_deadband_for_config()   -> Motors.output_deadband
+//     control.output_deadband -- 1 REQUIRED field.
+//   reversal_dwell_for_config()    -> Motors.reversal_dwell
+//     control.reversal_dwell_ms -- 1 REQUIRED field. JSON key carries a
+//     "_ms" unit suffix; this schema's field does not (coding-standards.md
+//     "no units in ANY identifier" -- this field doubles as the future
+//     generated Config::Robot C++ member name, unlike config.proto's own
+//     wire-only `*ConfigPatch` fields, which the coding-standards.md
+//     wire-key exclusion covers; unit stays in the `// [ms]` comment tag).
+//   trackwidth_for_config()        -> Geometry.trackwidth
+//     geometry.trackwidth -- 1 REQUIRED field.
+//   rotational_slip_for_config()   -> Geometry.rotational_slip
+//     calibration.rotational_slip -- 1 REQUIRED field. Domain {0} u
+//     [0.5, 1.0] (non-contiguous) -- same posture as config.proto's own
+//     header note: no `(min)`/`(max)`/`(abs_max)` pair can express it, so
+//     none is attached here; it stays in the thin hand-written validation
+//     layer around the generated pydantic model (sprint.md Out of Scope).
+//   rotation_calibration_for_config() -> Geometry.rotation_gain_pos/
+//                                      rotation_offset/rotation_gain_neg/
+//                                      rotation_offset_neg
+//     calibration.rotation_gain/rotation_offset_deg/rotation_gain_neg/
+//     rotation_offset_deg_neg -- 4 REQUIRED fields. Grouped under Geometry
+//     (not a standalone group): sprint.md's own Step 3 module list names
+//     "RobotLoop for geometry/rotation" as ONE configure() consumer, and
+//     drivetrain.proto's existing DrivetrainConfig already names this exact
+//     field cluster rotation_gain_pos/rotation_offset/rotation_gain_neg/
+//     rotation_offset_neg -- mirrored verbatim here for continuity.
+//   estimator_config_for_config()  -> Estimator.weight_heading_otos/
+//                                      weight_omega_otos/staleness
+//     estimator.weight_heading_otos/weight_omega_otos/staleness_ms -- 3
+//     REQUIRED fields. `staleness` (not `staleness_ms`): boot_config.h's
+//     own EstimatorBootConfig already names this field bare (`staleness`,
+//     `// [ms]` tag) -- mirrored, not config.proto's EstimatorConfigPatch
+//     spelling (`staleness_ms`), for the same C++-identifier reason
+//     `reversal_dwell` above drops its JSON key's own "_ms" suffix.
+//   shaper_config_for_config()     -> Planner.shaper_a_max/shaper_a_decel/
+//                                      shaper_alpha_max/shaper_alpha_decel/
+//                                      shaper_j_max/shaper_yaw_jerk_max
+//     control.a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max -- 6
+//     REQUIRED fields, still baked today into Config::ShaperBootConfig
+//     (boot_config.h) -- but that struct's own doc comment says it is
+//     "currently unread by any live consumer" (Motion::Planner uses its own
+//     hand-baked PlannerLimits, sourced from the LIVE planner.* fields
+//     below, not this struct) and sprint.md's own Scope list schedules
+//     "dead ShaperBootConfig deletion" as ticket 015 cleanup work. Given a
+//     home here (not excluded outright, unlike ColorConfig/LineConfig
+//     below) because this ticket's own acceptance criterion requires every
+//     `_require()` call site to have a schema field, TODAY -- but placed
+//     under a `shaper_`-prefixed name, at the high (2-byte-tag) end of the
+//     Planner group's field-number range, and flagged for deletion FROM
+//     THIS SCHEMA in the same ticket-015 pass that deletes the C++ struct
+//     and generator function feeding it.
+//   wheel_correction_for_config()  -> Drive.wheel_gain_left_accel/
+//                                      wheel_intercept_left_accel/
+//                                      wheel_gain_left_decel/
+//                                      wheel_intercept_left_decel/
+//                                      wheel_gain_right_accel/
+//                                      wheel_intercept_right_accel/
+//                                      wheel_gain_right_decel/
+//                                      wheel_intercept_right_decel
+//     control.wheel_gain_{left,right}_{accel,decel} / control.
+//     wheel_intercept_{left,right}_{accel,decel} -- 8 REQUIRED fields. The
+//     sprint's headline per-wheel Stage-A drive-correction surface
+//     (SUC-006) -- field names mirror sprint.md's own Drive::configure()
+//     pseudocode verbatim (config.drive.wheelGainLeftAccel, etc.).
+//   drive_config_for_config()      -> Drive.duty_per_speed_left/
+//                                      duty_per_speed_right/crawl_pulse
+//     control.duty_per_speed_left/duty_per_speed_right/crawl_pulse -- 3
+//     REQUIRED fields.
+//   wheel_controller_config_for_config() -> WheelControl.v_min/bias_max/
+//                                      tau_adapt/a_steady/
+//                                      deficit_threshold/deficit_window/
+//                                      pid_kp/pid_ki/pid_i_max/pid_kaff/
+//                                      pid_max
+//     control.wheel_v_min/wheel_bias_max/wheel_tau_adapt/wheel_a_steady/
+//     wheel_deficit_threshold/wheel_deficit_window_ms/wheel_pid_kp/
+//     wheel_pid_ki/wheel_pid_i_max/wheel_pid_kaff/wheel_pid_max -- 11
+//     REQUIRED fields. Field names mirror sprint.md's own Drive::
+//     configure() pseudocode verbatim (config.wheelControl.pidKp, etc.).
+//   planner_config_for_config()    -> Planner.v_max/a_max/a_decel/
+//                                      omega_max/alpha_max/alpha_decel/
+//                                      jerk_max/yaw_jerk_max/control_period/
+//                                      actuation_delay/settle_rest_velocity/
+//                                      settle_rest_omega/
+//                                      settle_epsilon_linear/
+//                                      settle_epsilon_angular/
+//                                      heading_hold_gain/decel_plan_fraction
+//     planner.v_max/a_max/a_decel/omega_max/alpha_max/alpha_decel/
+//     jerk_max/yaw_jerk_max/control_period/actuation_delay/
+//     settle_rest_velocity/settle_rest_omega/settle_epsilon_linear/
+//     settle_epsilon_angular/heading_hold_gain/decel_plan_fraction -- 16
+//     REQUIRED fields (the function's own docstring says "18"; the actual
+//     `_require()` call count in the current source is 16 -- trusted over
+//     the stale docstring number). The LIVE planner-limits surface
+//     Motion::Planner actually consumes.
+//   travel_calib_for_ports()       -> Motors.travel_calib_left/
+//                                      travel_calib_right          (soft)
+//   fwd_sign_for_ports()           -> Motors.fwd_sign_left/
+//                                      fwd_sign_right               (soft)
+//     calibration.mm_per_wheel_deg_left/right, calibration.
+//     fwd_sign_left/right -- read via `_get()` with a placeholder
+//     fallback, not `_require()` (a robot JSON may omit them and still
+//     build) -- included anyway because sprint.md's own ticket-001 mapping
+//     text names them explicitly ("travel_calib/fwd_sign -> Motors").
+//
+//   EXCLUDED, with rationale (not silently dropped):
+//   - `identity.drivetrain_type` (soft `_get()`, `drivetrain_type_for_
+//     config()`) IS included, as Identity.drivetrain_type below -- listed
+//     here only to note it is host-only despite being read by this
+//     generator (it feeds a compile-time C string constant,
+//     Config::kDrivetrainType, not a live Config::Robot member).
+//   - Every key under the JSON's `wheels`/`encoders`/`gripper`/
+//     `peripherals` sections, and the JSON's own (confusingly-named)
+//     `drive` section: sprint.md's own Problem-section audit states
+//     plainly these are "read by no firmware code" -- they "stay in the
+//     file under the one-file rule but never cross the wire," the same
+//     treatment ColorConfig/LineConfig get (Out of Scope, sprint.md) and
+//     for the identical reason -- adding schema fields nobody reads would
+//     be the same speculative generality sprint.md explicitly rejects for
+//     ColorConfig/LineConfig.
+//   - `geometry.drive_axle_offset_mm` (x/y), `geometry.
+//     odometry_chip_upside_down`, `geometry.otos_untrusted`, `geometry.
+//     wheelbase_mm`: none is read by any `_require()`/`_get()` call in
+//     gen_boot_config.py today (confirmed by reading the file in full) --
+//     dead data within an otherwise-live JSON section. Excluded from this
+//     ticket's schema on the same "every field traces to an actual
+//     _require() call site, not just a field count" discipline the
+//     acceptance criteria set for the seven robot-config groups; may be
+//     picked up by a later ticket (017's JSON reshape, or its own follow-up
+//     issue) if a live consumer is ever found or added for them.
+//   - ColorConfig/LineConfig are not declared at all (sprint.md Out of
+//     Scope, ticket 001's own acceptance criterion) -- neither root has
+//     ever baked a robot-JSON override for either (boot_wiring.cpp:28-33).
+// ---------------------------------------------------------------------------
+
+// ===========================================================================
+// Host-only groups -- never generate a C++ Config::Robot member, never cross
+// the wire, carry no ConfigGroupTarget value (`(host_only) = true`, below).
+// Exist purely so the host's generated pydantic model / JSON Schema
+// (gen_messages.py's ticket-002 emission modes) can represent the WHOLE
+// robot JSON file, not just its wire-addressable slice.
+// ===========================================================================
+
+// Identity -- robot name/uid/hardware model, plus the compile-time
+// drivetrain-type string (`identity.drivetrain_type`, gen_boot_config.py's
+// drivetrain_type_for_config(), soft `_get()` defaulting to
+// "differential") that feeds Config::kDrivetrainType (the `ID:` reply's own
+// drivetrain-type field) -- host-only despite being read by the generator,
+// because it becomes a compile-time C string constant, never a live
+// Config::Robot member.
+message Identity {
+  option (host_only) = true;
+
+  string robot_name       = 1;
+  string uid              = 2;
+  string hardware_model   = 3;
+  string common_name      = 4;
+  string drivetrain_type  = 5;  // "differential" | "mecanum"; default "differential"
+}
+
+// Connection -- how the host reaches this robot (never read by
+// gen_boot_config.py; host-tooling identity only).
+message Connection {
+  option (host_only) = true;
+
+  string device_announcement_name = 1;
+  string serial_last_6             = 2;
+}
+
+// Vision -- the overhead-camera AprilTag mount this robot answers to (never
+// read by gen_boot_config.py; playfield-tooling identity only).
+message Vision {
+  option (host_only) = true;
+
+  uint32 robot_tag_id          = 1;
+  float  tag_offset_x          = 2;  // [mm]
+  float  tag_offset_y          = 3;  // [mm]
+  float  tag_offset_z          = 4;  // [mm]
+  float  tag_offset_yaw        = 5;  // [rad]
+  float  camera_distance_scale = 6;
+}
+
+// ===========================================================================
+// ConfigGroupTarget -- which robot-config group a whole-group SET/GET or a
+// single-field SET/GET addresses. One value per robot-config group below
+// (by construction: group message name == enum value name, upper-cased with
+// underscores at word boundaries -- e.g. message WheelControl <->
+// WHEEL_CONTROL). Host-only groups (Identity/Connection/Vision above) have
+// no value here -- they are never wire-addressable.
+// ===========================================================================
+enum ConfigGroupTarget {
+  CONFIG_GROUP_UNSPECIFIED = 0;  // proto3-required zero value; never a real target
+  GEOMETRY      = 1;
+  MOTORS        = 2;
+  DRIVE         = 3;
+  WHEEL_CONTROL = 4;
+  PLANNER       = 5;
+  OTOS          = 6;
+  ESTIMATOR     = 7;
+}
+
+// ===========================================================================
+// Robot-config groups -- each generates a C++ Config::Robot member AND a
+// wire codec (ticket 002); each carries the ConfigGroupTarget value of the
+// same name above. Raw fields only, mirroring the robot JSON exactly (same
+// fields, same units) -- no derived quantities stored (e.g. Geometry holds
+// the raw `trackwidth`/`rotational_slip`, never the scrub-corrected
+// effective track width Drive/Odometry actually use; that division is a
+// Config::Robot METHOD, `effectiveTrackWidth()`, added by ticket 007 on the
+// C++ struct this schema generates -- not a schema field).
+// ===========================================================================
+
+// Geometry -- physical trackwidth, scrub correction, and the affine turn
+// (rotation) calibration. Consumed by RobotLoop's own "geometry/rotation"
+// configure() (sprint.md Step 3 module list).
+message Geometry {
+  float trackwidth          = 1 [(min) = 1.0];  // [mm] caliper-measured wheel separation; must be positive
+  // rotational_slip: scrub factor, actual/ideal rotation. Domain {0} u
+  // [0.5, 1.0] (0 = uncalibrated sentinel, not divide-by-zero) -- a
+  // non-contiguous domain no (min)/(max)/(abs_max) pair can express; left
+  // unbounded here on purpose (see this file's own header checklist).
+  float rotational_slip     = 2;
+  // Affine turn-response calibration: actual = gain*commanded + offset,
+  // per direction of commanded rotation (drivetrain.proto's own
+  // DrivetrainConfig already names this exact field cluster identically).
+  float rotation_gain_pos   = 3;
+  float rotation_offset     = 4;  // [deg] positive-direction offset (see rotation_gain_pos)
+  float rotation_gain_neg   = 5;
+  float rotation_offset_neg = 6;  // [deg]
+}
+
+// Motors -- per-bound-motor (left/right drive pair) calibration and
+// velocity-PID gains. Consumed by Devices::Motor (left AND right,
+// independently) via Configurator::install(MOTORS).
+message Motors {
+  float travel_calib_left   = 1  [(min) = 0.0001];  // [mm/deg] must be positive
+  float travel_calib_right  = 2  [(min) = 0.0001];  // [mm/deg]
+  int32 fwd_sign_left       = 3  [(min) = -1, (max) = 1];  // +1 or -1
+  int32 fwd_sign_right      = 4  [(min) = -1, (max) = 1];
+  float output_deadband     = 5  [(abs_max) = 1.0];  // [-1,1] duty fraction
+  float reversal_dwell      = 6  [(min) = 0.0];  // [ms] hold at commanded-zero on any sign change; 0 = legacy immediate-reversal
+  float vel_kp              = 7  [(min) = 0.0];
+  float vel_ki              = 8  [(min) = 0.0];
+  float vel_kff             = 9  [(min) = 0.0];
+  float vel_i_max           = 10 [(min) = 0.0];
+  float vel_kaw             = 11 [(min) = 0.0];  // anti-windup back-calculation coefficient; 0 = off
+  float vel_filt_alpha      = 12 [(min) = 0.0];  // EMA weight on the filtered velocity sample
+}
+
+// Drive -- App::Drive's open-loop wheel calibration and the per-wheel
+// Stage-A commanded->actual correction (this sprint's headline feature,
+// SUC-006). Consumed by App::Drive via Configurator::install(DRIVE).
+message Drive {
+  float duty_per_speed_left        = 1  [(min) = 0.0];  // [duty/(mm/s)] 1 / measured plant gain, left
+  float duty_per_speed_right       = 2  [(min) = 0.0];  // [duty/(mm/s)] 1 / measured plant gain, right
+  float crawl_pulse                = 3  [(abs_max) = 1.0];  // [-1,1] sub-breakaway pulse amplitude; 0 = off
+  // Stage A: measured = gain*commanded + intercept, per wheel per direction
+  // of approach (docs/design/wheel-speed-command-mapping.md). gain must be
+  // positive -- App::Drive's correctedCommand() divides by it; gen_boot_
+  // config.py's own wheel_correction_for_config() already aborts the build
+  // if any gain <= 0.
+  float wheel_gain_left_accel      = 4  [(min) = 0.0001];
+  float wheel_intercept_left_accel = 5;   // [mm/s]
+  float wheel_gain_left_decel      = 6  [(min) = 0.0001];
+  float wheel_intercept_left_decel = 7;   // [mm/s]
+  float wheel_gain_right_accel     = 8  [(min) = 0.0001];
+  float wheel_intercept_right_accel = 9;  // [mm/s]
+  float wheel_gain_right_decel     = 10 [(min) = 0.0001];
+  float wheel_intercept_right_decel = 11; // [mm/s]
+}
+
+// WheelControl -- App::Drive's unified three-timescale wheel-speed
+// controller: Stage B's wire-tunable fast-PID gains and Stage C/
+// deficit-flag's bounds. Consumed by App::Drive via
+// Configurator::install(WHEEL_CONTROL). Every field's "0 = disabled" is
+// App::Drive's own documented convention (boot_config.h's
+// WheelControllerBootConfig doc comment) -- a robot JSON may legitimately
+// ship every one of these at 0 (both stages inert), so bounds below stay
+// at an inclusive >= 0 floor, never a strict positive one.
+message WheelControl {
+  float v_min              = 1  [(min) = 0.0];  // [mm/s] speed floor
+  float bias_max           = 2  [(min) = 0.0];  // [mm/s] Stage C trim authority clamp
+  float tau_adapt          = 3  [(min) = 0.0];  // [s] Stage C adaptation time constant; <=0 disables
+  float a_steady           = 4  [(min) = 0.0];  // [mm/s^2] steady-state gate
+  float deficit_threshold  = 5  [(min) = 0.0];  // [mm/s] deficit-flag error threshold
+  float deficit_window     = 6  [(min) = 0.0];  // [ms] deficit-flag sustain window
+  float pid_kp             = 7  [(min) = 0.0];  // [1] dimensionless proportional gain
+  float pid_ki             = 8  [(min) = 0.0];  // [1/s] integral gain
+  float pid_i_max          = 9  [(min) = 0.0];  // [mm/s] integrator clamp
+  float pid_kaff           = 10 [(min) = 0.0];  // [s] accel feedforward
+  float pid_max            = 11 [(min) = 0.0];  // [mm/s] total fast-loop authority clamp
+}
+
+// Planner -- Motion::Planner's tuning surface: profile ceilings, loop
+// timing, settle/rest, heading hold. Consumed by Motion::Planner via
+// Configurator::install(PLANNER). Fields 1-16 are the LIVE surface
+// (planner_config_for_config()); fields 17-22 are the DEAD
+// Config::ShaperBootConfig surface (shaper_config_for_config()) -- see this
+// file's own header checklist for why they are declared at all, and why
+// they are placed last (least-hot, correctly landing in the 2-byte-tag
+// range) pending ticket-015 deletion.
+message Planner {
+  float  v_max                  = 1  [(min) = 0.0];  // [mm/s] linear velocity ceiling
+  float  a_max                  = 2  [(min) = 0.0];  // [mm/s^2] linear accel-ramp ceiling
+  float  a_decel                = 3  [(min) = 0.0];  // [mm/s^2] linear decel-taper ceiling
+  float  omega_max              = 4  [(min) = 0.0];  // [rad/s] angular velocity ceiling
+  float  alpha_max              = 5  [(min) = 0.0];  // [rad/s^2] angular accel-ramp ceiling
+  float  alpha_decel            = 6  [(min) = 0.0];  // [rad/s^2] angular decel-taper ceiling
+  float  jerk_max                = 7  [(min) = 0.0];  // [mm/s^3] linear jerk ceiling
+  float  yaw_jerk_max            = 8  [(min) = 0.0];  // [rad/s^3] angular jerk ceiling
+  float  control_period          = 9  [(min) = 0.0];  // [ms]
+  float  actuation_delay         = 10 [(min) = 0.0];  // [ms] command-staged-to-wheels latency
+  float  settle_rest_velocity    = 11 [(min) = 0.0];  // [mm/s]
+  float  settle_rest_omega       = 12 [(min) = 0.0];  // [rad/s]
+  float  settle_epsilon_linear   = 13 [(min) = 0.0];  // [mm]
+  float  settle_epsilon_angular  = 14 [(min) = 0.0];  // [rad]
+  float  heading_hold_gain       = 15 [(min) = 0.0];  // [1/s] rad/s of correction per rad of error
+  float  decel_plan_fraction     = 16 [(min) = 0.0];  // [1] fraction of decel ceiling to plan brake-start against
+
+  // DEAD -- Config::ShaperBootConfig's own fields (see this file's own
+  // header checklist entry for shaper_config_for_config()). Delete
+  // alongside the C++ struct/generator function, ticket 015.
+  float shaper_a_max            = 17 [(min) = 0.0];  // [mm/s^2]
+  float shaper_a_decel          = 18 [(min) = 0.0];  // [mm/s^2]
+  float shaper_alpha_max        = 19 [(min) = 0.0];  // [rad/s^2]
+  float shaper_alpha_decel      = 20 [(min) = 0.0];  // [rad/s^2]
+  float shaper_j_max            = 21 [(min) = 0.0];  // [mm/s^3]
+  float shaper_yaw_jerk_max     = 22 [(min) = 0.0];  // [rad/s^3]
+}
+
+// Otos -- SparkFun OTOS mounting lever-arm offset and chip scale
+// multipliers. Consumed by Devices::Otos via Configurator::install(OTOS).
+// NOTE (trap 3, sprint.md): `linear_scale`/`angular_scale` here are the
+// config MULTIPLIER domain (1.0 = no correction), the same domain
+// boot_config.h's OtosBootConfig already uses -- Devices::RealOtos::
+// begin() converts this multiplier through scaleToRegister() before
+// calling setLinearScalar()/setAngularScalar() (which take the chip's raw
+// int8 register value directly). Reconciling the LIVE wire push path to
+// apply that same conversion is ticket 010's job, not this ticket's.
+message Otos {
+  float offset_x     = 1;  // [mm] mounting offset from chassis centre to sensor
+  float offset_y     = 2;  // [mm]
+  float offset_yaw   = 3;  // [rad] mounting yaw offset
+  float linear_scale  = 4 [(min) = 0.0001];   // multiplier; 1.0 = no correction; must be positive
+  float angular_scale = 5 [(min) = 0.0001];   // multiplier; 1.0 = no correction; must be positive
+}
+
+// Estimator -- App::StateEstimator's complementary-blend fusion weights.
+// Consumed by App::StateEstimator via Configurator::install(ESTIMATOR).
+message Estimator {
+  float  weight_heading_otos = 1 [(min) = 0.0, (max) = 1.0];  // blend weight: body heading vs OTOS heading
+  float  weight_omega_otos   = 2 [(min) = 0.0, (max) = 1.0];  // blend weight: body omega vs OTOS omega
+  uint32 staleness            = 3;  // [ms] max OTOS reading age still eligible to blend
+}
+
+// ===========================================================================
+// Wire envelope messages this schema drives -- the CONFIG binary arm's new
+// internal shape (sprint.md Step 3/Step 4). Per-group payload bodies are
+// placeholder `bytes` here: the generated group struct (ticket 002) IS the
+// per-group message, so the envelope itself does not need to know any
+// group's internal field shape, only which target it addresses and how
+// many bytes its encoded body is -- this ticket declares that envelope
+// shape only; ticket 002 (codegen) and ticket 008/009/012 (firmware
+// dispatch) decide the generated C++ representation of `bytes` under the
+// CODAL/no-heap constraint (a fixed-capacity array, most likely sized
+// against the same kEncodeScratchCap=220 ceiling wire.cpp already
+// documents -- not decided here).
+//
+// The 240 B envelope cannot carry Config::Robot's whole ~590 B field set in
+// one frame (sprint.md Design Rationale Decision 3) -- every op below is
+// necessarily per-ConfigGroupTarget, never per-object; a host aggregates a
+// full read-back by iterating every target's own GetConfig/ConfigSnapshot.
+// ===========================================================================
+
+// SetConfigGroup -- push a whole group's worth of values in one frame.
+// Firmware decodes `body` straight into Config::Robot's `target` member (no
+// patch, no presence flags, no merge -- Configurator::applyGroup(target,
+// wire, len)) and fans it out via install(target), which returns
+// ERR_NOT_LIVE for a boot-only target rather than silently no-op'ing.
+message SetConfigGroup {
+  ConfigGroupTarget target = 1;
+  bytes             body   = 2;  // encoded `target`'s own generated group message
+}
+
+// GetConfig -- request a read-back of one group.
+message GetConfig {
+  ConfigGroupTarget target = 1;
+}
+
+// ConfigSnapshot -- GetConfig's reply: the live, in-memory value of one
+// group, encoded the same way SetConfigGroup.body is.
+message ConfigSnapshot {
+  ConfigGroupTarget target = 1;
+  bytes             body   = 2;
+}
+
+// SetConfigField -- set exactly one field inside one group, addressed by
+// (target, field number) -- the wire carries a NUMBER, never a string key.
+// `field` is the target group's own generated protobuf field number (e.g.
+// Drive.wheel_gain_left_decel's field number 4 above), looked up host-side
+// via the real compiled descriptor (`Drive.DESCRIPTOR.fields_by_name[...]
+// .number`) so a human still types a name and the wire still carries a
+// number. Firmware's Configurator::applyField() reuses the SAME field-
+// lookup/bounds-check table wire.cpp's decoder already builds for
+// SetConfigGroup's own `target` (currently sealed in an anonymous
+// namespace -- ticket 012 exposes it). `value` must be `isfinite` before
+// `validateBounds()` runs: bounds compare with `<`/`>`, both false for NaN,
+// so a NaN would otherwise pass every bound the fields above declare
+// (ticket 012's own job, not solved by this schema).
+message SetConfigField {
+  ConfigGroupTarget target = 1;
+  uint32            field  = 2;
+  float             value  = 3;
+}

@@ -1,7 +1,7 @@
 ---
 id: '001'
-title: "robot_config.proto — the one schema, end-state grouped shape + wire messages"
-status: open
+title: "robot_config.proto \u2014 the one schema, end-state grouped shape + wire messages"
+status: done
 use-cases:
 - SUC-001
 - SUC-005
@@ -54,27 +54,61 @@ generate anything (ticket 002) — schema authorship only.
 
 ## Acceptance Criteria
 
-- [ ] `robot_config.proto` exists in `src/protos/`, declares
+- [x] `robot_config.proto` exists in `src/protos/`, declares
       `Identity`/`Connection`/`Vision` (no `ConfigTarget` value, marked
       `(host_only)`) and `Geometry`/`Motors`/`Drive`/`WheelControl`/
       `Planner`/`Otos`/`Estimator` (each with a `ConfigTarget` enum value).
-- [ ] Every field `gen_boot_config.py`'s `_require()` calls currently read
+      **Naming deviation, flagged**: the enum is named `ConfigGroupTarget`,
+      not `ConfigTarget` — `config.proto` already declares a top-level enum
+      named `ConfigTarget` (different values, `CONFIG_DRIVETRAIN` etc.), and
+      protoc enforces package-wide uniqueness for top-level enum type names
+      (confirmed empirically: two same-named top-level enums in files
+      sharing one package fail to compile even with no cross-import).
+      `config.proto`'s own `ConfigTarget` is dead (sprint.md's Problem
+      section: "declared and used nowhere in current firmware or host
+      code") and is deleted by ticket 013, not this ticket — this ticket's
+      file scope is `robot_config.proto` (create) + `options.proto` (add
+      `(host_only)`) only, so renaming/deleting `config.proto`'s enum is out
+      of scope here. See `robot_config.proto`'s own header comment for the
+      full rationale; ticket 013 is the natural point to rename
+      `ConfigGroupTarget` -> `ConfigTarget` once the collision is gone, if
+      wanted.
+- [x] Every field `gen_boot_config.py`'s `_require()` calls currently read
       (control/geometry/calibration/estimator/planner sections) has a
       corresponding field in the schema, grouped per the target layout
       above — verified by a field-by-field checklist against
       `gen_boot_config.py`'s actual `_require()` call sites, not just a
-      field count.
-- [ ] `ConfigTarget`, `SetConfigGroup`, `GetConfig`, `ConfigSnapshot`,
+      field count. Checklist lives in `robot_config.proto`'s own header
+      comment and is mechanically verified by
+      `src/tests/unit/test_robot_config_proto_parses.py`'s
+      `REQUIRED_FIELD_HOMES` table (one test per field). Six fields
+      (`shaper_config_for_config()`'s `control.a_max`/`a_decel`/
+      `alpha_max`/`alpha_decel`/`j_max`/`yaw_jerk_max`, feeding the already-
+      dead `Config::ShaperBootConfig`) are included, `shaper_`-prefixed, at
+      the high end of the `Planner` group, flagged for deletion alongside
+      the C++ struct in ticket 015. A handful of JSON keys are deliberately
+      EXCLUDED (not `_require()`'d and confirmed dead by sprint.md's own
+      audit: `wheels`/`encoders`/`gripper`/`peripherals`/`drive` JSON
+      sections, plus `geometry.drive_axle_offset_mm`/
+      `odometry_chip_upside_down`/`otos_untrusted`/`wheelbase_mm`) — see the
+      proto file's header comment for the itemized rationale on each.
+- [x] `ConfigTarget`, `SetConfigGroup`, `GetConfig`, `ConfigSnapshot`,
       `SetConfigField` are declared (per-group payload bodies for
       `SetConfigGroup` may be minimal/placeholder — the generated group
       struct from ticket 002 IS the per-group message; this ticket
-      declares the envelope shape).
-- [ ] A `(host_only)` proto option is added to `options.proto` and applied
+      declares the envelope shape). (`ConfigTarget` declared as
+      `ConfigGroupTarget` — see the naming-deviation note on the first
+      criterion above.) `SetConfigGroup`/`ConfigSnapshot` bodies are a
+      placeholder `bytes` field, per this criterion's own "may be
+      minimal/placeholder" allowance.
+- [x] A `(host_only)` proto option is added to `options.proto` and applied
       to `Identity`/`Connection`/`Vision`.
-- [ ] The proto parses cleanly under the same parser `gen_messages.py`
+- [x] The proto parses cleanly under the same parser `gen_messages.py`
       already uses (a bare parse/compile check — full codegen is ticket
-      002's job).
-- [ ] `ColorConfig`/`LineConfig` are **not** declared as groups (Out of
+      002's job). Verified via a direct `grpc_tools.protoc` invocation
+      (mirroring `gen_messages.py`'s own `_run_codegen_pipeline()`) over
+      every file in `src/protos/`, `ret == 0`.
+- [x] `ColorConfig`/`LineConfig` are **not** declared as groups (Out of
       Scope per sprint.md).
 
 ## Testing
