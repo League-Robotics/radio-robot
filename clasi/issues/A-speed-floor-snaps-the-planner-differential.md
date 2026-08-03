@@ -54,7 +54,7 @@ Two independent walls meet here:
 2. **vMin itself is unmeasured under load.** The 99.7 figure comes from a
    stand sweep (wheels unloaded, n=3, cut short by the I2C wedge). A measured
    *loaded* floor is likely lower and would reduce the damage independently —
-   see [[next-physical-bench-session-checklist]] item 4.
+   see [[A-next-physical-bench-session-checklist]] item 4.
 
 There is also a floor split: firmware `wheel_v_min = 99.7`
 (`drive.cpp:150-156`) vs the host taper's `_UNMANAGED_FLOOR = 90.0`
@@ -87,5 +87,5 @@ measured actuation floor.
 - `docs/code_review/2026-08-02-post-130-wheels-solid-review.md` — F12 (this
   file's absence), C1 (the planner-side wall), F7 (the constant split).
 - `docs/post-mortem/2026-08-02-sprint-130-wheels-solid.md`
-- [[next-physical-bench-session-checklist]] — item 4 measures the real
+- [[A-next-physical-bench-session-checklist]] — item 4 measures the real
   loaded floor.

@@ -69,7 +69,7 @@ Separately, a test asserting "shaping is off unless pushed" now fails because th
 unified boot path bakes real shaper defaults. That one is probably the *test*
 encoding a pre-unification assumption — confirm before editing either side.
 
-### 3. `tour2-146-degree-turn-still-undershoots-after-130-010.md`
+### 3. `A-tour2-146-degree-turn-still-undershoots-after-130-010.md`
 
 Ticket 010 fixed the general undershoot (worst per-turn error −20.8° → 2.72°) but
 TOUR_2's 146° turn still misses by −10.12°. **The residual does not scale with

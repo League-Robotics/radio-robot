@@ -31,7 +31,7 @@ it that is ready to become tickets.
 | `surface-i2c-error-counts-through-the-bus-interface` | One bullet inside review F6's observability package (which also covers `ConfigSnapshot`, setpoint-on-wire, deficit decoupling, bits 10/12, probeSlot). Will be done as part of it or not at all. |
 | `plus500-transient-criteria-and-plant-gain-drift-followup` | **Answered, not deferred.** Review Part 6 shows two of the three failing bounds (ripple ≤10 mm/s, split ≤10 mm/s) sit *below the actuator floor* — 1 duty LSB ≈ 8–11 mm/s. The issue's recommendation (run a Stage B gain sweep) would chase a bound the hardware cannot hold. This is a spec decision, and the one Stage B trial making ripple *worse* (33.7) is consistent with a quantizer limit cycle. The gain-drift half is review F2. |
 | `bench-reverify-residuals-and-the-4ms-...` | Review F7 covers the period comprehensively and structurally (the four `runAndWait` gaps sum to `kCycle` but real work runs *between* the marks, plus per-block whole-ms round-up). The unverified bench criteria moved to the bench-session checklist. |
-| `tovez-hard-silent-i2c-wedge-...` | → consolidated into `next-physical-bench-session-checklist` (item 1, the gate). |
+| `tovez-hard-silent-i2c-wedge-...` | → consolidated into `A-next-physical-bench-session-checklist` (item 1, the gate). |
 | `hitl-confirm-wheel-frozen-flag-...` | → consolidated (item 2). |
 | `playfield-actuation-floor-measurement-...` | → consolidated (item 4). |
 
@@ -53,8 +53,8 @@ Deferred, not judged wrong. Each would be rediscovered quickly if it mattered.
 
 | Issue | Why |
 |---|---|
-| `speed-floor-snaps-the-planner-differential` | **Referenced by three documents and never created** — the post-mortem, the knowledge doc, and the actuation-floor issue all cite a file a repo- and history-wide search does not find. Review F12 calls creating it "the highest-value single file in this review." Mechanism verified at `drive.cpp:150-156,277-278`: the floor runs on each wheel's already-summed `cmdVelocity`, so it cannot distinguish a 3 mm/s differential trim from a 3 mm/s travel command. |
-| `next-physical-bench-session-checklist` | Consolidates the three issues that all waited on the same thing — a person at the bench — plus the two sprint-130 criteria never re-measured because nobody was there to power-cycle a wedged robot. They were four files describing one session. |
+| `A-speed-floor-snaps-the-planner-differential` | **Referenced by three documents and never created** — the post-mortem, the knowledge doc, and the actuation-floor issue all cite a file a repo- and history-wide search does not find. Review F12 calls creating it "the highest-value single file in this review." Mechanism verified at `drive.cpp:150-156,277-278`: the floor runs on each wheel's already-summed `cmdVelocity`, so it cannot distinguish a 3 mm/s differential trim from a 3 mm/s travel command. |
+| `A-next-physical-bench-session-checklist` | Consolidates the three issues that all waited on the same thing — a person at the bench — plus the two sprint-130 criteria never re-measured because nobody was there to power-cycle a wedged robot. They were four files describing one session. |
 
 **Not created, contrary to review F12:** `make-irq-guard-off-permanent-and-reconcile-the-docs.md`.
 The review flagged it as a second missing file, but the guard is not merely
@@ -66,21 +66,21 @@ Nothing remains to make permanent. The stale references in older docs
 (`docs/architecture/*`, `docs/post-mortem/*`) are ordinary doc rot, not a
 tracked decision.
 
-## Still open (10)
+## Still open (9)
 
 All re-verified unfixed in the tree on 2026-08-02.
 
 | Issue | Verification |
 |---|---|
-| `rebuild-nezha-facade-on-the-v5-binary-surface` | Review F11: ~29 of ~36 public methods call deleted protocol methods; 11 `_proto._conn` reach-arounds confirmed present; three pose owners with disagreeing unit conversions. Blocks every bench session. |
-| `rewrite-io-calibrate-on-the-v5-binary-surface` | Review H4: six deleted protocol calls confirmed at `calibrate.py:401-421,747-854`; `calibration/linear.py`/`angular.py` fail *silently* at the wire. Needs the fold-or-delete decision. |
-| `vision-config-robot-tag-id-must-fail-closed` | Confirmed: `robot_config.py:77` is still `robot_tag_id: int = 1`, with hardcoded `100` fallbacks at `cli.py:166,645,747` and `calibrate.py:315,651`. Small, real, nasty failure mode. |
-| `sensors-...-line-sensor-dead-parity-...` | Confirmed: `cycleCount_` declared `robot_loop.h:201`, tested `robot_loop.cpp:544`, incremented nowhere. Merged with the flip-flop-ownership issue. |
-| `tour2-146-degree-turn-still-undershoots-...` | Updated with review F10's specific hypothesis: `decelLatched` is a one-way trap whose failure is additive and angle-independent — matching the residual's signature. Now a testable claim with a named fingerprint. |
-| `rotation-calibration-vs-live-heading-hold-gain` | Live: `tovez_nocal.json` still carries the sim-fitted `rotation_gain` 1.006 / offset 12.1, and `heading_hold_gain` is still 2.0 there and in `togov.json` (zeroed only in `tovez.json`). Two tests xfail on it. |
-| `system-test-minimal-...` | Trimmed to the unlanded phases (2, 4, 5, 6). Phases 1 and 3 verified landed. |
-| `next-physical-bench-session-checklist` | New. Gates most hardware work. |
-| `speed-floor-snaps-the-planner-differential` | New. |
+| `A-rebuild-nezha-facade-on-the-v5-binary-surface` | Review F11: ~29 of ~36 public methods call deleted protocol methods; 11 `_proto._conn` reach-arounds confirmed present; three pose owners with disagreeing unit conversions. Blocks every bench session. |
+| `B-rewrite-io-calibrate-on-the-v5-binary-surface` | Review H4: six deleted protocol calls confirmed at `calibrate.py:401-421,747-854`; `calibration/linear.py`/`angular.py` fail *silently* at the wire. Needs the fold-or-delete decision. |
+| `B-vision-config-robot-tag-id-must-fail-closed` | Confirmed: `robot_config.py:77` is still `robot_tag_id: int = 1`, with hardcoded `100` fallbacks at `cli.py:166,645,747` and `calibrate.py:315,651`. Small, real, nasty failure mode. |
+| `C-sensors-line-sensor-dead-and-perception-pacing-owner` | Confirmed: `cycleCount_` declared `robot_loop.h:201`, tested `robot_loop.cpp:544`, incremented nowhere. Merged with the flip-flop-ownership issue. |
+| `A-tour2-146-degree-turn-still-undershoots-after-130-010` | Updated with review F10's specific hypothesis: `decelLatched` is a one-way trap whose failure is additive and angle-independent — matching the residual's signature. Now a testable claim with a named fingerprint. |
+| `B-rotation-calibration-vs-live-heading-hold-gain` | Live: `tovez_nocal.json` still carries the sim-fitted `rotation_gain` 1.006 / offset 12.1, and `heading_hold_gain` is still 2.0 there and in `togov.json` (zeroed only in `tovez.json`). Two tests xfail on it. |
+| `B-system-test-minimal-remaining-phases` | Trimmed to the unlanded phases (2, 4, 5, 6). Phases 1 and 3 verified landed. |
+| `A-next-physical-bench-session-checklist` | New. Gates most hardware work. |
+| `A-speed-floor-snaps-the-planner-differential` | New. |
 
 ## What this does not cover
 

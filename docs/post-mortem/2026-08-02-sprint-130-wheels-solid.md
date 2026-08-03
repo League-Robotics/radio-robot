@@ -252,7 +252,7 @@ Five issues, all filed rather than carried:
 
 - `bench-reverify-residuals-and-the-4ms-delivered-period-offset.md`
 - `sprint-130-regressions-speed-floor-snaps-differential-and-shaper-defaults.md`
-- `tour2-146-degree-turn-still-undershoots-after-130-010.md`
+- `A-tour2-146-degree-turn-still-undershoots-after-130-010.md`
 - `plus500-transient-criteria-and-plant-gain-drift-followup.md`
 - `playfield-actuation-floor-measurement-deferred-from-130-012.md`
 

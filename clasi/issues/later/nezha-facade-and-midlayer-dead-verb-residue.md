@@ -1,8 +1,8 @@
 ---
 status: pending
 superseded_by:
-  - rebuild-nezha-facade-on-the-v5-binary-surface.md
-  - rewrite-io-calibrate-on-the-v5-binary-surface.md
+  - A-rebuild-nezha-facade-on-the-v5-binary-surface.md
+  - B-rewrite-io-calibrate-on-the-v5-binary-surface.md
   - nav-goto-stack-is-dead-gate-it-loudly-then-rebuild-or-delete.md
 ---
 

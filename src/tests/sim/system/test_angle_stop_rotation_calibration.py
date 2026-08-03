@@ -134,7 +134,7 @@ def _run_angle_stop_move(loop, stop_deg: float, omega: float) -> float:
         "still needed once heading-hold is genuinely live -- and if so, "
         "refitting it against the new closed-loop dynamics -- is a "
         "measurement task, not a composition-root change; tracked in "
-        "clasi/issues/rotation-calibration-vs-live-heading-hold-gain.md, "
+        "clasi/issues/B-rotation-calibration-vs-live-heading-hold-gain.md, "
         "adjacent to ticket 010's own turn-shaping-undershoot work."
     ),
     strict=False,
@@ -174,7 +174,7 @@ def test_angle_stop_lands_close_to_target_with_tovez_nocal_calibration():
         "overshoot on its own, WITHOUT any rotation_gain/offset calibration "
         "-- this negative control now lands within the +/-5 deg bound "
         "(measured +1.31 deg) instead of the ~13 deg the old, heading-hold-"
-        "off sim produced. Tracked in clasi/issues/rotation-calibration-vs-"
+        "off sim produced. Tracked in clasi/issues/B-rotation-calibration-vs-"
         "live-heading-hold-gain.md."
     ),
     strict=False,

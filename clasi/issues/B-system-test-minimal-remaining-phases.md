@@ -30,7 +30,7 @@ datasets in `out/`. The 2026-08-02 review (S2) calls the rails
 Phase 2 is the one that unblocks the rest: a blessed hardware square-tour
 dataset is simultaneously the first cross-tier golden and the first input to
 the sim error-model fit the 2026-08-02 review's Part 5 asks for. It is also
-gated on the robot working again — see [[next-physical-bench-session-checklist]].
+gated on the robot working again — see [[A-next-physical-bench-session-checklist]].
 
 The umbrella charter (`system-test-square-tour-is-the-one-system-test-sim-bench-playfield.md`)
 was moved to `later/` in the 2026-08-02 triage: its operative rule is now
