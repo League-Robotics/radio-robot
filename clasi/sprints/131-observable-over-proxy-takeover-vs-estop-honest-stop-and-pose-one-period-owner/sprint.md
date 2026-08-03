@@ -108,7 +108,11 @@ sprint):
   attempt.
 - A commanded differential trim of a few mm/s produces a proportional wheel
   response in sim, not a step to `vMin`; the sim-tier tour tests that
-  previously FAULTed on this pass.
+  previously FAULTed on this pass. (REVISED, see Architecture's Revision
+  section: the mechanism is now a ratio-preserving scale rather than a
+  common-mode/differential split — ticket 003's own turn-accuracy
+  non-regression gate, below, is the criterion that actually caught the
+  shipped-then-revised implementation's regression.)
 - A pose-sanity test in sim drives a wheel past the +/-30,000 mm rebaseline
   margin: heading and x/y are continuous (no step), total odometry travel
   matches commanded, and wheel velocity does not read 0 during the
@@ -494,9 +498,12 @@ own diffing (independently characterized as correct,
 this is closing a gap between documentation and code, not introducing new
 behavior outside that gap.
 
-**Decision 4 — Floor the common mode in `App::Drive`; do not give the
-planner a `vMin` field this sprint.** Context: F12/C1's speed-floor
-regression. Alternatives: (a) floor common-mode only, entirely inside
+**Decision 4 (SUPERSEDED post-shipment — see "Revision — Ticket 003's
+speed-floor semantics" below for the measurement that invalidated this
+decision and the replacement design; kept here verbatim as the
+historical record of what was originally tried and why) — Floor the
+common mode in `App::Drive`; do not give the planner a `vMin` field this
+sprint.** Context: F12/C1's speed-floor regression. Alternatives: (a) floor common-mode only, entirely inside
 `App::Drive`, computed from the two wheel commands it already receives
 (chosen). (b) additionally give `PlannerLimits` a `vMin` field so the
 profiler's own terminal taper can plan realistically against it. Why:
@@ -592,7 +599,187 @@ pre-designed without the test evidence.
   firmware-to-host config read-back, a larger feature. Tracked forward.
 - Whether `PlannerLimits` should eventually gain a `vMin` field (Decision
   4's deferred option (b)) is a real open design question for a future
-  sprint, once the loaded floor is measured.
+  sprint, once the loaded floor is measured. **Reaffirmed by the Revision
+  below**: the ratio-preserving-scale replacement for Decision 4 resolves
+  the measured regression without needing this — option (b) stays
+  deferred, not because it was proven unnecessary in general, but because
+  the specific conflict that would have forced it (a genuine heading-hold
+  differential fighting a genuinely-enforced floor) is not reachable in
+  any shipped robot profile today (see Revision).
+
+### Revision — Ticket 003's speed-floor semantics (2026-08-02, post-shipment)
+
+**What was originally decided.** Decision 4 above: `Drive::tick()`
+reconstructs `commonMode = 0.5*(cmdVelocityLeft + cmdVelocityRight)` and
+`differential = 0.5*(cmdVelocityRight - cmdVelocityLeft)` from the two
+wheels' already-mixed `cmdVelocity`, floors ONLY `commonMode` via the
+existing, unchanged `applySpeedFloor()`, then recombines
+(`speedLeft = flooredCommon - differential`,
+`speedRight = flooredCommon + differential`). Shipped as commit
+`29578345` (ticket 003), reasoned from: "a small heading trim is small
+because it is a correction, not because it is a slow travel command."
+
+**The measurement that invalidated it.** Team-lead's boundary
+verification, `test_tour_closure_gate.py::
+test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band`,
+TOUR_1 90-degree turns, single-step harness, bisected commit-by-commit
+(rebuilding `libfirmware_host.dylib` at each point):
+
+| commit | turn 2 | turn 4 |
+|---|---|---|
+| `22a3c368` pre-sprint base | -2.68 deg | -13.19 deg |
+| `841a018b` ticket 001 | -2.57 deg | -13.08 deg |
+| `0cfa5f1f` ticket 002 | -2.57 deg | -13.08 deg |
+| `29578345` ticket 003 | **-10.38 deg** | **-20.07 deg** |
+
+001 and 002 are neutral (slightly better than base). 003 adds ~7-8
+degrees of undershoot to every turn measured. (Turn 4's pre-existing
+-13.19 deg is a SEPARATE, already-known defect — `decelLatched`,
+ticket 006's territory, tracked in
+`A-tour2-146-degree-turn-still-undershoots-after-130-010.md` — not
+conflated with the ~7-8 deg 003 itself added on top.)
+
+**Root mechanism (why Decision 4's own reasoning does not generalize).**
+`Planner::planWheels()` (the profiler behind every Angle-kind Move,
+i.e. every 90-degree turn in the tour) emits
+`cmdLeft_ = lambda * unit[0]`, `cmdRight_ = lambda * unit[1]`. For a pure
+in-place rotation, `unit[0] = -1, unit[1] = +1` (equal and opposite), so
+`commonMode = 0.5*(cmdLeft_ + cmdRight_) = 0` EXACTLY, for every tick of
+the ENTIRE turn (not only its terminal taper) -- it is a structural
+property of the shape, not a coincidence of a particular tick. Decision
+4's common-mode-only floor therefore never engages, at any point, for a
+pure rotation: the differential (`= lambda`, the turn's ENTIRE commanded
+magnitude, not a trim riding on top of something else) passes through
+completely unfloored. When `lambda` is below the actuator's
+minimum-sustained-speed floor during the turn's accel ramp-in and
+(more consequentially, because it is a longer window) its decel
+ramp-out -- `vMin` is 99.7 mm/s in the compiled sim/firmware
+`WheelControllerBootConfig` (`defaultWheelControllerConfig()`,
+`boot_config.cpp`), confirmed to be the value actually in effect
+regardless of the nominal robot JSON's own `wheel_v_min`
+(`wheel_v_min`/`wheel_bias_max`/etc. are documented bake-only,
+compile-time-only fields, never live-pushed by
+`configure_from_robot()` -- `tovez_nocal.json`'s own `wheel_v_min: 0.0`
+does not reach the compiled sim library actually under test) -- the
+wheels are commanded a sub-breakaway duty they cannot physically
+deliver (post-130 review Part 6: breakaway duty 0.09-0.10 fwd/0.164
+rev-right, nothing sustained below ~100 mm/s, `crawl_pulse = 0` ships).
+The turn simply stops rotating before reaching its commanded angle.
+The OLD, pre-131-003 code (independent per-wheel flooring) handled this
+correctly for a symmetric pivot BY ACCIDENT: both wheels have equal
+magnitude, so flooring each wheel independently to `vMin` is equivalent
+to flooring the pair as a whole, and the turn's tail is driven through
+at (at least) `vMin` instead of stalling.
+
+Decision 4's own justifying argument ("a small trim is small because it
+is a correction") is true of `Planner::applyHeadingHold()`'s differential
+(a trim riding atop a Distance Move's already-profiled common-mode
+speed) but false of `planWheels()`'s ratio-locked output for a pure
+rotation, where there is no separate common-mode component AT ALL --
+Decision 4's arithmetic decomposition of `cmdVelocityLeft/Right` into
+"common mode" and "differential" is a mathematical identity that holds
+regardless of which of the two call sites produced the numbers, but the
+PHYSICAL MEANING Decision 4 assigned to "differential" (a correction,
+safe to leave unfloored) is only true for one of them. `Drive::tick()`
+cannot tell the two cases apart from the two floats alone -- they are
+bit-for-bit identical either way. This is, in miniature, exactly the
+class of bug this whole sprint exists to close (checking a proxy --
+here, "which arithmetic bucket did this number fall into" -- instead of
+the observable -- "can the actuator physically deliver this").
+
+**The new decision.** Replace the common-mode/differential decomposition
+with a RATIO-PRESERVING SCALE, computed from the raw wheel pair directly
+(no decomposition at all): let
+`dominantMag = max(|cmdVelocityLeft|, |cmdVelocityRight|)`. If
+`dominantMag` is nonzero and below `vMin`, scale BOTH wheels by the same
+factor `vMin / dominantMag` -- preserving their exact commanded ratio --
+so the dominant wheel lands at exactly `vMin`. Otherwise (dominant
+already at/above `vMin`, or both wheels exactly zero) the raw pair
+passes through completely unchanged. This is the same
+dominant-constrained/ratio-locked pattern `Planner::planWheels()`
+already uses internally for its own accel-ceiling tie-break (`planner.cpp`
+~line 1175) -- not a new idiom, a precedented one.
+
+**Why this resolves the conflict without the deferred planner-vMin
+scope (option 3):**
+
+1. For a symmetric pivot (the regressed Angle-Move case): both wheels
+   have equal magnitude, so scaling to put the dominant wheel at `vMin`
+   puts BOTH at `vMin` -- bit-identical to the old, pre-131-003
+   per-wheel-independent floor for this exact case. Restores turn
+   accuracy to the 001/002 baseline (or better).
+2. For 131-003's own AC#1 scenario (a real differential riding on an
+   ALREADY above-floor common-mode command, e.g. common=100,
+   differential=3 -> raw 97/103): the dominant wheel (103) already
+   clears `vMin`, so NO scaling applies -- the raw pair passes through
+   unchanged, reproducing 131-003's own intended, tested behavior for
+   the one scenario that is actually reachable on a shipped robot
+   profile (see point 4).
+3. For an asymmetric arc (unequal-magnitude wheels, both below floor
+   during ramp-up/ramp-down): ratio-preserving scaling is a strict
+   improvement over BOTH the old code (which flattened the commanded
+   curvature toward 1:1 by flooring each wheel to the same `vMin`
+   independently) and 131-003's shipped code (whose common-mode-only
+   floor does not bound how much it distorts an asymmetric differential
+   riding on a sub-floor common mode).
+4. It is currently UNREACHABLE-neutral for every shipped robot profile:
+   no current robot JSON combines a nonzero `wheel_v_min` with a nonzero
+   `heading_hold_gain` (`tovez.json`: vMin=99.7/gain=0.0;
+   `tovez_nocal.json`/`togov.json`: vMin=0.0/gain=2.0), so "a genuine
+   heading-hold differential fighting a genuinely-enforced floor" cannot
+   be exercised end-to-end today regardless of which flooring rule is in
+   effect -- the only PRACTICALLY reachable case is point 2 above, which
+   is unchanged.
+5. It STRENGTHENS the "stop is stop" / Stage A-Stage B commanded-zero
+   guard agreement (131-002's own requirement): any wheel whose raw
+   command is exactly `0.0f` multiplies to exactly `0.0f` under any scale
+   factor (IEEE-754 `0 * x == 0` for finite `x`), so a wheel held at rest
+   by vector cancellation now PROVABLY stays at exactly zero, rather than
+   being driven nonzero as 131-003's shipped code had to specially
+   justify as "intentional" (its own completion notes,
+   `scenarioRawZeroWheelMayDriveNonzeroButGenuineFullStopStaysZero`).
+6. Zero cross-module scope creep: like Decision 4's own chosen
+   alternative (a), this is computed entirely inside `App::Drive` from
+   the two wheels' already-published `cmdVelocity` -- no
+   `Motion::Planner` change, no new `PlannerLimits::vMin` field, no
+   re-derivation of `settle_epsilon_linear`. Option 3 (pushing
+   floor-awareness into the planner) remains correctly deferred --
+   turns out not to be required to resolve this conflict after all.
+
+**Acknowledged, deliberate tradeoff (amends the Open Question above, does
+not silently drop it).** The one sub-case 131-003's own AC#2 specifically
+exercised -- a real differential trim riding on an exactly- or
+near-zero common-mode component (e.g. `applyHeadingHold()`'s correction
+during a Distance Move's terminal approach, once common-mode has decayed
+near zero) -- now ALSO gets scaled up toward `vMin`, i.e. reverts to the
+same "lurch" 131-003 was written to prevent, for that one sub-case only.
+Accepted, not overlooked:
+- It is the physically honest answer: a sub-breakaway differential is
+  sub-breakaway regardless of whether its origin is "a correction" or
+  "the entire commanded motion," and `Drive` has no way -- and, per
+  Decision 4's own original alternative (b), should not be given one
+  this sprint -- to distinguish the two from the wheel pair alone.
+- It is currently unreachable in any shipped robot profile (point 4
+  above) -- no regression to any behavior a real or simulated tour
+  exercises today.
+- Heading-hold is independently disabled/tracked as unstable (this
+  sprint's own Out-of-Scope section) -- re-enabling it is already gated
+  behind a separate fix, at which point this exact tradeoff must be
+  revisited together with the loaded-actuation-floor bench measurement
+  and the deferred `PlannerLimits::vMin` awareness.
+
+**Self-review of this revision (scoped -- one module, one function's
+call-site logic, no new cross-module edge, no diagram/tiering change).**
+Cohesion: `App::Drive`'s purpose is unchanged (still "converts a
+commanded wheel speed into actuated motor duty," one sentence, no
+"and"). Coupling/boundary: unchanged -- still computed entirely from
+`state.wheelLeft/Right.cmdVelocity`, no new inbound or outbound edge.
+Anti-patterns: none introduced (no god component, no new shared mutable
+state, no circular dependency; the ratio-lock pattern is reused, not
+invented). Risk: the one behavior change (near-zero-common-mode
+differential trim reverts to boosted) is explicitly flagged above rather
+than silently shipped, and is inert for every current robot profile.
+Verdict: **APPROVE**.
 
 ## Use Cases
 
@@ -661,38 +848,73 @@ Parent: (none — firmware-internal contract)
         bit-identical to before this ticket in the already-passing sim
         suite.
 
-### SUC-131-003: A small differential steering correction is delivered proportionally, not snapped to the travel floor
+### SUC-131-003: A wheel pair below the actuation floor is boosted to the floor without distorting its commanded ratio (REVISED — see Architecture's Revision section)
 Parent: (none — firmware-internal contract)
 
 - **Actor**: `App::Drive::tick()`
-- **Preconditions**: The planner is running a Distance/Twist Move with a
-  small heading-hold differential correction active (a few mm/s per
-  wheel), while the common-mode travel command is itself at or above
-  `vMin`, OR the common-mode command is near zero while a real steering
-  differential is still commanded.
+- **Preconditions**: Either (a) a Distance Move's heading-hold
+  differential correction is active while the common-mode travel command
+  is itself at or above `vMin` (the only combination reachable on any
+  currently shipped robot profile — see Revision), or (b) an Angle Move
+  (or any wheel-pair command with no separate common-mode component at
+  all, e.g. a pure pivot) commands both wheels at a magnitude below
+  `vMin` during its accel ramp-in or decel ramp-out.
 - **Main Flow**:
-  1. `Drive::tick()` receives the two wheels' summed `cmdVelocity`
-     (common-mode plus differential, already mixed by the planner).
-  2. Drive separates the common-mode component from the differential
-     component arithmetically.
-  3. The floor (`vMin`) applies to the common-mode magnitude only; the
-     differential passes through unfloored.
-  4. The two components are recombined into the actual per-wheel duty
-     path.
-- **Postconditions**: A few-mm/s differential trim produces a
-  proportional per-wheel duty difference, not a ~99.7 mm/s step.
+  1. `Drive::tick()` receives the two wheels' `cmdVelocity` as already
+     mixed by the planner (common-mode plus differential for a Distance
+     Move's heading-hold trim; a pure ratio-locked pair for an Angle
+     Move — `Drive` does not know or need to know which).
+  2. Drive computes the dominant (larger-magnitude) wheel's raw command.
+  3. If the dominant wheel's magnitude is nonzero and below `vMin`, BOTH
+     wheels are scaled by the same factor (`vMin / dominantMagnitude`),
+     preserving their exact ratio, so the dominant wheel lands at exactly
+     `vMin`. Otherwise the raw pair passes through unchanged.
+- **Postconditions**: A wheel pair that already clears the floor (the
+  only currently-reachable differential-trim case) is untouched,
+  bit-identical to the raw commanded pair. A wheel pair below the floor
+  is boosted to the floor WITHOUT changing the ratio between the two
+  wheels — a symmetric pivot is boosted symmetrically (matching
+  pre-131-003 behavior exactly, fixing the regression); an asymmetric arc
+  keeps its commanded curvature instead of being flattened toward 1:1
+  (the old per-wheel-independent floor's own latent defect). Any wheel
+  commanded exactly `0.0f` stays exactly `0.0f` after scaling, so "stop
+  is stop" and the Stage A/Stage B commanded-zero guards (131-002) hold
+  trivially.
 - **Acceptance Criteria**:
   - [ ] Sim test: a 3 mm/s differential correction with a >=vMin
-        common-mode command produces per-wheel commands differing by
-        approximately the differential amount, not a floor-magnitude
-        jump.
-  - [ ] The sim-tier tour tests that previously FAULTed on this
-        (equivalent to the four TestGUI tour tests named in the issue)
-        pass.
+        common-mode command (dominant wheel already at/above `vMin`)
+        produces per-wheel commands differing by approximately the
+        differential amount, not a floor-magnitude jump — no scaling
+        applies at all because the dominant wheel already clears the
+        floor.
+  - [ ] Sim test: a symmetric pivot (equal-and-opposite wheel commands,
+        e.g. an Angle Move) with both wheels below `vMin` is boosted to
+        exactly `(-vMin, +vMin)` — bit-identical to what the
+        pre-131-003 per-wheel-independent floor produced for this case.
+  - [ ] Sim test: an asymmetric pair below `vMin` (e.g. 20/80 mm/s at a
+        test-local `vMin`=100) is scaled to preserve its ratio exactly
+        (25/100), not flattened toward 1:1.
+  - [ ] **HARD NON-REGRESSION GATE**:
+        `test_tour_closure_gate.py::test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band`,
+        single-step harness — TOUR_1 turn 2 error magnitude <= 2.68 deg
+        and turn 4 error magnitude <= 13.19 deg (the measured pre-sprint
+        baseline; tickets 001/002 measured -2.57/-13.08, so matching or
+        beating that is the real target). This is the test that caught
+        131-003's shipped regression (-10.38/-20.07) and is the
+        authoritative check that the revised algorithm actually fixes it,
+        not just the synthetic harness scenarios above.
   - [ ] No regression in the square-tour/circle-tour closure gates at the
         sim tier.
   - [ ] The floor's NUMERIC value is unchanged by this ticket (explicitly
         not re-fit) — acceptance is about semantics, not the constant.
+  - [ ] Explicitly acknowledged, not silently reintroduced: a real
+        differential trim riding on an exactly-/near-zero common-mode
+        component (131-003's own original AC#2 scenario) is now ALSO
+        boosted toward `vMin` rather than passed through unfloored — see
+        Architecture's Revision section for why this is accepted (the
+        scenario is unreachable on any shipped robot profile today, and
+        is physically indistinguishable from the pivot case this ticket
+        must fix).
 
 ### SUC-131-004: Wheel position and heading stay continuous across a software rebaseline
 Parent: (none — firmware-internal contract)
@@ -822,7 +1044,7 @@ Before tickets can be created, all of the following must be true:
 |---|-------|------------|
 | 001 | Split Drive::takeover()/estop() and fix sign-aware bias on reversal | none |
 | 002 | Commanded-zero through Stage B + Stage B freshness gates + NezhaMotor genuine freshness | 001 |
-| 003 | Speed floor: common-mode only, differential passes through | 002 |
+| 003 | Speed floor: ratio-preserving scale, not common-mode-only (REVISED) | 002 |
 | 004 | positionEpoch consumers: Odometry + planner pose channels re-anchor across rebaseline | none |
 | 005 | One control period: absolute end-of-cycle deadline pacing | 004 |
 | 006 | Release decelLatched on re-measured rise + large-angle/chained/transient planner_tests | 005 |
