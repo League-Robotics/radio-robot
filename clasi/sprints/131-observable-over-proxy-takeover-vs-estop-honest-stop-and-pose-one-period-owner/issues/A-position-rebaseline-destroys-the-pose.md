@@ -1,6 +1,9 @@
 ---
-status: pending
+status: in-progress
 priority: high
+sprint: '131'
+tickets:
+- 131-004
 ---
 
 # Position rebaseline destroys the pose: `positionEpoch` has no consumer outside the wire

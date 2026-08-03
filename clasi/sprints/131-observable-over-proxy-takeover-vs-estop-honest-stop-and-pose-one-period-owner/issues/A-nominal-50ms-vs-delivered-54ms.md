@@ -1,6 +1,9 @@
 ---
-status: pending
+status: in-progress
 priority: high
+sprint: '131'
+tickets:
+- 131-005
 ---
 
 # The control period is 54 ms and the config says 50; every gain is tuned against the wrong number
