@@ -15,12 +15,17 @@ namespace {
 constexpr uint32_t kSettle = 4;  // [ms] encoder-settle window, both motors
 constexpr uint32_t kClear = 4;   // [ms] post-duty-write clearance window
 
-// The four pacing blocks must sum to kCycle; kPace absorbs the three
-// settle/clear windows rather than stacking a fresh kCycle on top.
+// The three settle/clear windows have a fixed budget of their own; the
+// trailing pacing block (cycle()'s own runAndWaitUntil() call, below) does
+// NOT get a fourth fixed budget on top of them any more (131-005) -- it
+// targets the cycle's own absolute end, state_.time.cycleStart + kCycle,
+// so whatever real time the three windows above (plus their own bodies'
+// work) actually consumed this cycle is exactly what the final block's
+// wait shrinks by. This static_assert stays: the three windows must still
+// leave a nonnegative amount of the budget for that final wait to absorb.
 constexpr uint32_t kWindows = 2 * kSettle + kClear;  // [ms]
 static_assert(kWindows <= RobotLoop::kCycle,
               "kSettle+kClear+kSettle must fit inside the kCycle budget");
-constexpr uint32_t kPace = RobotLoop::kCycle - kWindows;  // [ms]
 
 constexpr uint32_t kPreamblePace = 10;  // [ms] boot-loop probe pacing
 
@@ -86,6 +91,19 @@ void RobotLoop::runAndWait(uint32_t gap, Body body) {  // [ms]
   uint32_t mark = markTime();
   body();
   sleepUntil(mark, gap);
+}
+
+// 131-005: see this method's own doc comment (robot_loop.h). Unlike
+// runAndWait() above, the mark this waits against is supplied by the
+// CALLER (the cycle's own start, not this call's own entry) -- the whole
+// point being that any jitter/rounding the earlier blocks picked up this
+// cycle already shows up in markTime() by the time this runs, so
+// sleepUntil() below computes a correspondingly SMALLER remaining wait
+// rather than a fixed one.
+template <typename Body>
+void RobotLoop::runAndWaitUntil(uint32_t deadlineMark, uint32_t deadlineGap, Body body) {  // [ms] [ms]
+  body();
+  sleepUntil(deadlineMark, deadlineGap);
 }
 
 float RobotLoop::clampToPositionWireBound(float pos, bool* clamped) {
@@ -496,8 +514,8 @@ void RobotLoop::publishMoveResult(const Motion::TickResult& moveResult) {
 // Main cycle. Vendor windows: the brick needs kSettle between select and
 // collect and kClear after a duty write; interposed brick traffic during a
 // settle invalidates the pending sample, so the windows' bodies never
-// touch the bus. The trailing kPace block does touch the bus (OTOS + one
-// of line/color), outside any select->collect window.
+// touch the bus. The trailing block does touch the bus (OTOS + one of
+// line/color), outside any select->collect window.
 //
 // comms_.pump() runs in ALL FOUR blocks -- it is pure CPU/buffer work, no
 // bus traffic, so it is legal inside a settle window, and putting it there
@@ -506,6 +524,14 @@ void RobotLoop::publishMoveResult(const Motion::TickResult& moveResult) {
 // by src/tests/sim/system/sim_api_harness.cpp (exactly four sleepMillis()
 // calls per cycle), so pump() is folded into the EXISTING bodies rather
 // than given a block of its own.
+//
+// 131-005: the trailing block's own wait is an ABSOLUTE end-of-cycle
+// deadline (runAndWaitUntil(state_.time.cycleStart, kCycle, ...), not a
+// gap relative to its own entry mark -- see this call's own comment below
+// and robot_loop.h's kCycle doc comment for the measured defect this
+// fixes (a rock-stable 54ms delivered period against a 50ms nominal,
+// traced to the three earlier blocks' own rounding/overrun being re-added
+// on top of the fourth block's fixed budget instead of absorbed by it).
 void RobotLoop::cycle() {
   state_.time.cycleStart = markTime();  // [ms] pace anchor + wire `now`
   const uint64_t cycleStartUs = clock_.nowMicros();  // [us]
@@ -538,13 +564,21 @@ void RobotLoop::cycle() {
 
   publishWheels();  // at the point of same-generation L/R coherence
 
-  runAndWait(kPace, [&] {
+  // 131-005: targets state_.time.cycleStart + kCycle directly (an absolute
+  // deadline), not a fresh gap from this block's own entry markTime() --
+  // whatever the three settle/clear blocks above (plus their own bodies'
+  // real work) already consumed this cycle is exactly what this wait
+  // shrinks by, so a jittery/overrunning cycle is absorbed HERE instead of
+  // compounding into next cycle's own start mark (which is always taken
+  // fresh, via markTime(), at the top of THIS function -- so a cycle's own
+  // final-block rounding never carries forward into the next cycle).
+  runAndWaitUntil(state_.time.cycleStart, kCycle, [&] {
     comms_.pump(state_.time.cycleStart);
 
     uint64_t nowUs = clock_.nowMicros();
 
     // 131-004: positionEpoch already reflects THIS cycle's publishWheels()
-    // (which ran before this kPace block), so a same-cycle rebaseline's
+    // (which ran before this trailing block), so a same-cycle rebaseline's
     // epoch bump is visible here -- odom_ re-anchors instead of
     // differencing across the rebaseline jump (Motion::Odometry::
     // integrate()'s own doc comment, odometry.h).

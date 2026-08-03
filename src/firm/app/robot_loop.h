@@ -50,10 +50,31 @@ class RobotLoop {
   // hardware identical). At 40 the loop's measured busy time (~21 ms) plus
   // vendor-bus-clearance overrun meant the pacer never actually slept
   // (delivered period drifted ~46-48 ms, the "47 ms" `boot_config.cpp`
-  // baked as a separate, dishonest number). At 50, busy time is
-  // comfortably under budget, so the pacer paces again: the delivered
-  // period is exactly 50 ms and stable -- see robot_loop.cpp's own kPace
-  // computation.
+  // baked as a separate, dishonest number).
+  //
+  // 130-011 bench re-measurement (2026-08-02) found that raising kCycle to
+  // 50 did NOT make delivered == nominal as the paragraph above used to
+  // claim: cycle_period read a rock-stable 54.000 ms +/- 0.006 ms idle,
+  // not 50 -- with cycleBusy only ~21-23 ms (comfortably under budget, so
+  // NOT the old kCycle=40 busy-time-overrun pattern). Same +4 ms at both
+  // kCycle=40 and kCycle=50: structural, not a budget problem -- the four
+  // `runAndWait()` pacing blocks each computed their own wait as a GAP
+  // relative to that block's own entry mark, so any rounding/overrun any
+  // one block picked up (fiber_sleep quantizing to a whole tick, real work
+  // between marks) was simply re-added on top of the next block's own
+  // fixed budget instead of being absorbed anywhere.
+  //
+  // 131-005 fixes this: cycle()'s trailing pacing block now targets an
+  // ABSOLUTE end-of-cycle deadline (state_.time.cycleStart + kCycle)
+  // rather than a gap relative to its own entry mark, so whatever the
+  // three earlier blocks' own jitter/rounding already spent is absorbed
+  // into this one final wait instead of compounding across all four (see
+  // robot_loop.cpp's own runAndWaitUntil()/cycle() call site). Proven
+  // self-correcting under injected jitter in a host-build unit test
+  // (app_robot_loop_pacing_harness.cpp) -- the PHYSICAL robot's own
+  // delivered period is NOT re-measured by that ticket (`tovez` unreachable
+  // that sprint); re-running `src/tests/bench/planner_square_tour.py` once
+  // the bench is available again is an open follow-up, not yet done.
   static constexpr uint32_t kCycle = 50;  // [ms] (~20 Hz)
 
   // All references are already-constructed modules; the composition root
@@ -111,6 +132,16 @@ class RobotLoop {
 
   template <typename Body>
   void runAndWait(uint32_t gap, Body body);  // [ms]
+
+  // 131-005: like runAndWait(), but the wait targets an ABSOLUTE deadline
+  // (deadlineMark + deadlineGap) instead of a gap relative to a mark taken
+  // at this call's own entry. Used ONLY by cycle()'s trailing block, whose
+  // deadline is state_.time.cycleStart + kCycle -- so jitter/rounding
+  // already spent by the three earlier runAndWait() blocks this cycle is
+  // absorbed into this one final wait instead of compounding on top of it
+  // (see cycle()'s own call site comment).
+  template <typename Body>
+  void runAndWaitUntil(uint32_t deadlineMark, uint32_t deadlineGap, Body body);  // [ms] [ms]
 
   // Drain the command ring and dispatch each entry to its owning
   // subsystem. Every path acks -- either the outcome of the routing itself

@@ -32,9 +32,16 @@
 //   - controlPeriod/actuationDelay: the sim genuinely delivers its own
 //     cycle time (SimHarness::step() advances virtual time by EXACTLY
 //     RobotLoop::kCycle, with none of a real board's vendor-bus-clearance
-//     overrun -- see PlannerBootConfig::controlPeriod's own doc comment
-//     for why the ROBOT JSON bakes a measured 47ms instead of the nominal
-//     40).
+//     overrun or fiber-sleep rounding -- see PlannerBootConfig::
+//     controlPeriod's own doc comment). 131-005: the ROBOT JSON's
+//     control_period is now simply "= kCycle" (50), not a separately
+//     re-measured value that drifts stale every time kCycle itself
+//     changes (the OLD 40ms-nominal generation baked a measured "47ms"
+//     this way, and the fixed-gap pacing scheme that made that number
+//     true made the SAME kind of gap re-open at the 50ms nominal too --
+//     see robot_loop.h's kCycle doc comment for the full history and the
+//     absolute-deadline pacing fix that closes it by construction rather
+//     than by re-measuring).
 //   - otosConfig: TestSim::SimPlant's OtosPlant is already a perfect,
 //     zero-mounting-error sensor -- a real chip's measured lever-arm/scale
 //     correction has no counterpart to correct in it (found empirically,

@@ -275,7 +275,15 @@ struct PlannerBootConfig {
   float jerkMax = 0.0f;     // [mm/s^3] linear jerk ceiling
   float yawJerkMax = 0.0f;  // [rad/s^3] angular jerk ceiling
 
-  // Loop timing -- the MEASURED delivered cycle period, not a nominal.
+  // Loop timing. 131-005: App::RobotLoop::cycle()'s trailing pacing block
+  // targets an ABSOLUTE end-of-cycle deadline, so the delivered period
+  // converges to App::RobotLoop::kCycle by construction rather than
+  // needing to be independently re-measured and baked in here whenever
+  // kCycle changes (the prior framing -- "the MEASURED delivered cycle
+  // period, not a nominal" -- is exactly the "note is the symptom"
+  // pattern that let a stale measured constant ship twice; see
+  // robot_loop.h's kCycle doc comment for the full history). This field
+  // is simply "= kCycle" on every current robot profile.
   float controlPeriod = 0.0f;   // [ms]
   float actuationDelay = 0.0f;  // [ms] command-staged-to-wheels latency
 

@@ -109,7 +109,8 @@ void Telemetry::update(const Types::RobotState& state, const Drive& drive) {
   }
 
   // line/color -- exactly one of {line, color} ticks a given cycle
-  // (RobotLoop's own kPace-block body alternates them); only the
+  // (RobotLoop::cycle()'s own trailing pacing block body alternates
+  // them); only the
   // fresh one's word is refreshed here, the other's stays at its
   // last-staged snapshot -- matching the wire spec's "fresh THIS frame"
   // semantics.

@@ -1348,6 +1348,23 @@ void Planner::update(Types::RobotState& state) const {
   // roll the history itself (that happens in tick(), the one mutating half
   // of this class's own two-method contract), so it reads the previous
   // generation rollCommandHistory() already aged for it.
+  //
+  // limits_.plant.controlPeriod (this baked/configured value) and
+  // App::Drive's own per-cycle MEASURED state.time.cyclePeriod
+  // (drive.cpp's own tick(), Stage B's dt) now agree BY CONSTRUCTION
+  // (131-005): App::RobotLoop::cycle()'s trailing pacing block targets an
+  // absolute end-of-cycle deadline, so the delivered period converges to
+  // App::RobotLoop::kCycle -- the same nominal controlPeriod is baked
+  // from (data/robots/*.json's own control_period, now simply "=
+  // kCycle") -- rather than the two drifting apart by whatever the
+  // pacer's own fixed-gap rounding happened to leak (130-011 measured an
+  // 8% gap this way: a rock-stable 54ms delivered vs. a 50ms baked
+  // nominal, enough on its own to flip applyHeadingHold() unstable on
+  // hardware). This dt is still the BAKED value, not a live read of
+  // cyclePeriod -- update() has no access to per-cycle measured timing,
+  // only the planner's own configured limits_ -- but the two are no
+  // longer an accepted, structural disagreement, just the same number by
+  // two different (and now equal) routes.
   const float dt = limits_.plant.controlPeriod * 0.001f;  // [s]
   state.wheelLeft.cmdAccel = (stagedLeft - cmdLeftPrevious_) / dt;
   state.wheelRight.cmdAccel = (stagedRight - cmdRightPrevious_) / dt;

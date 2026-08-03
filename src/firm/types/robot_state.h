@@ -185,7 +185,9 @@ struct RobotState {
   // --- Pose --- writer: Motion::Odometry::integrate() (dead-reckoned
   // world pose) plus the same-cycle fused body-frame twist
   // (BodyKinematics::forward() over both wheels' current velocities,
-  // computed inline in RobotLoop's own kPace block). Encoder-only -- never
+  // computed inline in RobotLoop::cycle()'s own trailing pacing block --
+  // 131-005 renamed this from a fixed "kPace" budget to an absolute
+  // end-of-cycle deadline; the block itself is unchanged). Encoder-only -- never
   // OTOS-blended (that blend lives one level up, in `estimate` below).
   // Odometry is the SOLE writer -- no other subsystem may assign into this
   // section. An OTOS-fused pose belongs in `estimate` below, never here.
