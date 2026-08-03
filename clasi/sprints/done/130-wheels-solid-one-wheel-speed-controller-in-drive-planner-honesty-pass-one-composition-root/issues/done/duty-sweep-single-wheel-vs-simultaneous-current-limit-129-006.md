@@ -57,7 +57,7 @@ off during transients -- not designed to fight a hard current limit).
 
 ### Reference data
 
-- `src/tests/bench/duty_sweep.csv` / `duty_sweep.png` (129-006, captured
+- `src/tests/bench/output/duty_sweep.csv` / `duty_sweep.png` (129-006, captured
   2026-08-01) -- the full one-wheel-at-a-time sweep, both directions,
   both wheels, showing the saturation/decline past duty~0.30-0.40.
 - `data/robots/tovez.json`'s `control._drive_calibration_note`, the

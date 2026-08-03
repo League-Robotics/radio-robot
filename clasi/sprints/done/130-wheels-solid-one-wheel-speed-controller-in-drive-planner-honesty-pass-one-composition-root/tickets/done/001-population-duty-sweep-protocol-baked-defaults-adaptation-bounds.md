@@ -114,7 +114,7 @@ refit-without-redriving support intact.
 
 **Files to create/modify**:
 - `src/tests/bench/duty_sweep.py` (population + simultaneous modes)
-- `src/tests/bench/duty_sweep.csv` / `.png` (regenerated)
+- `src/tests/bench/output/duty_sweep.csv` / `.png` (regenerated)
 - `data/robots/tovez.json` / `togov.json` / `tovez_nocal.json`
   (population-mean defaults + adaptation-bound keys — coordinate with
   ticket 004's schema changes so this isn't done twice)
@@ -170,7 +170,7 @@ something an agent can recover from. Filed as
 `clasi/issues/tovez-hard-silent-i2c-wedge-blocks-completing-the-population-
 duty-sweep.md`.
 
-**What was captured and committed** (`src/tests/bench/duty_sweep.csv`,
+**What was captured and committed** (`src/tests/bench/output/duty_sweep.csv`,
 `duty_sweep.png`): a complete left-wheel duty-speed curve, both
 directions, full 0.04-1.0 range -- genuinely linear (steady local slope
 ~1000-1200 mm/s/duty) to duty~0.55, materially higher than 129-006's ~0.30

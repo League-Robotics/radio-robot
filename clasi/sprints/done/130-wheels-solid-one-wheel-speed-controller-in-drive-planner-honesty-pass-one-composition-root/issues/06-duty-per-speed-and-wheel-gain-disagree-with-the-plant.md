@@ -166,7 +166,7 @@ Stage C (bias trim, ticket 004/005) genuinely closes the residual GIVEN
 TIME: a continuous 90s hold at cmd 150mm/s converged both wheels to
 within ~5mm/s of the target (bias settling at +14.0mm/s right / -3 to
 -5mm/s left, both inside the ±23.8mm/s clamp — see
-`src/tests/bench/bias_convergence_150.png`).
+`src/tests/bench/output/bias_convergence_150.png`).
 
 The "Acceptance spec for the +500 button" section above (agreed
 2026-07-31) was re-verified end to end against real hardware, full
