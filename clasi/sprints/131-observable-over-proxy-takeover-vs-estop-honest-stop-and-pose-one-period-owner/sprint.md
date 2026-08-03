@@ -781,6 +781,76 @@ differential trim reverts to boosted) is explicitly flagged above rather
 than silently shipped, and is inert for every current robot profile.
 Verdict: **APPROVE**.
 
+### Revision — Ticket 006's `decelLatched` premise disconfirmed by instrumentation (2026-08-03, post-shipment)
+
+**What was originally decided.** Decision 7 above: release
+`active_.decelLatched` when the current tick's own freshly-recomputed
+`raw` phase is `Accel`/`Hold`, on the hypothesis (F10, post-130 review)
+that the latch's one-way trap was the mechanism producing TOUR_2's
+146-degree-turn undershoot.
+
+**The measurement that disconfirmed it.** Before writing any fix code,
+per this ticket's own instruction, the implementer instrumented every
+`Planner::planWheels()` call across both tours, both error profiles
+(2,351 ticks total) and found the release condition's own trigger
+(`decelLatched` held AND fresh `raw` recomputing `Accel`/`Hold`) **never
+fires once**. Every Angle Move's phase trace is a clean, monotonic
+Accel -> Hold -> Decel -> Closing in every turn examined, including the
+ones badly outside the shaped band; every turn completes via the
+ordinary Closing/profile-complete branch, never the 0.5 s stall
+backstop the originating issue's own fingerprint requires. Per-turn
+numbers on `test_tour_closure_gate.py` are bit-for-bit IDENTICAL before
+and after the fix, on both tours and both profiles.
+
+**What is actually happening instead.** Comparing the planner's own
+internal `remaining` accounting (which lands near-exact at completion on
+every turn) against the test's ground-truth achieved-vs-commanded delta:
+TOUR_1's leg 3 (the straight leg between turn 2 and turn 4) carries
+6.45 deg of true-heading drift under the IDEAL, zero-sensor-noise
+profile alone, and 130-010's own cumulative-baseline ledger carries a
+completed Distance leg's baseline **unchanged** across that drift
+(`carryHeading_ = active_.baselineHeading`, `planner.cpp`'s `tick()`,
+the `Move::Kind::Distance` completion case) — the following turn targets
+a fixed heading relative to a baseline that predates the straight leg's
+own drift, so it physically rotates `(90 - drift)` degrees from its true
+starting heading. This is the mirror image of the already-known,
+already-accepted 119-002 "axis-drop coast at chain boundaries" defect on
+the other side of the same straight/turn chain boundary. It does **not**
+fully close the arithmetic (leg 3's 6.45 deg does not by itself account
+for turn 4's full -13.08 deg), so a second, uninvestigated contributor
+likely exists. Separately, the 146-degree turn's own sign flipped during
+this sprint (now +5.19 deg ideal / +14.07 deg realistic, was -10.12 deg
+in the originating issue) — some prior 131 ticket already shifted it,
+suggesting the mechanism is direction-dependent, not purely angle-scaled.
+
+**Disposition.** The `decelLatched` release fix shipped anyway: it is a
+real, independently-demonstrated defect (a genuinely re-measured
+Accel/Hold tick must be allowed to un-clamp), it is safe by construction
+(the new branch only ever widens what the profiler may command relative
+to the old one-way ratchet, never restricts further), it is the
+architectural direction this sprint already committed to, and it was
+negative-control tested (the new
+`testAngle146DegreesRecoversFromTransientDecelLatchTrip` scenario fails
+against the pre-fix code, confirming it is not a vacuous test). It is
+recorded here as a verified latent-safety improvement, not as the cause
+of the undershoot — that distinction matters for anyone reading this
+architecture later and assuming the 146-degree residual is closed. It is
+not: `A-tour2-146-degree-turn-still-undershoots-after-130-010.md` stays
+open, and the recommended follow-up (re-open investigation targeting the
+Distance-leg baseline carry not folding in the leg's own true drift,
+using `straight_leg_cruise_headings`, already instrumented in
+`test_tour_closure_gate.py`) is carried forward — see Sprint Changes
+below.
+
+Self-review of this revision (scoped — one module, one release
+condition, no new cross-module edge, no diagram/tiering change).
+Cohesion/coupling/boundary: unchanged from Decision 7's own review.
+Anti-patterns: none introduced. Risk: none from the code change itself
+(strictly widens, never restricts); the risk this revision manages is
+purely one of RECORD-KEEPING — an architecture doc that kept Decision
+7's original causal claim uncorrected would misattribute a fix to a
+defect it does not actually address. Verdict: **APPROVE**.
+
 ## Use Cases
 
 ### SUC-131-001: Motion-ownership handover preserves the wheel controller's learned state
@@ -982,7 +1052,7 @@ Parent: (none — firmware-internal contract)
         shows unchanged behavior; the existing four-`sleepMillis`-calls-
         per-cycle schedule assertion still holds.
 
-### SUC-131-006: A large-angle turn completes at its commanded angle, not short by a fixed residual
+### SUC-131-006: A large-angle turn completes at its commanded angle, not short by a fixed residual (PARTIALLY UNMET — see Sprint Changes and Architecture's Revision section)
 Parent: (none — firmware-internal contract)
 
 - **Actor**: `Motion::Planner::tick()`
@@ -1059,3 +1129,188 @@ serially, not in parallel worktrees; 004-005 both touch
 `decelLatched` logic and its own test file). The chain 001->002->003->004->
 005->006 also matches the order the six source issues were presented in,
 which already traces this exact dependency shape.
+
+## Sprint Changes
+
+Recorded at close (2026-08-03). All six tickets are done
+(`clasi/sprints/131-.../tickets/done/`), on branch
+`sprint/131-observable-over-proxy-takeover-vs-estop-honest-stop-and-pose-one-period-owner`
+at `33a2b031`. This section is the delta between what the plan above
+committed to and what actually happened — two of six tickets did not
+land as originally decided, and both deltas are load-bearing for anyone
+reading this document later.
+
+### Tickets 001, 002, 004, 005 — shipped as planned
+
+- **001** (`841a018b`) — `takeover()`/`estop()` split + sign-aware bias,
+  per Decisions 1-2. Resolved `A-move-takeover-wipes-the-controllers-learned-state.md`.
+  Neutral-to-improving on the turn-accuracy observable (see table below).
+- **002** (`0cfa5f1f`) — commanded-zero through Stage B + genuine
+  `lastFreshUs_`, per Decision 3. Resolved
+  `A-commanded-zero-leaks-through-stage-b.md`. Neutral on the
+  turn-accuracy observable.
+- **004** (`0edefd06`) — `positionEpoch` consumers in `Motion::Odometry`
+  and the planner's `PoseTracker`/`WheelChannel`, per Decision 5.
+  Resolved `A-position-rebaseline-destroys-the-pose.md`.
+- **005** (`335f4c09`) — absolute end-of-cycle deadline pacing, per
+  Decision 6. Verified without hardware via an injected-jitter negative
+  control: the sim steps at exactly `kCycle` and so cannot structurally
+  exhibit the 54 ms delivered-period defect, so the implementer injected
+  sleep jitter and measured *accumulation* instead, reproducing
+  54.568 ms against hardware's measured 54.000 ms, then confirmed the
+  new test fails against the pre-fix pacing code. Resolved
+  `A-nominal-50ms-vs-delivered-54ms.md`. The physical robot's delivered
+  period is not re-measured this sprint (bench debt, below).
+
+### Ticket 003 — shipped, regressed, withdrawn, replaced
+
+Ticket 003 shipped its planned design (Decision 4: floor the common
+mode only, let the differential pass through unfloored) as commit
+`29578345`, and that design was wrong: `Planner::planWheels()` emits a
+pure differential for every Angle Move — the common mode is exactly
+zero, by construction, for the entire turn — so Decision 4's floor never
+engaged, and the turn's own sub-breakaway commands passed through
+completely unfloored. Measured cost, `test_tour_closure_gate.py`,
+single-step harness:
+
+| commit | turn 2 | turn 4 |
+|---|---|---|
+| `22a3c368` pre-sprint base | -2.68 deg | -13.19 deg |
+| `841a018b` ticket 001 | -2.567 deg | -13.080 deg |
+| `0cfa5f1f` ticket 002 | -2.567 deg | -13.080 deg |
+| `29578345` ticket 003, first attempt | **-10.38 deg** | **-20.07 deg** |
+| `47908f39` ticket 003, revised | -2.567 deg | -13.080 deg |
+| `0edefd06`/`335f4c09`/`7176605a` (004-006) | -2.567 deg | -13.080 deg |
+
+001 and 002 are neutral; 003's first attempt added ~7-8 degrees of
+undershoot to every turn measured, caught by the team-lead's own
+boundary verification (bisected commit-by-commit) rather than by the
+ticket's own original acceptance criteria, which had no non-regression
+gate against this specific failure mode at the time. The shipped
+implementation was withdrawn and replaced with a ratio-preserving scale
+(scale both wheels by the same factor when the dominant wheel is
+sub-floor, preserving their commanded ratio; pass through unchanged
+otherwise) — bit-identical to the pre-sprint per-wheel floor for a
+symmetric pivot, bit-identical to 003's own intended behavior for the
+one differential-trim scenario reachable on any shipped robot profile,
+and a strict improvement over both for an asymmetric arc. Full
+root-cause narrative and the replacement's design rationale: Architecture's
+"Revision — Ticket 003's speed-floor semantics" section above. Resolved
+`A-speed-floor-snaps-the-planner-differential.md`.
+
+### Ticket 006 — shipped, disconfirmed its own premise
+
+Ticket 006 (`7176605a`) shipped the planned `decelLatched` release fix
+(Decision 7) but, per its own pre-implementation instrumentation
+requirement, disconfirmed the hypothesis that motivated it. Post-130
+review's F10 proposed `decelLatched`'s one-way trap as the mechanism
+behind TOUR_2's 146-degree-turn undershoot. Instrumenting every
+`planWheels()` call across 2,351 ticks (both tours, both error
+profiles) found the release condition's own trigger — `decelLatched`
+held while a freshly re-measured tick recomputes Accel/Hold — **never
+fires**: every Angle Move's phase trace is a clean, monotonic
+Accel -> Hold -> Decel -> Closing in every turn examined, and every
+turn completes via the ordinary profile-complete branch, never the
+stall backstop the hypothesis requires. Per-turn numbers on
+`test_tour_closure_gate.py` are bit-for-bit identical before and after
+the fix, on both tours and both profiles.
+
+This negative result is the sprint's most valuable output — a
+hypothesis tested and disconfirmed rather than assumed, which is
+exactly the discipline this sprint's own premise (checking a proxy
+instead of the observable) argues for. The fix ships anyway as a
+verified, negative-control-tested latent-safety improvement: it only
+ever widens what the profiler may command relative to the old one-way
+ratchet, never restricts further, and the new
+`testAngle146DegreesRecoversFromTransientDecelLatchTrip` scenario fails
+against the pre-fix code, confirming it is a real regression guard, not
+a vacuous one.
+
+What the instrumentation found instead: TOUR_1's leg 3 (the straight
+leg between turn 2 and turn 4) carries 6.45 deg of true-heading drift
+under the ideal, zero-noise profile alone, and 130-010's own
+cumulative-baseline ledger carries a completed Distance leg's baseline
+unchanged across that drift — a plausible but not fully sufficient
+explanation for turn 4's -13.08 deg residual (leg 3's 6.45 deg does not
+by itself account for the full -13.08 deg, so a second, uninvestigated
+contributor likely exists). Separately, the 146-degree turn's own error
+sign flipped during this sprint (-10.12 deg at issue-filing time,
+now +5.19 deg ideal / +14.07 deg realistic), suggesting the mechanism
+is direction-dependent rather than purely angle-scaled. Full narrative:
+Architecture's "Revision — Ticket 006's `decelLatched` premise
+disconfirmed" section above.
+
+**`A-tour2-146-degree-turn-still-undershoots-after-130-010.md` is NOT
+resolved.** Ticket 006 carries `completes_issue: false`; the issue file
+remains in this sprint's open `issues/` directory, not `issues/done/`.
+Recommended follow-up (from the ticket's own completion notes, not yet
+filed as a fresh issue): re-open investigation targeting the
+Distance-leg baseline carry not folding in the leg's own true heading
+drift, using `straight_leg_cruise_headings` (already instrumented in
+`test_tour_closure_gate.py`) as the measurement tool.
+
+### Acceptance criteria left deliberately unchecked (SUC-131-006 / ticket 006)
+
+Two of ticket 006's acceptance criteria are unmet, by design, not
+oversight, and are left unchecked in the ticket file rather than marked
+done against a false premise or a stale baseline:
+
+- *"TOUR_2's 146-degree turn lands within the same band as its 90-degree
+  turns"* — not met; this criterion was contingent on the F10/
+  `decelLatched` hypothesis being the actual cause, which the
+  instrumentation above disconfirmed.
+- *"No regression: TOUR_1 worst per-turn error stays <= 2.72 deg...
+  full sim suite 460 passed / 0 failed"* — unmeetable as literally
+  written, because its baseline was false when written: the 2.72 deg
+  figure is 130-010's own stale measurement, not this sprint's
+  ticket-start reality. TOUR_1's worst per-turn error was never 2.72 deg
+  at sprint start — independently re-measured immediately before ticket
+  006 touched anything, it was -24.699 deg (turn 12). Ticket 006
+  reproduces that actual ticket-start baseline bit-for-bit — no
+  regression against ground truth — but the criterion as stated cannot
+  be checked off against the number it names.
+
+### Test state at close (team-lead measured, all suites plus the standalone planner build)
+
+| suite | result |
+|---|---|
+| `planner_tests` (standalone, Python-free) | 8/8 passed |
+| `src/tests/sim` | 462 passed, 1 xfailed, 2 xpassed, 0 failed (up from 460 at sprint start: +1 rebaseline-pose test, +1 pacing test) |
+| `src/tests/unit` | 611 passed, 3 failed |
+| `src/tests/testgui` | 595 passed, 4 failed |
+
+The 7 failures (3 unit, 4 testgui) are inherited, not caused by this
+sprint: measured at base `22a3c368` before any ticket landed, and
+unchanged at close. The 3 `test_gen_boot_config_planner.py` failures
+are proven pre-existing by dependency — this sprint touched nothing
+under `src/scripts/`, `data/robots/`, or `src/host/`. The 4 testgui
+failures were measured directly at base. Tracked in
+`clasi/issues/A-seven-untriaged-failing-tests-poison-every-no-regressions-claim.md`
+so they stop silently poisoning every future sprint's "no regressions"
+claim.
+
+### Hardware bench debt — undischarged, not faked
+
+`tovez` has been wedged (dead-I2C signature) since 2026-08-01; no
+ticket in this sprint claims a bench result, and nothing here is
+hardware-verified. Acceptance ran on the sim tier throughout, which is
+legitimate here because the sim runs the real firmware through the
+130-002 composition root — but sprint 130's own heading-hold
+instability appeared ONLY on hardware, so "passes in sim" is not
+"works." Outstanding, explicitly declared in their own tickets rather
+than silently dropped: ticket 003's floor-value re-fit (needs the
+loaded-actuation-floor measurement) and ticket 005's delivered-period
+re-measurement (`src/tests/bench/planner_square_tour.py`).
+
+### Outcome summary
+
+| ticket | commit | issue | result |
+|---|---|---|---|
+| 001 takeover/estop split + direction-relative bias | `841a018b` | A-move-takeover-... | resolved |
+| 002 commanded-zero through Stage B + genuine `lastFreshUs_` | `0cfa5f1f` | A-commanded-zero-... | resolved |
+| 003 speed floor: ratio-preserving scale | `29578345` withdrawn -> `47908f39` | A-speed-floor-... | resolved |
+| 004 epoch-aware `Odometry`/`PoseTracker` re-anchor | `0edefd06` | A-position-rebaseline-... | resolved |
+| 005 absolute end-of-cycle deadline pacing | `335f4c09` | A-nominal-50ms-... | resolved |
+| 006 `decelLatched` release + large-angle scenarios | `7176605a` | A-tour2-... | **NOT resolved** (`completes_issue: false`) |
+
+Five of six issues resolved. `A-tour2-146-degree-turn-still-undershoots-after-130-010` remains open, deliberately, carried forward per the follow-up above.
