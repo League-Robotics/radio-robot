@@ -32,8 +32,21 @@ RobotGraph::BootValues RobotGraph::bakeBootValues(const BootOverrides& overrides
   r.colorConfig = Devices::ColorConfig{};
   r.lineConfig = Devices::LineConfig{};
 
-  r.trackWidth =
-      overrides.trackWidth ? *overrides.trackWidth : effectiveTrackWidth(r.drivetrainConfig);
+  // 132-007 (subsystem configure() entry points + derived-value methods):
+  // trackWidth is now computed via Config::Robot::effectiveTrackWidth()
+  // (config/robot.h) -- the ONE definition of the scrub-corrected track
+  // width -- rather than the free function effectiveTrackWidth() above.
+  // Config::defaultGeometryGroup() and Config::defaultDrivetrainConfig()
+  // bake IDENTICAL trackwidth/rotational_slip values from the same robot
+  // JSON (132-005's own parity note), so this is the same number via the
+  // now-canonical path. effectiveTrackWidth(msg::DrivetrainConfig) itself
+  // is UNCHANGED and stays in use by composition_root_parity_harness.cpp,
+  // which deliberately computes its own "hardware-equivalent" value
+  // independently of whatever composeRobot() does internally -- retargeting
+  // its call site there is not this ticket's job.
+  Config::Robot geometrySource;
+  geometrySource.geometry = Config::defaultGeometryGroup();
+  r.trackWidth = overrides.trackWidth ? *overrides.trackWidth : geometrySource.effectiveTrackWidth();
 
   // PlannerLimits below is the plant-validated tuning baked from the
   // active robot JSON's own `planner` section (see bootPlannerLimits()'s
@@ -101,18 +114,22 @@ RobotGraph::RobotGraph(Devices::I2CBus& bus, const Devices::Clock& clock, Device
   configurator_.loadBaked();
   configurator_.install();
 
-  // installRotationCalibration() stays a direct call, not routed through
-  // Configurator::install(): RobotLoop already depends on Configurator
-  // (routeCommand()'s CONFIG arm), so the reverse reference would be
-  // circular, and rotation calibration's real home is RobotLoop's own
-  // configure(const Config::Robot&) (ticket 007, "Subsystem configure()
-  // consumers ... RobotLoop for geometry/rotation" -- sprint.md Step 3).
-  // Data source retargeted from bootValues_.drivetrainConfig to
-  // configurator_.config().geometry would need a signature change to
-  // installRotationCalibration() (boot_calibration.h, out of this
-  // ticket's file scope) -- left for ticket 007, which owns that
-  // migration anyway.
-  installRotationCalibration(robotLoop_, bootValues_.drivetrainConfig);
+  // 132-007: rotation calibration now installs through RobotLoop's own
+  // configure(const Config::Robot&) (robot_loop.h) instead of the old
+  // installRotationCalibration() free function (deleted -- this was its
+  // only call site) -- resolving the "solve cleanly" note 132-006 left
+  // here (see git history for the prior version of this comment).
+  // RobotLoop::configure() takes the whole Config::Robot exactly like
+  // Drive/the boot_calibration.h adapters do, reading configurator_'s own
+  // freshly-loaded object (loadBaked() above) rather than
+  // bootValues_.drivetrainConfig (the old, separate msg::DrivetrainConfig
+  // family) -- a direct call, not routed through Configurator::install():
+  // RobotLoop already depends on Configurator (routeCommand()'s CONFIG
+  // arm), so the reverse reference would be circular. RobotLoop::
+  // configure() needs no Configurator& itself to avoid that -- it just
+  // takes the object as a plain parameter, the same shape every other
+  // subsystem's configure() takes.
+  robotLoop_.configure(configurator_.config());
 }
 
 void RobotGraph::loadPersistedTuning() {

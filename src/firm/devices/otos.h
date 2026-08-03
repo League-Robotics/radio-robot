@@ -132,6 +132,16 @@ class Otos {
   virtual void setOffset(float x, float y, float heading) = 0;     // [mm] [mm] [rad]
   virtual void getOffset(float& x, float& y, float& heading) = 0;  // [mm] [mm] [rad]
   virtual void init() = 0;
+
+  // No Config::Robot-consuming configure() on THIS interface (132-007,
+  // the-configuration-object.md) -- this file's own "Scope changes"
+  // header section already establishes why: Devices-local
+  // Devices::OtosConfig exists instead of reusing a Config:: type
+  // specifically "so this leaf never includes config/" (the devices
+  // isolation invariant). App::configureOtos(Devices::Otos&, const
+  // Config::Robot&) (app/boot_calibration.h) is the Config::Robot-
+  // consuming entry point instead, calling setLinearScalar()/
+  // setAngularScalar()/setOffset() above.
 };
 
 // RealOtos — the SparkFun OTOS I2C leaf. All the behavior documented in

@@ -49,38 +49,23 @@
 
 #include "app/drive.h"
 #include "config/persisted_tuning.h"
+#include "config/robot.h"
 #include "devices/motor.h"
 #include "devices/otos.h"
 #include "messages/envelope.h"
-#include "messages/robot_config.h"
 #include "motion/planner/planner.h"
 
-namespace Config {
-
-// Robot -- the ONE owned configuration object (issue: the-configuration-
-// object.md, sprint 132). Composes the seven msg:: robot-config groups
-// generated from src/protos/robot_config.proto (messages/robot_config.h),
-// one member per msg::ConfigGroupTarget, by value -- Identity/Connection/
-// Vision (host-only) are deliberately NOT here, matching the issue's own
-// "the object holds RAW file values" framing: this mirrors only the
-// groups that ever cross the wire or feed a converter.
-//
-// Populated at boot by Configurator::loadBaked() (config/boot_config.h's
-// generated Config::default*Group() functions, 132-005). Decoding a wire
-// push directly into this same object (Configurator::applyGroup()) is
-// tickets 008/012's job, not this ticket's -- Configurator::install()
-// here only reads it back out for the boot-time fan-out.
-struct Robot {
-  msg::Geometry geometry;
-  msg::Motors motors;
-  msg::Drive drive;
-  msg::WheelControl wheelControl;
-  msg::Planner planner;
-  msg::Otos otos;
-  msg::Estimator estimator;
-};
-
-}  // namespace Config
+// Config::Robot -- the ONE owned configuration object (issue: the-
+// configuration-object.md, sprint 132) -- moved to its own header,
+// config/robot.h, by 132-007 (see that header's own doc comment for why:
+// breaking a circular #include with app/drive.h, and because the SHAPE
+// of Config::Robot is config/'s own data model, not something this class
+// owns). Populated at boot by Configurator::loadBaked() (config/
+// boot_config.h's generated Config::default*Group() functions, 132-005).
+// Decoding a wire push directly into this same object
+// (Configurator::applyGroup()) is tickets 008/012's job, not this
+// ticket's -- Configurator::install() here only reads it back out for
+// the boot-time fan-out.
 
 namespace App {
 
@@ -121,13 +106,18 @@ class Configurator {
   // the old free-function install*Calibration() family (boot_calibration.h)
   // used -- installShaperLimits()/installDriveCalibration()/
   // installWheelController()'s bodies, ported here reading config_ instead
-  // of a resolve()-computed struct. Deliberately NOT installRotationCalibration()'s
-  // job (RobotLoop is not a reference this class holds, and rotation
-  // calibration becomes RobotLoop's own configure(const Config::Robot&) in
-  // ticket 007) -- boot_wiring.cpp calls that one directly, still reading
-  // config() for its data. Full per-group correctness (OTOS/ESTIMATOR, the
-  // Drive::kDutyPerSpeed-vs-JSON question) is tickets 009/010's job; this
-  // is a straightforward relocation of what already worked.
+  // of a resolve()-computed struct. Deliberately NOT RobotLoop's own
+  // geometry/rotation configure() (RobotLoop is not a reference this
+  // class holds) -- 132-007 gave RobotLoop its own
+  // `configure(const Config::Robot&)` entry point instead, and
+  // boot_wiring.cpp calls it directly, right after loadBaked(), reading
+  // config() for its data exactly the way this method does. This
+  // method's own body is also NOT yet retargeted to call the new
+  // Drive::configure()/Motion::Planner-adapter/Motor-adapter/Otos-adapter
+  // entry points 132-007 added -- that retarget is tickets 008/009/010's
+  // job (applyGroup()'s per-target dispatch, Drive::kDutyPerSpeed-vs-JSON,
+  // OTOS/ESTIMATOR correctness); this is still a straightforward
+  // relocation of what already worked.
   void install();
 
  private:

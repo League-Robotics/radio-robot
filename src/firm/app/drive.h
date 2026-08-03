@@ -160,6 +160,7 @@
 
 #include <cstdint>
 
+#include "config/robot.h"
 #include "devices/motor.h"
 #include "firm/types/robot_state.h"
 
@@ -285,6 +286,20 @@ class Drive {
   };
   void setAdaptationBounds(const AdaptationBounds& bounds) { bounds_ = bounds; }
   const AdaptationBounds& adaptationBounds() const { return bounds_; }
+
+  // configure -- the-configuration-object.md's "subsystems take the
+  // whole object and pull out what they want" entry point (132-007):
+  // nothing outside Drive needs to know what Drive reads out of
+  // Config::Robot. A thin pull-and-forward onto the setters above --
+  // setWheelCorrection() (Stage A, config.drive.wheel_*),
+  // setControlGains()/setAdaptationBounds() (Stage B/C,
+  // config.wheelControl.*), setCrawlPulse() (config.drive.crawl_pulse).
+  // Deliberately does NOT touch trackWidth_ (no post-construction setter
+  // exists -- constructor injection stays, boot_wiring.cpp's own
+  // bakeBootValues()) or dutyPerSpeed (Drive::kDutyPerSpeed is MEASURED,
+  // NOT CONFIGURED -- see that constant's own doc comment; whether a
+  // live push should reverse that is ticket 009's call, not this one's).
+  void configure(const Config::Robot& config);
 
   // --- Stage B/C observability (wired into the wire Telemetry frame /
   // TestGUI by 130-005, per issue 04's own folded-in observability

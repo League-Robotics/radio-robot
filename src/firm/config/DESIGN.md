@@ -38,6 +38,21 @@ hands `main.cpp` motor/drivetrain/OTOS/estimator defaults.
 
 ## 2. Orientation
 
+**Stale notice (sprint 132, "configuration discipline"):** this section
+(and most of the rest of this file) predates 132-001 through 132-007 and
+does not yet describe `Config::Robot` (`robot.h`, 132-006/132-007's own
+whole-configuration object, generated-group members from
+`messages/robot_config.h` plus its own derived-value methods —
+`effectiveTrackWidth()`/`rotationOffsetPos()`/`rotationOffsetNeg()`/
+`velocityFilterWeight()`), `App::Configurator`'s ownership of it
+(`app/configurator.h`), the `Config::default*Group()` family
+(`boot_config.h`, 132-005), `config_parity_capi.h`/`.cpp` (132-003), or
+`persisted_tuning.h`/`.cpp`. A full reconciliation pass is out of this
+file's individual ticket scopes so far; see each new file's own header
+comment for its current, accurate documentation, and 132's own sprint.md
+for the end-state shape this directory is converging on. The two files
+below remain accurate for the ORIGINAL boot-baking seam they describe.
+
 Two files, two very different authorship models:
 
 - **`boot_config.h`** is hand-written. It declares the `Config::default*()`

@@ -62,6 +62,16 @@ class Motor {
   // selected — config.proto's MotorConfigPatch.side). The ONE MotorConfig
   // field this interface still live-applies; gain routing moved out with
   // the PID (this file's own header).
+  //
+  // No Config::Robot-consuming configure() on THIS interface (132-007,
+  // the-configuration-object.md): the devices isolation invariant (this
+  // file's own DESIGN.md §3) forbids devices/ from naming a Config::
+  // type at all. App::configureMotor(Devices::Motor&, const
+  // Config::Robot&, bool isLeft) -> bool (app/boot_calibration.h) is the
+  // Config::Robot-consuming entry point instead — the same App::-layer
+  // pattern toDeviceMotorConfig() (same file) already uses for
+  // msg::MotorConfig -> Devices::MotorConfig. It calls applyTravelCalib()
+  // below, guarded like reconfigure()'s own at-rest check.
   virtual void applyTravelCalib(float travelCalib) = 0;
 
   // reconfigure — a guarded, post-construction, WHOLE-config replacement

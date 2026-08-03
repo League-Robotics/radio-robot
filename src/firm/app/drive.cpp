@@ -10,6 +10,34 @@ namespace App {
 Drive::Drive(Devices::Motor& left, Devices::Motor& right, float trackWidth)
     : left_(left), right_(right), trackWidth_(trackWidth) {}
 
+// configure -- see drive.h's own doc comment. A thin pull-and-forward:
+// every value read here has an existing setter, no new control logic.
+void Drive::configure(const Config::Robot& config) {
+  setWheelCorrection(
+      config.drive.wheel_gain_left_accel, config.drive.wheel_intercept_left_accel,
+      config.drive.wheel_gain_left_decel, config.drive.wheel_intercept_left_decel,
+      config.drive.wheel_gain_right_accel, config.drive.wheel_intercept_right_accel,
+      config.drive.wheel_gain_right_decel, config.drive.wheel_intercept_right_decel);
+  setCrawlPulse(config.drive.crawl_pulse);
+
+  ControlGains gains;
+  gains.kp = config.wheelControl.pid_kp;
+  gains.ki = config.wheelControl.pid_ki;
+  gains.iMax = config.wheelControl.pid_i_max;
+  gains.kaff = config.wheelControl.pid_kaff;
+  gains.pidMax = config.wheelControl.pid_max;
+  setControlGains(gains);
+
+  AdaptationBounds bounds;
+  bounds.vMin = config.wheelControl.v_min;
+  bounds.biasMax = config.wheelControl.bias_max;
+  bounds.tauAdapt = config.wheelControl.tau_adapt;
+  bounds.aSteady = config.wheelControl.a_steady;
+  bounds.deficitThreshold = config.wheelControl.deficit_threshold;
+  bounds.deficitWindow = config.wheelControl.deficit_window;
+  setAdaptationBounds(bounds);
+}
+
 void Drive::command(float vLeft, float vRight, float duration,
                     uint32_t moveId, uint32_t now) {
   targetLeft_ = vLeft;

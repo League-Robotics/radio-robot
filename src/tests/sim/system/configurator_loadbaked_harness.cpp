@@ -25,6 +25,17 @@
 //      composition_root_parity_harness.cpp's own "compare against the SAME
 //      generation the composition root used" pattern rather than
 //      re-parsing tovez.json independently.
+//   4. (132-007) RobotLoop::configure(const Config::Robot&) -- the one
+//      configure() entry point boot_wiring.cpp calls directly rather than
+//      through Configurator::install() (see that method's own doc comment,
+//      configurator.h) -- installs rotation calibration matching
+//      config().geometry, read back via the new rotationGainPos()/
+//      rotationOffsetPos()/rotationGainNeg()/rotationOffsetNeg() getters
+//      (robot_loop.h). The other five 132-007 configure() entry points
+//      (Drive::configure(), App::configurePlanner()/configureMotor()/
+//      configureOtos()) are covered by
+//      src/tests/sim/unit/configure_entry_points_harness.cpp instead,
+//      which needs no full composition root.
 //
 // Hand-rolled assertions, PASS/FAIL per scenario, nonzero exit on any
 // failure -- mirrors every other src/tests/sim/system harness's own shape.
@@ -123,12 +134,29 @@ int main() {
   checkFloatEq(config.estimator.weight_heading_otos, hwEstimator.weight_heading_otos,
                "estimator.weight_heading_otos");
 
+  beginScenario(
+      "132-007: RobotLoop::configure(const Config::Robot&) -- called directly from "
+      "boot_wiring.cpp's constructor, right after loadBaked() -- installs rotation "
+      "calibration matching config().geometry, converted through the SAME derived "
+      "methods (rotationOffsetPos()/rotationOffsetNeg(), config/robot.h) that replaced "
+      "the deleted installRotationCalibration() free function");
+  constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
+  checkFloatEq(sim.robotLoop().rotationGainPos(), config.geometry.rotation_gain_pos,
+               "robotLoop().rotationGainPos()");
+  checkFloatEq(sim.robotLoop().rotationOffsetPos(), config.geometry.rotation_offset * kDegToRad,
+               "robotLoop().rotationOffsetPos()");
+  checkFloatEq(sim.robotLoop().rotationGainNeg(), config.geometry.rotation_gain_neg,
+               "robotLoop().rotationGainNeg()");
+  checkFloatEq(sim.robotLoop().rotationOffsetNeg(), config.geometry.rotation_offset_neg * kDegToRad,
+               "robotLoop().rotationOffsetNeg()");
+
   std::printf("\n");
   if (g_failureCount == 0) {
     std::printf(
         "OK: sim composition root constructs/boots/drives with "
-        "Configurator::loadBaked()+install(), and config() reflects the "
-        "baked robot config across all 7 groups\n");
+        "Configurator::loadBaked()+install(), config() reflects the "
+        "baked robot config across all 7 groups, and RobotLoop::configure() "
+        "(132-007) installs rotation calibration matching it\n");
     return 0;
   }
   std::printf("FAILED: %d assertion(s) across the Configurator::loadBaked() smoke test\n",

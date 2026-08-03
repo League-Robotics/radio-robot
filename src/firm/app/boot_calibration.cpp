@@ -2,7 +2,21 @@
 // separate TU from boot_wiring.cpp.
 #include "app/boot_calibration.h"
 
+#include <cmath>
+
 namespace App {
+
+namespace {
+
+// kConfigureRestVelocity -- mirrors NezhaMotor::kReconfigureRestVelocity/
+// MotorArmor::kRestVelocity (both 5.0f, nezha_motor.h/motor_armor.h) --
+// a leaf/subsystem-local constant for a similar guard, deliberately NOT
+// shared with either (nezha_motor.h's own kReconfigureRestVelocity
+// comment establishes this project's precedent: each guard gets its own
+// named constant at its own layer).
+constexpr float kConfigureRestVelocity = 5.0f;  // [mm/s]
+
+}  // namespace
 
 Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   Devices::MotorConfig cfg;
@@ -72,13 +86,8 @@ void installShaperLimits(Motion::Planner& planner, const Motion::PlannerLimits& 
                             limits.ceilings.jerkMax, limits.ceilings.yawJerkMax);
 }
 
-void installRotationCalibration(RobotLoop& robotLoop,
-                                const msg::DrivetrainConfig& drivetrainConfig) {
-  constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
-  robotLoop.setRotationCalibration(
-      drivetrainConfig.rotation_gain_pos, drivetrainConfig.rotation_offset * kDegToRad,
-      drivetrainConfig.rotation_gain_neg, drivetrainConfig.rotation_offset_neg * kDegToRad);
-}
+// installRotationCalibration -- DELETED (132-007); see boot_calibration.h's
+// own note at this declaration's old spot.
 
 void installDriveCalibration(Drive& drive, const Config::DriveBootConfig& driveConfig) {
   // MEASURED, NOT CONFIGURED (stakeholder, 2026-07-31): one baked constant
@@ -110,6 +119,31 @@ void installWheelController(Drive& drive, const Config::WheelControllerBootConfi
   bounds.deficitThreshold = config.deficitThreshold;
   bounds.deficitWindow = config.deficitWindow;
   drive.setAdaptationBounds(bounds);
+}
+
+// configurePlanner -- see boot_calibration.h's own doc comment.
+void configurePlanner(Motion::Planner& planner, const Config::Robot& config) {
+  planner.applyShaperLimits(config.planner.a_max, config.planner.a_decel,
+                            config.planner.alpha_max, config.planner.alpha_decel,
+                            config.planner.jerk_max, config.planner.yaw_jerk_max);
+}
+
+// configureMotor -- see boot_calibration.h's own doc comment.
+bool configureMotor(Devices::Motor& motor, const Config::Robot& config, bool isLeft) {
+  const bool atRest =
+      std::fabs(motor.velocity()) < kConfigureRestVelocity && motor.appliedDuty() == 0.0f;
+  if (!atRest) return false;
+
+  motor.applyTravelCalib(isLeft ? config.motors.travel_calib_left
+                                : config.motors.travel_calib_right);
+  return true;
+}
+
+// configureOtos -- see boot_calibration.h's own doc comment.
+void configureOtos(Devices::Otos& otos, const Config::Robot& config) {
+  otos.setLinearScalar(config.otos.linear_scale);
+  otos.setAngularScalar(config.otos.angular_scale);
+  otos.setOffset(config.otos.offset_x, config.otos.offset_y, config.otos.offset_yaw);
 }
 
 }  // namespace App
