@@ -63,9 +63,9 @@ void testZohPredict() {
 void testOdometryStraight() {
   PoseTracker pose;
   pose.configure(100.0f);
-  pose.integrate(0.0f, 0.0f);  // seed
+  pose.integrate(0.0f, 0.0f, 0, 0);  // seed
   for (int i = 1; i <= 100; ++i) {
-    pose.integrate(5.0f * i, 5.0f * i);
+    pose.integrate(5.0f * i, 5.0f * i, 0, 0);
   }
   CHECK_NEAR(pose.x(), 500.0f, 1e-3);
   CHECK_NEAR(pose.y(), 0.0f, 1e-6);
@@ -76,13 +76,13 @@ void testOdometryStraight() {
 void testOdometryPureRotation() {
   PoseTracker pose;
   pose.configure(100.0f);
-  pose.integrate(0.0f, 0.0f);
+  pose.integrate(0.0f, 0.0f, 0, 0);
   // Opposite wheels: quarter turn = heading pi/2, track 100 -> each wheel
   // travels pi/2 * 50 mm; path length stays zero (ds == 0 per step).
   const float wheelTravel = static_cast<float>(M_PI) * 0.5f * 50.0f;
   for (int i = 1; i <= 50; ++i) {
     const float d = wheelTravel * static_cast<float>(i) / 50.0f;
-    pose.integrate(-d, d);
+    pose.integrate(-d, d, 0, 0);
   }
   CHECK_NEAR(pose.heading(), M_PI * 0.5, 1e-5);
   CHECK_NEAR(pose.x(), 0.0f, 1e-4);
@@ -93,17 +93,62 @@ void testOdometryPureRotation() {
 void testOtosHeadingBlend() {
   PoseTracker pose;
   pose.configure(100.0f);
-  pose.integrate(0.0f, 0.0f);
+  pose.integrate(0.0f, 0.0f, 0, 0);
   pose.blendHeading(0.1f, 0.5f);
   CHECK_NEAR(pose.heading(), 0.05f, 1e-6);
   // Wrap seam: OTOS says +3.1, we say -3.1 -- residual goes the short way
   // (through pi), never the 6.2 rad long way.
   PoseTracker wrapped;
   wrapped.configure(100.0f);
-  wrapped.integrate(0.0f, 0.0f);
+  wrapped.integrate(0.0f, 0.0f, 0, 0);
   wrapped.reset(0.0f, 0.0f, -3.1f);
   wrapped.blendHeading(3.1f, 0.5f);
   CHECK(wrapped.heading() < -3.1f);  // moved AWAY from zero, toward -pi
+}
+
+// 131-004 (position-rebaseline-destroys-the-pose.md): a per-wheel epoch
+// change re-anchors THAT wheel's own delta baseline, crediting zero delta
+// for it on the epoch-change call, while the other wheel (epoch unchanged)
+// keeps differencing normally -- independent per side.
+void testPoseTrackerReAnchorsOnEpochChangePerWheelIndependently() {
+  PoseTracker pose;
+  pose.configure(100.0f);
+  pose.integrate(0.0f, 0.0f, 0, 0);  // seed
+
+  // Ordinary cycle, epoch unchanged: normal straight-line diff.
+  pose.integrate(10.0f, 10.0f, 0, 0);
+  CHECK_NEAR(pose.x(), 10.0f, 1e-3);
+  CHECK_NEAR(pose.heading(), 0.0f, 1e-6);
+
+  // Left wheel "rebaselines" -- its raw position drops to near 0 (mirrors
+  // Devices::NezhaMotor::softRebaseline()'s lastPosition_ = 0.0f) and its
+  // epoch bumps 0 -> 1. Right wheel's own epoch is unchanged and keeps
+  // advancing normally (10 -> 25, a genuine +15mm). Without the epoch-aware
+  // re-anchor this would compute dLeft = 0 - 10 = -10 (a phantom -10mm on
+  // the left wheel); WITH it, left's delta for this call is exactly zero.
+  pose.integrate(/*leftPosition=*/0.0f, /*rightPosition=*/25.0f, /*leftEpoch=*/1,
+                 /*rightEpoch=*/0);
+  // dLeft=0, dRight=15 -> ds=7.5, dTheta=15/100=0.15 (not the huge negative
+  // value a raw -10/+15 pair would have produced).
+  CHECK_NEAR(pose.heading(), 0.15f, 1e-5);
+
+  // Next, ordinary cycle: left's baseline is now anchored at 0.0f, so a
+  // genuine continuing move from there diffs normally again (no phantom
+  // "catch-up" jump from the eaten cycle).
+  const float headingBeforeNextCycle = pose.heading();
+  pose.integrate(5.0f, 30.0f, 1, 0);
+  const float dLeft = 5.0f;   // 5 - 0
+  const float dRight = 5.0f;  // 30 - 25
+  const float dThetaNext = (dRight - dLeft) / 100.0f;  // 0
+  CHECK_NEAR(pose.heading(), headingBeforeNextCycle + dThetaNext, 1e-5);
+
+  // Right wheel independently rebaselines later -- left's epoch (1) is
+  // unchanged this call, so left diffs normally; only right re-anchors.
+  pose.integrate(10.0f, 0.0f, 1, 2);
+  const float dLeft2 = 5.0f;  // 10 - 5, normal diff
+  const float dRight2 = 0.0f;  // re-anchored, not (0 - 30) = -30
+  const float dThetaFinal = (dRight2 - dLeft2) / 100.0f;
+  CHECK_NEAR(pose.heading(), headingBeforeNextCycle + dThetaNext + dThetaFinal, 1e-5);
 }
 
 }  // namespace
@@ -115,6 +160,7 @@ int main() {
   testOdometryStraight();
   testOdometryPureRotation();
   testOtosHeadingBlend();
+  testPoseTrackerReAnchorsOnEpochChangePerWheelIndependently();
   std::printf("estimation_test: all checks passed\n");
   return 0;
 }

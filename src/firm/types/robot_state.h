@@ -91,7 +91,13 @@ struct RobotState {
   // increments each time RobotLoop calls the wheel's existing
   // Devices::Motor::rebaseline() as its raw position nears the wire's
   // sint32/zigzag bound; NOT touched by Devices::Motor/NezhaMotor/
-  // MotorArmor themselves.
+  // MotorArmor themselves. Readers (131-004, position-rebaseline-destroys-
+  // the-pose.md): Motion::Odometry::integrate() and the planner's
+  // Motion::PoseTracker::integrate() both take this field per-wheel and
+  // re-anchor their own delta baseline on a change, instead of
+  // differencing across the rebaseline's ~30,000mm jump -- this is no
+  // longer wire-projection-only (App::Telemetry still also copies it onto
+  // the wire, unchanged).
   struct Wheel {
     float position = 0.0f;      // [mm] Devices::Motor::position()
     float velocity = 0.0f;      // [mm/s] signed, Devices::Motor::velocity()

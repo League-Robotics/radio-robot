@@ -370,7 +370,11 @@ TickResult Planner::tick(const Types::RobotState& state) {
   // extrapolation is still applied -- as an additive lookahead term in
   // measure(), where it informs the plan without accumulating (sketch §4:
   // "traveled distance is ALWAYS anchored to measured positions").
-  pose_.integrate(left_.basisPosition(), right_.basisPosition());
+  // 131-004: pass each wheel's positionEpoch through so pose_ re-anchors
+  // across a rebaseline instead of differencing across the discontinuity
+  // (Motion::PoseTracker::integrate()'s own doc comment, estimation.h).
+  pose_.integrate(left_.basisPosition(), right_.basisPosition(), state.wheelLeft.positionEpoch,
+                  state.wheelRight.positionEpoch);
   // OTOS heading blend -- DELETED by 130-009 along with
   // PlannerLimits::headingOtosWeight/otosStaleness: the feature was live
   // code (pose_.blendHeading()) but configured off in every robot JSON

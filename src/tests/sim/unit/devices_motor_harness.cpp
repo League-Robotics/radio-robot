@@ -1048,6 +1048,76 @@ void scenarioSampleTimeHoldsLastSuccessfulCollectAcrossFailedCollects() {
             "sampleTime() resumes advancing once the collect succeeds again");
 }
 
+// 131-004 (position-rebaseline-destroys-the-pose.md secondary defect):
+// rebaseline()/softRebaseline() re-anchors position() to 0.0f but must NOT
+// zero velocity() -- this is a SOFTWARE-only re-anchor of the position
+// baseline mid-motion, not a real stop, and velocity_ already holds THIS
+// cycle's own genuinely-computed rate (tick() always runs before
+// App::RobotLoop::publishWheel() calls rebaseline() the same cycle).
+// Before this ticket, softRebaseline() also wrote velocity_ = 0.0f, so a
+// wheel reported 0 mm/s for 1-2 cycles purely because of the re-anchor --
+// which Stage B would act on as a genuine stop
+// (A-commanded-zero-leaks-through-stage-b.md).
+void scenarioRebaselinePreservesVelocityAcrossTheBoundary() {
+  beginScenario("rebaseline() preserves velocity() across the software re-anchor (131-004)");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  Devices::NezhaMotor motor(plant, baseNezhaConfig());
+
+  // Two paired cycles establish a real, nonzero velocity -- mirrors
+  // scenarioRequestCollectPairingYieldsExpectedPositionVelocity() above.
+  scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
+  motor.requestSample();
+  motor.tick(0);
+
+  scriptEncoderRequestCollect(bus, wireAddr, 10.0f);
+  motor.requestSample();
+  motor.tick(20000);  // 20ms later
+
+  checkFloatEq(motor.velocity(), 500.0f, "velocity established pre-rebaseline (10mm / 20ms)",
+               1e-6f);
+
+  // Simulates App::RobotLoop::publishWheel() calling rebaseline() this same
+  // cycle, once this tick's own already-collected position crosses the
+  // rebaseline margin.
+  motor.rebaseline();
+
+  checkFloatEq(motor.position(), 0.0f, "rebaseline() re-anchors position() to 0", 1e-6f);
+  checkTrue(motor.velocity() != 0.0f,
+            "velocity() is NOT zeroed by rebaseline() -- it still holds the last genuinely "
+            "computed value across the boundary cycle (was zeroed pre-131-004)");
+  checkFloatEq(motor.velocity(), 500.0f,
+               "velocity() is UNCHANGED by rebaseline(), not merely nonzero -- it holds exactly "
+               "this cycle's own already-computed rate",
+               1e-6f);
+
+  // The first post-rebaseline tick's own collect is a fresh baseline-only
+  // anchor off the rebaselined position (hasLastTick_ was reset to false
+  // by rebaseline()) -- no velocity is (re-)computed THAT tick either,
+  // mirroring the boot-anchor case
+  // (scenarioVelocityReadsZeroUntilTwoValidSamplesCollected() above):
+  // velocity() simply continues holding its last real value.
+  scriptEncoderRequestCollect(bus, wireAddr, 0.5f);
+  motor.requestSample();
+  motor.tick(40000);
+  checkFloatEq(motor.velocity(), 500.0f,
+               "the first post-rebaseline tick is a baseline-only anchor -- velocity() still "
+               "holds its last real value, not yet re-derived from the new baseline",
+               1e-6f);
+
+  // The SECOND post-rebaseline tick resumes computing a real difference
+  // quotient off the new (rebaselined) baseline.
+  scriptEncoderRequestCollect(bus, wireAddr, 1.5f);
+  motor.requestSample();
+  motor.tick(60000);
+  checkFloatEq(motor.velocity(), 50.0f,
+               "velocity() resumes a real difference quotient off the rebaselined baseline "
+               "(1.0mm / 20ms) once a second post-rebaseline sample lands",
+               1e-6f);
+}
+
 }  // namespace
 
 int main() {
@@ -1065,6 +1135,7 @@ int main() {
   scenarioExplicitZeroWriteShapingIsPassThrough();
   scenarioSampleTimeReflectsMostRecentTick();
   scenarioSampleTimeHoldsLastSuccessfulCollectAcrossFailedCollects();
+  scenarioRebaselinePreservesVelocityAcrossTheBoundary();
 
   if (g_failureCount == 0) {
     std::printf("OK: all devices motor scenarios passed\n");

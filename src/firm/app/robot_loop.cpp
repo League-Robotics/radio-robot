@@ -543,7 +543,13 @@ void RobotLoop::cycle() {
 
     uint64_t nowUs = clock_.nowMicros();
 
-    odom_.integrate(motorL_.position(), motorR_.position());  // before OTOS: FakeOtos reads it
+    // 131-004: positionEpoch already reflects THIS cycle's publishWheels()
+    // (which ran before this kPace block), so a same-cycle rebaseline's
+    // epoch bump is visible here -- odom_ re-anchors instead of
+    // differencing across the rebaseline jump (Motion::Odometry::
+    // integrate()'s own doc comment, odometry.h).
+    odom_.integrate(motorL_.position(), motorR_.position(), state_.wheelLeft.positionEpoch,
+                    state_.wheelRight.positionEpoch);  // before OTOS: FakeOtos reads it
     otos_.tick(nowUs);
     publishOtos();
     const bool tickedLine = (cycleCount_ % 2) == 1;  // first cycle ticks line

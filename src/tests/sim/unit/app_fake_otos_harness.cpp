@@ -106,7 +106,7 @@ void scenarioStraightMirrorsOdometryAndTwist() {
   // Both wheels advance 100 mm -> a straight 100 mm leg, heading unchanged.
   left.setPosition(100.0f);
   right.setPosition(100.0f);
-  odom.integrate(left.position(), right.position());
+  odom.integrate(left.position(), right.position(), 0, 0);
 
   left.setVelocity(200.0f);
   right.setVelocity(200.0f);
@@ -135,7 +135,7 @@ void scenarioSpinMirrorsOdometryAndTwist() {
   // Left forward, right backward by equal amounts -> pure spin.
   left.setPosition(40.0f);
   right.setPosition(-40.0f);
-  odom.integrate(left.position(), right.position());
+  odom.integrate(left.position(), right.position(), 0, 0);
 
   left.setVelocity(100.0f);
   right.setVelocity(-100.0f);

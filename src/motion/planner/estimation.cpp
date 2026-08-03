@@ -29,17 +29,27 @@ float WheelChannel::positionAt(uint32_t t) const {
   return anchorPosition_ + velocityFiltered_ * age;
 }
 
-void PoseTracker::integrate(float leftPosition, float rightPosition) {
+void PoseTracker::integrate(float leftPosition, float rightPosition, uint8_t leftEpoch,
+                             uint8_t rightEpoch) {
   if (!seeded_) {
     lastLeft_ = leftPosition;
     lastRight_ = rightPosition;
+    lastLeftEpoch_ = leftEpoch;
+    lastRightEpoch_ = rightEpoch;
     seeded_ = true;
     return;
   }
-  const float dLeft = leftPosition - lastLeft_;
-  const float dRight = rightPosition - lastRight_;
+  // 131-004: see Motion::Odometry::integrate()'s own comment (odometry.cpp)
+  // -- identical per-wheel re-anchor-on-epoch-change contract.
+  const bool leftRebaselined = (leftEpoch != lastLeftEpoch_);
+  const bool rightRebaselined = (rightEpoch != lastRightEpoch_);
+
+  const float dLeft = leftRebaselined ? 0.0f : (leftPosition - lastLeft_);
+  const float dRight = rightRebaselined ? 0.0f : (rightPosition - lastRight_);
   lastLeft_ = leftPosition;
   lastRight_ = rightPosition;
+  lastLeftEpoch_ = leftEpoch;
+  lastRightEpoch_ = rightEpoch;
 
   const float ds = 0.5f * (dLeft + dRight);
   const float dTheta = (dRight - dLeft) / trackWidth_;

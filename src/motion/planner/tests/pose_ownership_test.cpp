@@ -99,7 +99,8 @@ void testPlannerNeverWritesStatePoseEvenWithOtosBlendConfigured() {
 
   for (int i = 0; i < 200; ++i) {
     // --- Odometry FIRST, exactly App::RobotLoop::cycle()'s own order. ---
-    odom.integrate(state.wheelLeft.position, state.wheelRight.position);
+    odom.integrate(state.wheelLeft.position, state.wheelRight.position,
+                   state.wheelLeft.positionEpoch, state.wheelRight.positionEpoch);
     publishPose(state, odom);
 
     // A fresh, clearly divergent OTOS heading every cycle -- present and
