@@ -1272,6 +1272,217 @@ void scenarioBiasPersistsAcrossChainedTakeoverBoundaries() {
            "tour, no reset anywhere");
 }
 
+// ===========================================================================
+// 13-15. 131-003 (SUC-131-003, issue
+// A-speed-floor-snaps-the-planner-differential.md): applySpeedFloor() moves
+// from a per-wheel, post-mix application to a common-mode-only application,
+// with the differential (steering/trim) component computed and re-applied
+// UNFLOORED. All three scenarios below drive tick() directly with
+// dutyPerSpeed=(1,1) (identity: duty == corrected command, this file's own
+// established convention) and all-zero ControlGains/AdaptationBounds.tauAdapt
+// (Stage B/C both inert -- see scenarioSetDutyStagesRawValues()'s own
+// precedent), so MockMotor::lastDutyCmd reflects the post-floor,
+// post-recombination speedLeft/speedRight EXACTLY, isolating the floor's own
+// arithmetic from every other stage. Only AdaptationBounds.vMin is set (a
+// test-local 100.0f mm/s -- NOT this robot's real, LOW-CONFIDENCE 99.7
+// figure; ticket 131-003 is semantics-only and must not entangle a test
+// constant with the production one).
+// ===========================================================================
+
+// 13. AC#1: a small differential trim riding on a common-mode speed AT the
+// floor boundary produces a PROPORTIONAL per-wheel split (the differential
+// passes through whole), not the asymmetric, partially-eaten split the OLD
+// per-wheel-independent floor produced at this exact boundary.
+void scenarioDifferentialTrimAtFloorBoundaryStaysProportional() {
+  beginScenario("131-003 AC#1: a differential trim on a common-mode speed AT the vMin boundary "
+                "produces a proportional per-wheel split (the OLD per-wheel floor ate half the "
+                "trim here)");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.vMin = 100.0f;  // [mm/s] test-local floor -- NOT tovez.json's real 99.7
+  drive.setAdaptationBounds(bounds);
+
+  // Deliberately chosen so the OLD per-wheel floor bites: raw left (97) is
+  // BELOW vMin (100) and would have been independently boosted to exactly
+  // 100 -- eating the correction down to a 3 mm/s split (100 vs 103) instead
+  // of the commanded 6 mm/s split (97 vs 103). Common mode (100) is already
+  // AT vMin, so the NEW common-mode floor is a no-op here -- the fix is
+  // entirely in WHERE the floor looks, not in re-tuning vMin itself.
+  const float commonMode = 100.0f;    // [mm/s] -- AT the floor
+  const float differential = 3.0f;    // [mm/s] -- "a few mm/s" heading-hold trim
+  const float cmdLeft = commonMode - differential;   // 97
+  const float cmdRight = commonMode + differential;  // 103
+
+  drive.tick(wheelCmd(cmdLeft, cmdRight));
+
+  checkFloatEq(left.lastDutyCmd, cmdLeft,
+              "left wheel: the differential passes through proportionally -- duty matches the "
+              "RAW (unfloored) commanded value, common mode was already at the floor");
+  checkFloatEq(right.lastDutyCmd, cmdRight,
+              "right wheel: same -- proportional, not floor-snapped");
+  checkFloatEq(right.lastDutyCmd - left.lastDutyCmd, 2.0f * differential,
+              "the per-wheel split equals the full commanded differential (6 mm/s) -- NOT the "
+              "3 mm/s split the OLD per-wheel-independent floor would have left after boosting "
+              "only the sub-floor left wheel");
+
+  // A second, healthier-margin case (common mode comfortably above the
+  // floor) as a plain sanity check that proportional pass-through holds in
+  // the ordinary case too, not just at the adversarial boundary above.
+  MockMotor left2;
+  MockMotor right2;
+  App::Drive drive2(left2, right2, trackWidth);
+  drive2.setDutyPerSpeed(1.0f, 1.0f);
+  drive2.setAdaptationBounds(bounds);
+  const float cruiseCommon = 150.0f;  // [mm/s] comfortably above vMin
+  drive2.tick(wheelCmd(cruiseCommon - differential, cruiseCommon + differential));
+  checkFloatEq(left2.lastDutyCmd, cruiseCommon - differential,
+              "healthy-margin case: left wheel duty matches the raw commanded value exactly");
+  checkFloatEq(right2.lastDutyCmd, cruiseCommon + differential,
+              "healthy-margin case: right wheel duty matches the raw commanded value exactly");
+}
+
+// 14. AC#2: a differential riding on a NEAR-ZERO (here, exactly zero)
+// common-mode component passes through completely unfloored (no artificial
+// pivot at vMin authority); a near-zero but NONZERO common-mode component
+// with NO differential still receives the existing boost-to-vMin treatment,
+// unchanged.
+void scenarioDifferentialWithNearZeroCommonModePassesThroughUnfloored() {
+  beginScenario("131-003 AC#2: a differential trim with a near-zero common mode passes through "
+                "unfloored (no artificial pivot at vMin); common-mode-only boost-to-vMin is "
+                "unchanged");
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.vMin = 100.0f;  // [mm/s] test-local floor -- NOT tovez.json's real 99.7
+
+  // Sub-case A: common mode EXACTLY zero (e.g. a pure heading-hold trim with
+  // no net travel, or a terminal approach's own instant of zero crossing),
+  // small differential trim. The OLD per-wheel floor would have boosted
+  // BOTH wheels to +-vMin independently (raw -3/+3 -> floored -100/+100),
+  // turning a 3 mm/s trim into a full-authority 100 mm/s pivot -- the exact
+  // "lurch" this ticket's issue names. The new floor must leave it alone.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setAdaptationBounds(bounds);
+
+    const float differential = 3.0f;  // [mm/s]
+    drive.tick(wheelCmd(-differential, differential));
+
+    checkFloatEq(left.lastDutyCmd, -differential,
+                "zero common mode: the differential passes through UNFLOORED on the left wheel "
+                "-- not boosted to -vMin");
+    checkFloatEq(right.lastDutyCmd, differential,
+                "zero common mode: same, right wheel -- not boosted to +vMin");
+    checkTrue(std::fabs(left.lastDutyCmd) < bounds.vMin,
+             "left duty stays well under vMin -- proof this is NOT the floor-snapped ~vMin lurch "
+             "the OLD per-wheel-independent floor would have produced here");
+  }
+
+  // Sub-case B: a small NONZERO common mode (no differential at all -- a
+  // plain sub-floor travel command) still gets boosted to vMin, sign
+  // preserved, exactly as applySpeedFloor() always did -- this ticket only
+  // changes WHAT the floor sees, never removes the boost itself.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setAdaptationBounds(bounds);
+
+    const float subFloorCommon = 5.0f;  // [mm/s] -- below vMin, no differential
+    drive.tick(wheelCmd(subFloorCommon, subFloorCommon));
+
+    checkFloatEq(left.lastDutyCmd, bounds.vMin,
+                "no differential: common-mode-only boost-to-vMin is UNCHANGED -- both wheels "
+                "boosted to +vMin");
+    checkFloatEq(right.lastDutyCmd, bounds.vMin,
+                "same, right wheel");
+  }
+}
+
+// 15. The Stage A/Stage B commanded-zero-guard coupling flagged by 131-002's
+// own implementer (002's ticket note, carried into this ticket's own brief):
+// under the common-mode/differential split, a wheel whose RAW cmdVelocity is
+// exactly 0.0f may no longer see a post-floor speedLeft/Right of exactly
+// 0.0f (its raw zero was an incidental cancellation of a floored common mode
+// against a nonzero differential, not an instruction to hold this wheel at
+// rest) -- and that is CORRECT: this wheel is legitimately part of an active,
+// asymmetric command and must be driven. Stage A's (correctedCommand()) and
+// Stage B's (fastPid() guard) commanded-zero checks cannot disagree on this,
+// because both read the SAME recombined speedLeft/Right value (drive.cpp's
+// own tick() doc comment) -- there is only one guard, computed once. A
+// GENUINE full stop (BOTH raw wheel commands exactly 0.0f) is unaffected and
+// still recombines to exactly (0.0f, 0.0f) -- "stop is stop" holds.
+void scenarioRawZeroWheelMayDriveNonzeroButGenuineFullStopStaysZero() {
+  beginScenario("131-003: a wheel whose RAW command is exactly 0.0f may now drive nonzero as part "
+                "of an active asymmetric command (Stage A/B's zero guards still agree, reading the "
+                "same recombined value) -- a GENUINE full stop (both wheels raw zero) still "
+                "recombines to exactly (0.0, 0.0)");
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.vMin = 100.0f;  // [mm/s] test-local floor
+
+  // Sub-case A: common mode (50) is below vMin and gets boosted to 100; the
+  // differential (50) exactly cancels the floored common on the LEFT wheel's
+  // RAW command (50 - 50 == 0), but the recombined (post-floor) speedLeft is
+  // 100 - 50 == 50 -- nonzero. This wheel must be DRIVEN at 50, not held at
+  // rest: the zero was incidental vector cancellation, not a stop.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setAdaptationBounds(bounds);
+
+    const float commonMode = 50.0f;    // [mm/s] -- below vMin
+    const float differential = 50.0f;  // [mm/s] -- cancels the left wheel's RAW command exactly
+    const float rawLeft = commonMode - differential;   // 0.0f exactly
+    const float rawRight = commonMode + differential;  // 100.0f
+    checkFloatEq(rawLeft, 0.0f, "setup: the left wheel's RAW command is exactly 0.0f");
+
+    drive.tick(wheelCmd(rawLeft, rawRight));
+
+    checkFloatEq(left.lastDutyCmd, 50.0f,
+                "the left wheel drives at a NONZERO 50 mm/s despite a raw-zero command -- the "
+                "common mode's floor boost carries through; Stage A/B's zero guards correctly did "
+                "NOT suppress this wheel (they read the recombined, nonzero speedLeft, not the raw "
+                "command)");
+    checkFloatEq(left.lastDutyCmd, right.lastDutyCmd - 2.0f * differential,
+                "left/right differ by the full commanded differential, matching the common-mode "
+                "floor boost carried through symmetrically");
+  }
+
+  // Sub-case B: contrast -- a GENUINE full stop (both wheels' raw command
+  // exactly 0.0f) still recombines to exactly (0.0, 0.0): common mode and
+  // differential are both 0.0f, applySpeedFloor(0.0f)'s own "stop is stop"
+  // guard returns 0.0f unboosted, so both wheels write EXACT zero duty --
+  // unaffected by this ticket (see also scenarioStopZeroesBothTargetsWithinOneCycle()
+  // above, which proves this same invariant through a full NezhaMotor round trip).
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setAdaptationBounds(bounds);
+
+    drive.tick(wheelCmd(0.0f, 0.0f));
+
+    checkFloatEq(left.lastDutyCmd, 0.0f,
+                "genuine full stop: left wheel writes EXACTLY 0.0 duty, unaffected by the "
+                "common-mode/differential split");
+    checkFloatEq(right.lastDutyCmd, 0.0f,
+                "genuine full stop: right wheel writes EXACTLY 0.0 duty");
+  }
+}
+
 }  // namespace
 
 int main() {
@@ -1289,6 +1500,9 @@ int main() {
   scenarioTakeoverDoesNotTouchStopReassertionCountdown();
   scenarioReversalAfterConvergedForwardBiasDoesNotReduceMagnitude();
   scenarioBiasPersistsAcrossChainedTakeoverBoundaries();
+  scenarioDifferentialTrimAtFloorBoundaryStaysProportional();
+  scenarioDifferentialWithNearZeroCommonModePassesThroughUnfloored();
+  scenarioRawZeroWheelMayDriveNonzeroButGenuineFullStopStaysZero();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Drive scenarios passed\n");

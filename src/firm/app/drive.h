@@ -59,10 +59,20 @@
 //                                baseline below; the breakaway dead zone
 //                                stays feedforward-owned, never
 //                                rediscovered by the adaptive bias.
-//      Wheels-solid contract enforcement: a sub-vMin nonzero command is
-//      rounded UP to vMin (applySpeedFloor(), Open Question 2 --
+//      Wheels-solid contract enforcement: a sub-vMin nonzero COMMON-MODE
+//      command is rounded UP to vMin (applySpeedFloor(), Open Question 2 --
 //      matches the project's own established boost-to-breakaway fix
-//      rather than silently stalling the wheel); a sustained large error
+//      rather than silently stalling the wheel). 131-003 (issue
+//      A-speed-floor-snaps-the-planner-differential.md): the floor applies
+//      to the common-mode component of the two wheels' commanded speed
+//      ONLY -- tick() reconstructs common-mode/differential arithmetically
+//      from cmdVelocity before flooring, then recombines, so a small
+//      differential steering correction (Planner::applyHeadingHold()) rides
+//      through unfloored instead of being independently rounded up to vMin
+//      on each wheel. See tick()'s own doc comment (drive.cpp) for the
+//      recombination and sprint 131 Design Rationale Decision 4 for why the
+//      planner does not gain its own vMin awareness this ticket. A
+//      sustained large error
 //      while BOTH bias and the fast PID sit pinned at their configured
 //      authority raises a deficit-flag policy (deficitLeft()/Right()) --
 //      the robot runs slow, loudly, never silently. `Motion::Planner`

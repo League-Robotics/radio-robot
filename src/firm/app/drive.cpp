@@ -186,6 +186,15 @@ float Drive::crawlDuty(float duty, float& carry) const {
 // diagnostic signal. `vMin <= 0` (uncalibrated / no population floor
 // configured yet) makes this a no-op, so a robot JSON that hasn't run
 // ticket 001's sweep behaves exactly as before.
+//
+// 131-003 (issue A-speed-floor-snaps-the-planner-differential.md): this
+// function's own body/constants are UNCHANGED -- only WHAT tick() passes
+// as `commanded` changed. tick() now calls this with the two wheels'
+// COMMON-MODE speed only (0.5*(cmdVelocityLeft + cmdVelocityRight)),
+// never with a raw per-wheel cmdVelocity that may itself be a
+// common-mode-plus-differential sum -- see tick()'s own doc comment for
+// the recombination and sprint 131 Design Rationale Decision 4 for why
+// the planner does not get its own vMin awareness instead.
 float Drive::applySpeedFloor(float commanded) const {
   if (commanded == 0.0f) return 0.0f;  // stop is stop, never boosted
   if (bounds_.vMin <= 0.0f) return commanded;
@@ -309,12 +318,46 @@ void Drive::tick(const Types::RobotState& state) {
   // standing still is the right answer to that.
   if (!calibrated_) return;
 
-  // Wheels-solid speed floor (Open Question 2) -- applied FIRST, so
+  // Wheels-solid speed floor (Open Question 2), 131-003 (issue
+  // A-speed-floor-snaps-the-planner-differential.md): applied to the
+  // COMMON-MODE component of the two wheels' commanded speed ONLY, so
   // every stage below (classification, the map, the fast PID, the
-  // adaptation gate) sees the SAME effective target: whichever speed we
-  // actually decided to drive at, not the raw sub-floor request.
-  const float speedLeft = applySpeedFloor(state.wheelLeft.cmdVelocity);
-  const float speedRight = applySpeedFloor(state.wheelRight.cmdVelocity);
+  // adaptation gate) sees the SAME effective per-wheel target -- but a
+  // small differential steering correction is no longer indistinguishable
+  // from a small travel command. Before this ticket the floor ran on each
+  // wheel's already-summed cmdVelocity, so it could not tell a 3 mm/s
+  // heading-hold trim (Planner::applyHeadingHold(), planner.cpp) from a
+  // 3 mm/s travel command -- both got rounded up to vMin independently,
+  // turning a steering correction into a lurch. Reconstruct the common
+  // mode and the differential arithmetically -- matching
+  // applyHeadingHold()'s own mixing convention exactly (`cmdLeft_ =
+  // profiled - differential; cmdRight_ = profiled + differential`) --
+  // floor ONLY the common-mode magnitude via the existing, UNCHANGED
+  // applySpeedFloor(), then recombine. applySpeedFloor()'s own "stop is
+  // stop" guard (commanded == 0.0f never boosted) means a genuine full
+  // stop (both raw wheel commands exactly 0.0f) still recombines to
+  // exactly (0.0f, 0.0f): commonMode and differential are both 0.0f,
+  // flooredCommon stays 0.0f unboosted, so speedLeft/speedRight are each
+  // 0.0f - 0.0f and 0.0f + 0.0f. A near-zero (but nonzero) common mode --
+  // e.g. a Distance Move's terminal approach -- still receives the
+  // existing boost-to-vMin treatment exactly as before; only the
+  // differential riding on top of it is new-exempt from the floor. The
+  // planner does NOT get its own vMin awareness this ticket (deferred,
+  // sprint 131 Design Rationale Decision 4 -- review C1's terminal-taper
+  // mismatch waits on the same loaded-actuation-floor bench measurement
+  // as vMin/biasMax themselves). The result feeds the rest of tick()
+  // exactly where speedLeft/speedRight were read before this ticket --
+  // Stage A's/Stage B's own commanded-zero guards (correctedCommand()'s
+  // `desired == 0.0f`, below, and the `speedLeft == 0.0f` check ahead of
+  // fastPid()) therefore keep reading the SAME recombined value and so
+  // cannot disagree with each other by construction.
+  const float commonMode = 0.5f * (state.wheelLeft.cmdVelocity +
+                                    state.wheelRight.cmdVelocity);  // [mm/s]
+  const float differential = 0.5f * (state.wheelRight.cmdVelocity -
+                                      state.wheelLeft.cmdVelocity);  // [mm/s]
+  const float flooredCommon = applySpeedFloor(commonMode);
+  const float speedLeft = flooredCommon - differential;
+  const float speedRight = flooredCommon + differential;
 
   // Stage A: the calibrated conversion map (correctedCommand()) plus
   // Stage C's bias -- v_corrected = map(v_cmd) + bias (drive.h's own
