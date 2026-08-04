@@ -1,6 +1,10 @@
 ---
-status: pending
+status: in-progress
 priority: high
+sprint: '133'
+tickets:
+- 133-001
+- 133-004
 ---
 
 # A single commanded stop does not reach the motor; `estop()` failed 5 of 6

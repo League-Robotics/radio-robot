@@ -1,6 +1,11 @@
 ---
-status: pending
+status: in-progress
 priority: medium
+sprint: '133'
+tickets:
+- 133-002
+- 133-003
+- 133-004
 ---
 
 # Wheel controller: the I term is a position term, and the actuator quantizes at 8.46 mm/s

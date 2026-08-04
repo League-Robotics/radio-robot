@@ -1,6 +1,9 @@
 ---
-status: pending
+status: done
 priority: high
+sprint: '133'
+tickets:
+- 133-005
 ---
 
 # Sprint 132 introduced a sim turn-accuracy regression, cause unknown
