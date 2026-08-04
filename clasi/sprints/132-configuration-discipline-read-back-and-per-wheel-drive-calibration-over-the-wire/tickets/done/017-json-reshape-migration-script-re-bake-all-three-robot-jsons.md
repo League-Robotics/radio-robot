@@ -1,7 +1,7 @@
 ---
 id: '017'
 title: "JSON reshape \u2014 migration script + re-bake all three robot JSONs"
-status: in-progress
+status: done
 use-cases:
 - SUC-008
 depends-on:
