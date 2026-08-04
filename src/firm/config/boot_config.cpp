@@ -255,13 +255,13 @@ msg::Drive defaultDriveGroup() {
     cfg.duty_per_speed_left = 0.001182f;    // [duty/(mm/s)]
     cfg.duty_per_speed_right = 0.001182f;  // [duty/(mm/s)]
     cfg.crawl_pulse = 0.0f;                    // [-1,1]; 0 = off
-    cfg.wheel_gain_left_accel = 1.0f;
+    cfg.wheel_gain_left_accel = 0.9075f;
     cfg.wheel_intercept_left_accel = 0.0f;      // [mm/s]
-    cfg.wheel_gain_left_decel = 1.0f;
+    cfg.wheel_gain_left_decel = 0.9075f;
     cfg.wheel_intercept_left_decel = 0.0f;      // [mm/s]
-    cfg.wheel_gain_right_accel = 1.0f;
+    cfg.wheel_gain_right_accel = 0.8f;
     cfg.wheel_intercept_right_accel = 0.0f;     // [mm/s]
-    cfg.wheel_gain_right_decel = 1.0f;
+    cfg.wheel_gain_right_decel = 0.8f;
     cfg.wheel_intercept_right_decel = 0.0f;     // [mm/s]
     return cfg;
 }
