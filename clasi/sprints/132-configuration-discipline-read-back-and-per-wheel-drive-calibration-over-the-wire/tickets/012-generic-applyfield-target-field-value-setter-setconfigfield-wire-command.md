@@ -1,7 +1,7 @@
 ---
 id: '012'
 title: Generic applyField(target, field, value) setter + SetConfigField wire command
-status: open
+status: done
 use-cases:
 - SUC-004
 depends-on:
@@ -32,23 +32,23 @@ number.
 
 ## Acceptance Criteria
 
-- [ ] `wire.cpp`'s field-lookup (`findField`-equivalent) and
+- [x] `wire.cpp`'s field-lookup (`findField`-equivalent) and
       `validateBounds()` are reachable from `Configurator::applyField()`
       — either by exposing them outside the anonymous namespace or an
       equivalent refactor that avoids duplicating the lookup logic.
-- [ ] `applyField()` rejects a NaN `value` via an explicit `isfinite()`
+- [x] `applyField()` rejects a NaN `value` via an explicit `isfinite()`
       check BEFORE calling `validateBounds()`, verified by a new test
       pushing NaN and confirming rejection.
-- [ ] `applyField()` rejects an unknown field number with `ERR_BADARG`.
-- [ ] `applyField()` on a valid field/value writes it into `config_` at
+- [x] `applyField()` rejects an unknown field number with `ERR_BADARG`.
+- [x] `applyField()` on a valid field/value writes it into `config_` at
       the correct offset and calls `install(target)`.
-- [ ] `SetConfigField` is declared on the wire and dispatched from
+- [x] `SetConfigField` is declared on the wire and dispatched from
       `robot_loop.cpp`'s `processMessage()`.
-- [ ] `NezhaProtocol.set_config_field(target, field_name, value)` exists,
+- [x] `NezhaProtocol.set_config_field(target, field_name, value)` exists,
       resolves `field_name` via the real generated protobuf descriptor
       (not a hand-maintained string-to-number table), and sends
       `SetConfigField`.
-- [ ] Compiles under `HOST_BUILD`.
+- [x] Compiles under `HOST_BUILD`.
 
 ## Testing
 

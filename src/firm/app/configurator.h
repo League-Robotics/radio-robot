@@ -20,7 +20,14 @@
 // WheelControl/Planner/Otos/Estimator structs ARE the wire codec targets,
 // decoded through gen_messages.py-emitted `msg::wire::decode(<Group>&, ...)`
 // overloads, wire.h/wire.cpp) and `install(target)` fans out just that one
-// group. `applyField()` (single-field push, ticket 012) is still to come.
+// group. `applyField(target, fieldNumber, value)` (132-012) is the
+// single-field counterpart: reuses the SAME re-appliability gate and the
+// SAME generated field-table engine (gen_messages.py-emitted
+// `msg::wire::setField(<Group>&, ...)` overloads, one per applyGroup()'s
+// own decode() family) to write exactly one already-live field, addressed
+// by (target, protobuf field number) rather than a whole-group payload --
+// the dev-mode single-value push `.claude/rules/configuration-discipline.md`
+// carves out for bench tuning.
 //
 // Every `ConfigGroupTarget` declares whether it is safely re-appliable at
 // runtime or boot-only (the-configuration-object.md's "boot-only vs live"
@@ -169,6 +176,38 @@ class Configurator {
   // validates inline and this function does not partially commit a
   // half-decoded group.
   msg::ErrCode applyGroup(msg::ConfigGroupTarget target, const uint8_t* wire, size_t len);
+
+  // applyField() -- 132-012 (SetConfigField / the-configuration-object.md's
+  // own worked design, "Updating one value: (target, field number,
+  // value)"): the single-field counterpart of applyGroup() above -- writes
+  // exactly ONE field inside ONE already-live group, addressed by (target,
+  // protobuf field number), rather than replacing the whole group.
+  //
+  // Reuses applyGroup()'s SAME re-appliability gate (`isLiveConfigurable()`
+  // -- a boot-only target is refused with ERR_NOT_LIVE BEFORE any field
+  // lookup, config_ untouched) and the SAME generated field-table engine
+  // applyGroup()'s decode() family uses for the lookup/bounds-validate/
+  // write pass (`msg::wire::setField(<Group>&, ...)`, wire.h/wire.cpp's
+  // 132-012 addition -- "the loop minus tag decoding," per the design doc).
+  //
+  // `value` is rejected as ERR_BADARG if it is not finite (NaN or +/-inf)
+  // BEFORE `msg::wire::setField()` ever runs: `validateBounds()`'s `<`/`>`
+  // bound comparisons are both false for NaN, so an unchecked NaN would
+  // otherwise pass every bound a field declares and land in config_ (the
+  // same documented trap 132-008 closed for applyGroup()'s own decode
+  // path). This keeps config_ untouched on every rejection path --
+  // unknown field (ERR_BADARG), non-finite value (ERR_BADARG), and
+  // out-of-bounds (ERR_RANGE) are all checked before the single scalar
+  // write, and the write itself is one field wide, so there is no
+  // multi-field decode to partially commit the way applyGroup()'s
+  // whole-group decode can.
+  //
+  // On success, fans out via install(target) -- the SAME call applyGroup()
+  // makes -- so a single-field push takes effect exactly the way a
+  // whole-group push does (including MOTORS's ERR_BUSY-while-moving guard
+  // and ESTIMATOR's permanent ERR_UNIMPLEMENTED, both install(target)'s
+  // own job, unaffected by which caller reached it).
+  msg::ErrCode applyField(msg::ConfigGroupTarget target, uint16_t fieldNumber, float value);
 
   // install(target) -- 132-008: fans ONE already-decoded group out to the
   // subsystem(s) that own it (the re-appliability table above documents

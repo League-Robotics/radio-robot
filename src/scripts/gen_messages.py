@@ -2424,6 +2424,92 @@ bool validateBounds(const FieldDesc& fd, const void* src) {
   return true;
 }
 
+// setScalarField() -- 132-012 (SetConfigField / Configurator::applyField(),
+// the-configuration-object.md's own worked design: "Updating one value:
+// (target, field number, value)"). applyField()'s own engine -- "the loop
+// minus tag decoding," per that design doc. SAME field-number lookup
+// decodeInto() runs per incoming wire tag (below), but driven by an
+// explicit field NUMBER the caller already has instead of one just decoded
+// off the wire, and the SAME validateBounds() bounds check just above --
+// reused, not reimplemented, so a single-field push (SetConfigField) and a
+// whole-group push (SetConfigGroup/applyGroup(), 132-008) can never
+// validate a bound differently.
+//
+// `value` always arrives as a wire FLOAT (SetConfigField.value,
+// robot_config.proto) regardless of the target field's own native
+// ScalarType -- e.g. Motors.fwd_sign_left/right are int32, Estimator.
+// staleness is uint32 -- so this converts the incoming float to that
+// field's own representation (mirroring decodeScalarValue()/
+// encodeScalarValue()'s own per-ScalarType shape above) BEFORE calling
+// validateBounds(), which reads the value back out through
+// scalarAsDouble(), typed by fd->scalarType.
+//
+// Every robot_config.proto group field reachable from here is a plain
+// FieldKind::kScalar -- no Opt/oneof/nested-message field exists in any of
+// Geometry/Motors/Drive/WheelControl/Planner/Otos/Estimator today (this
+// file's own _robot_config_groups()/_build_field_table() doc comment,
+// gen_messages.py). Anything else is rejected with ERR_BADARG rather than
+// mishandled, the same posture decodeInto()'s own kMessage/kOneofMessage
+// cases take for a schema shape this sprint's config groups do not use.
+//
+// NaN/Inf rejection is the CALLER's job (Configurator::applyField(),
+// std::isfinite() on the raw incoming float, BEFORE this function ever
+// runs) -- not repeated here, so the "reject NaN before validateBounds()"
+// contract lives at exactly one call site rather than being duplicated
+// into this generated engine text too.
+Result setScalarField(void* base, const MessageTable& table, uint16_t fieldNumber, float value) {
+  const FieldDesc* fd = nullptr;
+  for (uint8_t i = 0; i < table.fieldCount; ++i) {
+    if (table.fields[i].number == fieldNumber) {
+      fd = &table.fields[i];
+      break;
+    }
+  }
+  if (fd == nullptr || fd->kind != FieldKind::kScalar) {
+    return Result{false, fieldNumber, ErrCode::ERR_BADARG};
+  }
+
+  uint8_t converted[sizeof(uint32_t)] = {};
+  size_t width = 0;
+  switch (fd->scalarType) {
+    case ScalarType::kFloat: {
+      width = sizeof(float);
+      std::memcpy(converted, &value, width);
+      break;
+    }
+    case ScalarType::kInt32:
+    case ScalarType::kSint32: {
+      const int32_t v = static_cast<int32_t>(value);
+      width = sizeof(v);
+      std::memcpy(converted, &v, width);
+      break;
+    }
+    case ScalarType::kUint32: {
+      const uint32_t v = static_cast<uint32_t>(value);
+      width = sizeof(v);
+      std::memcpy(converted, &v, width);
+      break;
+    }
+    case ScalarType::kBool:
+    case ScalarType::kEnum: {
+      converted[0] = static_cast<uint8_t>(value);
+      width = sizeof(uint8_t);
+      break;
+    }
+    default:
+      // kDouble/kInt64/kUint64/kNone: unreached by any robot_config.proto
+      // group field today (every field is float/int32/uint32/bool/enum) --
+      // reject cleanly rather than mis-convert if a future group field ever
+      // adds one of these.
+      return Result{false, fd->number, ErrCode::ERR_BADARG};
+  }
+
+  if (!validateBounds(*fd, converted)) return Result{false, fd->number, ErrCode::ERR_RANGE};
+
+  std::memcpy(static_cast<uint8_t*>(base) + fd->offset, converted, width);
+  return Result{true, fd->number, ErrCode::ERR_NONE};
+}
+
 // --- Generated per-message field tables (regenerated from protos/*.proto
 // on every run -- everything above this point is fixed engine text,
 // everything from here through kMessageTables[] is schema-derived data). --
@@ -2911,6 +2997,61 @@ def _render_config_group_encode_defs(group_names: list[str]) -> str:
     return "\n".join(lines)
 
 
+# 132-012 (SetConfigField / Configurator::applyField()): the single-field
+# mirror of _render_config_group_decode_decls()/_render_config_group_
+# decode_defs() (132-008) -- one small setField() overload per
+# robot_config.proto robot-config group, wrapping the SAME fixed-engine-text
+# setScalarField() (this file's _WIRE_CPP_PART1, right after
+# validateBounds()) against that group's own kTable_<Group>. Same "not
+# reachable from CommandEnvelope/ReplyEnvelope's own BFS" fact as decode()/
+# encode() above (_robot_config_groups()'s own doc comment) -- struct_order's
+# ordinary per-struct loop in _emit_wire_files() never builds one of these
+# either.
+def _render_config_group_setfield_decls(group_names: list[str]) -> str:
+    if not group_names:
+        return ""
+    lines = [
+        "",
+        "// setField(<Group>&, ...) -- 132-012 addition, one overload per",
+        "// robot_config.proto robot-config group -- Configurator::applyField()'s",
+        "// (SetConfigField) own single-field write path, reusing the SAME",
+        "// generated setScalarField() engine (this file's fixed engine text,",
+        "// alongside validateBounds()) against that group's own kTable_<Group>.",
+        "// Looks `fieldNumber` up by NUMBER (not by decoded wire tag), converts",
+        "// `value` to that field's own native scalar representation, validates",
+        "// it through the SAME validateBounds() decodeInto() uses, and on",
+        "// success writes it directly into `out` at the matching offset.",
+        "// Returns {false, fieldNumber, ERR_BADARG} for an unknown field",
+        "// number, {false, field.number, ERR_RANGE} for a bound violation",
+        "// (NaN included -- rejecting NaN before this call is the CALLER's",
+        "// job, Configurator::applyField()'s own std::isfinite() check), or",
+        "// {true, field.number, ERR_NONE} on success.",
+    ]
+    for name in group_names:
+        lines.append(f"Result setField({name}& out, uint16_t fieldNumber, float value);")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_config_group_setfield_defs(group_names: list[str]) -> str:
+    if not group_names:
+        return ""
+    lines = [
+        "// setField(<Group>&, ...) -- 132-012 addition; see wire.h's own",
+        "// declaration comment. Thin trampoline into setScalarField() (this",
+        "// file's fixed engine text) against each group's own generated",
+        "// kTable_<Group> -- same shape as decode()/encode()'s own per-group",
+        "// wrappers just above.",
+        "",
+    ]
+    for name in group_names:
+        lines.append(f"Result setField({name}& out, uint16_t fieldNumber, float value) {{")
+        lines.append(f"  return setScalarField(&out, kTable_{name}, fieldNumber, value);")
+        lines.append("}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _emit_wire_files(fds):
     """Emit src/firm/messages/wire.{h,cpp}. Returns (wire_h, wire_cpp, cmd_report,
     reply_report) -- the reports are also printed to stderr by the caller
@@ -2961,6 +3102,7 @@ def _emit_wire_files(fds):
               + _WIRE_H_FOOTER
               + _render_config_group_decode_decls(group_struct_order)
               + _render_config_group_encode_decls(group_struct_order)
+              + _render_config_group_setfield_decls(group_struct_order)
               + _WIRE_H_CLOSE)
 
     cpp_parts = [_WIRE_CPP_PART1]
@@ -2972,6 +3114,7 @@ def _emit_wire_files(fds):
     cpp_parts.append(_WIRE_CPP_PART2)
     cpp_parts.append(_render_config_group_decode_defs(group_struct_order))
     cpp_parts.append(_render_config_group_encode_defs(group_struct_order))
+    cpp_parts.append(_render_config_group_setfield_defs(group_struct_order))
     cpp_parts.append(_WIRE_CPP_PART3)
     wire_cpp = "\n".join(cpp_parts)
 

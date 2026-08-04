@@ -2,6 +2,8 @@
 // for the module's boundary.
 #include "app/configurator.h"
 
+#include <cmath>
+
 #include "app/boot_calibration.h"
 #include "config/boot_config.h"
 #include "messages/wire.h"
@@ -365,6 +367,51 @@ msg::ErrCode Configurator::applyGroup(msg::ConfigGroupTarget target, const uint8
       // (-Wswitch/-Werror) rather than silently falling through here.
       return msg::ErrCode::ERR_NOT_LIVE;
   }
+
+  return install(target);
+}
+
+// applyField() -- see configurator.h's own doc comment. Boot-only targets
+// are refused BEFORE any field lookup (same isLiveConfigurable() gate
+// applyGroup() uses above); a non-finite value is refused BEFORE
+// msg::wire::setField() ever runs -- validateBounds() (wire.cpp) only
+// guards min/max/abs_max, not finiteness, so a NaN/Inf check has to happen
+// here, at the one call site, rather than inside the generated engine
+// (132-008's own documented NaN trap, closed there for applyGroup()'s
+// decode path and closed here for this single-field path the same way).
+msg::ErrCode Configurator::applyField(msg::ConfigGroupTarget target, uint16_t fieldNumber,
+                                      float value) {
+  if (!isLiveConfigurable(target)) return msg::ErrCode::ERR_NOT_LIVE;
+  if (!std::isfinite(value)) return msg::ErrCode::ERR_BADARG;
+
+  msg::wire::Result r{false, fieldNumber, msg::ErrCode::ERR_BADARG};
+  switch (target) {
+    case msg::ConfigGroupTarget::DRIVE:
+      r = msg::wire::setField(config_.drive, fieldNumber, value);
+      break;
+    case msg::ConfigGroupTarget::WHEEL_CONTROL:
+      r = msg::wire::setField(config_.wheelControl, fieldNumber, value);
+      break;
+    case msg::ConfigGroupTarget::MOTORS:
+      r = msg::wire::setField(config_.motors, fieldNumber, value);
+      break;
+    case msg::ConfigGroupTarget::OTOS:
+      r = msg::wire::setField(config_.otos, fieldNumber, value);
+      break;
+    case msg::ConfigGroupTarget::ESTIMATOR:
+      r = msg::wire::setField(config_.estimator, fieldNumber, value);
+      break;
+    case msg::ConfigGroupTarget::GEOMETRY:
+    case msg::ConfigGroupTarget::PLANNER:
+    case msg::ConfigGroupTarget::CONFIG_GROUP_UNSPECIFIED:
+      // Unreachable: isLiveConfigurable() already filtered these out above.
+      // Kept as an explicit case (not folded into `default`), same
+      // discipline applyGroup()'s own switch documents -- a future
+      // ConfigGroupTarget added without a matching arm here fails to
+      // compile (-Wswitch/-Werror) rather than silently falling through.
+      return msg::ErrCode::ERR_NOT_LIVE;
+  }
+  if (!r.ok) return r.code;
 
   return install(target);
 }

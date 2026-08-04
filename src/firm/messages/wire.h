@@ -65,7 +65,7 @@ struct Result {
 // computes, including ticket 004's cycle_busy/cycle_period primary-frame
 // migration (194B largest, up from 185B pre-migration -- the whole reason
 // this budget needed recomputing in the first place).
-//   CommandEnvelope: config=49B, stop=8B, move=38B, wheels=24B, estop=3B, get_config=5B (worst=config=49B) + non-oneof=6B => total=55B
+//   CommandEnvelope: config=49B, stop=8B, move=38B, wheels=24B, estop=3B, get_config=5B, set_field=16B (worst=config=49B) + non-oneof=6B => total=55B
 //   ReplyEnvelope: ok=19B, err=10B, tlm=188B, cfg=228B (worst=cfg=228B) + non-oneof=4B => total=232B
 constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 55;
 constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 232;
@@ -142,6 +142,28 @@ uint16_t encode(const WheelControl& in, uint8_t* buf, uint16_t cap);
 uint16_t encode(const Planner& in, uint8_t* buf, uint16_t cap);
 uint16_t encode(const Otos& in, uint8_t* buf, uint16_t cap);
 uint16_t encode(const Estimator& in, uint8_t* buf, uint16_t cap);
+
+// setField(<Group>&, ...) -- 132-012 addition, one overload per
+// robot_config.proto robot-config group -- Configurator::applyField()'s
+// (SetConfigField) own single-field write path, reusing the SAME
+// generated setScalarField() engine (this file's fixed engine text,
+// alongside validateBounds()) against that group's own kTable_<Group>.
+// Looks `fieldNumber` up by NUMBER (not by decoded wire tag), converts
+// `value` to that field's own native scalar representation, validates
+// it through the SAME validateBounds() decodeInto() uses, and on
+// success writes it directly into `out` at the matching offset.
+// Returns {false, fieldNumber, ERR_BADARG} for an unknown field
+// number, {false, field.number, ERR_RANGE} for a bound violation
+// (NaN included -- rejecting NaN before this call is the CALLER's
+// job, Configurator::applyField()'s own std::isfinite() check), or
+// {true, field.number, ERR_NONE} on success.
+Result setField(Geometry& out, uint16_t fieldNumber, float value);
+Result setField(Motors& out, uint16_t fieldNumber, float value);
+Result setField(Drive& out, uint16_t fieldNumber, float value);
+Result setField(WheelControl& out, uint16_t fieldNumber, float value);
+Result setField(Planner& out, uint16_t fieldNumber, float value);
+Result setField(Otos& out, uint16_t fieldNumber, float value);
+Result setField(Estimator& out, uint16_t fieldNumber, float value);
 
 }  // namespace wire
 }  // namespace msg

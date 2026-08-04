@@ -137,6 +137,18 @@ void RobotLoop::routeCommand(const Cmd& cmd) {
     case msg::CommandEnvelope::CmdKind::GET_CONFIG:
       handleGetConfig(cmd.env);
       break;
+    case msg::CommandEnvelope::CmdKind::SET_FIELD:
+      // 132-012 (SetConfigField / Configurator::applyField()): the
+      // single-field dev-mode push, same "no per-command ReplyEnvelope,
+      // outcome rides the ack ring" shape as CONFIG just above -- unlike
+      // GET_CONFIG, which replies synchronously (a group's worth of
+      // values has no room in the ack ring).
+      tlm_.ack(cmd.env.corr_id,
+               static_cast<uint32_t>(configurator_.applyField(
+                   cmd.env.cmd.set_field.target,
+                   static_cast<uint16_t>(cmd.env.cmd.set_field.field),
+                   cmd.env.cmd.set_field.value)));
+      break;
     case msg::CommandEnvelope::CmdKind::NONE:
     default:
       break;

@@ -296,12 +296,31 @@ message CommandEnvelope {
     // `GET_CONFIG` verb EXACTLY (WhichOneof("cmd").upper() == "GET_CONFIG"),
     // which is why the arm is spelled with an underscore rather than one
     // word -- see commands.proto's own GET_CONFIG/CFG doc comment.
-    ConfigDelta config     = 6;
-    Stop        stop       = 13;
-    Move        move       = 21;
-    Wheels      wheels     = 22;
-    Estop       estop      = 23;
-    GetConfig   get_config = 24;
+    //
+    // set_field(25) -- 132-012 (SetConfigField / Configurator::applyField(),
+    // the dev-mode single-value push): the next fresh field number after
+    // get_config, carrying robot_config.proto's `SetConfigField{target,
+    // field, value}` -- address a single already-live field by
+    // (ConfigGroupTarget, protobuf field number), never a string key. Same
+    // load-bearing-name rule as every arm above: this arm's name uppercases
+    // to commands.proto's `SET_FIELD` verb EXACTLY (WhichOneof("cmd").upper()
+    // == "SET_FIELD") -- see commands.proto's own SET_FIELD doc comment for
+    // why the verb (and therefore this arm) is spelled shorter than the
+    // `SetConfigField` message type it carries: the literal mirror
+    // "set_config_field"/"SET_CONFIG_FIELD" would push
+    // `Comms::kMaxCommandPrefixBytes`/`kMaxLineBytes` (comms.h) past
+    // `Com::SerialPort::kTxBufferCapacity` (250) -- `GET_CONFIG` (10 bytes)
+    // is already this schema's longest verb name and the sole driver of
+    // that 249-byte figure (132-011's own flagged headroom concern);
+    // "SET_FIELD" (9 bytes) stays under it, so this arm leaves that budget
+    // unchanged.
+    ConfigDelta    config     = 6;
+    Stop           stop       = 13;
+    Move           move       = 21;
+    Wheels         wheels     = 22;
+    Estop          estop      = 23;
+    GetConfig      get_config = 24;
+    SetConfigField set_field  = 25;
   }
 }
 

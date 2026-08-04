@@ -146,6 +146,7 @@ struct CommandEnvelope {
         WHEELS = 4,
         ESTOP = 5,
         GET_CONFIG = 6,
+        SET_FIELD = 7,
     };
     CmdKind cmd_kind = CmdKind::NONE;
     union {
@@ -155,6 +156,7 @@ struct CommandEnvelope {
         Wheels wheels;
         Estop estop;
         GetConfig get_config;
+        SetConfigField set_field;
     } cmd = {};
 
     uint32_t corr_id = 0;

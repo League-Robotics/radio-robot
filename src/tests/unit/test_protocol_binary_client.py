@@ -70,7 +70,7 @@ import pytest
 
 from robot_radio.io.serial_conn import SerialConnection
 from robot_radio.io.wire_codec import decode_frame, encode_frame
-from robot_radio.robot.pb2 import common_pb2, config_pb2, envelope_pb2, telemetry_pb2
+from robot_radio.robot.pb2 import common_pb2, config_pb2, envelope_pb2, robot_config_pb2, telemetry_pb2
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 from robot_radio.robot._legacy_tlm_text import parse_historical_tlm_line
 
@@ -400,6 +400,50 @@ def test_set_config_binary_round_trips_ack_and_builds_correct_envelope():
         config=envelope_pb2.ConfigDelta(
             drivetrain=config_pb2.DrivetrainConfigPatch(trackwidth=128.0, rotational_slip=0.92)))
     assert sent.SerializeToString() == reference.SerializeToString()
+
+
+def test_set_config_field_round_trips_ack_over_real_framing_and_derives_set_field_prefix():
+    """132-012: unlike the pb2-level tests in test_protocol_set_config_
+    field.py, this one round-trips through the REAL SerialConnection/COBS+
+    CRC framing (_ConfigLoopbackSerial, this file's own fixture) -- proving
+    the load-bearing arm-name contract concretely: ``set_field`` (the
+    CommandEnvelope.cmd oneof arm 132-012 added) must derive the wire line's
+    ``SET_FIELD:`` prefix via ``WhichOneof("cmd").upper()``
+    (``io/serial_conn.py``'s ``_envelope_command_name()``), and that prefix
+    must be a verb ``wire_commands.py`` actually recognizes as binary --
+    both regenerated from commands.proto's own SET_FIELD row (132-012) by
+    the SAME gen_messages.py pipeline this repo's build always runs.
+    _ConfigLoopbackSerial itself is command-name-agnostic (it decodes
+    whatever ``<COMMAND>:`` prefix arrives via ``decode_frame()``), so this
+    is the same fixture ``test_set_config_binary_round_trips_ack_and_
+    builds_correct_envelope`` above already trusts for ``CONFIG``."""
+    fake = _ConfigLoopbackSerial()
+    conn = SerialConnection()
+    conn._ser = fake
+    conn._start_reader()
+    try:
+        proto = NezhaProtocol(conn)
+        ack = proto.set_config_field(robot_config_pb2.DRIVE, "wheel_gain_left_decel", 1.043)
+    finally:
+        conn._stop_reader()
+
+    assert ack is not None
+    assert ack.ok is True
+    assert ack.err_code == 0
+
+    assert len(fake.sent_envelopes) == 1
+    sent = fake.sent_envelopes[0]
+    assert sent.WhichOneof("cmd") == "set_field"
+    assert sent.set_field.target == robot_config_pb2.DRIVE
+    assert sent.set_field.field == robot_config_pb2.Drive.DESCRIPTOR.fields_by_name[
+        "wheel_gain_left_decel"].number
+    assert sent.set_field.value == pytest.approx(1.043)
+
+    # The wire line itself carried the "SET_FIELD:" prefix (not, say, a
+    # generic "CONFIG:" or the message type's own literal name) --
+    # confirms WhichOneof("cmd").upper() derivation actually ran, not just
+    # that SOME frame arrived and decoded.
+    assert any(raw.startswith(b"SET_FIELD:") for raw in fake.raw_writes)
 
 
 def test_set_config_binary_returns_none_on_timeout():

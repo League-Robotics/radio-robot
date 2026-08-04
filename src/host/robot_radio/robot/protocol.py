@@ -1268,6 +1268,71 @@ class NezhaProtocol:
         })
 
     # ------------------------------------------------------------------
+    # Config: SET one field (132-012, SetConfigField / Configurator::
+    # applyField()) -- the development-mode single-value push
+    # ``.claude/rules/configuration-discipline.md`` carves out for bench
+    # tuning sweeps ("we're going to do a sweep, so we should allow that").
+    # Addressed by (``ConfigGroupTarget``, protobuf field number), never a
+    # string key -- see ``robot_config.proto``'s own ``SetConfigField``
+    # doc comment for the wire rationale (~11 B vs ~25 for a string key
+    # like ``"wheel_gain_left_decel"``, and no hand-maintained name
+    # vocabulary that can drift from what it names, the
+    # ``pid.kff -> kaff`` class of bug).
+    # ------------------------------------------------------------------
+
+    def set_config_field(self, target: int, field_name: str, value: float, *,
+                         read_timeout: int = 500,  # [ms]
+                         ) -> "AckEntry | None":
+        """Send ``SetConfigField{target, field, value}`` -- write exactly
+        ONE field inside ONE already-live robot-config group.
+
+        ``field_name`` is resolved to its wire field NUMBER via the REAL
+        compiled protobuf descriptor for ``target``'s own group message
+        (``<Group>.DESCRIPTOR.fields_by_name[field_name].number``), so a
+        human still types a name (``"wheel_gain_left_decel"``) and the wire
+        still carries only a number — the resolution happens HERE, host-side,
+        never as a hand-maintained string-to-number table that could drift
+        from the schema it names.
+
+        Rides the ack ring like every other CONFIG-arm SET
+        (``set_config_binary()``'s own docstring — ``move``/``config``/
+        ``stop``/``wheels``/``estop`` never get a synchronous
+        ``ReplyEnvelope``) — fires via ``send_envelope_fast()``, then polls
+        for the completion the SAME duck-typed way ``set_config_binary()``
+        does (``poll_ack()`` for a ``Sim``-backed connection,
+        ``wait_for_ack()`` otherwise).
+
+        Returns the matched ``AckEntry`` (``ack.ok`` True, ``err_code`` 0)
+        on success, or ``None`` on an unknown ``target``, an unknown
+        ``field_name`` (no wire traffic in either case), a timeout, or a
+        NAK reply — check ``ERR_BADARG`` (unknown field number on the
+        firmware's own table, or a non-finite ``value``), ``ERR_RANGE``
+        (a declared (min)/(max)/(abs_max) bound violated), ``ERR_NOT_LIVE``
+        (``target`` is a boot-only group — GEOMETRY/PLANNER), or
+        ``ERR_BUSY`` (MOTORS, guarded while that side is in motion) by
+        calling ``wait_for_ack()``/``poll_ack()`` directly instead, if the
+        distinction matters to the caller.
+        """
+        group_name = _CONFIG_GROUP_NAMES.get(target)
+        if group_name is None:
+            return None
+        pb_cls = getattr(robot_config_pb2, group_name)
+        field_desc = pb_cls.DESCRIPTOR.fields_by_name.get(field_name)
+        if field_desc is None:
+            return None
+
+        request = robot_config_pb2.SetConfigField(
+            target=target, field=field_desc.number, value=float(value))
+        envelope = envelope_pb2.CommandEnvelope(set_field=request)
+        corr_id = self._conn.send_envelope_fast(envelope)
+        poll_ack = getattr(self._conn, "poll_ack", None)
+        ack = poll_ack(corr_id, timeout=read_timeout) if poll_ack is not None \
+            else self.wait_for_ack(corr_id, timeout=read_timeout)
+        if ack is None or not ack.ok:
+            return None
+        return ack
+
+    # ------------------------------------------------------------------
     # Drive commands
     # ------------------------------------------------------------------
 

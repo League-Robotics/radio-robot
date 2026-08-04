@@ -76,10 +76,21 @@ _CPP_ROW_RE = re.compile(
 #             carries CommandEnvelope.cmd.get_config; CFG (robot->host)
 #             carries ReplyEnvelope.body.cfg -- the first genuinely NEW
 #             binary command/reply PAIR added since WHEELS/ESTOP.
+#   SET_FIELD -- 132-012 (SetConfigField / Configurator::applyField()): the
+#             WRITE half of GET_CONFIG's read-back pair, host->robot,
+#             carrying CommandEnvelope.cmd.set_field (a single already-live
+#             field addressed by (ConfigGroupTarget, protobuf field
+#             number)). Deliberately spelled shorter than its own message
+#             type (SetConfigField) -- GET_CONFIG (10 bytes) is already this
+#             schema's longest verb name and the sole driver of
+#             Comms::kMaxCommandPrefixBytes/kMaxLineBytes (249 B, one byte
+#             below SerialPort::kTxBufferCapacity's 250); the literal mirror
+#             "SET_CONFIG_FIELD" (17 bytes) would push that past the ceiling,
+#             "SET_FIELD" (9 bytes) does not.
 _EXPECTED_CLEARTEXT = {"HELLO", "PING", "ID", "VER", "DEVICE", "PONG",
                        "READY", "STATUS", "HELP", "DBG"}
 _EXPECTED_BINARY = {"MOVE", "CONFIG", "STOP", "WHEELS", "ESTOP", "TLM", "OK", "ERR",
-                    "GET_CONFIG", "CFG"}
+                    "GET_CONFIG", "CFG", "SET_FIELD"}
 
 
 def _parse_cpp_verb_table(commands_h: str) -> list[tuple[str, bool]]:

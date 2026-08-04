@@ -127,8 +127,15 @@ def test_field_numbers_match_pb2_descriptors():
     # `get_config` (24, 132-011: GetConfig/ConfigSnapshot wire read-back) is
     # the next fresh arm after wheels/estop, same load-bearing-name rule
     # (uppercases to commands.proto's GET_CONFIG verb exactly).
+    # `set_field` (25, 132-012: SetConfigField / Configurator::applyField())
+    # is the next fresh arm after get_config, same load-bearing-name rule --
+    # uppercases to commands.proto's SET_FIELD verb exactly (deliberately
+    # shorter than the SetConfigField message type it carries; see
+    # envelope.proto's own set_field arm doc comment for the wire-budget
+    # reasoning).
     expected_cmd_numbers = {"config": 6, "stop": 13, "move": 21,
-                            "wheels": 22, "estop": 23, "get_config": 24}
+                            "wheels": 22, "estop": 23, "get_config": 24,
+                            "set_field": 25}
     actual_cmd_numbers = {
         f.name: f.number for f in pb_envelope.CommandEnvelope.DESCRIPTOR.oneofs_by_name["cmd"].fields
     }

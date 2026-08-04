@@ -478,7 +478,12 @@ message Estimator {
 // bytes still inside it, tightly: see wire.h's generated size-report
 // comment for the exact measured total. SetConfigGroup/SetConfigField
 // remain UNWIRED as of 132-011 -- that is ticket 012/013's job, not this
-// one; GET is not gated behind SET landing first.)
+// one; GET is not gated behind SET landing first. UPDATE, 132-012:
+// SetConfigField is now wired -- envelope.proto's own `set_field` arm
+// (CommandEnvelope.cmd, field 25; see that arm's own doc comment for why
+// the wire verb is the deliberately-shorter `SET_FIELD`, not a literal
+// `SET_CONFIG_FIELD` mirror of this message's own name). SetConfigGroup
+// remains ticket 013's job.)
 // ===========================================================================
 
 // SetConfigGroup -- push a whole group's worth of values in one frame.
@@ -529,6 +534,17 @@ message ConfigSnapshot {
 // `validateBounds()` runs: bounds compare with `<`/`>`, both false for NaN,
 // so a NaN would otherwise pass every bound the fields above declare
 // (ticket 012's own job, not solved by this schema).
+//
+// WIRED, 132-012: CommandEnvelope.cmd.set_field (envelope.proto, field
+// 25) -- carries this message host->robot, dispatched by
+// RobotLoop::routeCommand() to Configurator::applyField(), acked via the
+// ack ring exactly like config/move/stop (never a synchronous reply, unlike
+// GetConfig's own cfg arm). The arm/verb name is "set_field"/"SET_FIELD",
+// not a literal "set_config_field"/"SET_CONFIG_FIELD" mirror of this
+// message's own name -- see envelope.proto's own set_field arm doc comment
+// for the wire-budget reasoning (GET_CONFIG's 10-byte verb name is already
+// this schema's longest, driving comms.h's kMaxLineBytes to within 1 byte
+// of SerialPort::kTxBufferCapacity; a 17-byte verb name would exceed it).
 message SetConfigField {
   ConfigGroupTarget target = 1;
   uint32            field  = 2;
