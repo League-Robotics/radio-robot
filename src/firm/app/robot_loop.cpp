@@ -767,6 +767,14 @@ void RobotLoop::cycle() {
 
 
 #ifdef ROBOT_DEBUG
+void RobotLoop::captureTuningBaseline() {
+  if (dbgTuningBaselined_) return;
+  dbgBoundsBaseline_ = drive_.adaptationBounds();
+  dbgDutyPerSpeedBaseLeft_ = drive_.dutyPerSpeedLeft();
+  dbgDutyPerSpeedBaseRight_ = drive_.dutyPerSpeedRight();
+  dbgTuningBaselined_ = true;
+}
+
 void RobotLoop::applyDbgAction(uint32_t now) {
   // Expire duration-bounded injections FIRST, so a wedge armed for N ms
   // clears on time even if no further DBG traffic ever arrives.
@@ -804,12 +812,100 @@ void RobotLoop::applyDbgAction(uint32_t now) {
                   static_cast<unsigned long>(action.duration));
       break;
     }
+    // --- 133-003 live tuning arms ---------------------------------------
+    //
+    // Every echo below reports the value that LANDED, formatted from the
+    // float actually handed to the setter -- never a re-print of the wire
+    // text. newlib-nano's printf has no float support (debug.h's own
+    // header), so each splits DBG_MILLI()'s rounded integer milli-unit
+    // into whole and thousandths parts: "vmin 60.000 applied". Rounding
+    // rather than truncating matters at this scale -- static_cast<int>(
+    // 1.02f * 1000.0f) is 1019, so a truncating echo would report a gain
+    // of 1.019 for a push of 1.02 and send an operator hunting a
+    // firmware bug that is really a printf.
+    //
+    // The literal token "applied" is a CONTRACT with
+    // src/tests/bench/velocity_profile_gate.py's _assert_tuning(), which
+    // waits for it before it will report a run. Do not reword it.
+    case Comms::DbgActionKind::kVmin: {
+      captureTuningBaseline();
+      drive_.setSpeedFloor(action.value);
+      const long milli = DBG_MILLI(action.value);
+      App::debugf("vmin %ld.%03ld applied", milli / 1000, milli % 1000);
+      break;
+    }
+    case Comms::DbgActionKind::kASteady: {
+      // Stage C's bias adaptation gates on |cmdAccel| < aSteady, so at the
+      // baked 30 mm/s^2 it is frozen through every ramp the profile gate
+      // drives (even the gentle 200 mm/s trapezoid ramps at ~267 mm/s^2).
+      // Raising this is how 004 finds out whether the residual L/R
+      // distance imbalance is banked in the ramps.
+      captureTuningBaseline();
+      drive_.setASteady(action.value);
+      const long milli = DBG_MILLI(action.value);
+      App::debugf("asteady %ld.%03ld applied", milli / 1000, milli % 1000);
+      break;
+    }
+    case Comms::DbgActionKind::kPos: {
+      // Stage B's position-error clamp [mm] -- 133-002's setter. The
+      // INPUT-side bound; its OUTPUT-side sibling (ControlGains::iMax) has
+      // a CONFIG key already. NOTE for a tuning session: pos_err_max IS in
+      // the robot JSON and IS live-configurable over the WHEEL_CONTROL
+      // wire group, so this verb is the RAM-only shortcut, not the only
+      // path -- a value worth keeping goes in data/robots/<robot>.json.
+      captureTuningBaseline();
+      drive_.setPositionErrorMax(action.value);
+      const long milli = DBG_MILLI(action.value);
+      App::debugf("pos %ld.%03ld applied", milli / 1000, milli % 1000);
+      break;
+    }
+    case Comms::DbgActionKind::kGain: {
+      // Per-wheel multiplier on the BOOT-INSTALLED dutyPerSpeed pair --
+      // the L/R plateau-speed imbalance trim. Multiplying the captured
+      // baseline (not the current value) makes a re-push idempotent and
+      // `gain 1 1` a true restore; see captureTuningBaseline()'s own doc
+      // comment (robot_loop.h) for why the baseline is the installed pair
+      // rather than Drive::kDutyPerSpeed.
+      //
+      // MEASURED, and the reason that distinction is not academic: the Sim
+      // composition root boots at dutyPerSpeed 0.002, while
+      // Drive::kDutyPerSpeed is 0.001182. Scaling the CONSTANT would make
+      // `DBG:gain 1 1` -- the documented identity push -- a silent 41%
+      // recalibration there, and the same trap waits on any robot whose
+      // JSON does not happen to carry 0.001182. See
+      // src/tests/sim/system/test_dbg_tuning_verbs.py's own idempotence
+      // and clear-restores scenarios.
+      captureTuningBaseline();
+      drive_.setDutyPerSpeed(dbgDutyPerSpeedBaseLeft_ * action.value,
+                             dbgDutyPerSpeedBaseRight_ * action.value2);
+      const long milliLeft = DBG_MILLI(action.value);
+      const long milliRight = DBG_MILLI(action.value2);
+      App::debugf("gain L=%ld.%03ld R=%ld.%03ld applied",
+                  milliLeft / 1000, milliLeft % 1000,
+                  milliRight / 1000, milliRight % 1000);
+      break;
+    }
     case Comms::DbgActionKind::kClear:
       motorL_.setForcedWedge(false);
       motorR_.setForcedWedge(false);
       dbgWedgeUntilL_ = 0;
       dbgWedgeUntilR_ = 0;
-      App::debugf("clear");
+      // "clear every injected override" (this verb's own documented
+      // contract, comms.cpp) now genuinely means EVERY one: the tuning
+      // arms above are overrides too, and leaving them latched after a
+      // clear would let a sweep's last value silently ride into the next
+      // measurement. Restores only when a tuning verb actually landed --
+      // otherwise there is no baseline and nothing to restore, and
+      // writing zeros here would UNCALIBRATE the robot.
+      if (dbgTuningBaselined_) {
+        drive_.setAdaptationBounds(dbgBoundsBaseline_);
+        drive_.setDutyPerSpeed(dbgDutyPerSpeedBaseLeft_,
+                               dbgDutyPerSpeedBaseRight_);
+        dbgTuningBaselined_ = false;
+        App::debugf("clear (tuning restored to boot)");
+      } else {
+        App::debugf("clear");
+      }
       break;
     case Comms::DbgActionKind::kUnrecognized:
       App::debugf("unrecognized dbg: %s", action.text);

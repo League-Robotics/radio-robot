@@ -369,13 +369,41 @@ class Comms {
   // RobotLoop::cycle() drains takeDbgAction() and applies it -- the same
   // stage/consume split TlmAction uses, for the same reason (Comms holds
   // no reference to the subsystems a fault targets).
+  //
+  // 133-003 added the four LIVE TUNING arms (kVmin/kGain/kASteady/kPos).
+  // They are a different KIND of DBG verb from the fault-injection arms
+  // above -- they change control parameters rather than inject a fault --
+  // but they ride this same channel deliberately: they are RAM-only bench
+  // knobs, and .claude/rules/configuration-discipline.md binds PRODUCTION
+  // BOOT, not bench tuning ("you should be able to configure individual
+  // items without the file -- we're going to do a sweep"). The permanent
+  // home for a tuned value is still the robot JSON. Each applies through
+  // an App::Drive setter and ECHOES "... applied" -- the echo is not
+  // cosmetic: src/tests/bench/velocity_profile_gate.py refuses to report a
+  // run until it sees one, so a verb that applied silently would produce a
+  // measurement attributed to gains it never actually set.
   enum class DbgActionKind : uint8_t { kNone, kMark, kPing, kWedge, kClear,
+                                       kVmin, kGain, kASteady, kPos,
                                        kUnrecognized };
   struct DbgAction {
     DbgActionKind kind = DbgActionKind::kNone;
     char text[64] = {};   // kMark: the full original data ("mark leg1a")
     uint8_t port = 0;     // kWedge: 1 = left, 2 = right, 3 = both
     uint32_t duration = 0;  // [ms] kWedge auto-clear; 0 = latched
+    // value/value2 -- the tuning arms' operands. One field pair rather
+    // than four named ones: DbgAction is a ring element (kDbgRingDepth
+    // copies live in Comms), the arms are mutually exclusive, and `kind`
+    // already says which quantity `value` holds. The units differ per arm
+    // and are therefore documented per arm, not in the field name.
+    //   kVmin     value  [mm/s]    speed floor
+    //   kASteady  value  [mm/s^2]  Stage C steady gate (Stage B stopped
+    //                                gating on it at 133-002)
+    //   kPos      value  [mm]      Stage B position-error clamp
+    //   kGain     value / value2   [1] LEFT / RIGHT dutyPerSpeed multipliers
+    // value2 is meaningful ONLY for kGain (the one two-argument verb);
+    // every other arm leaves it at its default.
+    float value = 0.0f;
+    float value2 = 0.0f;
   };
 
   // takeDbgAction -- consume-on-read from a small FIFO ring. UNLIKE

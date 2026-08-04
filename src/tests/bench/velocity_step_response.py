@@ -14,9 +14,12 @@ Unlike the pre-P4 `pid_hold_speed.py` (text `DEV M <port> VEL`, no longer
 reachable — see that file's own module docstring for the wire this repo
 actually speaks now), this script drives BOTH wheels together via the P4
 wire's only motion verb (`NezhaProtocol.twist()`), and applies gains LIVE via
-`NezhaProtocol.config()` (106-002's own ConfigDelta live-apply) — no reflash
-between gain trials, matching binding requirement #9 ("everything tunable
-live").
+`wheel_control_tuning.push_gains()` (133-003: 106-002's own `ConfigDelta`
+live-apply, `NezhaProtocol.config(**{"pid.kp": ...})`, was deleted by
+132-012 in favor of the schema-addressed `set_config_field()`/`get_config()`
+pair; `push_gains()` is the host-side translation, with read-back
+verification) — no reflash between gain trials, matching binding
+requirement #9 ("everything tunable live").
 
 Usage:
     # One gain set, the full 70/140/250 grid, live-applied (no reflash):
@@ -40,8 +43,14 @@ import time
 from robot_radio.io.serial_conn import SerialConnection
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 
+_BENCH_DIR = pathlib.Path(__file__).resolve().parent
+if str(_BENCH_DIR) not in sys.path:
+    sys.path.insert(0, str(_BENCH_DIR))
+
+from wheel_control_tuning import (  # noqa: E402  (path must be set up first)
+    TuningNotConfirmed, describe_persistence, format_gains, push_gains, read_gains)
+
 DEFAULT_PORT = "/dev/cu.usbmodem2121102"
-ACK_TIMEOUT = 500  # [ms]
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
 
@@ -122,19 +131,6 @@ def summarize_step(times_ms: list[int], vel: list[float], target: float) -> dict
 # Bench I/O
 # ---------------------------------------------------------------------------
 
-def dev_wait_ack(proto: NezhaProtocol, corr_id: int, attempts: int = 3):
-    """Bounded retry over wait_for_ack() -- mirrors rig_dev.py's own
-    wait_for_ack_retrying(): the live wire occasionally delays an individual
-    ack (see clasi/issues/ack-ring-intermittent-delivery-gap.md), not a bug
-    in this script."""
-    ack = None
-    for _ in range(attempts):
-        ack = proto.wait_for_ack(corr_id, timeout=ACK_TIMEOUT)
-        if ack is not None:
-            return ack
-    return ack
-
-
 def _one_twist_capture(proto: NezhaProtocol, target: float, step_duration: float,
                         capture: float) -> tuple[bool, bool, list[int], list[float], list[float]]:
     """One twist()+capture attempt. Returns (acked, moved, times_ms, vel_l, vel_r).
@@ -214,23 +210,35 @@ def run_step(proto: NezhaProtocol, target: float, step_duration: float, capture:
     }
 
 
+def gains_from_args(args: argparse.Namespace) -> "dict[str, float]":
+    """Build the flat-key WHEEL_CONTROL gain dict this script pushes, from
+    parsed CLI args -- pure and unit-testable without hardware. Empty when
+    `--no-config` was passed or no gain flag was given; `push_gains()`'s own
+    read-back then reports whatever gains are already live, matching
+    `--no-config`'s documented contract of characterizing the shipped/live
+    gains rather than pushing new ones."""
+    gains: "dict[str, float]" = {}
+    if args.no_config:
+        return gains
+    if args.kp is not None:
+        gains["pid.kp"] = args.kp
+    if args.ki is not None:
+        gains["pid.ki"] = args.ki
+    if args.kff is not None:
+        gains["pid.kff"] = args.kff
+    if args.imax is not None:
+        gains["pid.iMax"] = args.imax
+    if args.kaw is not None:
+        gains["pid.kaw"] = args.kaw
+    return gains
+
+
 def main() -> int:
     args = _args()
     speeds = [float(s) for s in args.speeds.split(",") if s.strip()]
     mode = "relay" if args.relay else None
 
-    gains = {}
-    if not args.no_config:
-        if args.kp is not None:
-            gains["pid.kp"] = args.kp
-        if args.ki is not None:
-            gains["pid.ki"] = args.ki
-        if args.kff is not None:
-            gains["pid.kff"] = args.kff
-        if args.imax is not None:
-            gains["pid.iMax"] = args.imax
-        if args.kaw is not None:
-            gains["pid.kaw"] = args.kaw
+    gains = gains_from_args(args)
 
     csv_path = pathlib.Path(args.csv)
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -254,28 +262,35 @@ def main() -> int:
         time.sleep(1.5)  # let boot-time telemetry queue drain before the first command
         proto.read_pending_binary_tlm_frames()
 
+        # 132-012 deleted the curated flat-key ConfigDelta push
+        # (`NezhaProtocol.config(**{"pid.kp": ...})`); `push_gains()`
+        # (wheel_control_tuning.py) is the current live-tuning path -- it
+        # sets each WHEEL_CONTROL field individually via
+        # `set_config_field()`, then READS THE GROUP BACK and raises
+        # `TuningNotConfirmed` rather than returning quietly if a value did
+        # not land. That replaces this script's own former outbound-send
+        # retry loop: a failure here means the robot's gains are UNKNOWN,
+        # so the right response is to abort the trial, not to characterize
+        # whatever happened to be live.
+        readback_gains: "dict[str, float]" = {}
         if gains:
             print(f"  applying gains live (no reflash): {gains}")
-            # Retry the config() SEND itself, not just the ack wait -- the
-            # direct-USB CDC link is a characterized, pre-existing bench
-            # gotcha (occasional dropped outbound bytes, not just dropped
-            # replies -- see run_step()'s own retry rationale). A caller
-            # that only retries wait_for_ack() can't recover from a
-            # genuinely dropped config() send.
-            ack = None
-            for attempt in range(3):
-                corr_id = proto.config(**gains)
-                ack = dev_wait_ack(proto, corr_id)
-                if ack is not None and ack.ok:
-                    break
-                print(f"    (retry {attempt + 1}/3: config() did not ack OK -- re-sending)")
-                time.sleep(0.3)
-            print(f"    config() ack: {ack}")
-            if ack is None or not ack.ok:
-                print("  ERROR: config() never acked OK after 3 attempts -- aborting this trial")
+            try:
+                readback_gains = push_gains(proto, gains)
+            except TuningNotConfirmed as exc:
+                print(f"  ERROR: {exc}")
+                print("  gains not confirmed on the robot -- aborting this trial")
                 return 3
+            print(f"    confirmed on robot: {format_gains(readback_gains)}")
+            for line in describe_persistence(readback_gains):
+                print(line)
         else:
             print("  --no-config: characterizing whatever gains are already live")
+            try:
+                readback_gains = read_gains(proto)
+            except TuningNotConfirmed as exc:
+                print(f"  WARN: could not read live gains for the record: {exc}")
+        gains_record = format_gains(readback_gains) if readback_gains else "(unread)"
 
         csv_file = open(csv_path, "a", newline="")
         writer = csv.writer(csv_file)
@@ -302,8 +317,8 @@ def main() -> int:
             result = run_step(proto, target, args.step_duration, args.capture)
             results.append(result)
             for t_ms, vl, vr in result["trace"]:
-                writer.writerow([str(gains), target, "L", t_ms, vl])
-                writer.writerow([str(gains), target, "R", t_ms, vr])
+                writer.writerow([gains_record, target, "L", t_ms, vl])
+                writer.writerow([gains_record, target, "R", t_ms, vr])
             L, R = result["left"], result["right"]
             print(f"    twist acked: {result['twist_acked']}")
             print(f"    L: peak={L['peak']}  overshoot={L['overshoot_pct']:.1f}%"
@@ -313,7 +328,7 @@ def main() -> int:
                   f"  rise={R['rise_time_s']}  settled={R['settled_mean']}"
                   if R["peak"] is not None else "    R: no data")
 
-        print(f"\n  === summary ({gains if gains else 'boot-default gains'}) ===")
+        print(f"\n  === summary (gains: {gains_record}) ===")
         print(f"  {'target':>8}  {'ovL%':>6}  {'ovR%':>6}  {'riseL':>7}  {'riseR':>7}")
         worst_overshoot = 0.0
         for result in results:

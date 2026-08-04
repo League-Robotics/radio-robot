@@ -65,6 +65,13 @@ from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 from robot_radio.testgui.transport import (
     _UNMANAGED_EASE, _UNMANAGED_FLOOR, _UNMANAGED_SPEED, run_unmanaged_distance_drive)
 
+_BENCH_DIR = pathlib.Path(__file__).resolve().parent
+if str(_BENCH_DIR) not in sys.path:
+    sys.path.insert(0, str(_BENCH_DIR))
+
+from wheel_control_tuning import (  # noqa: E402  (path must be set up first)
+    TuningNotConfirmed, describe_persistence, format_gains, push_gains)
+
 DEFAULT_PORT = "/dev/cu.usbmodem2121202"      # tovez -- confirm with `uv run mbdeploy list`
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 
@@ -332,6 +339,26 @@ def run_plus500(proto: NezhaProtocol, sink: FrameSink, label: str) -> dict:
     }
 
 
+def _revert_stage_b(proto: NezhaProtocol, label: str) -> bool:
+    """Push `STAGE_B_ZERO_GAINS` and report the read-back. This is the
+    safety-ish revert path (leave the robot at the shipped all-zero Stage B
+    default) -- a failed revert must be reported LOUDLY (never swallowed
+    silently) but must never itself raise: the caller always has its own
+    cleanup (`estop()`/`tlmOff()`/disconnect in `main()`'s `finally`) still
+    to run, and a raised exception here must not skip it or crash the
+    script before that cleanup executes. Returns True if the revert was
+    confirmed, False if it was not (NAK, timeout, or read-back
+    disagreement) -- the caller uses this to report the true end state
+    rather than assuming a revert attempt always succeeds."""
+    try:
+        readback = push_gains(proto, STAGE_B_ZERO_GAINS)
+    except TuningNotConfirmed as exc:
+        print(f"  ERROR: revert to all-zero Stage B gains NOT confirmed ({label}): {exc}")
+        return False
+    print(f"    confirmed reverted to all-zero ({label}): {format_gains(readback) or '(all zero)'}")
+    return True
+
+
 def _write_csv(path: pathlib.Path, frames: "list[tuple[float, TLMFrame]]") -> None:
     with open(path, "w", newline="") as fh:
         w = csv.writer(fh)
@@ -468,19 +495,26 @@ def main() -> int:
 
         tuned_run = tuned_score = None
         kept_gains = None
+        revert_confirmed = None
         if not args.skip_stage_b:
             print("\n=== 4. Stage B trial gains ===")
             print(f"  pushing live: {STAGE_B_TRIAL_GAINS}")
-            corr_id = proto.config(**STAGE_B_TRIAL_GAINS)
-            ack = proto.wait_for_ack(corr_id, timeout=800)
-            print(f"  config() ack: {ack}")
+            try:
+                trial_readback = push_gains(proto, STAGE_B_TRIAL_GAINS)
+            except TuningNotConfirmed as exc:
+                print(f"  ERROR: {exc}")
+                print("  Stage B trial gains not confirmed on the robot -- aborting Stage B A/B")
+                return 3
+            print(f"    confirmed on robot: {format_gains(trial_readback)}")
+            for line in describe_persistence(trial_readback):
+                print(line)
             time.sleep(0.5)
 
             print("\n=== 5. +500 button, tuned Stage B gains ===")
             tuned_run = run_plus500(proto, sink, "+500 tuned")
             if len(tuned_run["samples"]) < 3:
                 print("ERROR: robot went silent during the tuned +500 run -- reverting gains and aborting")
-                proto.config(**STAGE_B_ZERO_GAINS)
+                _revert_stage_b(proto, "post-abort")  # loudly reports its own failure; never raises
                 return 3
             tuned_score = score_plus500(tuned_run["samples"])
             print(f"  elapsed={tuned_run['elapsed_s']:.2f}s  "
@@ -506,9 +540,7 @@ def main() -> int:
             if keep_tuned:
                 kept_gains = dict(STAGE_B_TRIAL_GAINS)
             else:
-                corr_id = proto.config(**STAGE_B_ZERO_GAINS)
-                ack = proto.wait_for_ack(corr_id, timeout=800)
-                print(f"  revert config() ack: {ack}")
+                revert_confirmed = _revert_stage_b(proto, "decision: revert")
 
         # --- CSV / chart ---
         _write_csv(csv_path, sink.frames)
@@ -528,6 +560,9 @@ def main() -> int:
         print(f"  PNG: {png_path}")
         if kept_gains is not None:
             print(f"  Stage B gains KEPT live on the robot (persisted to flash): {kept_gains}")
+        elif revert_confirmed is False:
+            print("  Stage B gains: revert to all-zero FAILED to confirm -- robot may still be "
+                  "running trial gains (see ERROR above)")
         else:
             print("  Stage B gains: reverted to all-zero (shipped default) before exit")
 

@@ -152,7 +152,27 @@ App::Comms::TlmAction classifyTlmArg(const uint8_t* data, uint16_t len) {
 //   mark <text>       echo request -- text preserved verbatim
 //   ping              inbound-path self-test (replies DBG:pong)
 //   wedge left|right|both [ms]   force the wedge latch; 0/omitted = latched
-//   clear             clear every injected override
+//   clear             clear every injected override AND restore every
+//                     tuning value below to what boot installed
+//
+// 133-003 live-tuning arms (RAM-only; boot restores the robot JSON's own
+// value through the generated boot config -- comms.h's DbgActionKind doc
+// comment carries the configuration-discipline rationale):
+//   vmin <mm/s>       App::Drive speed floor
+//   asteady <mm/s^2>  Stage C's bias-adaptation steady gate (Stage B
+//                     stopped gating on it at 133-002 -- its I term reads
+//                     position now, so there is no accumulator to freeze)
+//   pos <mm>          Stage B position-error clamp (133-002's setter)
+//   gain <L> <R>      per-wheel multiplier on the BOOT-INSTALLED
+//                     dutyPerSpeed pair; `gain 1 1` is the identity
+//
+// A missing operand, a non-numeric operand, or an out-of-domain value
+// (negative for the three scalars; non-positive for either gain
+// multiplier -- a zero or negative dutyPerSpeed is not a weak robot, it is
+// an uncalibrated or backwards one) all fall through to kUnrecognized,
+// which echoes "unrecognized dbg: <text>" rather than applying anything.
+// The gate keys on "applied", so a rejected push can never be mistaken for
+// a landed one.
 #ifdef ROBOT_DEBUG
 App::Comms::DbgAction classifyDbgArg(const uint8_t* data, uint16_t len) {
   App::Comms::DbgAction action;
@@ -193,6 +213,49 @@ App::Comms::DbgAction classifyDbgArg(const uint8_t* data, uint16_t len) {
   }
   if (std::strcmp(sub, "clear") == 0) {
     action.kind = App::Comms::DbgActionKind::kClear;
+    return action;
+  }
+  // parseScalar -- one non-negative float operand, or false. Unlike the
+  // bare std::strtof() the reference patch used, this REJECTS a token that
+  // is not a number outright instead of letting strtof()'s own 0.0 return
+  // stand in for it: `DBG:vmin oops` must not silently apply a zero floor
+  // and then echo "applied", which is exactly the shape of failure the
+  // echo contract exists to rule out.
+  auto parseScalar = [&nextToken](float& out) -> bool {
+    const char* token = nextToken();
+    if (token == nullptr) return false;
+    char* end = nullptr;
+    const float parsed = std::strtof(token, &end);
+    if (end == token || *end != '\0') return false;  // empty or trailing junk
+    if (!(parsed >= 0.0f)) return false;             // negative, or NaN
+    out = parsed;
+    return true;
+  };
+
+  if (std::strcmp(sub, "vmin") == 0) {
+    if (!parseScalar(action.value)) return action;
+    action.kind = App::Comms::DbgActionKind::kVmin;
+    return action;
+  }
+  if (std::strcmp(sub, "asteady") == 0) {
+    if (!parseScalar(action.value)) return action;
+    action.kind = App::Comms::DbgActionKind::kASteady;
+    return action;
+  }
+  if (std::strcmp(sub, "pos") == 0) {
+    if (!parseScalar(action.value)) return action;
+    action.kind = App::Comms::DbgActionKind::kPos;
+    return action;
+  }
+  if (std::strcmp(sub, "gain") == 0) {
+    // BOTH multipliers are required. Defaulting the omitted one to 1.0
+    // would be worse than rejecting: `DBG:gain 1.02` would then silently
+    // RESET the right wheel to identity while reading as "I only touched
+    // the left one".
+    if (!parseScalar(action.value)) return action;
+    if (!parseScalar(action.value2)) return action;
+    if (action.value <= 0.0f || action.value2 <= 0.0f) return action;
+    action.kind = App::Comms::DbgActionKind::kGain;
     return action;
   }
   if (std::strcmp(sub, "wedge") == 0) {

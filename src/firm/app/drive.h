@@ -510,6 +510,26 @@ class Drive {
     bounds_.posErrMax = (posErrMax > 0.0f) ? posErrMax : 0.0f;
   }
 
+  // Live override for the speed floor -- same DEVELOPMENT-tuning contract
+  // as setPositionErrorMax() above (133-003's `DBG:vmin <mm/s>` verb is the
+  // one caller; RAM-only, boot restores wheel_control.v_min from the robot
+  // JSON). Clamped non-negative; 0 disables the floor entirely, the same
+  // "0 = off" convention every sibling in AdaptationBounds uses.
+  void setSpeedFloor(float vMin) {  // [mm/s]
+    bounds_.vMin = (vMin > 0.0f) ? vMin : 0.0f;
+  }
+
+  // Live override for the steady gate -- same contract again (133-003's
+  // `DBG:asteady <mm/s^2>` verb; RAM-only, boot restores
+  // wheel_control.a_steady). This gates Stage C's bias adaptation
+  // (`|a_cmd| < aSteady`); as of 133-002 it no longer gates Stage B, whose
+  // I term reads position and therefore has no accumulator left to freeze.
+  // Clamped non-negative; <= 0 still disables Stage C's adaptation
+  // outright, unchanged from the boot path.
+  void setASteady(float aSteady) {  // [mm/s^2]
+    bounds_.aSteady = (aSteady > 0.0f) ? aSteady : 0.0f;
+  }
+
   // Expire an armed command whose deadline has passed (latching the
   // completion event), then publish this subsystem's targets into
   // state.wheelLeft/Right.cmdVelocity -- but ONLY while Drive owns motion.
