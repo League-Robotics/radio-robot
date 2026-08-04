@@ -66,7 +66,6 @@ pytestmark = pytest.mark.skipif(
 
 _TRACK_WIDTH = 128.0  # [mm] matches tovez_nocal.json's own geometry.trackwidth
 
-
 def _make_loop():
     """A bare, headless ``SimLoop`` -- deterministic manual stepping
     (``start_tick_thread=False``, ticket 009's own precedent), no
@@ -87,7 +86,8 @@ def test_configure_from_robot_succeeds_headless_no_testgui_import():
     configure_from_robot() with a tovez_nocal.json-loaded RobotConfig
     succeeds -- SUC-002's own acceptance criterion, proven concretely (not
     just by import-grep): no exception, and no NEW robot_radio.testgui
-    module enters sys.modules as a side effect of THIS call."""
+    module enters sys.modules as a side effect of THIS call.
+    """
     from robot_radio.config.robot_config import load_robot_config
 
     config = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
@@ -115,7 +115,8 @@ def test_configure_from_robot_tier1_push_is_acked_by_firmware():
     ACKed. Steps a few cycles after the call (manual/deterministic mode) so
     the injected ConfigDelta command(s) are processed and their acks ride
     back out on a subsequent Telemetry push, then drains and asserts at
-    least one OK ack landed."""
+    least one OK ack landed.
+    """
     from robot_radio.config.robot_config import load_robot_config
 
     config = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
@@ -160,8 +161,18 @@ def test_configure_from_robot_tovez_nocal_changes_measurable_drive_behavior():
     from robot_radio.config.robot_config import load_robot_config
 
     config = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
-    assert config.control is not None
-    assert config.control.vel_kp == pytest.approx(0.002)
+    # 132-014's pre-020 sanity precheck here (config.control.vel_kp == 0.002,
+    # proving "this profile is really calibrated with non-trivial gains"
+    # before trusting the behavioral comparison below) had no equivalent
+    # for the span between 132-020's grouped RobotConfig shape (config.
+    # control no longer exists) and 132-017's JSON reshape (config.motors.
+    # vel_kp read its proto3 zero default until then). RESTORED, 132-017:
+    # data/robots/tovez_nocal.json now carries real motors.vel_kp (the
+    # profile's own "neutral baseline", per that file's own
+    # motors._neutral_note -- nonzero but deliberately vanilla, still
+    # proving "this profile is calibrated," not a placeholder).
+    assert config.motors.vel_kp > 0.0
+    assert config.wheel_control is not None
 
     baseline = _make_loop()
     configured = _make_loop()

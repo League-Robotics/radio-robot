@@ -286,18 +286,23 @@ class TestPersistence:
 def _fake_robot_config(*, rotational_slip, trackwidth):
     """A real (pydantic) RobotConfig with only the fields this resolver
     cares about overridden -- mirrors test_sim_errors_from_cal_button.py's
-    own helper of the same shape."""
-    from robot_radio.config.robot_config import (
-        CalibrationConfig,
-        GeometryConfig,
-        IdentityConfig,
-        RobotConfig,
-    )
+    own helper of the same shape.
+
+    132-014: rotational_slip/trackwidth both moved onto GeometryConfig
+    (robot_config.proto's grouped shape, 132-020) -- CalibrationConfig no
+    longer exists. Both fields are plain, never-None floats now (0.0 is
+    each field's own "uncalibrated"/"missing" sentinel, per
+    resolve_calibration_defaults()'s own truthy-check retarget) -- pass
+    ``None`` here (this helper's own "missing" convenience) and it is
+    translated to 0.0 for the underlying pydantic field."""
+    from robot_radio.config.robot_config import GeometryConfig, IdentityConfig, RobotConfig
 
     return RobotConfig(
         identity=IdentityConfig(robot_name="fake", uid="fake-uid"),
-        geometry=GeometryConfig(trackwidth=trackwidth),
-        calibration=CalibrationConfig(rotational_slip=rotational_slip),
+        geometry=GeometryConfig(
+            trackwidth=trackwidth if trackwidth is not None else 0.0,
+            rotational_slip=rotational_slip if rotational_slip is not None else 0.0,
+        ),
     )
 
 

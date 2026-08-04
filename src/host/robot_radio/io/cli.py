@@ -119,10 +119,12 @@ def _make_robot(args) -> tuple[QBotPro, SerialConnection, dict]:
 # matches the `ID` registry entry and always times out) -- but fixing only
 # that one call would have left the rest of the sequence (SET/OI/OL/OA)
 # just as dead, silently no-op'ing while `cmd_sync_cal()` printed "pushed
-# successfully". The live calibration-push path is
-# `robot_radio.robot.protocol.NezhaProtocol.config()`/`.otos_config()`
-# (the binary `CONFIG` arm, docs/protocol-v5.md §6) -- see `cmd_sync_cal()`
-# below, which now points here instead of pretending to push anything.
+# successfully". The live calibration-push path is now
+# `robot_radio.robot.protocol.NezhaProtocol.set_config_field()`/
+# `.set_config_group()` (132-014 -- `.config()`/`.otos_config()` are
+# themselves DELETED, config.proto's whole *ConfigPatch surface having
+# been retired, 132-013) -- see `cmd_sync_cal()` below, which now points
+# here instead of pretending to push anything.
 #
 # NOTE: `robot_radio.calibration.push.calibration_commands()` builds the
 # same dead v2 `SET`/`OI`/`OL`/`OA` sequence and has additional live
@@ -232,17 +234,18 @@ def cmd_sync_cal(args):
     doc comment, above, for the full history and sprint 124 ticket 013's
     own discovery of this defect). Rather than keep printing a false
     success message, ``rogo sync cal`` now fails loudly and points at the
-    live mechanism: ``NezhaProtocol.config()``/``.otos_config()`` (the
-    binary ``CONFIG`` arm, docs/protocol-v5.md §6), reachable via
+    live mechanism: ``NezhaProtocol.set_config_field()``/
+    ``.set_config_group()`` (132-014 -- the per-field/per-group SetConfigField/
+    SetConfigGroup wire arms, docs/protocol-v5.md §6), reachable via
     ``rogo repl`` or a short script.
     """
     print(
         "Error: 'rogo sync cal' is retired — it sent protocol-v2 text\n"
         "verbs (SET/OI/OL/OA) that no current firmware build has ever\n"
         "recognized; it silently pushed nothing while claiming success.\n"
-        "Use the live calibration path instead: NezhaProtocol.config()\n"
-        "and .otos_config() (the binary CONFIG command, docs/protocol-v5.md\n"
-        "§6) via 'rogo repl' or a short script.",
+        "Use the live calibration path instead: NezhaProtocol.\n"
+        "set_config_field()/.set_config_group() (the binary CONFIG plane,\n"
+        "docs/protocol-v5.md §6) via 'rogo repl' or a short script.",
         file=sys.stderr,
     )
     sys.exit(1)
@@ -1506,8 +1509,9 @@ def main():
         "cal",
         help="RETIRED (124-014) — always errors. Used protocol-v2 text "
              "verbs (SET/OI/OL/OA) with no firmware handler since the "
-             "102-107 rebuild. Use NezhaProtocol.config()/.otos_config() "
-             "(the binary CONFIG command, docs/protocol-v5.md §6) instead.",
+             "102-107 rebuild. Use NezhaProtocol.set_config_field()/"
+             ".set_config_group() (the binary CONFIG plane, "
+             "docs/protocol-v5.md §6) instead.",
     )
 
     sync_sub.add_parser(

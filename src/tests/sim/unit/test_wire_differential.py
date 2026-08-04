@@ -14,15 +14,20 @@ Rewritten 115-009 (gut S1's own test-sweep/green-bar ticket) against the
 frame-v2 Telemetry schema (115-003, `telemetry-frame-tightening-amendment-
 to-gut-s1.md`) and the PLANNER-arm-deleted ConfigDelta (also 115-003);
 updated 116-001 (MOVE protocol cutover) -- CommandEnvelope's three live
-arms are now move/config/stop (`twist`, arm 19, deleted/reserved,
-superseded by `move`, a fresh arm 21). This suite covers:
+arms are move/config/stop (`twist`, arm 19, deleted/reserved, superseded by
+`move`, a fresh arm 21). This suite covers:
 
   A. host-encode (`pb2`) -> firmware-decode (``wire_differential_harness``,
      via `msg::wire::decode(CommandEnvelope&, ...)`) -> assert decoded
-     fields match the original input. Exercised for CommandEnvelope's three
-     live arms: move (MoveTwist|MoveWheels velocity x time|distance|angle
-     stop), config (DRIVETRAIN/MOTOR/OTOS -- PLANNER deleted wholesale,
-     115-003; WATCHDOG deleted, 116-001), stop.
+     fields match the original input. Exercised for CommandEnvelope's move
+     (MoveTwist|MoveWheels velocity x time|distance|angle stop) and stop
+     arms. `config` (132-013, patch-surface retirement: now
+     SetConfigGroup{target, body}, not the deleted ConfigDelta{drivetrain/
+     motor/otos}) has its own, lighter-weight decode coverage in
+     wire_codec_harness.cpp/config_gate_harness.cpp instead -- a full
+     differential/boundary suite for the new group surface is not this
+     ticket's job (see this file's own "ConfigDelta ... DELETED" comment
+     below, kept for the historical record).
   B. firmware-encode (harness, via `msg::wire::encode(const ReplyEnvelope&,
      ...)` / `msg::wire::encode(const TelemetrySecondary&, ...)`) ->
      host-decode (`pb2.ParseFromString`) -> assert decoded fields match.
@@ -35,17 +40,17 @@ A dedicated field-number-correspondence test additionally cross-checks the
 host `pb2` descriptors' field numbers against the exact numbers this
 suite's byte-construction helpers use (which match wire.cpp's generated
 `kFields_*[]` tables) -- catches a stale/out-of-sync regeneration on either
-side, not just implicitly via a round-trip mismatch.
+side, not just implicitly via a round-trip mismatch. The config-message
+pins this test used to carry are deleted alongside config.proto (132-013).
 
 Boundary/range corpus: NONE of the arms reachable from this schema carry a
 `(min)`/`(max)`/`(abs_max)` proto option any more -- `MotionSegment` (the
 pre-103 schema's only `(min)`/`(max)`/`(abs_max)`-validated fields) and
 `ConfigGet.target` (the only `(req)`-validated field) both left with their
-owning arms. The "REALITY CHECK" corpus below still documents that
-`DrivetrainConfigPatch`/`MotorConfigPatch`/`OtosConfigPatch` carry no
-wire-level bound at all (`PlannerConfigPatch` went with 115-003's deletion,
-`ConfigDelta.watchdog` with 116-001's -- there is no boundary corpus left to
-run for either).
+owning arms. The old "REALITY CHECK" corpus documenting that
+`DrivetrainConfigPatch`/`OtosConfigPatch` carried no wire-level bound at
+all is deleted alongside config.proto (132-013) -- there is no boundary
+corpus for the CURRENT config surface in this file.
 """
 from __future__ import annotations
 
@@ -59,16 +64,12 @@ from _wire_diff_driver import (  # noqa: E402
     encode_err,
     encode_ok,
     encode_telemetry,
-    env_config_drivetrain,
-    env_config_motor,
-    env_config_otos,
     env_move_twist,
     env_move_wheels,
     env_stop,
     f32,
     float_eq,
     parse_decode_line,
-    pb_config,
     pb_envelope,
     pb_telemetry,
 )
@@ -124,14 +125,27 @@ def test_field_numbers_match_pb2_descriptors():
     # therefore the CRC scope -- from `WhichOneof("cmd").upper()`, so
     # `wheels`/`estop` must spell commands.proto's WHEELS/ESTOP verbs
     # exactly. This assertion pins the names as well as the numbers.
+    # `get_config` (24, 132-011: GetConfig/ConfigSnapshot wire read-back) is
+    # the next fresh arm after wheels/estop, same load-bearing-name rule
+    # (uppercases to commands.proto's GET_CONFIG verb exactly).
+    # `set_field` (25, 132-012: SetConfigField / Configurator::applyField())
+    # is the next fresh arm after get_config, same load-bearing-name rule --
+    # uppercases to commands.proto's SET_FIELD verb exactly (deliberately
+    # shorter than the SetConfigField message type it carries; see
+    # envelope.proto's own set_field arm doc comment for the wire-budget
+    # reasoning).
     expected_cmd_numbers = {"config": 6, "stop": 13, "move": 21,
-                            "wheels": 22, "estop": 23}
+                            "wheels": 22, "estop": 23, "get_config": 24,
+                            "set_field": 25}
     actual_cmd_numbers = {
         f.name: f.number for f in pb_envelope.CommandEnvelope.DESCRIPTOR.oneofs_by_name["cmd"].fields
     }
     assert actual_cmd_numbers == expected_cmd_numbers
 
-    expected_body_numbers = {"ok": 2, "err": 3, "tlm": 4}
+    # `cfg` (12, 132-011) is ReplyEnvelope.body's first genuinely new arm
+    # since the pre-102 prune -- free numbers on this oneof start at 12
+    # (reserved 5 to 11, envelope.proto).
+    expected_body_numbers = {"ok": 2, "err": 3, "tlm": 4, "cfg": 12}
     actual_body_numbers = {
         f.name: f.number for f in pb_envelope.ReplyEnvelope.DESCRIPTOR.oneofs_by_name["body"].fields
     }
@@ -165,30 +179,30 @@ def test_field_numbers_match_pb2_descriptors():
     assert actual_move_plain_numbers == expected_move_plain_numbers
 
     # ERR_NOT_CONFIGURED (8, 114-001): composition root refused MOVE --
-    # config-completeness gate not yet satisfied.
+    # config-completeness gate not yet satisfied. ERR_NOT_LIVE (9, 132-008)
+    # / ERR_BUSY (10, 132-008): a push to a boot-only ConfigGroupTarget /
+    # a guarded subsystem (Devices::Motor) refusing while in motion --
+    # pre-existing as of this ticket (132-011), added to this dict here
+    # because this test's own assert on `expected_cmd_numbers`/
+    # `expected_body_numbers` above previously failed FIRST and masked
+    # this gap from ever being reached; not this ticket's own schema
+    # change (it added neither code), fixed in passing while already
+    # editing this exact function for its own get_config/cfg additions.
     expected_err_codes = {
         "ERR_NONE": 0, "ERR_UNKNOWN": 1, "ERR_BADARG": 2, "ERR_RANGE": 3, "ERR_FULL": 4, "ERR_DECODE": 5,
         "ERR_UNIMPLEMENTED": 6, "ERR_OVERSIZE": 7, "ERR_NOT_CONFIGURED": 8,
+        "ERR_NOT_LIVE": 9, "ERR_BUSY": 10,
     }
     actual_err_codes = {
         name: v.number for name, v in pb_envelope.DESCRIPTOR.enum_types_by_name["ErrCode"].values_by_name.items()
     }
     assert actual_err_codes == expected_err_codes
 
-    # "planner" (field 3, PlannerConfigPatch) DELETED (115-003) -- field 3 is
-    # `reserved`, not an active oneof arm. "watchdog" (field 4) DELETED
-    # (116-001, MOVE protocol cutover) -- field 4 is `reserved`, not an
-    # active oneof arm any more (`ConfigTarget.CONFIG_WATCHDOG` stays
-    # declared-unused). "otos" (109-004) is unaffected. "estimator" (117
-    # ticket 003, EstimatorConfigPatch) is a fresh arm at field 6, the next
-    # free number after `reserved 3, 4` and `otos = 5`.
-    expected_config_delta_patch = {
-        "drivetrain": 1, "motor": 2, "otos": 5, "estimator": 6,
-    }
-    actual_config_delta_patch = {
-        f.name: f.number for f in pb_envelope.ConfigDelta.DESCRIPTOR.oneofs_by_name["patch"].fields
-    }
-    assert actual_config_delta_patch == expected_config_delta_patch
+    # ConfigDelta.patch field-number pin -- DELETED, 132-013 (patch-surface
+    # retirement): `ConfigDelta` no longer exists in envelope_pb2 (deleted
+    # alongside config.proto). `CommandEnvelope.config` (field 6, pinned in
+    # `expected_cmd_numbers` above) now carries `SetConfigGroup`
+    # (robot_config.proto), not `ConfigDelta`.
 
 
 def test_field_numbers_match_pb2_descriptors_telemetry():
@@ -244,31 +258,13 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
         "TelemetrySecondary should be deleted outright (124-009)"
     )
 
-    expected_drivetrain_patch = {
-        "trackwidth": 1, "rotational_slip": 2, "ekf_q_xy": 3, "ekf_q_theta": 4, "ekf_r_otos_xy": 5,
-        "ekf_r_otos_theta": 6, "ekf_r_fix_xy": 7, "ekf_r_fix_theta": 8,
-    }
-    actual_drivetrain_patch = {f.name: f.number for f in pb_config.DrivetrainConfigPatch.DESCRIPTOR.fields}
-    assert actual_drivetrain_patch == expected_drivetrain_patch
-
-    expected_motor_patch = {"side": 1, "travel_calib": 2, "kp": 3, "ki": 4, "kff": 5, "i_max": 6, "kaw": 7}
-    actual_motor_patch = {f.name: f.number for f in pb_config.MotorConfigPatch.DESCRIPTOR.fields}
-    assert actual_motor_patch == expected_motor_patch
-
-    # PlannerConfigPatch DELETED wholesale (115-003, gut S1 motion-stack
-    # excision) -- there is no descriptor left to pin. OtosConfigPatch
-    # (109-004) is unaffected.
-    expected_otos_patch = {
-        "linear_scale": 1, "angular_scale": 2, "offset_x": 3, "offset_y": 4, "offset_yaw": 5, "init": 6,
-    }
-    actual_otos_patch = {f.name: f.number for f in pb_config.OtosConfigPatch.DESCRIPTOR.fields}
-    assert actual_otos_patch == expected_otos_patch
-
-    expected_bound_motor_side = {"LEFT": 0, "RIGHT": 1}
-    actual_bound_motor_side = {
-        n: v.number for n, v in pb_config.DESCRIPTOR.enum_types_by_name["BoundMotorSide"].values_by_name.items()
-    }
-    assert actual_bound_motor_side == expected_bound_motor_side
+    # DrivetrainConfigPatch/MotorConfigPatch/OtosConfigPatch/BoundMotorSide
+    # field-number pins -- DELETED, 132-013 (patch-surface retirement):
+    # config.proto (their only source) is deleted wholesale, replaced by
+    # robot_config.proto's group/field wire arms. There is no descriptor
+    # left to pin; see test_config_parity_capi.py /
+    # test_gen_messages_robot_config_emission.py for the CURRENT schema's
+    # own generated-parity coverage.
 
     # DriveMode relocated INTO telemetry.proto from the deleted planner.proto
     # (115-003 Decision 4) -- read from pb_telemetry now, not pb_planner
@@ -359,118 +355,17 @@ def test_direction_a_stop(harness):
 
 
 # ---------------------------------------------------------------------------
-# ConfigDelta -- COMMAND-only (never appears in ReplyEnvelope.body, see
-# envelope.proto's own oneof list): its differential coverage is Direction A
-# ONLY (host-encode -> firmware-decode). Unchanged shape from the pre-103
-# schema.
+# ConfigDelta / DrivetrainConfigPatch / MotorConfigPatch / OtosConfigPatch --
+# DELETED, 132-013 (patch-surface retirement). This whole differential
+# coverage block tested the old curated per-target patch surface
+# (config.proto), replaced by robot_config.proto's group/field wire arms
+# (SetConfigGroup/GetConfig/ConfigSnapshot/SetConfigField). Deleted outright
+# rather than ported -- see wire_codec_harness.cpp's own
+# scenarioRoundTripConfigSetGroup() and config_gate_harness.cpp's
+# armorWheelControlConfigCommand() for the new schema's own (lighter-weight)
+# decode coverage; a full differential/boundary suite for the new group
+# surface is not this ticket's job.
 # ---------------------------------------------------------------------------
-
-
-def test_direction_a_config_drivetrain(harness):
-    raw = env_config_drivetrain(20, trackwidth=321.0, rotational_slip=0.75, ekf_q_xy=1.5, ekf_q_theta=2.5,
-                                 ekf_r_otos_xy=3.5, ekf_r_otos_theta=4.5, ekf_r_fix_xy=6.5, ekf_r_fix_theta=7.5)
-    fields = _assert_ok(harness, raw)
-    assert fields["cmd_kind"] == "CONFIG"
-    assert fields["patch_kind"] == "DRIVETRAIN"
-    for key, expected in [("trackwidth", 321.0), ("rotational_slip", 0.75), ("ekf_q_xy", 1.5),
-                           ("ekf_q_theta", 2.5), ("ekf_r_otos_xy", 3.5), ("ekf_r_otos_theta", 4.5),
-                           ("ekf_r_fix_xy", 6.5), ("ekf_r_fix_theta", 7.5)]:
-        assert fields[f"{key}_has"] == "1"
-        assert float_eq(fields[key], expected)
-
-
-def test_direction_a_config_drivetrain_partial_fields(harness):
-    """Only the fields actually SET on the wire (proto3 `optional` explicit
-    presence) come back `_has=1` -- the rest stay `_has=0`, proving the
-    generated decoder's Opt<T> presence tracking (not just the values) is
-    byte-for-byte faithful to what google.protobuf serialized."""
-    raw = env_config_drivetrain(21, trackwidth=100.0)
-    fields = _assert_ok(harness, raw)
-    assert fields["trackwidth_has"] == "1"
-    assert float_eq(fields["trackwidth"], 100.0)
-    for key in ("rotational_slip", "ekf_q_xy", "ekf_q_theta", "ekf_r_otos_xy", "ekf_r_otos_theta",
-                "ekf_r_fix_xy", "ekf_r_fix_theta"):
-        assert fields[f"{key}_has"] == "0"
-
-
-@pytest.mark.parametrize("side,name", [(pb_config.LEFT, "LEFT"), (pb_config.RIGHT, "RIGHT")])
-def test_direction_a_config_motor(harness, side, name):
-    raw = env_config_motor(22, side=side, travel_calib=1.111, kp=9.5, ki=8.5, kff=7.5, i_max=6.5, kaw=5.5)
-    fields = _assert_ok(harness, raw)
-    assert fields["cmd_kind"] == "CONFIG"
-    assert fields["patch_kind"] == "MOTOR"
-    assert fields["side"] == name
-    for key, expected in [("travel_calib", 1.111), ("kp", 9.5), ("ki", 8.5), ("kff", 7.5), ("i_max", 6.5),
-                           ("kaw", 5.5)]:
-        assert fields[f"{key}_has"] == "1"
-        assert float_eq(fields[key], expected)
-
-
-def test_direction_a_config_motor_only_travel_calib(harness):
-    """ml/mr -- travel_calib alone, no Gains fields present."""
-    raw = env_config_motor(23, side=pb_config.RIGHT, travel_calib=2.222)
-    fields = _assert_ok(harness, raw)
-    assert fields["side"] == "RIGHT"
-    assert fields["travel_calib_has"] == "1"
-    assert float_eq(fields["travel_calib"], 2.222)
-    for key in ("kp", "ki", "kff", "i_max", "kaw"):
-        assert fields[f"{key}_has"] == "0"
-
-
-def test_direction_a_config_otos(harness):
-    """OtosConfigPatch's 5 Opt<float> fields (linear_scale/angular_scale/
-    offset_x/offset_y/offset_yaw) round-trip host-encode -> firmware-decode,
-    plus the plain (non-optional) `init` trigger bool."""
-    raw = env_config_otos(24, linear_scale=1.01, angular_scale=0.99, offset_x=12.5, offset_y=-3.5,
-                           offset_yaw=0.125, init=True)
-    fields = _assert_ok(harness, raw)
-    assert fields["cmd_kind"] == "CONFIG"
-    assert fields["patch_kind"] == "OTOS"
-    for key, expected in [("linear_scale", 1.01), ("angular_scale", 0.99), ("offset_x", 12.5),
-                           ("offset_y", -3.5), ("offset_yaw", 0.125)]:
-        assert fields[f"{key}_has"] == "1"
-        assert float_eq(fields[key], expected)
-    assert fields["init"] == "1"
-
-
-def test_direction_a_config_otos_init_false_and_no_optional_fields(harness):
-    """`init` is a PLAIN bool (proto3 implicit presence, not Opt<float>) --
-    it round-trips even when every optional calibration field is absent."""
-    raw = env_config_otos(29, init=False)
-    fields = _assert_ok(harness, raw)
-    assert fields["patch_kind"] == "OTOS"
-    assert fields["init"] == "0"
-    for key in ("linear_scale", "angular_scale", "offset_x", "offset_y", "offset_yaw"):
-        assert fields[f"{key}_has"] == "0"
-
-
-def test_direction_a_config_reserved_watchdog_field_ignored(harness):
-    """The DELETED ConfigDelta.watchdog arm's old field number (4) round-trips
-    as an unrecognized field within the nested ConfigDelta message -- skipped,
-    never decoded into a live oneof arm (116-001; see envelope.proto's own
-    reserved-list comment). Hand-spliced raw bytes, since pb2 no longer has a
-    `watchdog` field to construct."""
-    from _wire_diff_driver import _tag, _varint
-
-    # ConfigDelta{} with a spliced-in field 4 (varint) -- mirrors the same
-    # raw-byte-splicing approach the fuzz suite uses for unknown-field
-    # coverage, at the NESTED-message level this time.
-    config_bytes = _tag(4, 0) + _varint(5000)
-    config_field = _tag(6, 2) + _varint(len(config_bytes)) + config_bytes  # CommandEnvelope.cmd.config, field 6
-    raw = pb_envelope.CommandEnvelope(corr_id=25).SerializeToString() + config_field
-    fields = _assert_ok(harness, raw)
-    assert fields["cmd_kind"] == "CONFIG"
-    assert fields["patch_kind"] == "NONE"
-
-
-def test_direction_a_config_empty_patch(harness):
-    """A well-formed ConfigDelta with no oneof `patch` arm set at all decodes
-    OK (patch_kind == NONE) -- the wire codec itself must still decode it
-    cleanly, never reject it."""
-    raw = pb_envelope.CommandEnvelope(corr_id=26, config=pb_envelope.ConfigDelta()).SerializeToString()
-    fields = _assert_ok(harness, raw)
-    assert fields["cmd_kind"] == "CONFIG"
-    assert fields["patch_kind"] == "NONE"
 
 
 # ===========================================================================
@@ -805,61 +700,11 @@ def test_direction_b_telemetry_reading_ages_independent_across_frames(harness):
 
 
 # ===========================================================================
-# Boundary/range corpus -- config Patch messages carry NO `(min)`/`(max)`/
-# `(abs_max)` proto option (unchanged from the pre-103 schema; config.proto
-# is untouched by this ticket's prune). `MotionSegment` (the pre-103
-# schema's only bounded-field arms, `segment`/`replace`) and
-# `ConfigGet.target` (the only `(req)`-validated field) are both GONE with
-# their owning arms -- there is no boundary corpus left to run for THEM.
-#
-# REALITY CHECK (documented, not silently patched -- config.proto's own file
-# header, "Validation note" section): confirmed directly against wire.cpp's
-# generated `kFields_DrivetrainConfigPatch[]`/`kFields_MotorConfigPatch[]`/
-# `kFields_OtosConfigPatch[]`/`kFields_ConfigDelta[]` tables, every one of
-# which has `flags = 0` (no kHasMin/kHasMax/kHasAbsMax bit set) for these
-# fields -- THE WIRE CODEC ACCEPTS ANY float/uint32 value for tw/rotSlip/
-# ekf*/linear_scale/angular_scale over the binary plane. This is a
-# pre-existing, already-flagged gap (config.proto's own comment), not
-# something this ticket's prune changed -- verified again here since this
-# file's schema assumptions were re-derived from scratch this ticket.
-# `PlannerConfigPatch` (min_speed's own former owner) is DELETED wholesale
-# (115-003); `ConfigDelta.watchdog` (the pre-116 sTimeout field) is DELETED
-# (116-001) -- there is no boundary corpus left to run for either.
+# Boundary/range corpus for the deleted config Patch messages -- DELETED,
+# 132-013 (patch-surface retirement). config.proto (the source of
+# DrivetrainConfigPatch/OtosConfigPatch and the "no wire-level bound"
+# REALITY CHECK this corpus documented) no longer exists.
 # ===========================================================================
-
-_CONFIG_INVARIANT_BOUNDARY_CASES = [
-    ("drivetrain_tw_zero", dict(trackwidth=0.0)),
-    ("drivetrain_tw_negative", dict(trackwidth=-1.0)),
-    ("drivetrain_tw_large_negative", dict(trackwidth=-1.0e9)),
-    ("drivetrain_tw_positive", dict(trackwidth=1.0)),
-    ("drivetrain_rotslip_zero", dict(rotational_slip=0.0)),
-    ("drivetrain_rotslip_half", dict(rotational_slip=0.5)),
-    ("drivetrain_rotslip_one", dict(rotational_slip=1.0)),
-    ("drivetrain_rotslip_just_below_half", dict(rotational_slip=0.49)),
-    ("drivetrain_rotslip_just_above_one", dict(rotational_slip=1.01)),
-    ("drivetrain_rotslip_negative", dict(rotational_slip=-1.0)),
-    ("drivetrain_rotslip_between_zero_and_half", dict(rotational_slip=0.3)),
-]
-
-
-@pytest.mark.parametrize("case_id,patch_kwargs", _CONFIG_INVARIANT_BOUNDARY_CASES,
-                         ids=[c[0] for c in _CONFIG_INVARIANT_BOUNDARY_CASES])
-def test_boundary_config_drivetrain_no_wire_level_enforcement(harness, case_id, patch_kwargs):
-    raw = env_config_drivetrain(50, **patch_kwargs)
-    fields = _assert_ok(harness, raw)
-    assert fields["cmd_kind"] == "CONFIG"
-    assert fields["patch_kind"] == "DRIVETRAIN"
-    for key, expected in patch_kwargs.items():
-        assert fields[f"{key}_has"] == "1"
-        assert float_eq(fields[key], expected)
-
-
-@pytest.mark.parametrize("linear_scale", [-1.0e9, -1.0, 0.0, 1.0])
-def test_boundary_config_otos_linear_scale_no_wire_level_enforcement(harness, linear_scale):
-    raw = env_config_otos(51, linear_scale=linear_scale)
-    fields = _assert_ok(harness, raw)
-    assert fields["patch_kind"] == "OTOS"
-    assert float_eq(fields["linear_scale"], linear_scale)
 
 
 if __name__ == "__main__":

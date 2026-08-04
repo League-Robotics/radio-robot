@@ -4,7 +4,7 @@
 #pragma once
 
 #include "messages/common.h"
-#include "messages/config.h"
+#include "messages/robot_config.h"
 #include "messages/telemetry.h"
 
 
@@ -20,6 +20,8 @@ enum class ErrCode : uint8_t {
     ERR_UNIMPLEMENTED = 6,
     ERR_OVERSIZE = 7,
     ERR_NOT_CONFIGURED = 8,
+    ERR_NOT_LIVE = 9,
+    ERR_BUSY = 10,
 };
 
 // Ack
@@ -112,27 +114,6 @@ struct Move {
     // --- array / optional-string accessors ---
 };
 
-// ConfigDelta
-struct ConfigDelta {
-    enum class PatchKind : uint8_t {
-        NONE = 0,
-        DRIVETRAIN = 1,
-        MOTOR = 2,
-        OTOS = 3,
-        ESTIMATOR = 4,
-    };
-    PatchKind patch_kind = PatchKind::NONE;
-    union {
-        DrivetrainConfigPatch drivetrain;
-        MotorConfigPatch motor;
-        OtosConfigPatch otos;
-        EstimatorConfigPatch estimator;
-    } patch = {};
-
-
-    // --- array / optional-string accessors ---
-};
-
 // CommandEnvelope
 struct CommandEnvelope {
     enum class CmdKind : uint8_t {
@@ -142,14 +123,18 @@ struct CommandEnvelope {
         MOVE = 3,
         WHEELS = 4,
         ESTOP = 5,
+        GET_CONFIG = 6,
+        SET_FIELD = 7,
     };
     CmdKind cmd_kind = CmdKind::NONE;
     union {
-        ConfigDelta config;
+        SetConfigGroup config;
         Stop stop;
         Move move;
         Wheels wheels;
         Estop estop;
+        GetConfig get_config;
+        SetConfigField set_field;
     } cmd = {};
 
     uint32_t corr_id = 0;
@@ -164,12 +149,14 @@ struct ReplyEnvelope {
         OK = 1,
         ERR = 2,
         TLM = 3,
+        CFG = 4,
     };
     BodyKind body_kind = BodyKind::NONE;
     union {
         Ack ok;
         Error err;
         Telemetry tlm;
+        ConfigSnapshot cfg;
     } body = {};
 
     uint32_t corr_id = 0;

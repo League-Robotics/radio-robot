@@ -164,19 +164,20 @@ bool findFreshAck(const std::vector<DecodedLine>& frames, uint32_t ackCorr, uint
   return false;
 }
 
-// --- Hand-rolled CommandEnvelope{config: ConfigDelta{motor: ...}} encoder
-// -- no encode(CommandEnvelope) codec exists (wire_test_codec.h's own file
-// header: firmware only ever DECODES a CommandEnvelope), and
+// --- Hand-rolled CommandEnvelope{config: SetConfigGroup{WHEEL_CONTROL,
+// ...}} encoder -- no encode(CommandEnvelope) codec exists (wire_test_codec.h's
+// own file header: firmware only ever DECODES a CommandEnvelope), and
 // wire_test_codec.h itself only builds MOVE/STOP envelopes (the two shapes
 // SimHarness::injectMove()/injectStop() need). SUC-055 (the CONFIG-mid-MOVE
 // scenario below) is the only scenario in this file needing a CONFIG
-// envelope, so -- mirroring config_gate_harness.cpp's/
-// app_robot_loop_harness.cpp's own established "per-harness-file fixture
-// duplication" convention for exactly this same hand-rolled encoder --
-// this is a small, self-contained, file-local copy rather than a change to
-// the shared wire_test_codec.h. Field numbers per envelope.proto/
-// config.proto: CommandEnvelope.config=6, ConfigDelta.motor=2,
-// MotorConfigPatch.side=1 (LEFT=0), MotorConfigPatch.kp=3. -----------------
+// envelope, so -- mirroring config_gate_harness.cpp's own established
+// "per-harness-file fixture duplication" convention for exactly this same
+// hand-rolled encoder -- this is a small, self-contained, file-local copy
+// rather than a change to the shared wire_test_codec.h. Field numbers per
+// envelope.proto/robot_config.proto (132-013, patch-surface retirement --
+// this used to target the deleted ConfigDelta.motor=2/MotorConfigPatch.kp=3):
+// CommandEnvelope.config=6, SetConfigGroup.target=1 (WHEEL_CONTROL=4),
+// SetConfigGroup.body=2, WheelControl.pid_kp=7. ----------------------------
 
 using WireRuntime::WireType;
 
@@ -240,22 +241,37 @@ std::string armorLine(const uint8_t* raw, size_t rawLen, const char* command) {
   return line;
 }
 
-// CommandEnvelope{corr_id, config: ConfigDelta{motor: MotorConfigPatch{
-// side=LEFT, kp}}} -- side is irrelevant to this scenario's own assertion
-// (handleConfig()/applyMotorConfigPatch() mirrors kp onto BOTH bound
-// motors regardless of `side` -- robot_loop.cpp's own mergeMotorGainsPatch()
-// comment), so LEFT(0) is chosen arbitrarily, matching every other
-// harness's own precedent (app_robot_loop_harness.cpp's
-// armorMotorConfigPatchCommand()).
+// CommandEnvelope{corr_id, config: SetConfigGroup{target=WHEEL_CONTROL,
+// body=WheelControl{..., pid_kp=kp}}} -- pid_kp lands on Drive's unified
+// wheel-speed controller (App::Drive::configure()) regardless of which
+// bound motor "side" the OLD MotorConfigPatch.side selector used to name
+// (kp/ki/etc always applied to BOTH bound motors even under the deleted
+// surface -- see this file's own git history for the pre-132-013 comment).
+// Every OTHER WheelControl field is encoded at its own real baked default
+// (config/boot_config.cpp's defaultWheelControllerConfig(), mirrored from
+// config_gate_harness.cpp's own armorWheelControlConfigCommand()) --
+// applyGroup() is a WHOLE-GROUP replace, no merge (132-008), so leaving
+// them unset would silently zero them in config_.wheelControl instead of
+// only changing kp.
 std::string armorMotorConfigPatchCommand(float kp, uint32_t corrId) {
-  Buf motorPatch;
-  putVarintField(motorPatch, 1, 0);  // MotorConfigPatch.side = LEFT (0)
-  putFloatField(motorPatch, 3, kp);  // MotorConfigPatch.kp
-  Buf motorDelta;
-  putMessageField(motorDelta, 2, motorPatch);  // ConfigDelta.motor, field 2
+  Buf wheelControl;
+  putFloatField(wheelControl, 1, 99.7f);   // v_min [mm/s]
+  putFloatField(wheelControl, 2, 23.8f);   // bias_max [mm/s]
+  putFloatField(wheelControl, 3, 30.0f);   // tau_adapt [s]
+  putFloatField(wheelControl, 4, 30.0f);   // a_steady [mm/s^2]
+  putFloatField(wheelControl, 5, 0.0f);    // deficit_threshold [mm/s]
+  putFloatField(wheelControl, 6, 0.0f);    // deficit_window [ms]
+  putFloatField(wheelControl, 7, kp);      // pid_kp -- the field under test
+  putFloatField(wheelControl, 8, 0.0f);    // pid_ki [1/s]
+  putFloatField(wheelControl, 9, 0.0f);    // pid_i_max [mm/s]
+  putFloatField(wheelControl, 10, 0.0f);   // pid_kaff [s]
+  putFloatField(wheelControl, 11, 0.0f);   // pid_max [mm/s]
+  Buf setConfigGroup;
+  putVarintField(setConfigGroup, 1, 4);  // SetConfigGroup.target = WHEEL_CONTROL (4)
+  putMessageField(setConfigGroup, 2, wheelControl);  // SetConfigGroup.body, field 2
   Buf env;
   putVarintField(env, 1, corrId);
-  putMessageField(env, 6, motorDelta);  // CommandEnvelope.config, field 6
+  putMessageField(env, 6, setConfigGroup);  // CommandEnvelope.config, field 6
   return armorLine(env.data, env.len, "CONFIG");
 }
 
@@ -1030,9 +1046,10 @@ void scenarioConfigMidMoveDoesNotChangeCompletionOutcome() {
   constexpr uint32_t kIdInterfered = 51;
   constexpr uint32_t kCorrInterfered = 151;
   constexpr uint32_t kConfigCorrId = 152;
-  // 125-003 -> 130-005: kp routes to App::Drive's own unified wheel-speed
-  // controller now (Configurator::applyMotorConfigPatch(), drive_.
-  // setControlGains()) -- NOT Motion::Planner's parked M4 duty stage
+  // 125-003 -> 130-005 -> 132-013: kp routes to App::Drive's own unified
+  // wheel-speed controller now (Configurator::install(WHEEL_CONTROL) ->
+  // Drive::configure() -> drive_.setControlGains()) -- NOT Motion::Planner's
+  // parked M4 duty stage
   // (velKp, dead since 128-015) and not Devices::Motor::gains() (deleted --
   // sprint.md Decision 2/7). Drive's ControlGains ship all-zero by default
   // (130-004's own Open Question 4 decision -- live bench tuning is ticket

@@ -69,24 +69,29 @@ def _fake_robot_config(*, rotational_slip=0.85, trackwidth=140.0, robot_name="fa
     cares about overridden.
 
     Using the real model (rather than an unconfigured ``MagicMock``)
-    exercises the real ``.calibration.rotational_slip`` / ``.geometry.
-    trackwidth`` attribute paths, and gives a real ``str`` ``.robot_name`` --
-    required because ``_build_main_window()``'s pre-existing robot-combo
-    preselect logic calls ``QComboBox.findText(cfg.robot_name)``, which
-    raises a ``TypeError`` if handed a non-``str`` (e.g. an unconfigured
+    exercises the real ``.geometry.rotational_slip``/``.geometry.
+    trackwidth`` attribute paths (132-014: both moved onto GeometryConfig,
+    robot_config.proto's grouped shape, 132-020 -- CalibrationConfig no
+    longer exists), and gives a real ``str`` ``.robot_name`` -- required
+    because ``_build_main_window()``'s pre-existing robot-combo preselect
+    logic calls ``QComboBox.findText(cfg.robot_name)``, which raises a
+    ``TypeError`` if handed a non-``str`` (e.g. an unconfigured
     ``MagicMock`` attribute).
+
+    ``rotational_slip``/``trackwidth`` are plain, never-``None`` floats now
+    (0.0 is each field's own "uncalibrated"/"missing" sentinel, per
+    ``resolve_calibration_defaults()``'s own truthy-check retarget) --
+    passing ``None`` here (this helper's own "missing" convenience) is
+    translated to 0.0 for the underlying pydantic field.
     """
-    from robot_radio.config.robot_config import (
-        CalibrationConfig,
-        GeometryConfig,
-        IdentityConfig,
-        RobotConfig,
-    )
+    from robot_radio.config.robot_config import GeometryConfig, IdentityConfig, RobotConfig
 
     return RobotConfig(
         identity=IdentityConfig(robot_name=robot_name, uid="fake-uid"),
-        geometry=GeometryConfig(trackwidth=trackwidth),
-        calibration=CalibrationConfig(rotational_slip=rotational_slip),
+        geometry=GeometryConfig(
+            trackwidth=trackwidth if trackwidth is not None else 0.0,
+            rotational_slip=rotational_slip if rotational_slip is not None else 0.0,
+        ),
     )
 
 

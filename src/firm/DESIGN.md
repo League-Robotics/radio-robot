@@ -257,7 +257,7 @@ below are the firmware-tree-specific ones.)
 - **115 (gut-to-minimal-firmware S1):** `Motion::Executor`/
   `Motion::JerkTrajectory`/`vendor/ruckig`, `App::Pilot`, and
   `App::HeadingSource` were DELETED wholesale, along with
-  `msg::PlannerConfig`/`PlannerConfigPatch` (`planner.proto` deleted).
+  `msg::PlannerConfig`/its own curated live-tuning message (`planner.proto` deleted).
   Tagged `pre-gut-motion-stack` for full recoverability — read that tag
   and sprint 115's own `architecture-update.md` for the pre-gut
   architecture, not this doc.
@@ -276,11 +276,16 @@ below are the firmware-tree-specific ones.)
   independently-valid/stale peer estimates, extrapolated
   zero-order-hold, plus a v1 complementary blend against OTOS
   heading/omega whose weights are fail-closed baked config defaulting to
-  0.0 (encoder-only this sprint) and live-tunable via a new
-  `ConfigDelta.estimator` (`EstimatorConfigPatch`) arm — **not** persisted
-  to flash (a reboot reverts to the baked default). Its predictions are
-  not exposed on the wire; validation runs host-side against the raw
-  `EncoderReading`/`OtosReading` fields via a captured TLM-log CSV.
+  0.0 (encoder-only this sprint) and were live-tunable via a dedicated
+  wire arm — **not** persisted to flash (a reboot reverts to the baked
+  default). Its predictions are not exposed on the wire; validation runs
+  host-side against the raw `EncoderReading`/`OtosReading` fields via a
+  captured TLM-log CSV. HISTORICAL as of 132-013 (patch-surface
+  retirement) / 128-016 (App::StateEstimator itself deleted as dead
+  code): the ESTIMATOR group (robot_config.proto's `Estimator`) still
+  decodes on the wire for read-back but reaches no live consumer
+  (Configurator::install(ESTIMATOR) permanently returns
+  ERR_UNIMPLEMENTED).
 
 **Open, firmware-tree-wide** (each subsystem doc's own §6 carries its
 local items):

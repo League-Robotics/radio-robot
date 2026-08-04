@@ -30,6 +30,8 @@ import argparse
 import math
 import pathlib
 
+import pytest
+
 from robot_radio.io.sim_loop import SimLoop
 from robot_radio.testgui.transport import _sim_lib_path
 

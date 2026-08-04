@@ -160,6 +160,7 @@
 
 #include <cstdint>
 
+#include "config/robot.h"
 #include "devices/motor.h"
 #include "firm/types/robot_state.h"
 
@@ -177,11 +178,12 @@ class Drive {
 
   // The measured plant inverse: duty = speed * kDutyPerSpeed.
   //
-  // BAKED IN, NOT CONFIGURED (stakeholder, 2026-07-31). Measured by
-  // src/tests/bench/duty_sweep.py on the stand at firmware v0.20260731.13:
-  // 853.6 mm/s per unit duty on the left wheel, 837.8 on the right -- 1.9%
-  // apart -- corroborated by a saturation reading (696-795 mm/s at full duty)
-  // that depends on no constant at all. 1/845.7 = 0.001182.
+  // HISTORICAL / REFERENCE ONLY as of 132-009 -- see below for the
+  // reversal. Measured by src/tests/bench/duty_sweep.py on the stand at
+  // firmware v0.20260731.13: 853.6 mm/s per unit duty on the left wheel,
+  // 837.8 on the right -- 1.9% apart -- corroborated by a saturation
+  // reading (696-795 mm/s at full duty) that depends on no constant at
+  // all. 1/845.7 = 0.001182.
   //
   // ONE constant for both wheels on purpose. At 1.9% the two wheels are the
   // same wheel, and a per-wheel pair invites fitting one against the other --
@@ -189,12 +191,40 @@ class Drive {
   // calibrated, each measured against the other's error (see
   // `_wheel_correction_note` in data/robots/tovez.json).
   //
+  // BAKED IN, NOT CONFIGURED (stakeholder, 2026-07-31) -- REVERSED (132-009,
+  // the-configuration-object.md / .claude/rules/configuration-discipline.md,
+  // stakeholder 2026-08-03: "every value the robot uses comes from the
+  // file"). From 2026-07-31 until 132-009, `Configurator::install()` read
+  // this constant directly and ignored config_.drive.duty_per_speed_left/
+  // right entirely -- ONE hardcoded literal applied identically to EVERY
+  // robot (tovez/togov/tovez_nocal) regardless of which JSON was baked,
+  // which is itself the exact anti-pattern the "NO DEFAULTS" policy on
+  // dutyPerSpeedLeft_/Right_ below exists to prevent ("baking a value here
+  // is what made one robot's gearboxes every robot's"). 132-009 retargets
+  // `Configurator::install()` to read config_.drive.duty_per_speed_left/
+  // right instead -- the ONE-population-scale-value-plus-gain/intercept-
+  // absorbs-all-deviation design the-configuration-object.md settled on
+  // structurally prevents the SAME circular-fit risk the 07-31 decision was
+  // guarding against (duty_per_speed's two fields are measured together and
+  // kept equal by convention, never re-fit against wheel_gain residuals),
+  // without requiring a value the robot boots with to live outside the
+  // file. data/robots/tovez.json/tovez_nocal.json's own duty_per_speed_left/
+  // right were corrected from a stale 0.00187325 (the ~1.6x error
+  // the-configuration-object.md's Cause section cites) to 0.001182 as part
+  // of the same ticket, so this is a behavior-preserving source change, not
+  // a new calibration decision -- see Configurator::install()'s own doc
+  // comment (configurator.cpp) for the full writeup. This constant is KEPT,
+  // unread by production boot, as the documented measurement the file's
+  // value traces to and as duty_sweep.py's own constant-free cross-check
+  // anchor.
+  //
   // The robot JSONs still carry duty_per_speed_left/right and the generator
-  // still bakes them into Config::DriveBootConfig; main.cpp deliberately
-  // ignores those fields. They are removed as part of
-  // clasi/issues/04-continuous-duty-per-speed-calibration.md, which also makes
-  // this value the boot-time starting estimate for runtime adaptation rather
-  // than a fixed constant.
+  // still bakes them into Config::DriveBootConfig/Config::Robot; nothing
+  // ignores those fields as of 132-009. clasi/issues/04-continuous-duty-
+  // per-speed-calibration.md's own further step -- making this value a
+  // boot-time starting ESTIMATE for runtime adaptation, rather than a fixed
+  // constant for the whole session -- remains open, unaddressed by this
+  // reversal.
   static constexpr float kDutyPerSpeed = 0.001182f;  // [duty/(mm/s)]
 
   // Install this robot's own wheel calibration
@@ -285,6 +315,24 @@ class Drive {
   };
   void setAdaptationBounds(const AdaptationBounds& bounds) { bounds_ = bounds; }
   const AdaptationBounds& adaptationBounds() const { return bounds_; }
+
+  // configure -- the-configuration-object.md's "subsystems take the
+  // whole object and pull out what they want" entry point (132-007):
+  // nothing outside Drive needs to know what Drive reads out of
+  // Config::Robot. A thin pull-and-forward onto the setters above --
+  // setWheelCorrection() (Stage A, config.drive.wheel_*),
+  // setControlGains()/setAdaptationBounds() (Stage B/C,
+  // config.wheelControl.*), setCrawlPulse() (config.drive.crawl_pulse).
+  // Deliberately does NOT touch trackWidth_ (no post-construction setter
+  // exists -- constructor injection stays, boot_wiring.cpp's own
+  // bakeBootValues()) or dutyPerSpeed. dutyPerSpeed stays BOOT-ONLY by
+  // design even after 132-009's reversal of kDutyPerSpeed's own C++-literal
+  // sourcing (see that constant's doc comment, above, for the full
+  // writeup) -- the wire's DRIVE group never carried it and still does
+  // not; Configurator::install() (configurator.cpp) calls
+  // setDutyPerSpeed(config.drive.duty_per_speed_left/right) itself,
+  // separately from this method, at boot only.
+  void configure(const Config::Robot& config);
 
   // --- Stage B/C observability (wired into the wire Telemetry frame /
   // TestGUI by 130-005, per issue 04's own folded-in observability

@@ -22,11 +22,10 @@
 // pre-extraction shape. Behavior is unchanged; only the location moved.
 #pragma once
 
-#include "app/drive.h"
-#include "app/robot_loop.h"
-#include "config/boot_config.h"
+#include "config/robot.h"
 #include "devices/device_config.h"
 #include "devices/motor.h"
+#include "devices/otos.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
 #include "motion/planner/planner.h"
@@ -73,34 +72,73 @@ float effectiveTrackWidth(const msg::DrivetrainConfig& drivetrainConfig);  // [m
 Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainConfig,
                                         float trackWidth);  // [mm]
 
-// installShaperLimits -- marks shaping CONFIGURED through the same
-// applyShaperLimits() entry the wire push uses, with `limits`'s own
-// validated ceilings, so kFlagFaultShapingDisabled stays quiet.
-void installShaperLimits(Motion::Planner& planner, const Motion::PlannerLimits& limits);
+// installShaperLimits/installDriveCalibration/installWheelController --
+// DELETED, 132-015 (dead-code sweep, the-configuration-object.md). All
+// three had already lost their only call site by 132-006/132-009
+// (Configurator::install(), configurator.cpp, does the equivalent
+// fan-out inline instead, reading Config::Robot directly) -- this
+// ticket's own fresh grep re-confirmed zero remaining callers and
+// deleted them, alongside DriveBootConfig/WheelControllerBootConfig
+// (config/boot_config.h, deleted the same ticket -- see that file's own
+// note for the struct-level half of this cleanup).
+//
+// installRotationCalibration -- DELETED (132-007). Superseded by
+// RobotLoop::configure(const Config::Robot&) (robot_loop.h), which reads
+// config/robot.h's rotationOffsetPos()/rotationOffsetNeg() derived
+// methods instead of doing its own degrees->radians conversion inline;
+// boot_wiring.cpp's constructor calls robotLoop_.configure(configurator_.
+// config()) directly now, in place of this function's only call site.
 
-// installRotationCalibration -- the robot JSON's measured turn response
-// (`actual = gain*commanded + offset`, per direction), installed onto
-// robotLoop. Degrees on the wire/JSON side (what a human reads and what
-// the camera measurement produced), radians inside, matching
-// Motion::Move::threshold -- see RobotLoop::setRotationCalibration().
-void installRotationCalibration(RobotLoop& robotLoop,
-                                const msg::DrivetrainConfig& drivetrainConfig);
+// --- Config::Robot-consuming entry points (132-007, the-configuration-
+// object.md's "subsystems take the whole object" pattern) for the THREE
+// subsystems that cannot take a Config::Robot& as a member method
+// themselves --
+//   - Motion::Planner (src/motion/planner/): that tree's own, narrower
+//     dependency rule (src/motion/DESIGN.md §3) forbids ANY
+//     App::/Devices::/Config:: dependency, no exception -- "No Devices::*,
+//     App::*, or bus/timing collaborator anywhere in this tree."
+//   - Devices::Motor / Devices::Otos (src/firm/devices/): the devices
+//     isolation invariant (src/firm/DESIGN.md §5) forbids devices/ from
+//     including messages/ or config/ headers, and (otos.h's own "Scope
+//     changes" section) Devices::Otos deliberately keeps its OWN narrow
+//     Devices::OtosConfig for exactly this reason today.
+// toDeviceMotorConfig() above already lives here, in App::, for the
+// identical reason -- these three functions are that same pattern
+// extended to Config::Robot: App:: is the one layer that can see both a
+// Config:: type and the lower-layer subsystem's own API, so the
+// conversion/apply happens here, not down in the subsystem itself. Each
+// reuses an EXISTING setter -- no new firmware control logic.
 
-// installDriveCalibration -- installs this robot's own wheel calibration
-// (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
-// §6) onto drive: the measured plant-inverse duty-per-speed constant
-// (App::Drive::kDutyPerSpeed -- MEASURED, NOT CONFIGURED, stakeholder
-// 2026-07-31; deliberately NOT driveConfig.dutyPerSpeedLeft/Right, see
-// Drive::kDutyPerSpeed's own doc comment), the per-wheel gain/intercept
-// correction, and the crawl-pulse amplitude.
-void installDriveCalibration(Drive& drive, const Config::DriveBootConfig& driveConfig);
+// configurePlanner -- reuses Motion::Planner::applyShaperLimits(), the
+// SAME setter Configurator::install() (configurator.cpp) already calls,
+// reading config.planner's six shaper-ceiling fields.
+void configurePlanner(Motion::Planner& planner, const Config::Robot& config);
 
-// installWheelController -- installs App::Drive's unified three-timescale
-// wheel-speed controller (130-004, wheel-speed-controller-moves-into-
-// drive.md Phase 2): Stage B's fast-PID gains and Stage C/deficit-flag's
-// adaptation bounds, both baked from the robot JSON's `control.wheel_*`
-// keys via Config::defaultWheelControllerConfig(). See that struct's own
-// doc comment (config/boot_config.h) for the field-for-field mapping.
-void installWheelController(Drive& drive, const Config::WheelControllerBootConfig& config);
+// configureMotor -- reuses Devices::Motor::applyTravelCalib(), the ONE
+// MotorConfig field this interface still live-applies post-construction
+// (motor.h's own doc comment), side-selected exactly like RobotLoop's
+// own CONFIG merge path already does (isLeft picks motors.
+// travel_calib_left vs. travel_calib_right). Guarded the same way
+// NezhaMotor::reconfigure() is guarded (nezha_motor.cpp): refuses
+// (returns false, applies nothing) while the motor reports itself in
+// motion via its own public velocity()/appliedDuty() accessors -- the
+// SAME "is moving" signal reconfigure()'s own atRest check uses, read
+// through the public Devices::Motor interface rather than a
+// leaf-private field, since this function operates on the interface,
+// not a concrete leaf. Configurator maps a `false` return to ERR_BUSY
+// (ticket 009's own job); this function's scope is only the bool.
+[[nodiscard]] bool configureMotor(Devices::Motor& motor, const Config::Robot& config,
+                                  bool isLeft);
+
+// configureOtos -- reuses setLinearScalar()/setAngularScalar()/
+// setOffset(), the SAME setters Configurator::applyOtosPatch() (the old
+// patch surface, configurator.cpp) already call. Trap 3's multiplier-
+// vs-register domain mismatch is CLOSED here (132-010): linear_scale/
+// angular_scale are converted through Devices::scaleToRegister() (otos.h,
+// a free function since 132-010 -- see its own doc comment) before
+// reaching the chip-level setters, the same conversion RealOtos::begin()
+// applies to the baked value at boot, so a live push and a boot bake now
+// agree on what a given multiplier means.
+void configureOtos(Devices::Otos& otos, const Config::Robot& config);
 
 }  // namespace App

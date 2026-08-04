@@ -69,24 +69,55 @@ def _as_cfg_dict(config: Any) -> dict:
     ``gen_boot_config.py``'s mapping functions only ever read
     ``cfg.get("control", {})`` and (``fwd_sign_for_ports()`` alone)
     ``cfg.get("calibration", {})`` -- no other top-level key. A raw dict
-    (e.g. ``json.loads(path.read_text())``, or a bare ``{}``/partial dict
-    for the no-config fallback case) is passed through unchanged. A
-    ``RobotConfig`` (or any duck-typed object exposing ``.control``/
-    ``.calibration`` pydantic sub-models) has each sub-model dumped to a
-    plain dict via ``model_dump()`` -- this reproduces the identical dict
-    shape a raw ``json.load()`` of the same robot config file would present
-    at the same key path, since both models now declare every key
-    ``gen_boot_config.py`` reads (113-004).
+    (e.g. ``json.loads(path.read_text())`` of a robot JSON, still in the
+    OLD 13-section shape -- ticket 017 has not reshaped the files yet) is
+    passed through unchanged; this remains the ONLY input shape this
+    function still handles.
+
+    132-014 (retargeting off ``RobotConfig``'s retired ``.control``/
+    ``.calibration`` sub-models, removed when ``RobotConfig`` adopted
+    ``robot_config.proto``'s consumer-grouped shape, 132-020): a
+    ``RobotConfig``/duck-typed object is NO LONGER accepted here -- it has
+    no ``.control``/``.calibration`` attributes to dump any more (both are
+    now individually-typed, pydantic-validated fields spread across
+    ``.motors``/``.wheel_control``/``.drive``/``.geometry``/etc., not one
+    JSON-mirroring blob each). Every caller that used to pass a
+    ``RobotConfig`` through this function now reads its own needed fields
+    DIRECTLY off the grouped object instead -- see
+    ``motor_boot_config_for()``/``drive_boot_config_for()``/
+    ``drivetrain_boot_config_for()``'s own doc comments for the per-function
+    split (grouped-object fast path vs. this function's raw-dict path).
+    Passing a non-dict, non-grouped-shaped object here now raises
+    ``AttributeError`` (``.get`` on the wrong type) -- an honest failure,
+    not the old function's silent ``{}`` fallback that used to mask the
+    130-020 shape change as an empty (and therefore ``_require()``-raising)
+    config.
     """
     if isinstance(config, dict):
         return config
+    raise TypeError(
+        f"_as_cfg_dict() expects a raw robot-JSON dict (still the OLD "
+        f"13-section shape, pending ticket 017's reshape) -- got "
+        f"{type(config).__name__}. A RobotConfig/grouped-shape object must "
+        f"be read directly off its own .motors/.drive/.geometry groups "
+        f"(132-014) -- see this module's own header comment."
+    )
 
-    control = getattr(config, "control", None)
-    calibration = getattr(config, "calibration", None)
-    return {
-        "control": control.model_dump() if control is not None else {},
-        "calibration": calibration.model_dump() if calibration is not None else {},
-    }
+
+def _is_grouped_robot_config(config: Any) -> bool:
+    """True if *config* already exposes ``robot_config.proto``'s
+    consumer-grouped attributes directly (``.motors``/``.drive`` -- 132-020
+    adopted this shape into ``RobotConfig`` itself) rather than needing
+    ``gen_boot_config.py``'s raw-dict path-mapping functions at all: once
+    the source already carries typed ``Motors``/``Drive``/``Geometry``
+    group objects, re-deriving the SAME values through a dict-path lookup
+    would be needless indirection, not "reuse gen_boot_config.py's mapping,
+    don't re-derive it" (sprint 113's own Design Rationale Decision 2) --
+    that decision's whole point was to avoid a SECOND, independently-drifting
+    expression of the JSON-path-to-value mapping; reading an already-typed
+    field directly is not a second expression of anything.
+    """
+    return hasattr(config, "motors") and hasattr(config, "drive")
 
 
 # planner_boot_config_for() / _heading_source_wire_value() -- DELETED
@@ -113,12 +144,38 @@ def _as_cfg_dict(config: Any) -> dict:
 def motor_boot_config_for(config: Any, port: int) -> "dict[str, float | int]":
     """Return ``{"vel_filt_alpha": ..., "fwd_sign": ...}`` for *port*
     (1=left, 2=right, per ``gen_boot_config.py``'s own ``LEFT_PORT``/
-    ``RIGHT_PORT``), computed from *config* by calling
-    ``gen_boot_config.py``'s existing ``vel_gains_for_config()`` (the
-    ``filt`` element) and ``fwd_sign_for_ports()`` (indexed by port).
-    """
-    cfg = _as_cfg_dict(config)
+    ``RIGHT_PORT``).
 
+    132-014: two paths, selected by ``_is_grouped_robot_config()``. A
+    ``RobotConfig``/grouped-shape *config* (``.motors``/``.drive`` -- the
+    common case, 132-020) reads ``config.motors.vel_filt_alpha``/
+    ``fwd_sign_left``/``fwd_sign_right`` DIRECTLY -- ``Motors.vel_filt_alpha``
+    is a SINGLE value shared by both bound motors (matching
+    ``vel_gains_for_config()``'s own "applied to BOTH bound motors" shape),
+    ``fwd_sign_left``/``fwd_sign_right`` are per-side. A raw dict (still the
+    OLD 13-section JSON shape, e.g. from ``json.loads()``) still goes
+    through ``gen_boot_config.py``'s ``vel_gains_for_config()``/
+    ``fwd_sign_for_ports()`` (unchanged from before this ticket) -- the
+    JSON files themselves are not reshaped until ticket 017, so this path
+    still reads their current key layout.
+    """
+    if _is_grouped_robot_config(config):
+        motors = config.motors
+        if port == gbc.LEFT_PORT:
+            fwd_sign = motors.fwd_sign_left
+        elif port == gbc.RIGHT_PORT:
+            fwd_sign = motors.fwd_sign_right
+        else:
+            # Every other port (no drive-pair mount) -- the SAME placeholder
+            # gen_boot_config.py's own fwd_sign_for_ports() uses for a port
+            # outside the drive pair.
+            fwd_sign = gbc.FWD_SIGN
+        return {
+            "vel_filt_alpha": float(motors.vel_filt_alpha),
+            "fwd_sign": int(fwd_sign),
+        }
+
+    cfg = _as_cfg_dict(config)
     *_gains, filt_alpha = gbc.vel_gains_for_config(cfg)
     fwd_signs = gbc.fwd_sign_for_ports(cfg)
 
@@ -169,8 +226,26 @@ def drive_boot_config_for(config: Any) -> "dict[str, float]":
     Both remaining values are REQUIRED -- ``gen_boot_config.py``'s own
     fail-closed posture for the same keys, reached by calling ITS mapping
     function (``drive_config_for_config()``) rather than re-expressing the
-    JSON->value decision here.
+    JSON->value decision here for the raw-dict path.
+
+    132-014: a ``RobotConfig``/grouped-shape *config* (``.motors``/
+    ``.drive``, 132-020) reads ``config.drive.duty_per_speed_left/right``/
+    ``crawl_pulse`` DIRECTLY -- these are exactly ``Drive`` group fields
+    now, no dict-path derivation needed. The eight ``wheel_gain_*``/
+    ``wheel_intercept_*`` Stage-A fields ALSO live on ``config.drive`` but
+    are deliberately NOT read here either, same reason as always (see this
+    docstring's own linearization note above) -- this function's return
+    shape is unchanged by the retarget, still duty-per-speed pair + crawl
+    pulse only.
     """
+    if _is_grouped_robot_config(config):
+        drive = config.drive
+        return {
+            "duty_per_speed_left": float(drive.duty_per_speed_left),
+            "duty_per_speed_right": float(drive.duty_per_speed_right),
+            "crawl_pulse": float(drive.crawl_pulse),
+        }
+
     cfg = _as_cfg_dict(config)
     duty_left, duty_right, crawl = gbc.drive_config_for_config(cfg)
     return {
@@ -200,9 +275,26 @@ def drivetrain_boot_config_for(config: Any) -> "dict[str, float]":
 
     Degrees->radians conversion happens HERE (mirroring ``main.cpp``'s own
     ``kDegToRad`` conversion at its boot seam) so the ctypes export itself
-    stays a pure passthrough -- ``rotation_calibration_for_config()``
-    returns the offsets in degrees (the JSON's own unit).
+    stays a pure passthrough -- both paths below hand this function values
+    in DEGREES (the JSON's own unit, and ``robot_config.proto``'s own
+    ``Geometry.rotation_offset``/``rotation_offset_neg`` -- ``// [deg]``).
+
+    132-014: a ``RobotConfig``/grouped-shape *config* (``.motors``/
+    ``.drive``, 132-020) reads ``config.geometry.rotation_gain_pos``/
+    ``rotation_offset``/``rotation_gain_neg``/``rotation_offset_neg``
+    DIRECTLY -- the exact same four quantities
+    ``rotation_calibration_for_config()`` derives from the raw dict, now
+    typed ``Geometry`` group fields.
     """
+    if _is_grouped_robot_config(config):
+        geometry = config.geometry
+        return {
+            "rot_gain_pos": float(geometry.rotation_gain_pos),
+            "rot_offset_pos": math.radians(geometry.rotation_offset),
+            "rot_gain_neg": float(geometry.rotation_gain_neg),
+            "rot_offset_neg": math.radians(geometry.rotation_offset_neg),
+        }
+
     cfg = _as_cfg_dict(config)
     gain_pos, offset_pos_deg, gain_neg, offset_neg_deg = gbc.rotation_calibration_for_config(cfg)
     return {

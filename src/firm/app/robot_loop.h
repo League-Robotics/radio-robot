@@ -120,6 +120,33 @@ class RobotLoop {
     rotOffsetNeg_ = offsetNeg;
   }
 
+  // Read-only observability for setRotationCalibration()'s installed
+  // values (test/bench observability -- mirrors Drive's own biasLeft()/
+  // pidLeft()-style getters, drive.h). Added for 132-007's own configure()
+  // unit test: nothing else reads rotation calibration back out today.
+  float rotationGainPos() const { return rotGainPos_; }
+  float rotationOffsetPos() const { return rotOffsetPos_; }  // [rad]
+  float rotationGainNeg() const { return rotGainNeg_; }
+  float rotationOffsetNeg() const { return rotOffsetNeg_; }  // [rad]
+
+  // configure -- the-configuration-object.md's "subsystems take the
+  // whole object" entry point (132-007), for RobotLoop's own
+  // geometry/rotation calibration slice. A thin pull-and-forward onto
+  // setRotationCalibration() above, reading Config::Robot's geometry
+  // group and its two derived rotationOffsetPos()/rotationOffsetNeg()
+  // methods (config/robot.h) instead of App::installRotationCalibration()'s
+  // now-superseded msg::DrivetrainConfig-based conversion
+  // (boot_calibration.cpp:75-81) -- this IS the "solve cleanly" 132-006
+  // deferred here (configurator.h's own doc comment): boot_wiring.cpp
+  // calls this directly, right after configurator_.loadBaked(), so
+  // RobotLoop never needs a Configurator& to reach its own configuration
+  // (which would be circular -- RobotLoop already holds a Configurator&
+  // for CONFIG command routing).
+  void configure(const Config::Robot& config) {
+    setRotationCalibration(config.geometry.rotation_gain_pos, config.rotationOffsetPos(),
+                            config.geometry.rotation_gain_neg, config.rotationOffsetNeg());
+  }
+
   // Clamp a wheel position to the wire bound; static for isolated testing.
   static float clampToPositionWireBound(float pos, bool* clamped);
 
@@ -152,6 +179,14 @@ class RobotLoop {
   void handleWheels(const msg::CommandEnvelope& env);
   void handleStop(const msg::CommandEnvelope& env);
   void handleEstop(const msg::CommandEnvelope& env);
+
+  // handleGetConfig() -- 132-011: the CONFIG binary arm's read-back half.
+  // Unlike every other case in routeCommand()'s switch, this one replies
+  // SYNCHRONOUSLY (Comms::sendReply(), a ReplyEnvelope{cfg: ConfigSnapshot}
+  // or {err: Error}) rather than through the ack ring -- a ring entry has
+  // no room for a group's worth of values. See configurator.h's
+  // encodeSnapshot() for the read-back itself.
+  void handleGetConfig(const msg::CommandEnvelope& env);
 
   // MOVE enqueue is idempotent on Move.id: a host that retries an enqueue
   // whose ack was lost re-sends the SAME id under a fresh corr_id, and

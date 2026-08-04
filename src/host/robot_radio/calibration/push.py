@@ -3,27 +3,46 @@
 Resolves the interface duality between the MCP path (NezhaProtocol) and the
 CLI path (SerialConnection):
 
-- When passed a ``NezhaProtocol``: if the proto already has a
-  ``push_calibration`` method, delegates to it.  Otherwise extracts the
-  underlying ``SerialConnection`` (``proto._conn``) and falls through to the
-  direct-SET path.  This ensures forward-compatibility with the wiring that
-  ticket 028-003 adds to NezhaProtocol.
+- When passed a ``NezhaProtocol``: pushes every selected field as its own
+  ``set_config_field()`` round trip (132-014) -- ``calibration_kwargs()``'s
+  ml/mr/pid.* keys plus ``otos_kwargs()``'s OTOS offset/scale fields, the
+  SAME field set ``calibration_commands()`` below formats as text, just sent
+  over the real binary CONFIG-arm wire instead of a text line the current
+  firmware has no parser for.
 
-- When passed a ``SerialConnection``: constructs and sends the v2 SET command
-  sequence directly.
+- When passed a ``SerialConnection``: constructs and sends the v2 SET
+  command sequence (``calibration_commands()``) as plain text lines. This
+  path is KEPT for a bare ``SerialConnection`` caller, but does not reach a
+  live firmware handler on the current wire (the P4 single-loop firmware's
+  command plane is binary-only, ``docs/protocol-v5.md`` -- see
+  ``NezhaProtocol.send()``'s own doc comment) -- a pre-existing gap from the
+  102-107 rebuild, orthogonal to sprint 132's own changes, not fixed here.
 
 Both paths return a result dict with at minimum a ``"status"`` key.
 
-Note: this module does NOT wire push_calibration into cli.py or robot_mcp.py.
-That is ticket 028-003.
+132-014 (migrate host NezhaProtocol + calibration/push.py + TestGUI onto the
+new config surface): retargets every field SELECTOR below off the retired
+flat ``config.control``/``config.calibration`` sections (removed when
+``RobotConfig`` adopted ``robot_config.proto``'s consumer-grouped shape,
+132-020) onto the new ``config.motors``/``config.wheel_control``/
+``config.otos``/``config.estimator``/``config.planner`` groups, and retargets
+every SENDER off the retired ``*ConfigPatch``/``ConfigDelta`` wire shapes
+(deleted 132-013) onto ``NezhaProtocol.set_config_field()``.
+
+KNOWN GAP, mid-sprint (unchanged by this ticket -- ticket 017's job): the
+robot JSONs on disk (``data/robots/*.json``) are still in the OLD 13-section
+shape, so ``config.motors``/``config.wheel_control``/etc. read their proto3
+zero defaults for a REAL loaded robot config until ticket 017 reshapes the
+files -- see ``robot_config.py``'s own "KNOWN GAP, mid-sprint" doc comment.
+This module's job is field SELECTION from whatever shape ``config`` actually
+carries; it does not, and must not, work around the JSON still being
+unreshaped (sprint.md Design Rationale Decision 2 / Test Strategy).
 """
 
 from __future__ import annotations
 
 import math
-import sys
 from typing import Any
-
 
 
 def push_calibration(conn_or_proto: Any, config: Any) -> dict[str, Any]:
@@ -41,27 +60,17 @@ def push_calibration(conn_or_proto: Any, config: Any) -> dict[str, Any]:
     Returns
     -------
     dict
-        ``{"status": "ok", ...}`` on success.  The dict may carry additional
-        diagnostic keys (e.g. ``"commands"`` listing the verbs that were sent).
+        ``{"status": "ok"|"partial", ...}``.  The dict may carry additional
+        diagnostic keys (e.g. ``"applied"``/``"rejected"`` listing the
+        fields that succeeded/failed for the ``NezhaProtocol`` path,
+        ``"commands"`` listing the verbs sent for the ``SerialConnection``
+        path).
     """
-    # Resolve duality: NezhaProtocol vs SerialConnection.
     from robot_radio.robot.protocol import NezhaProtocol
     from robot_radio.io.serial_conn import SerialConnection
 
     if isinstance(conn_or_proto, NezhaProtocol):
-        proto = conn_or_proto
-        # If NezhaProtocol has its own push_calibration method (added by
-        # ticket 028-003), delegate to it.  Check both the instance and the
-        # class so that either a monkey-patched instance attribute or a real
-        # class method is found.
-        try:
-            _push_fn = object.__getattribute__(proto, "push_calibration")
-        except AttributeError:
-            _push_fn = getattr(type(proto), "push_calibration", None)
-        if _push_fn is not None and callable(_push_fn):
-            return _push_fn(config)
-        # Otherwise extract the underlying connection and fall through.
-        conn = proto._conn
+        return _push_via_proto(conn_or_proto, config)
     elif isinstance(conn_or_proto, SerialConnection):
         conn = conn_or_proto
     else:
@@ -73,182 +82,199 @@ def push_calibration(conn_or_proto: Any, config: Any) -> dict[str, Any]:
     return _push_via_conn(conn, config)
 
 
-def calibration_kwargs(config: Any) -> dict[str, float | int]:
+def calibration_kwargs(config: Any) -> "dict[str, float]":
     """Select the Tier-1 (already-wire-covered) calibration field set from
-    *config*, as a flat wire-key kwargs dict (``{"ml": ..., "pid.kp": ...,
-    ...}``) — the SAME wire-key vocabulary ``protocol.py``'s
-    ``_MOTOR_PID_KEYS``/``_DRIVETRAIN_KEYS`` curate.
+    *config*, as a flat ``{wire_key: value}`` dict (``{"ml": ...,
+    "pid.kp": ..., ...}``) -- the SAME wire-key vocabulary
+    ``protocol.py``'s ``_SET_KEY_TARGETS`` curates, each resolving to a
+    ``(ConfigGroupTarget, field_name)`` pair.
 
-    Pure, side-effect-free field SELECTION only — no text formatting, no
-    transport. This is what ``calibration_commands()`` (below) formats into
-    ``SET key=value`` strings for the hardware/CLI path; ticket 113-005's
-    ``SimLoop`` calls this directly and passes the dict straight to
-    ``NezhaProtocol.set_config(**kwargs)``, skipping the text round trip
-    entirely.
+    Pure, side-effect-free field SELECTION only -- no wire I/O.
+    ``SimLoop.configure_from_robot()`` (Tier 1) and
+    ``_push_via_proto()``/``calibration_commands()`` below all call this
+    directly.
+
+    132-014: retargeted off the retired ``config.control``/
+    ``config.calibration`` flat sections onto ``config.motors``/
+    ``config.wheel_control`` (``robot_config.proto``'s consumer-grouped
+    shape, 132-020). ``tw``/``rotSlip`` (``config.geometry.trackwidth``/
+    ``rotational_slip``) are DROPPED, not migrated: GEOMETRY is a
+    boot-only ``ConfigGroupTarget`` (configurator.h's own re-appliability
+    table -- "trackWidth has no post-construction setter anywhere"), so a
+    live push has NEVER taken effect (the old DrivetrainConfigPatch arm was
+    ``ERR_UNIMPLEMENTED`` on the firmware side for the same reason,
+    sprint.md's own Problem section) -- pushing them from HERE would also
+    be the exact ``Config::Robot`` GEOMETRY-divergence hazard
+    ``SimLoop.configure_from_robot()``'s own doc comment flags (trackWidth
+    is one of the sim's justified ``BootOverrides`` divergences, never to
+    be overwritten from a live push). ``set_config()``/the ``SET`` verb
+    still recognize ``tw``/``rotSlip`` directly (``protocol._SET_KEY_TARGETS``)
+    for a human/hardware caller that wants the honest ``ERR_NOT_LIVE`` --
+    this function simply never selects them into a Tier-1/connect-time push.
 
     Covers, in order:
-      - ``ml``/``mr`` — mm_per_wheel_deg_left/right (wheel-diameter-derived
-        default when uncalibrated).
-      - ``tw`` — trackwidth mm.
-      - ``rotSlip`` — calibration.rotational_slip.  ALWAYS present: an
-        uncalibrated config (rotational_slip null/missing) resolves to the
-        documented "no correction" sentinel ``0`` (``effectiveSlip()`` maps
-        0 -> 1.0), so a no-calibration robot NEUTRALIZES whatever value is
-        baked into the firmware's compiled-in DefaultConfig instead of
-        silently inheriting it.  This is what makes "select tovez nocal →
-        turns are geometry-pure" true in the sim.
-      - ``pid.kp/ki/kff/iMax/kaw`` — App::Drive's unified wheel-speed
-        controller's Stage B fast-PID gains (``control.wheel_pid_*`` →
-        ``MotorConfigPatch`` Gains, applied by ``Configurator::
-        applyMotorConfigPatch()``). 130-005 REPOINT: these wire keys used
-        to source from ``control.vel_*`` and land on Motion::Planner's
-        parked M4 duty stage (a silent no-op — nothing ever actuated from
-        it); they now source from ``control.wheel_pid_*`` and land on
-        App::Drive's live controller instead — ``pid.kff``/``pid.kaw``
-        specifically carry Stage B's ``kaff``/``pidMax`` (the two
-        ``ControlGains`` members with no wire field of their own name;
-        both borrowed fields were themselves already fully dead). Stakeholder
-        2026-07-18: selecting a robot must be authoritative for the
-        CONTROL gains too — the sim binary bakes its own harness gains
-        (``SimHarness::makeMotorConfig()``) and real firmware bakes
-        whatever robot JSON was active at build time
-        (``gen_boot_config.py``), and neither may silently leak into a
-        session. Each key is present only when the config carries a value
-        (``ControlConfig``'s own contract: None → firmware boot default
-        kept). ``control.vel_filt`` has NO live ``SET`` key and is
-        deliberately not pushed — it reaches firmware at build time only
-        (``gen_boot_config.py`` → ``MotorConfig.setVelFiltAlpha()``).
-        ``headingKp``/``headingKd``/``minSpeed``/``distanceKp``/
-        ``arriveDwell`` (113-003's own ``PlannerConfigPatch`` additions) —
-        DELETED (115-003, gut-to-minimal-firmware S1 motion-stack excision):
-        `PlannerConfigPatch`/`ConfigDelta.planner` and the `App::Pilot` that
-        applied them are gone; none of these five keys are valid
-        `set_config()` wire keys any more (see `protocol.py`'s own
-        `_ALL_SET_KEYS`, which no longer contains them) — pushing any of
-        them fails the WHOLE `set_config()` call (returns `None`, no wire
-        transmission at all), which is exactly why this function must NOT
-        still select them.
+      - ``ml``/``mr`` -- ``config.motors.travel_calib_left/right``
+        (``Motors.travel_calib_left/right``), falling back to the
+        wheel-diameter-derived default (``config.wheels.wheel_diameter_mm``,
+        a host-only section unaffected by the reshape) when the group field
+        reads its proto3 zero default (0.0 is never a valid calibrated
+        value -- ``robot_config.proto``'s own ``(min) = 0.0001`` bound).
+      - ``pid.kp/ki/kff/iMax/kaw`` -- App::Drive's unified wheel-speed
+        controller's Stage B fast-PID gains (``WheelControl.pid_kp/pid_ki/
+        pid_kaff/pid_i_max/pid_max``), the direct successor of
+        ``control.wheel_pid_*`` -- unchanged consumer (130-005), only the
+        source group/field names moved.
 
-    ``OI``/``OL``/``OA`` (OTOS) are deliberately OUT of this dict — they are
-    not ``SET key=value`` verbs at all (see ``calibration_commands()``'s own
-    docstring on ``otos_config()`` being a separate mechanism), so they have
-    no place in a flat kwargs dict.  ``calibration_commands()`` builds them
-    directly, unchanged.
-
-    Does NOT select ``config.geometry.odometry_offset_mm`` (the OTOS
-    mounting-offset/lever-arm) — see ``calibration_commands()``'s own
-    docstring for the full rationale (unregistered `SET` keys, ``ERR
-    badkey``).
+    ``OI``/``OL``/``OA`` (OTOS) are deliberately OUT of this dict -- see
+    ``otos_kwargs()`` below, a separate selector for a separate
+    ``ConfigGroupTarget`` (OTOS, not MOTORS/WHEEL_CONTROL).
     """
-    kwargs: dict[str, float | int] = {}
+    kwargs: "dict[str, float]" = {}
 
-    # ── Wheel encoder calibration and trackwidth ──────────────────────────
-    cal = getattr(config, "calibration", None)
-
+    # ── Wheel travel calibration (Motors group), diameter-derived fallback
+    motors = getattr(config, "motors", None)
     wd = getattr(getattr(config, "wheels", None), "wheel_diameter_mm", None)
-    default_wheel_travel_calib = (math.pi * wd / 360.0) if wd is not None else None  # [mm/deg]
+    default_travel_calib = (math.pi * wd / 360.0) if wd is not None else None  # [mm/deg]
 
-    wheel_travel_calib_left  = getattr(cal, "mm_per_wheel_deg_left",  None) if cal else None
-    wheel_travel_calib_right = getattr(cal, "mm_per_wheel_deg_right", None) if cal else None
-    wheel_travel_calib_left  = wheel_travel_calib_left  if wheel_travel_calib_left  is not None else default_wheel_travel_calib
-    wheel_travel_calib_right = wheel_travel_calib_right if wheel_travel_calib_right is not None else default_wheel_travel_calib
+    travel_calib_left = getattr(motors, "travel_calib_left", None) if motors is not None else None
+    travel_calib_right = getattr(motors, "travel_calib_right", None) if motors is not None else None
+    if not travel_calib_left and default_travel_calib is not None:
+        travel_calib_left = default_travel_calib
+    if not travel_calib_right and default_travel_calib is not None:
+        travel_calib_right = default_travel_calib
 
-    if wheel_travel_calib_left is not None:
-        kwargs["ml"] = float(wheel_travel_calib_left)
-    if wheel_travel_calib_right is not None:
-        kwargs["mr"] = float(wheel_travel_calib_right)
+    if travel_calib_left is not None:
+        kwargs["ml"] = float(travel_calib_left)
+    if travel_calib_right is not None:
+        kwargs["mr"] = float(travel_calib_right)
 
-    geom = getattr(config, "geometry", None)
-    tw = getattr(geom, "trackwidth", None) if geom else None
-    if tw is not None:
-        kwargs["tw"] = int(round(float(tw)))
-
-    # ── Rotational slip: always present, uncalibrated -> sentinel 0 ───────
-    rot_slip = getattr(cal, "rotational_slip", None) if cal else None
-    kwargs["rotSlip"] = float(rot_slip) if rot_slip is not None else 0.0
-
-    # ── App::Drive's unified wheel-speed controller: Stage B fast-PID
-    # gains, present when set ──────────────────────────────────────────────
-    # See this function's docstring. Wire keys are protocol.py's own
-    # vocabulary (_MOTOR_PID_KEYS); both hardware
-    # (binary_bridge.translate_command → NezhaProtocol.set_config) and Sim
-    # (SimTransport._handle_config_set → NezhaProtocol.config) accept them.
-    # 130-005 REPOINT: sourced from control.wheel_pid_* now, not
-    # control.vel_* (Motion::Planner's parked, dead M4 duty stage) --
-    # pid.kff/pid.kaw carry Stage B's kaff/pidMax (see this function's own
-    # docstring). headingKp/headingKd/minSpeed/distanceKp/arriveDwell --
-    # DELETED (115-003, gut S1 motion-stack excision): see this function's
-    # own docstring.
-    ctrl = getattr(config, "control", None)
+    # ── App::Drive's unified wheel-speed controller: Stage B fast-PID gains
+    wheel_control = getattr(config, "wheel_control", None)
     for wire_key, attr in (
-        ("pid.kp", "wheel_pid_kp"),
-        ("pid.ki", "wheel_pid_ki"),
-        ("pid.kff", "wheel_pid_kaff"),
-        ("pid.iMax", "wheel_pid_i_max"),
-        ("pid.kaw", "wheel_pid_max"),
+        ("pid.kp", "pid_kp"),
+        ("pid.ki", "pid_ki"),
+        ("pid.kff", "pid_kaff"),
+        ("pid.iMax", "pid_i_max"),
+        ("pid.kaw", "pid_max"),
     ):
-        value = getattr(ctrl, attr, None) if ctrl is not None else None
+        value = getattr(wheel_control, attr, None) if wheel_control is not None else None
         if value is not None:
             kwargs[wire_key] = float(value)
 
     return kwargs
 
 
-def estimator_kwargs(config: Any) -> dict[str, float]:
-    """Select the ``EstimatorConfigPatch`` field set from *config*, as a
-    flat ``NezhaProtocol.estimator_config(**kwargs)`` kwargs dict.
+def otos_kwargs(config: Any) -> "dict[str, float]":
+    """Select ``config.otos``'s OFFSET/SCALE fields as a flat
+    ``{field_name: value}`` dict, ready for
+    ``proto.set_config_field(robot_config_pb2.OTOS, field_name, value)``
+    per entry -- the OTOS counterpart of ``calibration_kwargs()`` above,
+    selecting from a DIFFERENT ``ConfigGroupTarget`` (OTOS, not
+    MOTORS/WHEEL_CONTROL).
 
-    Companion to ``calibration_kwargs()`` above, but for a DIFFERENT wire
-    arm: ``EstimatorConfigPatch`` is a binary-only ``ConfigDelta`` patch
-    (``config.proto``) with no ``SET key=value`` text-plane vocabulary at
-    all, so it is not, and cannot be, folded into
-    ``calibration_kwargs()``/``calibration_commands()`` -- those built the
-    ``_ALL_SET_KEYS`` text surface only.  Selects two field families that
-    ride the SAME ``EstimatorConfigPatch`` envelope (config.proto's own
-    "smallest coherent path" doc comment, restated on
-    ``NezhaProtocol.estimator_config()``):
+    132-014 (new function, replacing the OI/OL/OA text-verb-specific
+    handling ``calibration_commands()`` used to own alone): ``linear_scale``/
+    ``angular_scale`` here are already in the config MULTIPLIER domain
+    (1.0 = no correction) -- unlike the pre-132 text-plane ``OL``/``OA``
+    verbs (which carried the chip's raw int8 register scalar,
+    ``scale_to_int8()``-encoded), the live wire push applies NO such
+    encoding: ``App::configureOtos()`` (132-010, trap 3 closed) converts
+    the multiplier through ``Devices::scaleToRegister()`` FIRMWARE-side
+    now, so a live push and a boot bake finally agree on what a given
+    multiplier means. ``binary_bridge.py``'s ``OL <scale>``/``OA <scale>``
+    verbs already pass their argument straight through as the multiplier
+    (no host-side encoding) -- this function's values are pushed the same
+    way.
 
-      - ``config.estimator.*`` -- ``App::StateEstimator``'s fusion weights
-        (``weight_heading_otos``/``weight_omega_otos``/``staleness_ms``).
-      - ``config.control.*`` -- ``Motion::VelocityShaper``'s accel/jerk
-        ceilings (``a_max``/``a_decel``/``alpha_max``/``alpha_decel``/
-        ``j_max``/``yaw_jerk_max``, decel-into-the-goal campaign).
-
-      A former ``config.estimator.*`` field (a boot-time/live-tunable
-      time-lead anticipation constant) was DELETED (118 ticket 004,
-      land-at-zero-completion-delete-stop-lead.md) -- the completion
-      mechanism it drove no longer exists (see
-      ``App::MoveQueue::tick()``'s own doc comment for the land-at-zero
-      predicate that replaces it).
-
-    Each key is present only when *config* carries a non-``None`` value
-    (``EstimatorConfig``/``ControlConfig``'s own "None -> nothing pushed,
-    firmware boot default kept" contract -- unlike ``rotSlip``/OTOS in
-    ``calibration_kwargs()``, there is no "uncalibrated -> neutral
-    sentinel" discipline here: an absent estimator/shaper field simply
-    is not part of this push, exactly like the velocity-PID gains above).
-    Returns ``{}`` if *config* carries none of the nine fields at all --
-    the caller must treat that as "nothing to push", not send an empty
-    ``estimator_config()`` call (which raises ``ValueError``).
-
-    See ``clasi/issues/wire-testgui-live-push-of-estimator-stop-lead.md``
-    for why this selection previously had no push path at all: a GUI Sim
-    session ran with the estimator/shaper fields OFF even after 117/
-    b0f329a9 made them live-tunable, because Sim's compiled graph does not
-    link ``boot_config.cpp`` (117-004's documented deviation) and nothing
-    host-side pushed the live patch on connect.
+    Fields not present on *config* (``getattr`` returns ``None``) are
+    simply omitted -- there is no "uncalibrated -> neutral sentinel"
+    push here (unlike ``rotSlip``'s old sentinel discipline): an absent
+    OTOS field means "leave whatever ``loadBaked()``/the last push
+    already installed alone."
     """
-    kwargs: dict[str, float] = {}
+    kwargs: "dict[str, float]" = {}
+    otos = getattr(config, "otos", None)
+    for attr in ("offset_x", "offset_y", "offset_yaw", "linear_scale", "angular_scale"):
+        value = getattr(otos, attr, None) if otos is not None else None
+        if value is not None:
+            kwargs[attr] = float(value)
+    return kwargs
+
+
+# ESTIMATOR_FIELDS / PLANNER_SHAPER_FIELDS -- exported (no leading
+# underscore) so estimator_kwargs()'s callers (sim_loop.py Tier 3,
+# testgui/__main__.py's _push_estimator_config()) can partition its single
+# flat return dict back into its two wire targets without re-deriving the
+# field lists.
+ESTIMATOR_FIELDS = ("weight_heading_otos", "weight_omega_otos", "staleness")
+PLANNER_SHAPER_FIELDS = ("a_max", "a_decel", "alpha_max", "alpha_decel", "jerk_max", "yaw_jerk_max")
+
+
+def estimator_kwargs(config: Any) -> "dict[str, float]":
+    """Select the fusion-weight + shaper-ceiling field set from *config*, as
+    a flat ``{field_name: value}`` dict spanning TWO ``ConfigGroupTarget``s
+    -- ``ESTIMATOR_FIELDS`` (``config.estimator.*``) and
+    ``PLANNER_SHAPER_FIELDS`` (``config.planner_shaper.*``). Callers push
+    each key via ``set_config_field(ESTIMATOR or PLANNER_SHAPER, key,
+    value)``, selecting the target with ``key in ESTIMATOR_FIELDS``/``key
+    in PLANNER_SHAPER_FIELDS`` (module-level constants above).
+
+    132-014: retargeted off the retired single ``EstimatorConfigPatch``
+    binary arm (``config.proto``, one ``ConfigDelta.estimator`` patch
+    carrying all nine fields in ONE envelope) -- that whole patch type is
+    deleted (132-013). The nine fields now live on TWO different
+    ``robot_config.proto`` groups instead of one Patch message:
+
+      - ``config.estimator.weight_heading_otos``/``weight_omega_otos``/
+        ``staleness`` -- unchanged consumer intent (``App::StateEstimator``'s
+        complementary-blend fusion weights), but that consumer was ALREADY
+        deleted as dead code before this sprint (sprint 128 ticket 016) --
+        ``ESTIMATOR`` decodes these for read-back but ``install(ESTIMATOR)``
+        permanently returns ``ERR_UNIMPLEMENTED`` (configurator.h). A push
+        here is honestly rejected, not silently dropped (the old
+        ``EstimatorConfigPatch``'s own "acks 0, lands nowhere" trap,
+        closed) -- this function still selects them (read-back honesty),
+        it is the CALLER's job to log/tolerate the rejection.
+      - ``config.planner_shaper.a_max``/``a_decel``/``alpha_max``/
+        ``alpha_decel``/``jerk_max``/``yaw_jerk_max`` --
+        ``Motion::Planner``'s accel/jerk ceilings, formerly their OWN
+        dedicated always-live wire arm (riding the SAME
+        ``EstimatorConfigPatch`` envelope as a "smallest coherent path"
+        convenience, config.proto's own doc comment), then folded into
+        ``robot_config.proto``'s ``Planner`` message (a BOOT-ONLY
+        ``ConfigGroupTarget`` in full, 132-002 through 132-013) -- a real,
+        if temporary, capability REGRESSION this sprint's own architecture
+        introduced (a live push got the honest ``ERR_NOT_LIVE`` every
+        time, not a renaming).
+
+        FIXED, 132-017 (JSON reshape ticket, stakeholder-sanctioned
+        mid-sprint scope addition): the six fields split OUT of Planner
+        into their own ``PlannerShaper`` group/``PLANNER_SHAPER``
+        ``ConfigGroupTarget``, which IS live (its own setter,
+        ``Motion::Planner::applyShaperLimits()``, was already one of the
+        issue's eight safely re-appliable setters -- the coarse PLANNER
+        grouping was the only thing forcing it boot-only). Selected from
+        ``config.planner_shaper`` now, not ``config.planner`` -- the
+        pydantic model shape moved with the split (``robot_config.py``'s
+        own ``planner_shaper`` field).
+
+    Each key is present only when *config* carries a non-``None`` value for
+    it (``getattr`` returns ``None`` when the source group itself is
+    ``None`` or the attribute is absent). Returns ``{}`` if *config* carries
+    none of the nine fields at all -- the caller must treat that as
+    "nothing to push."
+    """
+    kwargs: "dict[str, float]" = {}
 
     est = getattr(config, "estimator", None)
-    for attr in ("weight_heading_otos", "weight_omega_otos", "staleness_ms"):
+    for attr in ESTIMATOR_FIELDS:
         value = getattr(est, attr, None) if est is not None else None
         if value is not None:
             kwargs[attr] = float(value)
 
-    ctrl = getattr(config, "control", None)
-    for attr in ("a_max", "a_decel", "alpha_max", "alpha_decel", "j_max", "yaw_jerk_max"):
-        value = getattr(ctrl, attr, None) if ctrl is not None else None
+    planner_shaper = getattr(config, "planner_shaper", None)
+    for attr in PLANNER_SHAPER_FIELDS:
+        value = getattr(planner_shaper, attr, None) if planner_shaper is not None else None
         if value is not None:
             kwargs[attr] = float(value)
 
@@ -261,134 +287,107 @@ def estimator_kwargs(config: Any) -> dict[str, float]:
 _SIX_DECIMAL_KEYS = frozenset({"ml", "mr"})
 
 # Per-command read timeouts for calibration_commands()'s pushed sequence.
-# OI (OTOS init) waits longer than a plain SET/OL/OA -- the chip's own init
-# sequence needs more time to settle before it can ack.
 _SET_READ_TIMEOUT_MS = 200
 _OTOS_INIT_READ_TIMEOUT_MS = 500
 
 
-def calibration_commands(config: Any) -> list[tuple[str, int]]:
-    """Build the v2 calibration wire-command sequence for *config*.
+def calibration_commands(config: Any) -> "list[tuple[str, int]]":
+    """Build the v2 calibration wire-command sequence for *config*, as
+    plain TEXT ``SET key=value``/``OI``/``OL``/``OA`` lines.
 
-    Pure function — returns ``(command, read_timeout)`` pairs and sends nothing,
-    so any transport (SerialConnection, NezhaProtocol, or the TestGUI's
-    Transport) can push the same sequence.  Mirrors the logic in
-    ``robot_radio.io.cli._push_calibration``; changes there should be
-    ported here.
+    Pure function -- returns ``(command, read_timeout)`` pairs and sends
+    nothing. KEPT for ``_push_via_conn()``'s ``SerialConnection`` path and
+    for direct callers that still want the text-line shape (e.g.
+    ``__main__.py``'s per-command push-loop UI, which logs each line's
+    reply) -- see this module's own header comment for why this text plane
+    does not reach a live firmware handler on the current wire regardless
+    of this function's own correctness (pre-existing, orthogonal gap from
+    the 102-107 rebuild).
 
-    113-003: a thin formatting wrapper over ``calibration_kwargs()`` (above)
-    — that function SELECTS which fields to push; this one FORMATS each
-    selected item into a ``SET key=value`` text command (``tw`` as a plain
-    int, ``ml``/``mr`` to 6 decimal places, everything else via ``%g``,
-    matching the pre-113-003 text implementation's own per-key formatting
-    exactly), then appends the OTOS ``OI``/``OL``/``OA`` sequence, which
-    ``calibration_kwargs()`` deliberately does not cover. Behavior-preserving
-    for every existing caller (``cli.py``, the sim turn-shape capture tool
-    relocated to ``src/tests/sim/`` by 128-011, ``__main__.py``'s manual
-    robot-select): byte-identical output to the pre-113-003 implementation
-    for every existing config shape.
+    132-014: a thin formatting wrapper over ``calibration_kwargs()``/
+    ``otos_kwargs()`` (above) -- unchanged shape, retargeted field sources.
+    ``OL``/``OA`` now format the MULTIPLIER directly (``otos_kwargs()``'s
+    own domain -- see that function's docstring for why ``scale_to_int8()``
+    is no longer applied here: the live wire push does the register
+    conversion firmware-side now, 132-010, and this text path mirrors that
+    for consistency even though it reaches no parser today). ``OI`` is
+    still emitted (an inert no-op token on the current wire regardless --
+    see this module's header comment) for continuity with the pre-132
+    command shape; nothing consumes it as a trigger any more.
 
     The sequence:
-      1. ``SET ml=<float>``  — mm_per_wheel_deg_left
-      2. ``SET mr=<float>``  — mm_per_wheel_deg_right
-      3. ``SET tw=<int>``    — trackwidth mm
-      4. ``SET rotSlip=<float>`` — calibration.rotational_slip.  ALWAYS
-         sent: an uncalibrated config (rotational_slip null/missing) pushes
-         the documented "no correction" sentinel ``0`` (``effectiveSlip()``
-         maps 0 -> 1.0), so a no-calibration robot NEUTRALIZES whatever
-         value is baked into the firmware's compiled-in DefaultConfig
-         instead of silently inheriting it.  This is what makes "select
-         tovez nocal → turns are geometry-pure" true in the sim.
-      5. ``SET pid.kp/ki/kff/iMax/kaw=<float>`` — the velocity-PID gains
-         (``control.vel_*`` → ``MotorConfigPatch`` Gains, applied to BOTH
-         motors by ``RobotLoop::handleConfig``). See ``calibration_kwargs()``'s
-         own docstring for the full field-selection rationale (including why
-         the former ``headingKp``/``headingKd``/``minSpeed``/``distanceKp``/
-         ``arriveDwell`` steps are gone -- 115-003 deleted
-         ``PlannerConfigPatch`` wholesale).
-      6. ``OI``              — OTOS init (must precede OL/OA)
-      7. ``OL <int8>``       — otos_linear_scale encoded
-      8. ``OA <int8>``       — otos_angular_scale encoded
-
-    109-004 RESTORES steps 5-7 (dropped 2026-07-16, out-of-process, when
-    ``OI``/``OL``/``OA`` had no path over the current binary wire at all —
-    see this function's own git history / issue
-    ``otos-calibration-config-message.md``): ``binary_bridge.py``'s
-    ``translate_command()`` now intercepts these three verbs and constructs/
-    sends an ``OtosConfigPatch`` ``ConfigDelta`` directly
-    (``NezhaProtocol.otos_config()``), on both hardware and Sim transports
-    (``SimTransport._handle_otos_patch()``) — so the push below reaches a
-    real firmware consumer again (``RobotLoop::handleConfig``'s new OTOS
-    case) instead of producing "not supported"/"nodev" noise on every
-    connect. ``OL``/``OA`` still carry the chip's RAW int8 register scalar
-    (``scale_to_int8()``, NOT the raw ``otos_linear_scale``/
-    ``otos_angular_scale`` multiplier itself) — the exact same encoding the
-    pre-2026-07-16 text-plane push used, unchanged by this restoration
-    (``Otos::setLinearScalar()``/``setAngularScalar()`` still expect the raw
-    register value — see ``otos.h``'s own OL/OA doc comment).
-
-    Does NOT push ``config.geometry.odometry_offset_mm`` (the OTOS
-    mounting-offset/lever-arm): ``odomOffX``/``odomOffY``/``odomYaw`` are not
-    in ``config_commands.cpp``'s registered `SET` key table
-    (architecture-update.md (084) Decision 2's closed 15-key surface) — a
-    push of any of them gets ``ERR badkey`` from the current firmware/sim
-    (ticket 085-005 finding; also observed independently during ticket
-    085-002/003's manual runs). This is not new drift 084 introduced: the
-    OTOS lever-arm has no real hardware driver in this program at all, and
-    OTOS pose is otherwise configured entirely via ``OI``/``OL``/``OA``/``OV``,
-    never `SET` — so this function still does not push it (109-004's
-    ``OtosConfigPatch`` DOES carry offset_x/y/yaw wire capacity, but no host
-    verb sends them yet — a future ticket's scope, not this restoration's).
-    ``config.geometry.odometry_offset_mm`` itself (e.g.
-    ``data/robots/tovez.json``'s non-zero ``x: -47.7``) is left as-is in the
-    schema — this function is simply not (yet) one of its consumers.
+      1. ``SET ml=<float>``/``SET mr=<float>`` -- wheel travel calib
+      2. ``SET pid.kp/ki/kff/iMax/kaw=<float>`` -- Stage B fast-PID gains
+      3. ``OI``              -- inert legacy token, see docstring above
+      4. ``OL <float>``/``OA <float>`` -- OTOS linear/angular scale, MULTIPLIER
     """
-    cmds: list[tuple[str, int]] = []
+    cmds: "list[tuple[str, int]]" = []
 
     for key, value in calibration_kwargs(config).items():
-        if key == "tw":
-            cmds.append((f"SET tw={value}", _SET_READ_TIMEOUT_MS))
-        elif key in _SIX_DECIMAL_KEYS:
+        if key in _SIX_DECIMAL_KEYS:
             cmds.append((f"SET {key}={value:.6f}", _SET_READ_TIMEOUT_MS))
         else:
             cmds.append((f"SET {key}={value:g}", _SET_READ_TIMEOUT_MS))
 
-    # ── OTOS init + scalars: RESTORED (109-004) ───────────────────────────
-    # Dropped 2026-07-16 (out-of-process) because OI/OL/OA had no path over
-    # the binary wire at all; 109-004 gives them one (OtosConfigPatch,
-    # RobotLoop::handleConfig's new OTOS case, binary_bridge.py's/
-    # SimTransport's direct-patch-send interception of these three verbs) --
-    # see this function's own docstring for the restoration's full
-    # rationale. OI must precede OL/OA (chip init before the scale writes).
-    # ALWAYS pushed, same "uncalibrated -> neutral sentinel" discipline as
-    # rotSlip above: an uncalibrated config (otos_linear_scale/
-    # otos_angular_scale null/missing) pushes the 1.0 "no correction"
-    # default explicitly, overwriting whatever DefaultConfig.cpp baked in,
-    # rather than silently omitting the write.
-    from robot_radio.calibration.helpers import scale_to_int8
-
-    cal = getattr(config, "calibration", None)
-    lin_scale = getattr(cal, "otos_linear_scale",  None) if cal else None
-    ang_scale = getattr(cal, "otos_angular_scale", None) if cal else None
-    lin_scale = float(lin_scale) if lin_scale is not None else 1.0
-    ang_scale = float(ang_scale) if ang_scale is not None else 1.0
-
+    otos = otos_kwargs(config)
     cmds.append(("OI", _OTOS_INIT_READ_TIMEOUT_MS))
-    cmds.append((f"OL {scale_to_int8(lin_scale)}", _SET_READ_TIMEOUT_MS))
-    cmds.append((f"OA {scale_to_int8(ang_scale)}", _SET_READ_TIMEOUT_MS))
-
-    # (The NOTE about OTOS mounting-offset never being pushable — `odomOff*`
-    # aren't registered SET keys — still holds; that stays out too.)
+    if "linear_scale" in otos:
+        cmds.append((f"OL {otos['linear_scale']:g}", _SET_READ_TIMEOUT_MS))
+    if "angular_scale" in otos:
+        cmds.append((f"OA {otos['angular_scale']:g}", _SET_READ_TIMEOUT_MS))
 
     return cmds
 
 
-def _push_via_conn(conn: Any, config: Any) -> dict[str, Any]:
-    """Send ``calibration_commands(config)`` over *conn* (SerialConnection).
+def _push_via_proto(proto: Any, config: Any) -> "dict[str, Any]":
+    """Push *config*'s calibration to *proto* (a real ``NezhaProtocol``)
+    over the LIVE binary wire -- one ``set_config_field()`` round trip per
+    selected field (``calibration_kwargs()``'s ml/mr/pid.* plus
+    ``otos_kwargs()``'s OTOS offset/scale fields), instead of the dead
+    ``SerialConnection``-text path ``_push_via_conn()`` below still serves.
+
+    132-014 (new function): this is what makes a REAL ``NezhaProtocol``
+    caller of ``push_calibration()`` (``io/robot_mcp.py``) actually reach
+    firmware -- before this ticket, every ``NezhaProtocol`` call fell
+    through to ``_push_via_conn(proto._conn, config)``, sending plain text
+    the current firmware's binary-only command plane cannot parse (see
+    this module's own header comment) -- a pre-existing gap, unrelated to
+    sprint 132, closed here as a natural consequence of giving
+    ``push_calibration()`` a real binary implementation.
+
+    Returns ``{"status": "ok"|"partial", "applied": [...], "rejected": [...]}``
+    -- ``applied``/``rejected`` name each pushed field (``"ml"``,
+    ``"otos.linear_scale"``, ...), never silently swallowing a rejection.
+    """
+    from robot_radio.robot import protocol as protocol_mod
+    from robot_radio.robot.pb2 import robot_config_pb2
+
+    applied: "list[str]" = []
+    rejected: "list[str]" = []
+
+    for key, value in calibration_kwargs(config).items():
+        target, field_name = protocol_mod._SET_KEY_TARGETS[key]
+        ack = proto.set_config_field(target, field_name, value)
+        (applied if ack is not None else rejected).append(key)
+
+    for field_name, value in otos_kwargs(config).items():
+        ack = proto.set_config_field(robot_config_pb2.OTOS, field_name, value)
+        (applied if ack is not None else rejected).append(f"otos.{field_name}")
+
+    return {
+        "status": "ok" if not rejected else "partial",
+        "applied": applied,
+        "rejected": rejected,
+    }
+
+
+def _push_via_conn(conn: Any, config: Any) -> "dict[str, Any]":
+    """Send ``calibration_commands(config)`` over *conn* (SerialConnection)
+    as plain text lines.
 
     Returns a dict with ``"status": "ok"`` and ``"commands"`` listing sent verbs.
     """
-    sent: list[str] = []
+    sent: "list[str]" = []
     for cmd, read_timeout in calibration_commands(config):
         conn.send(cmd, read_timeout=read_timeout)
         sent.append(cmd)

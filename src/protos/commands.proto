@@ -174,4 +174,43 @@ enum Verb {
   TLM = 10 [(binary) = true];
   OK  = 11 [(binary) = true];
   ERR = 12 [(binary) = true];
+
+  // GET_CONFIG/CFG -- 132-011 (GetConfig/ConfigSnapshot wire read-back):
+  // the read-back half of the CONFIG binary arm's new internal shape
+  // (robot_config.proto), the first genuinely NEW binary command/reply
+  // PAIR added since WHEELS/ESTOP. GET_CONFIG (host->robot) carries
+  // CommandEnvelope.cmd.get_config (a GetConfig{target}); its arm name
+  // ("get_config") is load-bearing the SAME way move/wheels/estop's are
+  // (WhichOneof("cmd").upper() derives the wire prefix), hence the
+  // underscore here rather than a single word. CFG (robot->host) carries
+  // ReplyEnvelope.body.cfg (a ConfigSnapshot{target, body}) -- unlike
+  // GET_CONFIG, its arm name is NOT wire-derived (Comms::sendReply()'s
+  // bodyKindToVerb() is a hand-written switch, not a string derivation),
+  // so "cfg"/"CFG" is a naming CHOICE, chosen to match this project's own
+  // long-anticipated vocabulary (see io/serial_conn.py's SerialConnection
+  // class docstring, which has named a future "cfg" reply verb since
+  // before this ticket existed).
+  GET_CONFIG = 19 [(binary) = true];
+  CFG        = 20 [(binary) = true];
+
+  // SET_FIELD -- 132-012 (SetConfigField / Configurator::applyField(), the
+  // dev-mode single-value push the-configuration-object.md's own "Updating
+  // one value: (target, field number, value)" section describes): the
+  // WRITE half of GET_CONFIG's read-back pair, host->robot, carrying
+  // CommandEnvelope.cmd.set_field (robot_config.proto's SetConfigField{
+  // target, field, value}). Its arm name ("set_field") is load-bearing the
+  // SAME way move/wheels/estop/get_config's are (WhichOneof("cmd").upper()
+  // derives the wire prefix) -- but DELIBERATELY spelled SHORTER than the
+  // message type it carries (SetConfigField), unlike GET_CONFIG's own
+  // exact-name mirror of GetConfig: GET_CONFIG (10 bytes) is already this
+  // schema's longest verb name and therefore the sole driver of
+  // `Comms::kMaxCommandPrefixBytes`/`kMaxLineBytes` (comms.h) -- 249 bytes,
+  // ONE byte below `Com::SerialPort::kTxBufferCapacity` (250) as of
+  // 132-011, already flagged there as a real headroom concern. The literal
+  // mirror "SET_CONFIG_FIELD" (17 bytes) would push kMaxCommandPrefixBytes
+  // from 11 to 18 and kMaxLineBytes to 256 -- OVER the 250-byte TX ring
+  // ceiling. "SET_FIELD" (9 bytes) stays under GET_CONFIG's own 10, so
+  // this verb pair does NOT become the new worst-case name and the 249-byte
+  // figure is unchanged by this addition.
+  SET_FIELD  = 21 [(binary) = true];
 }

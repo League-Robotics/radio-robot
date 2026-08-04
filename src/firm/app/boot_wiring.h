@@ -96,7 +96,7 @@ struct BootOverrides {
   // Otos::setLinearScalar()/setOffset() call -- RealOtos's own setters are
   // no-ops until begin() has run and set initialized_ = true (otos.cpp),
   // and begin() itself applies config_'s own baked scale before any such
-  // call could land, so the only safe seam is here, at resolve() time.
+  // call could land, so the only safe seam is here, at bakeBootValues() time.
   const Devices::OtosConfig* otosConfig = nullptr;
 };
 
@@ -177,26 +177,47 @@ class RobotGraph {
   void loadPersistedTuning();
 
  private:
-  // Resolved, already-baked config this constructor needs across several
-  // member initializers -- computed ONCE by resolve() before any member
-  // below it is built, so every member initializer reads a plain value,
-  // never re-derives one. Declared FIRST so it is guaranteed constructed
-  // before every member after it (C++ initializes in declaration order).
-  struct Resolved {
+  // BootValues -- the small residue of already-baked config this
+  // constructor still needs across several member initializers, computed
+  // ONCE by bakeBootValues() before any member below it is built, so every
+  // member initializer reads a plain value, never re-derives one. Declared
+  // FIRST so it is guaranteed constructed before every member after it
+  // (C++ initializes in declaration order).
+  //
+  // 132-006 (the-configuration-object.md): this struct used to be named
+  // `Resolved` and additionally carried driveConfig/wheelControllerConfig
+  // -- both DELETED here, because App::Configurator now owns those two
+  // groups' values (Config::Robot, configurator.h) and installs them
+  // itself, post-construction, via configurator_.loadBaked() +
+  // configurator_.install() (see boot_wiring.cpp's constructor body). What
+  // remains below is exactly the ~14-value "no post-construction setter"
+  // residue the issue's own audit found (trackWidth, the OTOS lever
+  // arm/scales, ColorConfig/LineConfig, PlannerLimits' non-re-appliable
+  // fields, the per-port motor wiring) -- values that MUST be complete
+  // before Drive/Odometry/the OTOS leaf/Motion::Planner/the motor leaves
+  // are constructed, because none of them has a setter for these fields at
+  // all. Config::Robot cannot supply these yet: it does not model per-port
+  // motor wiring (msg::Motors is drive-pair-only, no port/slewRate/polled),
+  // and Configurator itself cannot be constructed before Drive/Planner/the
+  // motor leaves exist (it holds references to them) -- so this
+  // construction-time bake stays a SEPARATE step from Configurator::
+  // loadBaked(), which populates the read-back object AFTER construction,
+  // from the same JSON via a different, newer generated function family
+  // (config/boot_config.h's Config::default*Group(), 132-005). Both read
+  // the identical robot-JSON keys; see 132-005's own completion note.
+  struct BootValues {
     Devices::MotorConfig motorCfgL;
     Devices::MotorConfig motorCfgR;
     Devices::OtosConfig otosConfig;
     Devices::ColorConfig colorConfig;
     Devices::LineConfig lineConfig;
     msg::DrivetrainConfig drivetrainConfig;
-    Config::DriveBootConfig driveConfig;
-    Config::WheelControllerBootConfig wheelControllerConfig;
     float trackWidth = 0.0f;  // [mm]
     Motion::PlannerLimits plannerLimits;
   };
-  static Resolved resolve(const BootOverrides& overrides);
+  static BootValues bakeBootValues(const BootOverrides& overrides);
 
-  Resolved resolved_;
+  BootValues bootValues_;
   float trackWidth_;
 
   Devices::NezhaMotor motorL_;

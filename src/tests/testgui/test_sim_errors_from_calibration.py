@@ -172,7 +172,17 @@ def test_nocal_robot_yields_zero_error_panel(
     from robot_radio.testgui import sim_prefs
 
     nocal = _load_tovez()
-    nocal.pop("calibration", None)  # "tovez nocal": no calibration at all
+    # "tovez nocal": no calibration at all. 132-017 JSON reshape retarget:
+    # rotational_slip moved from the OLD `calibration` section (popped
+    # wholesale here, pre-reshape) onto `geometry.rotational_slip` --
+    # `_on_sim_errors_from_cal()`'s only config-derived read is THIS ONE
+    # field (`sim_prefs.resolve_calibration_defaults()`, truthy-checked:
+    # 0 is the "uncalibrated" sentinel and falls back to the neutral 1.0
+    # -- see that function's own doc comment); every other panel field is
+    # hardcoded neutral regardless of config content, so zeroing this one
+    # field reproduces the old "calibration section entirely absent"
+    # scenario exactly.
+    nocal["geometry"]["rotational_slip"] = 0.0
     nocal["identity"]["robot_name"] = "tovez nocal"
     nocal["identity"]["uid"] = "tovez-nocal"
     robot_config_env(nocal, "tovez_nocal")
@@ -212,10 +222,21 @@ def test_nocal_robot_yields_zero_error_panel(
 def test_calibrated_robot_yields_inverse_calibration(
     qapp, monkeypatch, tmp_path, robot_config_env
 ):
-    """The real calibrated tovez config -> body rot scrub = rotational_slip
-    (0.92), trackwidth = geometry.trackwidth (128), everything else neutral."""
+    """The real calibrated tovez config -> body rot scrub =
+    geometry.rotational_slip, trackwidth = geometry.trackwidth (128),
+    everything else neutral.
+
+    132-014 KNOWN GAP, RESOLVED 132-017: this test used to read its
+    expected value off the RAW tovez.json dict's OLD
+    ``cfg["calibration"]["rotational_slip"]`` path, while the GUI panel's
+    actual value flowed through ``load_robot_config() ->
+    RobotConfig.geometry.rotational_slip`` (132-020's grouped shape) --
+    mismatched paths, not just a zero-default gap. 132-017's JSON reshape
+    moved ``rotational_slip`` from ``calibration`` to ``geometry`` in the
+    file too, so the raw-dict read below is retargeted to match, and the
+    marker is dropped."""
     cfg = _load_tovez()
-    expected_slip = cfg["calibration"]["rotational_slip"]
+    expected_slip = cfg["geometry"]["rotational_slip"]
     expected_tw = cfg["geometry"]["trackwidth"]
     robot_config_env(cfg, "tovez_calibrated")
 

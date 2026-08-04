@@ -47,6 +47,18 @@ command.)
 
 Collected under ``src/tests/testgui/`` per ``pyproject.toml``'s ``testpaths``
 (107-004 re-added the directory — dropped at sprint 102 ticket 005).
+
+132-014 disposition (patch-surface retirement, host migration): ``OL``/
+``OA`` are retargeted onto ``NezhaProtocol.set_config_field(robot_config_pb2.
+OTOS, "linear_scale"/"angular_scale", value)`` (``config.proto``'s
+``OtosConfigPatch``/``ConfigDelta`` are deleted, 132-013). ``OI`` has NO
+retarget -- ``robot_config.proto``'s ``Otos`` group carries no chip-reinit
+trigger field -- and now falls to the SAME honest, no-wire-call
+"unsupported" shape ``OV``/``OP``/``OR`` already get (a NAMED reason, not
+the generic ``_UNSUPPORTED_REPLY_FMT``). ``SET`` is retargeted onto ONE
+``set_config_field()`` round trip per key (``protocol._SET_KEY_TARGETS``),
+so a multi-key ``SET`` line now sends one envelope PER KEY, never a single
+batched Patch envelope.
 """
 
 from __future__ import annotations
@@ -55,7 +67,7 @@ import pytest
 
 from robot_radio.io.wire_codec import encode_frame
 
-from robot_radio.robot.pb2 import config_pb2, envelope_pb2
+from robot_radio.robot.pb2 import envelope_pb2, robot_config_pb2
 from robot_radio.robot.protocol import NezhaProtocol
 from robot_radio.testgui import binary_bridge
 
@@ -164,18 +176,19 @@ def test_empty_line_returns_empty_string_no_wire_call(proto):
 
 
 # ---------------------------------------------------------------------------
-# 109-004: OL/OA/OI direct-patch-send -- intercepted BEFORE the launch-
-# unblock short-circuit above. Stakeholder bench fix (2026-07-22) adds SET
-# to this same intercept (_handle_set_patch(), calling NezhaProtocol.
-# set_config() directly) -- SET was found rejecting every push against real
-# hardware (calibration push logged "'SET pid.kaw=0' rejected: ERR
-# unavailable legacy verb translation removed", 1/12 values applied). These
-# four verbs (OL/OA/OI/SET) are now the ONLY ones that still build and send
-# a real envelope through translate_command().
+# 109-004, retargeted 132-014: OL/OA set_config_field() direct-send --
+# intercepted BEFORE the launch-unblock short-circuit above. Stakeholder
+# bench fix (2026-07-22) adds SET to this same intercept
+# (_handle_set_patch(), calling NezhaProtocol.set_config_field() per key
+# directly) -- SET was found rejecting every push against real hardware
+# (calibration push logged "'SET pid.kaw=0' rejected: ERR unavailable
+# legacy verb translation removed", 1/12 values applied). OL/OA/SET are the
+# ONLY verbs that still build and send a real envelope through
+# translate_command() -- OI is recognized but sends nothing (see below).
 # ---------------------------------------------------------------------------
 
 
-def test_ol_sends_otos_config_patch_with_linear_scale(proto):
+def test_ol_sends_set_field_with_linear_scale(proto):
     nezha, conn = proto
     conn.ack_result = _pack_ack(1, 0)
 
@@ -184,12 +197,14 @@ def test_ol_sends_otos_config_patch_with_linear_scale(proto):
     assert reply == "OK ol"
     assert len(conn.envelope_calls) == 1
     sent = conn.envelope_calls[0]
-    assert sent.WhichOneof("cmd") == "config"
-    assert sent.config.WhichOneof("patch") == "otos"
-    assert sent.config.otos.linear_scale == pytest.approx(1.05)
+    assert sent.WhichOneof("cmd") == "set_field"
+    assert sent.set_field.target == robot_config_pb2.OTOS
+    assert sent.set_field.field == robot_config_pb2.Otos.DESCRIPTOR.fields_by_name[
+        "linear_scale"].number
+    assert sent.set_field.value == pytest.approx(1.05)
 
 
-def test_oa_sends_otos_config_patch_with_angular_scale(proto):
+def test_oa_sends_set_field_with_angular_scale(proto):
     nezha, conn = proto
     conn.ack_result = _pack_ack(1, 0)
 
@@ -197,18 +212,24 @@ def test_oa_sends_otos_config_patch_with_angular_scale(proto):
 
     assert reply == "OK oa"
     sent = conn.envelope_calls[0]
-    assert sent.config.otos.angular_scale == pytest.approx(-0.98)
+    assert sent.set_field.target == robot_config_pb2.OTOS
+    assert sent.set_field.field == robot_config_pb2.Otos.DESCRIPTOR.fields_by_name[
+        "angular_scale"].number
+    assert sent.set_field.value == pytest.approx(-0.98)
 
 
-def test_oi_sends_otos_config_patch_with_init_trigger(proto):
+def test_oi_has_no_live_retarget_and_sends_no_envelope(proto):
+    """robot_config.proto's Otos group carries offset/scale fields only --
+    OtosConfigPatch's old init trigger has no successor field to address
+    (configurator.h's own OTOS re-appliability-table row). OI is still
+    RECOGNIZED (not the generic _UNSUPPORTED_REPLY_FMT every other dead
+    verb gets) but sends nothing."""
     nezha, conn = proto
-    conn.ack_result = _pack_ack(1, 0)
 
     reply = binary_bridge.translate_command(nezha, "OI")
 
-    assert reply == "OK oi"
-    sent = conn.envelope_calls[0]
-    assert sent.config.otos.init is True
+    assert reply.startswith("ERR unsupported OI")
+    assert conn.envelope_calls == []
 
 
 def test_ol_with_no_scale_is_badarg_no_wire_call(proto):
@@ -248,13 +269,19 @@ def test_ol_ack_timeout_renders_err(proto):
     assert len(conn.envelope_calls) == 1  # the envelope was still sent
 
 
-def test_ol_nak_ack_renders_err(proto):
+def test_ol_nak_ack_also_renders_err(proto):
+    """set_config_field() collapses timeout and NAK into the same None
+    return (132-014 -- see that method's own docstring: "check ERR_BADARG/
+    ERR_RANGE/... by polling the ack directly instead, if the distinction
+    matters"), so this now renders the SAME "ERR unknown ... timeout or
+    rejected" shape test_ol_ack_timeout_renders_err asserts, not a distinct
+    "ERR nak" message."""
     nezha, conn = proto
     conn.ack_result = _pack_ack(1, envelope_pb2.ERR_UNIMPLEMENTED)
 
     reply = binary_bridge.translate_command(nezha, "OL 1.05")
 
-    assert reply.startswith("ERR nak")
+    assert reply.startswith("ERR unknown")
 
 
 def test_ov_op_or_still_render_unsupported_reply_unchanged(proto):
@@ -344,56 +371,48 @@ def test_stream_non_numeric_period_is_badarg_no_wire_call(stream_proto):
 
 
 # ---------------------------------------------------------------------------
-# SET direct-patch-send (stakeholder bench fix, 2026-07-22) -- calls
-# NezhaProtocol.set_config(), which itself calls set_config_binary().
-#
-# set_config_binary() itself was ALSO fixed this session (protocol.py):
-# it used to send via the BLOCKING _send_envelope()/conn.send_envelope()
-# and look for a synchronous ReplyEnvelope{ok:...} -- which the current
-# single-loop firmware never sends for ANY command (docs/protocol-v4.md
-# sec 7.1). Confirmed on the real bench: with only binary_bridge.py's SET
-# routing fixed (this file's own first round of tests), calibration push
-# against real hardware still showed 9/12 keys "ERR badarg set failed" --
-# set_config_binary() itself was timing out on every call. Fixed to send
-# via send_envelope_fast() + wait_for_ack() (the ack-ring poll), matching
-# move_twist()/stop()/config()/otos_config() -- so these tests now script
-# conn.ack_result (the wait_for_ack() return value), the SAME pattern the
-# OI/OL/OA tests above use, not conn.queue_reply() (send_envelope()'s own
-# synchronous reply queue, no longer read by this call path at all).
+# SET direct-send (stakeholder bench fix, 2026-07-22, retargeted 132-014) --
+# _handle_set_patch() calls NezhaProtocol.set_config_field() ONCE PER KEY
+# directly (not through set_config()), resolved via protocol._SET_KEY_TARGETS
+# -- so a multi-key SET line now sends one envelope per key, never one
+# batched Patch envelope. Ack-ring polling (conn.ack_result, the SAME
+# pattern the OL/OA tests above use) is unchanged -- set_config_field()
+# still fires via send_envelope_fast() + wait_for_ack().
 # ---------------------------------------------------------------------------
 
 
-def test_set_motor_pid_keys_send_one_left_side_motor_patch(proto):
+def test_set_wheel_control_pid_keys_send_two_set_field_envelopes(proto):
     nezha, conn = proto
     conn.ack_result = _pack_ack(1, 0)
 
     reply = binary_bridge.translate_command(nezha, "SET pid.kp=1.5 pid.kaw=20")
 
     assert reply == "OK set pid.kp=1.5 pid.kaw=20"
-    assert len(conn.envelope_calls) == 1
-    sent = conn.envelope_calls[0]
-    assert sent.WhichOneof("cmd") == "config"
-    assert sent.config.WhichOneof("patch") == "motor"
-    assert sent.config.motor.side == 0  # LEFT -- both PID keys land on ONE envelope
-    assert sent.config.motor.kp == pytest.approx(1.5)
-    assert sent.config.motor.kaw == pytest.approx(20)
+    assert len(conn.envelope_calls) == 2
+    for env in conn.envelope_calls:
+        assert env.WhichOneof("cmd") == "set_field"
+        assert env.set_field.target == robot_config_pb2.WHEEL_CONTROL
+    fields = {robot_config_pb2.WheelControl.DESCRIPTOR.fields_by_number[env.set_field.field].name
+              for env in conn.envelope_calls}
+    assert fields == {"pid_kp", "pid_max"}  # pid.kp -> pid_kp, pid.kaw -> pid_max
 
 
-def test_set_drivetrain_keys_send_drivetrain_patch(proto):
+def test_set_geometry_keys_send_two_set_field_envelopes(proto):
     nezha, conn = proto
     conn.ack_result = _pack_ack(1, 0)
 
     reply = binary_bridge.translate_command(nezha, "SET tw=128 rotSlip=0.92")
 
     assert reply == "OK set tw=128 rotSlip=0.92"
-    assert len(conn.envelope_calls) == 1
-    sent = conn.envelope_calls[0]
-    assert sent.config.WhichOneof("patch") == "drivetrain"
-    assert sent.config.drivetrain.trackwidth == pytest.approx(128)
-    assert sent.config.drivetrain.rotational_slip == pytest.approx(0.92)
+    assert len(conn.envelope_calls) == 2
+    for env in conn.envelope_calls:
+        assert env.set_field.target == robot_config_pb2.GEOMETRY
+    fields = {robot_config_pb2.Geometry.DESCRIPTOR.fields_by_number[env.set_field.field].name
+              for env in conn.envelope_calls}
+    assert fields == {"trackwidth", "rotational_slip"}
 
 
-def test_set_ml_mr_send_two_separate_motor_side_patches(proto):
+def test_set_ml_mr_send_two_separate_motors_set_field_envelopes(proto):
     nezha, conn = proto
     conn.ack_result = _pack_ack(1, 0)
 
@@ -401,8 +420,11 @@ def test_set_ml_mr_send_two_separate_motor_side_patches(proto):
 
     assert reply.startswith("OK set")
     assert len(conn.envelope_calls) == 2
-    sides = {env.config.motor.side for env in conn.envelope_calls}
-    assert sides == {config_pb2.LEFT, config_pb2.RIGHT}
+    for env in conn.envelope_calls:
+        assert env.set_field.target == robot_config_pb2.MOTORS
+    fields = {robot_config_pb2.Motors.DESCRIPTOR.fields_by_number[env.set_field.field].name
+              for env in conn.envelope_calls}
+    assert fields == {"travel_calib_left", "travel_calib_right"}
 
 
 def test_set_unknown_key_is_badkey_no_wire_call(proto):
@@ -441,23 +463,23 @@ def test_set_with_no_kv_pairs_is_badarg_no_wire_call(proto):
     assert conn.envelope_calls == []
 
 
-def test_set_nak_ack_renders_set_failed(proto):
+def test_set_nak_ack_renders_set_failed_at_key(proto):
     nezha, conn = proto
     conn.ack_result = _pack_ack(1, envelope_pb2.ERR_BADARG)
 
     reply = binary_bridge.translate_command(nezha, "SET tw=128")
 
-    assert reply == "ERR badarg set failed"
+    assert reply == "ERR badarg set failed at tw"
     assert len(conn.envelope_calls) == 1  # the envelope was still sent
 
 
-def test_set_ack_timeout_renders_set_failed(proto):
+def test_set_ack_timeout_renders_set_failed_at_key(proto):
     nezha, conn = proto
     conn.ack_result = None  # no matching completion ack ever arrives
 
     reply = binary_bridge.translate_command(nezha, "SET tw=128")
 
-    assert reply == "ERR badarg set failed"
+    assert reply == "ERR badarg set failed at tw"
     assert len(conn.envelope_calls) == 1  # the envelope was still sent
 
 
@@ -469,8 +491,11 @@ def test_set_ack_timeout_renders_set_failed(proto):
 
 
 def test_reply_oneof_no_longer_has_id_echo_helptext():
+    """132-011 adds `cfg` (ConfigSnapshot, GetConfig's synchronous reply) --
+    the body oneof's first genuinely NEW arm since the pre-102 prune this
+    test's own name refers to; id/echo/helptext stay gone."""
     fields = envelope_pb2.ReplyEnvelope.DESCRIPTOR.oneofs_by_name["body"].fields
-    assert {f.name for f in fields} == {"ok", "err", "tlm"}
+    assert {f.name for f in fields} == {"ok", "err", "tlm", "cfg"}
 
 
 @pytest.mark.skip(reason="DEPRECATED-COMMAND-INGEST -- the cmd oneof gained "

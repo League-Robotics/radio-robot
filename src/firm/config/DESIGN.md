@@ -38,6 +38,21 @@ hands `main.cpp` motor/drivetrain/OTOS/estimator defaults.
 
 ## 2. Orientation
 
+**Stale notice (sprint 132, "configuration discipline"):** this section
+(and most of the rest of this file) predates 132-001 through 132-007 and
+does not yet describe `Config::Robot` (`robot.h`, 132-006/132-007's own
+whole-configuration object, generated-group members from
+`messages/robot_config.h` plus its own derived-value methods —
+`effectiveTrackWidth()`/`rotationOffsetPos()`/`rotationOffsetNeg()`/
+`velocityFilterWeight()`), `App::Configurator`'s ownership of it
+(`app/configurator.h`), the `Config::default*Group()` family
+(`boot_config.h`, 132-005), `config_parity_capi.h`/`.cpp` (132-003), or
+`persisted_tuning.h`/`.cpp`. A full reconciliation pass is out of this
+file's individual ticket scopes so far; see each new file's own header
+comment for its current, accurate documentation, and 132's own sprint.md
+for the end-state shape this directory is converging on. The two files
+below remain accurate for the ORIGINAL boot-baking seam they describe.
+
 Two files, two very different authorship models:
 
 - **`boot_config.h`** is hand-written. It declares the `Config::default*()`
@@ -129,11 +144,16 @@ see `docs/design/design.md` §5, devices isolation invariant), and never touches
   `calibration.otos_*`) are still consumed exactly once, at `Devices::Otos`
   construction/`begin()`, in `main.cpp`; there is no live SET path for
   `OtosBootConfig` itself and none is planned. **109-004 added a SEPARATE,
-  live runtime OVERRIDE** on top of that boot baking: `OtosConfigPatch`
+  live runtime OVERRIDE** on top of that boot baking: HISTORICALLY (until
+  132-013, patch-surface retirement) the curated Otos live-tuning message
   (`config.proto`/`envelope.proto`), applied by `RobotLoop::handleConfig`
   directly against `Devices::Otos`'s existing `setLinearScalar()`/
   `setAngularScalar()`/`setOffset()`/`init()` primitives (`OL`/`OA`/`OI`,
-  host-side `NezhaProtocol.otos_config()`) — a live wire-triggered
+  host-side `NezhaProtocol.otos_config()`); now (132-013) the OTOS group's
+  own live wire arm (`robot_config.proto`'s `Otos`, `Configurator::
+  install(OTOS)`), against the same setLinearScalar()/setAngularScalar()/
+  setOffset() primitives minus `init()`, which has no Config::Robot-shaped
+  wire path any more — a live wire-triggered
   RE-calibration after boot, not a rebaking of the boot config struct
   itself. `Otos::setLinearScalar()`/`setAngularScalar()` still write the
   chip's own raw int8 register scalar directly (not the `OtosBootConfig`
@@ -143,12 +163,13 @@ see `docs/design/design.md` §5, devices isolation invariant), and never touches
   "boot-baked, plus a separate live override" shape** — the BOOT defaults
   (baked from the robot JSON's `estimator.*` keys) are consumed once, at
   `App::StateEstimator` construction, in `main.cpp` (ticket 004 wires the
-  actual construction call). `EstimatorConfigPatch` (`config.proto`/
-  `envelope.proto`) is the SEPARATE, live runtime override, applied by
-  `RobotLoop::handleConfig`'s `ESTIMATOR` branch directly against
-  `StateEstimator::setWeights()` (host-side `NezhaProtocol.
-  estimator_config()`) — but UNLIKE `OtosConfigPatch`, this live override
-  is NEVER written back into `persistedTuning_`/flash (Design Rationale
+  actual construction call). HISTORICALLY (until 132-013), the curated
+  Estimator live-tuning message (`config.proto`/`envelope.proto`) was the
+  SEPARATE, live runtime override, applied by `RobotLoop::handleConfig`'s
+  `ESTIMATOR` branch directly against `StateEstimator::setWeights()`
+  (host-side `NezhaProtocol.estimator_config()`) — but UNLIKE the curated
+  Otos live-tuning message, this live override was NEVER written back
+  into `persistedTuning_`/flash (Design Rationale
   Decision 4, sprint 117's overlay `design/design.md`): a reboot always
   reverts to `EstimatorBootConfig`'s baked value, never the last live-tuned
   one. `EstimatorBootConfig` itself is declared independently of `App::
@@ -218,8 +239,11 @@ constants block once, rather than re-deriving it per field.
   (117 ticket 003): `App::StateEstimator`'s fail-closed boot-time
   fusion-weight defaults (`headingOtos`/`omegaOtos`/`staleness`). Consumed
   by `main.cpp`'s `App::StateEstimator` construction (ticket 004) — never a
-  wire surface itself (§3); the separate live `EstimatorConfigPatch`
-  override is dispatched by `RobotLoop::handleConfig`, not this function.
+  wire surface itself (§3); HISTORICALLY the separate live curated
+  Estimator live-tuning message was dispatched by `RobotLoop::
+  handleConfig`, not this function -- superseded 132-013 by the ESTIMATOR
+  group's own wire arm (`robot_config.proto`), which likewise never
+  touches this baking function.
 ### Consumes
 - **`msg::MotorConfig`/`msg::DrivetrainConfig`** (from `messages/`) — the
   wire-plane structs this subsystem's functions return; see

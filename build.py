@@ -81,8 +81,6 @@ if options.revision:
 # sprint adds a Robot/ConfigRegistry back. The check is structural (does
 # src/firm/robot/ exist?), not a version flag, so it self-heals the moment that
 # directory reappears (architecture-update.md Design Rationale Decision 4).
-# check_config_sync.py is a separate CI lint (.github/workflows/build.yml),
-# not something build.py itself calls -- nothing to condition for it here.
 import subprocess as _sp
 _source_robot_dir = os.path.join(os.path.dirname(__file__), "src", "firm", "robot")
 if os.path.isdir(_source_robot_dir):

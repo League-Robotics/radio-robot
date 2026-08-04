@@ -42,19 +42,21 @@ def _envelope_command_name(envelope: "envelope_pb2.CommandEnvelope") -> bytes:
 
 class SimConfigConn:
     """Duck-typed ``SerialConnection`` substitute so ``NezhaProtocol.
-    config()``/``NezhaProtocol.set_config()`` can be reused VERBATIM against
-    a ``SimLoop`` -- Architecture Revision 1's "one mechanism, not a
-    Sim-specific fork" (sprint 109): the exact same envelope-building/
-    key-vocabulary code hardware transports use, just injected via
-    ``SimLoop.inject_command()`` instead of a live serial write.
+    set_config()``/``set_config_field()``/``set_config_group()``/
+    ``get_config()`` can be reused VERBATIM against a ``SimLoop`` --
+    Architecture Revision 1's "one mechanism, not a Sim-specific fork"
+    (sprint 109): the exact same envelope-building/key-vocabulary code
+    hardware transports use, just injected via ``SimLoop.inject_command()``
+    instead of a live serial write.
 
-    Implements ``send_envelope_fast()`` -- the one method
-    ``NezhaProtocol.config()`` calls on ``self._conn`` (duck-typed, no
-    ``isinstance`` check inside it) -- and ``send_envelope()`` (113-005
-    addition, needed by ``NezhaProtocol.set_config()``'s own
-    ``set_config_binary()``/``_send_envelope()`` call chain, which
-    ``config()`` does not use). Deliberately does NOT implement
-    ``wait_for_ack()``: ``NezhaProtocol.wait_for_ack()`` unconditionally
+    Implements ``send_envelope_fast()`` -- the method
+    ``set_config_field()``/``set_config_group()``/``set_config()`` call on
+    ``self._conn`` (duck-typed, no ``isinstance`` check inside it) -- and
+    ``send_envelope()`` (113-005 addition, needed by ``get_config()``'s own
+    BLOCKING ``_send_envelope()`` call, 132-011 -- the one CONFIG-arm
+    outcome with a genuinely synchronous reply). Deliberately does NOT
+    implement ``wait_for_ack()``: ``NezhaProtocol.wait_for_ack()``
+    unconditionally
     re-wraps whatever ``self._conn.wait_for_ack()`` returns via
     ``AckEntry.from_pb2()``, which expects a RAW ``telemetry_pb2.AckEntry``
     (``.status``/``.corr_id``/``.err_code``) -- but ``SimLoop.

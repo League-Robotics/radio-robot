@@ -55,6 +55,23 @@ target``) are rewritten onto a non-watchdog ``ConfigDelta``/kwarg pair.
 character instead of falling back to ``"I"`` (the 115-gate-noted decode
 gap, ``docs/bench-checklists/sprint-115-gut-s1.md``).
 
+132-014 disposition (patch-surface retirement, host migration): ``config.proto``
+(``ConfigDelta``/``*ConfigPatch``, this section's own live ``config`` arm
+target) is deleted wholesale by 132-013 -- ``envelope.proto``'s ``config``
+arm (field 6) now carries ``robot_config.proto``'s ``SetConfigGroup``
+instead. Section 2's ``set_config_binary()`` tests are DELETED (the method
+itself is deleted -- its whole-``ConfigDelta``-in, ``AckEntry``-out shape
+has no successor to test; ``set_config_group()`` is the new whole-group
+send, covered by protocol.py's own module-level example). Section 3's
+``set_config()`` tests are REWRITTEN, not deleted: ``set_config()`` itself
+survives (rebuilt as a thin fan-out over ``set_config_field()`` via the new
+``_SET_KEY_TARGETS`` table, protocol.py), so its OWN wire-shape assertions
+change (``sent.set_field.target``/``.field``/``.value``, not
+``sent.config.WhichOneof("patch")``) but its kwargs-in/dict-out CONTRACT
+does not. ``test_set_config_field_round_trips_ack_over_real_framing_and_
+derives_set_field_prefix`` (already covering the NEW ``set_field`` arm,
+132-012) is unaffected, kept as-is.
+
 Collected under ``src/tests/unit/`` (host-side unit/tooling check, not
 sim/bench/playfield-scoped — see ``tests/CLAUDE.md``); ``pyproject.toml``'s
 ``testpaths`` includes ``tests/unit`` so ``uv run python -m pytest`` collects
@@ -70,7 +87,7 @@ import pytest
 
 from robot_radio.io.serial_conn import SerialConnection
 from robot_radio.io.wire_codec import decode_frame, encode_frame
-from robot_radio.robot.pb2 import common_pb2, config_pb2, envelope_pb2, telemetry_pb2
+from robot_radio.robot.pb2 import common_pb2, envelope_pb2, robot_config_pb2, telemetry_pb2
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 from robot_radio.robot._legacy_tlm_text import parse_historical_tlm_line
 
@@ -266,9 +283,11 @@ def test_from_pb2_conn_left_right_derived_from_flags(raw_left, raw_right):
 
 
 # ---------------------------------------------------------------------------
-# 2. NezhaProtocol.set_config_binary() -- the live half of 096-007's binary
-# config client (get_config_binary() targeted the now-reserved `get` arm --
-# deleted by 104-002, see this file's own header note).
+# 2. NezhaProtocol.set_config_field() -- 132-012, round-tripped through the
+# REAL SerialConnection/COBS+CRC framing. set_config_binary() (096-007's
+# original binary config client, targeting the now-deleted ConfigDelta arm)
+# is gone -- 132-013 deleted config.proto wholesale; see this file's own
+# header note for the full 132-014 disposition.
 # ---------------------------------------------------------------------------
 
 # flags bit 5 (kFlagAckFresh) -- telemetry.proto Telemetry.flags, 115-003
@@ -368,16 +387,28 @@ class _NoReplySerial:
         return b""
 
 
-def test_set_config_binary_round_trips_ack_and_builds_correct_envelope():
+def test_set_config_field_round_trips_ack_over_real_framing_and_derives_set_field_prefix():
+    """132-012: unlike the pb2-level tests in test_protocol_set_config_
+    field.py, this one round-trips through the REAL SerialConnection/COBS+
+    CRC framing (_ConfigLoopbackSerial, this file's own fixture) -- proving
+    the load-bearing arm-name contract concretely: ``set_field`` (the
+    CommandEnvelope.cmd oneof arm 132-012 added) must derive the wire line's
+    ``SET_FIELD:`` prefix via ``WhichOneof("cmd").upper()``
+    (``io/serial_conn.py``'s ``_envelope_command_name()``), and that prefix
+    must be a verb ``wire_commands.py`` actually recognizes as binary --
+    both regenerated from commands.proto's own SET_FIELD row (132-012) by
+    the SAME gen_messages.py pipeline this repo's build always runs.
+    _ConfigLoopbackSerial itself is command-name-agnostic (it decodes
+    whatever ``<COMMAND>:`` prefix arrives via ``decode_frame()``), so this
+    is the same fixture ``test_set_config_binary_round_trips_ack_and_
+    builds_correct_envelope`` above already trusts for ``CONFIG``."""
     fake = _ConfigLoopbackSerial()
     conn = SerialConnection()
     conn._ser = fake
     conn._start_reader()
     try:
         proto = NezhaProtocol(conn)
-        delta = envelope_pb2.ConfigDelta(
-            drivetrain=config_pb2.DrivetrainConfigPatch(trackwidth=128.0, rotational_slip=0.92))
-        ack = proto.set_config_binary(delta)
+        ack = proto.set_config_field(robot_config_pb2.DRIVE, "wheel_gain_left_decel", 1.043)
     finally:
         conn._stop_reader()
 
@@ -387,61 +418,52 @@ def test_set_config_binary_round_trips_ack_and_builds_correct_envelope():
 
     assert len(fake.sent_envelopes) == 1
     sent = fake.sent_envelopes[0]
-    assert sent.WhichOneof("cmd") == "config"
-    assert sent.config.WhichOneof("patch") == "drivetrain"
-    assert sent.config.drivetrain.trackwidth == pytest.approx(128.0)
-    assert sent.config.drivetrain.rotational_slip == pytest.approx(0.92)
+    assert sent.WhichOneof("cmd") == "set_field"
+    assert sent.set_field.target == robot_config_pb2.DRIVE
+    assert sent.set_field.field == robot_config_pb2.Drive.DESCRIPTOR.fields_by_name[
+        "wheel_gain_left_decel"].number
+    assert sent.set_field.value == pytest.approx(1.043)
 
-    # Byte-identical to an independently pb2-built reference envelope with
-    # the SAME (send_envelope()-assigned) corr_id -- pb2 is the "host-side
-    # codec" here (see this file's own header note).
-    reference = envelope_pb2.CommandEnvelope(
-        corr_id=sent.corr_id,
-        config=envelope_pb2.ConfigDelta(
-            drivetrain=config_pb2.DrivetrainConfigPatch(trackwidth=128.0, rotational_slip=0.92)))
-    assert sent.SerializeToString() == reference.SerializeToString()
+    # The wire line itself carried the "SET_FIELD:" prefix (not, say, a
+    # generic "CONFIG:" or the message type's own literal name) --
+    # confirms WhichOneof("cmd").upper() derivation actually ran, not just
+    # that SOME frame arrived and decoded.
+    assert any(raw.startswith(b"SET_FIELD:") for raw in fake.raw_writes)
 
 
-def test_set_config_binary_returns_none_on_timeout():
+def test_set_config_field_returns_none_on_timeout_over_real_framing():
     conn = SerialConnection()
     conn._ser = _NoReplySerial()
     conn._start_reader()
     try:
         proto = NezhaProtocol(conn)
-        ack = proto.set_config_binary(
-            envelope_pb2.ConfigDelta(
-                drivetrain=config_pb2.DrivetrainConfigPatch(trackwidth=128.0)),
-            read_timeout=50)
+        ack = proto.set_config_field(
+            robot_config_pb2.DRIVE, "wheel_gain_left_decel", 1.043, read_timeout=50)
     finally:
         conn._stop_reader()
 
     assert ack is None
 
 
-def test_set_config_binary_not_connected_raises_connection_error():
-    """Bench fix (2026-07-22): set_config_binary() now sends via
-    send_envelope_fast() (fire-and-poll, matching move_twist()/stop()/
-    config()), which raises ConnectionError when not connected -- see that
-    method's own docstring. Before this fix, the OLD blocking
-    send_envelope() swallowed "not connected" into a plain None return;
-    the new behavior is consistent with every sibling fire-and-poll method
-    on this class (move_twist()/move_wheels()/stop()/config()/
-    otos_config() all document "raises ConnectionError if not connected"),
-    not a regression."""
+def test_set_config_field_not_connected_raises_connection_error():
+    """set_config_field() sends via send_envelope_fast() (fire-and-poll,
+    matching move_twist()/stop()/set_config_group()), which raises
+    ConnectionError when not connected -- see that method's own docstring
+    (132-014 -- this coverage used to live on the now-deleted
+    set_config_binary(), which shared the exact same send path)."""
     conn = SerialConnection()  # _ser stays None -- never connected
     proto = NezhaProtocol(conn)
 
     with pytest.raises(ConnectionError):
-        proto.set_config_binary(
-            envelope_pb2.ConfigDelta(drivetrain=config_pb2.DrivetrainConfigPatch(trackwidth=128.0)),
-            read_timeout=50)
+        proto.set_config_field(
+            robot_config_pb2.DRIVE, "wheel_gain_left_decel", 1.043, read_timeout=50)
 
 
 # ---------------------------------------------------------------------------
-# 3. NezhaProtocol.set_config() (097-002) -- thin wrapper over
-# set_config_binary() (096-007); reuses _ConfigLoopbackSerial (section 2
-# above). get_config()/get_config_binary() were DELETED by 104-002 (no live
-# config READ-back arm) -- see this file's own header note.
+# 3. NezhaProtocol.set_config() -- 132-014: rebuilt as a thin fan-out over
+# set_config_field() (above) via the _SET_KEY_TARGETS table, reusing
+# _ConfigLoopbackSerial (section 2 above). No longer a wrapper over
+# set_config_binary()/ConfigDelta (both deleted, 132-013).
 # ---------------------------------------------------------------------------
 
 
@@ -458,7 +480,7 @@ def _connected_proto(fake):
         conn._stop_reader()
 
 
-def test_set_config_single_drivetrain_key_sends_binary_and_returns_applied():
+def test_set_config_single_geometry_key_sends_set_field_and_returns_applied():
     fake = _ConfigLoopbackSerial()
     with _connected_proto(fake) as proto:
         result = proto.set_config(tw=128)
@@ -466,21 +488,16 @@ def test_set_config_single_drivetrain_key_sends_binary_and_returns_applied():
     assert result == {"tw": "128"}
     assert len(fake.sent_envelopes) == 1
     sent = fake.sent_envelopes[0]
-    assert sent.WhichOneof("cmd") == "config"
-    assert sent.config.WhichOneof("patch") == "drivetrain"
-    assert sent.config.drivetrain.trackwidth == pytest.approx(128.0)
-
-    reference = envelope_pb2.CommandEnvelope(
-        corr_id=sent.corr_id,
-        config=envelope_pb2.ConfigDelta(
-            drivetrain=config_pb2.DrivetrainConfigPatch(trackwidth=128.0)))
-    assert sent.SerializeToString() == reference.SerializeToString()
+    assert sent.WhichOneof("cmd") == "set_field"
+    assert sent.set_field.target == robot_config_pb2.GEOMETRY
+    assert sent.set_field.field == robot_config_pb2.Geometry.DESCRIPTOR.fields_by_name[
+        "trackwidth"].number
+    assert sent.set_field.value == pytest.approx(128.0)
 
 
-def test_set_config_motor_pid_key_applies_once_on_left_envelope():
-    """pid.* is applied to BOTH bound motors server-side from ONE patch
-    (handleConfigMotor(), binary_channel.cpp) -- set_config() must send only
-    ONE envelope for a pid.*-only call, not two."""
+def test_set_config_motor_pid_key_sends_wheel_control_set_field():
+    """pid.* now targets WHEEL_CONTROL.pid_kp (130-005/132-014) -- ONE
+    set_field envelope, same as every other single-key set_config() call."""
     fake = _ConfigLoopbackSerial()
     with _connected_proto(fake) as proto:
         result = proto.set_config(**{"pid.kp": 1.5})
@@ -488,15 +505,17 @@ def test_set_config_motor_pid_key_applies_once_on_left_envelope():
     assert result == {"pid.kp": "1.5"}
     assert len(fake.sent_envelopes) == 1
     sent = fake.sent_envelopes[0]
-    assert sent.config.WhichOneof("patch") == "motor"
-    assert sent.config.motor.side == config_pb2.LEFT
-    assert sent.config.motor.kp == pytest.approx(1.5)
+    assert sent.set_field.target == robot_config_pb2.WHEEL_CONTROL
+    assert sent.set_field.field == robot_config_pb2.WheelControl.DESCRIPTOR.fields_by_name[
+        "pid_kp"].number
+    assert sent.set_field.value == pytest.approx(1.5)
 
 
-def test_set_config_ml_and_mr_together_sends_two_motor_envelopes():
-    """ml/mr both patch MotorConfigPatch.travel_calib, disambiguated by
-    `side` -- a single MotorConfigPatch cannot carry both at once, so this
-    needs two envelopes (unlike the pid.* case above)."""
+def test_set_config_ml_and_mr_together_sends_two_motors_set_field_envelopes():
+    """ml/mr both target MOTORS, but different FIELDS
+    (travel_calib_left/travel_calib_right) -- two independent set_field
+    round trips, each safely additive (132-014: unlike the old
+    MotorConfigPatch.side split, neither push can zero the other's field)."""
     fake = _ConfigLoopbackSerial()
     with _connected_proto(fake) as proto:
         result = proto.set_config(ml=0.487, mr=0.481)
@@ -504,24 +523,29 @@ def test_set_config_ml_and_mr_together_sends_two_motor_envelopes():
     assert result == {"ml": "0.487", "mr": "0.481"}
     assert len(fake.sent_envelopes) == 2
     left, right = fake.sent_envelopes
-    assert left.config.motor.side == config_pb2.LEFT
-    assert left.config.motor.travel_calib == pytest.approx(0.487)
-    assert right.config.motor.side == config_pb2.RIGHT
-    assert right.config.motor.travel_calib == pytest.approx(0.481)
+    assert left.set_field.target == right.set_field.target == robot_config_pb2.MOTORS
+    assert left.set_field.field == robot_config_pb2.Motors.DESCRIPTOR.fields_by_name[
+        "travel_calib_left"].number
+    assert left.set_field.value == pytest.approx(0.487)
+    assert right.set_field.field == robot_config_pb2.Motors.DESCRIPTOR.fields_by_name[
+        "travel_calib_right"].number
+    assert right.set_field.value == pytest.approx(0.481)
 
 
-def test_set_config_spans_multiple_targets_sends_one_envelope_per_target():
-    """tw= (drivetrain) and pid.kp= (motor) are DIFFERENT ConfigDelta.patch
-    targets -- set_config() must fan them out into two round trips, one per
-    target (unlike config()'s stricter single-target-per-call contract)."""
+def test_set_config_spans_multiple_targets_sends_one_envelope_per_key():
+    """tw= (GEOMETRY) and pid.kp= (WHEEL_CONTROL) are DIFFERENT
+    ConfigGroupTargets -- set_config() fans them out into two round trips,
+    one per KEY now (132-014: the per-field primitive makes "one round
+    trip per target" and "one round trip per key" the same thing, unlike
+    the old per-target-patch batching)."""
     fake = _ConfigLoopbackSerial()
     with _connected_proto(fake) as proto:
         result = proto.set_config(tw=128, **{"pid.kp": 1.5})
 
     assert result == {"tw": "128", "pid.kp": "1.5"}
     assert len(fake.sent_envelopes) == 2
-    patches = {e.config.WhichOneof("patch") for e in fake.sent_envelopes}
-    assert patches == {"drivetrain", "motor"}
+    targets = {e.set_field.target for e in fake.sent_envelopes}
+    assert targets == {robot_config_pb2.GEOMETRY, robot_config_pb2.WHEEL_CONTROL}
 
 
 def test_set_config_unknown_key_returns_none_with_no_wire_traffic():

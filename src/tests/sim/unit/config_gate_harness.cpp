@@ -101,7 +101,7 @@ bool findAck(const std::vector<TestSupport::DecodedLine>& lines, uint32_t corrId
   return false;
 }
 
-// --- Hand-rolled CommandEnvelope{config: ConfigDelta{motor: ...}} encoder --
+// --- Hand-rolled CommandEnvelope{config: SetConfigGroup{WHEEL_CONTROL, ...}} encoder --
 // (mirrors app_robot_loop_harness.cpp's own Buf/putVarintField/
 // putFloatField/putMessageField/armorLine helpers -- no encode(CommandEnvelope)
 // codec exists, firmware only ever decodes one; a host/test builds commands
@@ -171,21 +171,37 @@ std::string armorLine(const uint8_t* raw, size_t rawLen, const char* command) {
   return line;
 }
 
-// Builds an armored CommandEnvelope{corr_id, config: ConfigDelta{motor:
-// MotorConfigPatch{side=LEFT, kp}}} line -- a MOTOR patch (not DRIVETRAIN)
-// deliberately: handleConfig() live-applies MOTOR/PLANNER/OTOS patches and
-// acks OK; only DRIVETRAIN/WATCHDOG/NONE stay ERR_UNIMPLEMENTED. Any
-// live-applying patch kind demonstrates "CONFIG stays unconditional" -- MOTOR
-// is the simplest to construct by hand.
-std::string armorMotorConfigCommand(float kp, uint32_t corrId) {
-  Buf motorPatch;
-  putVarintField(motorPatch, 1, 0);      // MotorConfigPatch.side = LEFT (0)
-  putFloatField(motorPatch, 3, kp);      // MotorConfigPatch.kp
-  Buf configDelta;
-  putMessageField(configDelta, 2, motorPatch);  // ConfigDelta.motor, field 2
+// Builds an armored CommandEnvelope{corr_id, config: SetConfigGroup{
+// target=WHEEL_CONTROL, body=WheelControl{..., pid_kp=kp}}} line --
+// WHEEL_CONTROL (132-013's replacement for the deleted MOTOR patch that
+// used to carry kp -- see Configurator::isLiveConfigurable(),
+// configurator.cpp) is live (Configurator::install(WHEEL_CONTROL) runs
+// unconditionally, unaffected by the configuration-completeness gate this
+// file tests) and demonstrates "CONFIG stays unconditional" the same way
+// the deleted MOTOR patch used to. Every OTHER WheelControl field is
+// encoded at its own real baked default (config/boot_config.cpp's
+// defaultWheelControllerConfig()) -- applyGroup() is a WHOLE-GROUP
+// replace, no merge (132-008), so leaving them unset would silently zero
+// them in config_.wheelControl instead of only changing kp.
+std::string armorWheelControlConfigCommand(float kp, uint32_t corrId) {
+  Buf wheelControl;
+  putFloatField(wheelControl, 1, 99.7f);   // v_min [mm/s]
+  putFloatField(wheelControl, 2, 23.8f);   // bias_max [mm/s]
+  putFloatField(wheelControl, 3, 30.0f);   // tau_adapt [s]
+  putFloatField(wheelControl, 4, 30.0f);   // a_steady [mm/s^2]
+  putFloatField(wheelControl, 5, 0.0f);    // deficit_threshold [mm/s]
+  putFloatField(wheelControl, 6, 0.0f);    // deficit_window [ms]
+  putFloatField(wheelControl, 7, kp);      // pid_kp -- the field under test
+  putFloatField(wheelControl, 8, 0.0f);    // pid_ki [1/s]
+  putFloatField(wheelControl, 9, 0.0f);    // pid_i_max [mm/s]
+  putFloatField(wheelControl, 10, 0.0f);   // pid_kaff [s]
+  putFloatField(wheelControl, 11, 0.0f);   // pid_max [mm/s]
+  Buf setConfigGroup;
+  putVarintField(setConfigGroup, 1, 4);  // SetConfigGroup.target = WHEEL_CONTROL (4)
+  putMessageField(setConfigGroup, 2, wheelControl);  // SetConfigGroup.body, field 2
   Buf env;
-  putVarintField(env, 1, corrId);        // CommandEnvelope.corr_id
-  putMessageField(env, 6, configDelta);  // CommandEnvelope.config, field 6
+  putVarintField(env, 1, corrId);            // CommandEnvelope.corr_id
+  putMessageField(env, 6, setConfigGroup);   // CommandEnvelope.config, field 6
   return armorLine(env.data, env.len, "CONFIG");
 }
 
@@ -266,16 +282,16 @@ int main() {
 
   // --- Scenario 4: CONFIG still works while unconfigured -------------------
   {
-    beginScenario("CONFIG{motor} against an unconfigured harness: still ack_err==0/OK "
+    beginScenario("CONFIG{WHEEL_CONTROL} against an unconfigured harness: still ack_err==0/OK "
                   "(unconditional, unaffected by the gate)");
     TestSim::SimHarness sim;
     sim.boot();
     sim.step(3);
     (void)sim.drainTelemetry();
 
-    checkTrue(!sim.isConfigured(), "setup: still unconfigured before the config patch");
-    std::string line = armorMotorConfigCommand(/*kp=*/0.05f, /*corrId=*/504);
-    checkTrue(!line.empty(), "armor() of the CONFIG{motor} envelope succeeds");
+    checkTrue(!sim.isConfigured(), "setup: still unconfigured before the config push");
+    std::string line = armorWheelControlConfigCommand(/*kp=*/0.05f, /*corrId=*/504);
+    checkTrue(!line.empty(), "armor() of the CONFIG{WHEEL_CONTROL} envelope succeeds");
     sim.injectCommand(line);
     sim.step(3);
 
@@ -283,18 +299,17 @@ int main() {
     uint32_t errCode = 1;  // any nonzero sentinel -- overwritten by findAck() on a match
     checkTrue(findAck(lines, 504, &errCode), "an ack for corrId=504 was seen");
     checkTrue(errCode == 0,
-              "CONFIG{motor} still acks ack_err==0/OK even though the harness is unconfigured");
-    // 125-003: kp used to route to App::Drive's own interim motion-local
-    // wheel-velocity PID gains, not Devices::Motor::gains() (deleted -- the
-    // velocity PID moved off the motor entirely, sprint.md Decision 2/7).
-    // 128-015: that interim PID class is deleted outright. Planner
-    // integration (2026-07-26) -> 130-005: pid.* wire keys retargeted AGAIN,
-    // this time from the planner's own (parked, dead) M4 duty stage onto
-    // App::Drive's unified wheel-speed controller -- the ONE wheel
-    // controller every cmdVelocity writer shares (drive.h's own header).
+              "CONFIG{WHEEL_CONTROL} still acks ack_err==0/OK even though the harness is unconfigured");
+    // pid_kp routes to App::Drive's unified wheel-speed controller (Stage
+    // B) via Configurator::install(WHEEL_CONTROL) -> Drive::configure() --
+    // the ONE wheel controller every cmdVelocity writer shares (drive.h's
+    // own header). 132-013 (patch-surface retirement): this used to be
+    // MotorConfigPatch.kp/the MOTOR arm; now it is WheelControl.pid_kp/the
+    // WHEEL_CONTROL group, applyGroup()'s whole-group push replacing the
+    // deleted merge-patch, same live-apply-while-unconfigured property.
     checkFloatEq(sim.drive().controlGains().kp, 0.05f,
-                 "the motor patch's kp actually landed live on Drive's controller -- handleConfig() ran, "
-                 "unaffected by the gate");
+                 "the pushed group's pid_kp actually landed live on Drive's controller -- "
+                 "CONFIG ran, unaffected by the gate");
   }
 
   // --- Scenario 5: configured-then-accepted -- real motion, no port

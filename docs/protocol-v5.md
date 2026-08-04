@@ -50,7 +50,7 @@ and is framed identically:
 
 | Plane | Shape | Carries |
 |---|---|---|
-| Binary command verbs (host→robot) | `<VERB>':'<COBS+CRC frame>'\n'` | `MOVE`/`CONFIG`/`STOP`/`WHEELS`/`ESTOP` — `CommandEnvelope`'s five `cmd` oneof arms (§3) |
+| Binary command verbs (host→robot) | `<VERB>':'<COBS+CRC frame>'\n'` | `MOVE`/`CONFIG`/`STOP`/`WHEELS`/`ESTOP`/`GET_CONFIG` — `CommandEnvelope`'s six `cmd` oneof arms (§3) |
 | Cleartext command verbs (host→robot) | `<VERB>'\n'`, no data | `HELLO` (identity request), `PING` (liveness), `ID` (configured-identity request), `VER` (build-version request) |
 | Cleartext reply verbs (robot→host) | `<VERB>':'<data>'\n'` | `DEVICE:` (boot/HELLO-reply hardware identity, byte-frozen), `PONG:t=<ms>` (PING's reply), `ID:<fields>` (configured identity), `VER:<version>` (build version) |
 | Binary reply verb (robot→host), every cycle | `TLM:<COBS+CRC frame>'\n'` | `ReplyEnvelope{corr_id=0, tlm: Telemetry}` — the SOLE per-command outcome path (§7) and the always-on telemetry push (§8) |
@@ -203,6 +203,18 @@ budget:
 | `CommandEnvelope` | `config`=49B, `stop`=2B, `move`=38B (worst=`config`) | **55 B** (unchanged from v4) |
 | `ReplyEnvelope` | `ok`=19B, `err`=10B, **`tlm`=126B** (worst=`tlm`) | **130 B** (down from v4's 194 B — §8.3) |
 
+**132-011 addendum (GetConfig/ConfigSnapshot read-back, §6.1)**: adding the
+`cfg` arm (`ConfigSnapshot`, carrying a group's up-to-220 B encoded `body`)
+to `ReplyEnvelope.body` moves the worst-case arm from `tlm` to `cfg` —
+measured by `gen_messages.py`'s own size report:
+
+| Envelope | Worst-case arm | Total |
+|---|---|---|
+| `ReplyEnvelope` (post-132-011) | `ok`=19B, `err`=10B, `tlm`=188B, **`cfg`=228B** (worst=`cfg`) | **232 B** — 8 B of margin below the 240 B envelope budget, the tightest this project's own wire schema has run to date |
+
+`CommandEnvelope`'s own total is unaffected (`get_config`'s own worst-case
+contribution, ~5 B, is far below `config`'s 49 B) — see §3.
+
 `TelemetrySecondary` — a second, independently-framed diagnostic frame
 that existed through protocol v4 — no longer exists (sprint 124 ticket
 009; §8.4 below); there is only ever one outbound top-level wire message
@@ -259,8 +271,11 @@ two-verb rump invited.
 | `STOP` | host→robot | binary | `CommandEnvelope.cmd.stop` (§3/§5.6) — **a PLANNED stop since the command-ingestion rework**: it enters `Motion::Planner`'s queue and executes in sequence, coming to rest before it completes. NOT "halt now" |
 | `WHEELS` | host→robot | binary | `CommandEnvelope.cmd.wheels` (§3) — the dumb teleop primitive: a per-wheel velocity pair held for a REQUIRED `duration`, routed straight to `App::Drive` with no planner involvement |
 | `ESTOP` | host→robot | binary | `CommandEnvelope.cmd.estop` (§3) — halt everything NOW: zero `App::Drive` and clear the planner's active + pending queue, no completion acks for the discarded entries. This is what `STOP` meant before the rework |
-| `TLM` | robot→host | binary | `ReplyEnvelope{tlm: Telemetry}` — the only reply arm with a live producer (§7.1/§8) |
-| `OK` / `ERR` | robot→host | binary | `ReplyEnvelope`'s `ok`/`err` oneof arms — schema-declared, zero live producers today (unchanged from v4, §7.1) |
+| `GET_CONFIG` | host→robot | binary | `CommandEnvelope.cmd.get_config` (§3/§6.1) — 132-011: request a read-back of one `ConfigGroupTarget`'s current value |
+| `SET_FIELD` | host→robot | binary | `CommandEnvelope.cmd.set_field` (§3/§6.2) — 132-012: write exactly one already-live field, addressed by `(ConfigGroupTarget, protobuf field number)` — deliberately spelled shorter than the `SetConfigField` message it carries (§6.2 explains why) |
+| `TLM` | robot→host | binary | `ReplyEnvelope{tlm: Telemetry}` — the primary reply arm, emitted every cycle (§8) |
+| `OK` / `ERR` | robot→host | binary | `ReplyEnvelope`'s `ok`/`err` oneof arms — `ok` remains schema-declared with zero live producers; `err` is now live for exactly one reason (a malformed `GET_CONFIG` target, §6.1/§7.1) |
+| `CFG` | robot→host | binary | `ReplyEnvelope{cfg: ConfigSnapshot}` (§3/§6.1) — 132-011: `GET_CONFIG`'s synchronous reply, the SECOND live `Comms::sendReply()` call site (the first being `TLM`) |
 
 `Comms::dispatchCleartext()` (`comms.cpp`) is the inbound handler for the
 four cleartext command verbs:
@@ -324,13 +339,18 @@ protocol v4**:
 | `move` | 21 | `Move` (§4) | `RobotLoop::handleMove()` | `MOVE` | `Motion::Planner::move()` — twist OR wheels velocity, any stop kind |
 | `wheels` | 22 | `Wheels{v_left, v_right, duration, id}` | `RobotLoop::handleWheels()` | `WHEELS` | `App::Drive::command()` — supersedes the planner |
 | `estop` | 23 | `Estop{}` (zero fields) | `RobotLoop::handleEstop()` | `ESTOP` | `App::Drive::estop()` **and** `Motion::Planner::estop()` |
+| `get_config` | 24 | `GetConfig{target}` (§6.1) | `RobotLoop::handleGetConfig()` | `GET_CONFIG` | `App::Configurator::encodeSnapshot()` — replies directly, does NOT ride the ack ring |
+| `set_field` | 25 | `SetConfigField{target, field, value}` (§6.2) | `RobotLoop::routeCommand()` | `SET_FIELD` | `App::Configurator::applyField()` |
 
 `corr_id` (field 1) is present on every `CommandEnvelope` and is echoed
-back via the ack ring (§7.1), never a per-command `ReplyEnvelope`.
-Reserved field numbers (2, 3, 4, 5, 7-12, 14-18, 19, 20) are unchanged;
-`wheels`/`estop` were assigned fresh, never-before-used numbers (22/23),
-never one of the reserved ones. `ErrCode` (used by every ack — §7.3) is
-unchanged.
+back via the ack ring (§7.1) for every arm EXCEPT `get_config`, which
+echoes it on a direct `ReplyEnvelope{cfg: ...}` instead (§6.1/§7.1) —
+never a per-command `ReplyEnvelope` for `move`/`config`/`stop`/`wheels`/
+`estop`/`set_field`. Reserved field numbers (2, 3, 4, 5, 7-12, 14-18, 19,
+20) are unchanged; `wheels`/`estop` were assigned fresh, never-before-used
+numbers (22/23), `get_config` (132-011) the next one after them (24), and
+`set_field` (132-012) the next one after that (25), never one of the
+reserved ones. `ErrCode` (used by every ack — §7.3) is unchanged.
 
 **An arm's NAME is load-bearing, not cosmetic.** Both host senders derive
 the wire line's `<COMMAND>':'` prefix — and therefore the CRC's scope
@@ -486,13 +506,167 @@ policy — `RobotLoop` calls an existing primitive, it does not add one.
 and the "arriving mid-`Move` never disturbs the active `Move`" guarantee
 are all identical to [`docs/protocol-v4.md`](protocol-v4.md) §6.
 
+### 6.1 `GetConfig`/`ConfigSnapshot` — read-back (132-011, new)
+
+The CONFIG binary arm's read-back half — the wire capability
+[[A-no-firmware-to-host-config-readback]] (sprint 132's own tracked issue)
+had been waiting on. Unlike `ConfigDelta` above (a SET-only arm whose
+outcome rides the ack ring), `GetConfig` is a genuine request/reply pair:
+
+- **Request** — `CommandEnvelope.cmd.get_config` (`GetConfig{target}`,
+  `src/protos/robot_config.proto`), field 24 (§3). `target` is one of the
+  seven robot-config `ConfigGroupTarget` values (`GEOMETRY`/`MOTORS`/
+  `DRIVE`/`WHEEL_CONTROL`/`PLANNER`/`OTOS`/`ESTIMATOR`) — never the
+  three host-only groups (`Identity`/`Connection`/`Vision`), which never
+  cross the wire at all.
+- **Reply** — `ReplyEnvelope.body.cfg` (`ConfigSnapshot{target, body}`),
+  field 12, sent SYNCHRONOUSLY via `Comms::sendReply()` — the second live
+  call site that method has ever had (the first, and only other one, is
+  `App::Telemetry::emitPrimary()`'s unsolicited `tlm` push). `body` is
+  `target`'s own group message, encoded exactly the way a future
+  `SetConfigGroup.body` push would be (the SAME generated per-group codec,
+  `msg::wire::encode(<Group>&, ...)` — 132-011's own encode-direction
+  addition to the `msg::wire::decode(<Group>&, ...)` family 132-008 first
+  added).
+- **Firmware path** — `RobotLoop::handleGetConfig()` calls
+  `App::Configurator::encodeSnapshot(target, snapshot)`, which reads
+  `Configurator::config()`'s matching group DIRECTLY — no derivation, no
+  merge — and encodes it. **Not gated by the applyGroup()/install()
+  re-appliability table**: read-back succeeds for every
+  `ConfigGroupTarget`, including the boot-only ones (`GEOMETRY`/
+  `PLANNER`) a whole-group SET would reject with `ERR_NOT_LIVE` — only
+  WRITES are gated, per the-configuration-object.md's own "GET still
+  works for boot-only groups even though SET is rejected" testing note.
+  An unrecognized `target` (`CONFIG_GROUP_UNSPECIFIED` or any value this
+  build's switch does not know) replies `ReplyEnvelope{err: Error{code:
+  ERR_BADARG}}` instead — reported, never silently dropped.
+- **Host path** — `NezhaProtocol.get_config(target)`
+  (`src/host/robot_radio/robot/protocol.py`) sends via the BLOCKING
+  `send_envelope()`/`_send_envelope()` path (`io/serial_conn.py`'s
+  corr-id-keyed `_reply_queues`, unlike every fire-and-poll CONFIG
+  method above) and parses `reply.cfg.body` into the target group's own
+  GENERATED pydantic model (`robot_config_generated.<Group>`, ticket
+  002's own model, never a raw dict) via the real compiled
+  `robot_config_pb2.<Group>` message. Returns `None` on an unknown
+  target, a timeout, a not-connected connection, or an `err` reply.
+- **Read-back equals the file** — because `Config::Robot` holds RAW file
+  values (never derived quantities — `Config::Robot`'s own header
+  comment), `get_config()`'s result can be diffed directly against the
+  robot JSON section it was baked from. This is the property later
+  tickets (018) build the full read-back-vs-file acceptance test on.
+- **Not carried by this ticket**: `SetConfigGroup`/`SetConfigField`
+  remain declared in `robot_config.proto` but UNWIRED — no
+  `CommandEnvelope` oneof arm exists for either yet (tickets 012/013).
+  GET landing does not depend on SET landing first. **UPDATE, 132-012**:
+  `SetConfigField` is now wired — see §6.2. `SetConfigGroup` remains
+  ticket 013's job.
+- **Envelope budget, tightly** — adding `cfg` (worst-case 228 B, a
+  `ConfigSnapshot` whose `body` capacity is 220 B) makes it
+  `ReplyEnvelope`'s new worst-case oneof arm, ahead of `tlm` (188 B):
+  `kReplyEnvelopeMaxEncodedSize` is now 232 B, 8 B under the 240 B
+  envelope budget (§2.3) — the tightest margin this project's wire
+  schema has run since the budget itself was set. `Comms`'s own
+  COBS-scratch/whole-line buffer constants (`kFramedMaxBytes`/
+  `kMaxLineBytes`, `comms.h`) grew correspondingly (200→238, 207→249) to
+  cover it — `kMaxLineBytes` (249) now sits only 1 byte below
+  `Com::SerialPort::kTxBufferCapacity` (250), a real, flagged headroom
+  concern (not a buffer-overflow risk) for a future ticket that grows
+  either constant further.
+
+### 6.2 `SetConfigField` — single-field write (132-012, new)
+
+The WRITE half of `GetConfig`'s read-back pair (§6.1) — the dev-mode
+single-value push `.claude/rules/configuration-discipline.md` carves out
+explicitly for bench tuning sweeps ("we're going to do a sweep, so we
+should allow that"), as distinct from production boot, which always comes
+from the file. Addressed by **`(ConfigGroupTarget, protobuf field
+number)`**, never a string key:
+
+- **Request** — `CommandEnvelope.cmd.set_field` (`SetConfigField{target,
+  field, value}`, `src/protos/robot_config.proto`), field 25 (§3). `field`
+  is `target`'s own group message's REAL generated protobuf field number
+  (e.g. `Drive.wheel_gain_left_decel`'s field number 4) — resolved
+  host-side via the real compiled descriptor
+  (`Drive.DESCRIPTOR.fields_by_name["wheel_gain_left_decel"].number`), so
+  a human still types a name and the wire still carries a number. Numbers
+  are smaller on the wire (~11 B vs ~25 for a string key like
+  `"wheel_gain_left_decel"`) and there is no hand-maintained name
+  vocabulary to drift — this structurally kills the `pid.kff → kaff`
+  class of bug, where a wire key's name stopped matching what it set.
+  **Field numbers are unique only WITHIN a message** — the address is
+  necessarily the pair `(target, field)`, never `field` alone, since e.g.
+  `Drive.wheel_gain_left_decel` and a different group's own field 4 need
+  not mean the same thing.
+- **Outcome** — rides the ack ring (§7.1) exactly like `config`/`move`/
+  `stop`/`wheels`/`estop` — never a synchronous reply, unlike `get_config`
+  (§6.1), which genuinely needs one (a group's worth of values has no room
+  in a ring entry; a single field's `err` code does).
+- **Firmware path** — `RobotLoop::routeCommand()` calls
+  `App::Configurator::applyField(target, field, value)`, which:
+  1. Rejects a boot-only `target` (`GEOMETRY`/`PLANNER`) with
+     `ERR_NOT_LIVE` — the SAME `isLiveConfigurable()` gate
+     `applyGroup()`/`install(target)` already use (§6), consulted BEFORE
+     any field lookup.
+  2. Rejects a non-finite `value` (NaN or ±infinity) with `ERR_BADARG` —
+     an explicit `std::isfinite()` check that runs BEFORE
+     `validateBounds()` ever sees the value: bounds compare with `<`/`>`,
+     both false for NaN, so an unchecked NaN would otherwise pass every
+     bound a field declares and land in `Config::Robot` uncaught.
+  3. Looks `field` up in `target`'s own generated field table
+     (`msg::wire::setField(<Group>&, field, value)`, `wire.h`/`wire.cpp`'s
+     132-012 addition) — the SAME table-driven lookup + `validateBounds()`
+     bounds check `applyGroup()`'s `decode()` family already runs per
+     wire tag, now driven by an explicit field number instead. An unknown
+     field number is `ERR_BADARG`; an out-of-bounds value is `ERR_RANGE`
+     — the same two outcomes a whole-group push can produce.
+  4. On success, fans out via `install(target)` — the SAME call
+     `applyGroup()` makes — so a single-field push takes effect exactly
+     the way a whole-group push does, including `MOTORS`'s per-side
+     `ERR_BUSY` guard and `ESTIMATOR`'s permanent `ERR_UNIMPLEMENTED`.
+- **Host path** — `NezhaProtocol.set_config_field(target, field_name,
+  value)` (`src/host/robot_radio/robot/protocol.py`) resolves
+  `field_name` via the real compiled `robot_config_pb2.<Group>` message's
+  own `DESCRIPTOR.fields_by_name`, then sends via the SAME fire-and-poll
+  `send_envelope_fast()`/`wait_for_ack()` path `set_config_binary()`/
+  `config()` already use. Returns the matched `AckEntry` on success, or
+  `None` on an unknown target, an unknown field name (no wire traffic in
+  either case), a timeout, or a NAK reply.
+- **Arm name, deliberately SHORT** — `set_field`/`SET_FIELD`, not a
+  literal `set_config_field`/`SET_CONFIG_FIELD` mirror of the
+  `SetConfigField` message type. `GET_CONFIG` (10 bytes) is already this
+  schema's longest verb name and the sole driver of
+  `Comms::kMaxCommandPrefixBytes`/`kMaxLineBytes` — 249 bytes, one byte
+  below `Com::SerialPort::kTxBufferCapacity` (250, §6.1's own flagged
+  headroom concern). The literal mirror (17 bytes) would push
+  `kMaxCommandPrefixBytes` from 11 to 18 and `kMaxLineBytes` to 256 — OVER
+  the TX ring ceiling. `SET_FIELD` (9 bytes) stays under `GET_CONFIG`'s
+  own 10, so this arm leaves that 249-byte figure UNCHANGED — confirmed
+  by regenerating `commands.h`/`comms.h` after this ticket's schema
+  change.
+- **Envelope budget, unaffected** — `SetConfigField`'s own worst-case
+  encoded size is ~16 B (measured by `gen_messages.py`'s own size report),
+  far below `config`'s 49 B — `CommandEnvelope`'s worst-case oneof arm and
+  total (55 B) are UNCHANGED by this ticket.
+
 ---
 
 ## 7. Responses
 
-### 7.1 The ack ring — the ONLY per-command outcome path
+### 7.1 The ack ring — the ONLY per-command outcome path for `move`/`config`/`stop`/`wheels`/`estop`/`set_field`
 
-There is no per-command `ReplyEnvelope`, and — **as of this sprint, no
+**132-011 exception**: `get_config` (§6.1) is the one arm whose outcome does
+NOT ride this ring — a `ConfigSnapshot` carries a whole group's worth of
+values, which has no room in a 4-deep ring of packed `corr_id<<4|err`
+scalars, so `RobotLoop::handleGetConfig()` replies with a genuine,
+synchronous, corr-id-matched `ReplyEnvelope{cfg: ...}` (or `{err: ...}`)
+instead. Everything below this note describes the other SIX arms
+(`set_field`, 132-012, rides the ring exactly like its five siblings — a
+single field's `err` code fits a ring entry fine, unlike a whole group's
+worth of values), whose "no per-command `ReplyEnvelope`" property is
+otherwise still exactly as stated.
+
+There is no per-command `ReplyEnvelope` for `move`/`config`/`stop`/
+`wheels`/`estop`, and — **as of this sprint, no
 single-scalar "freshest ack" slot either** (protocol v4's `ack_corr`/
 `ack_err` fields 5/6 and `flags` bit 5 `kFlagAckFresh`, added sprint 120
 alongside the ring, are DELETED outright: `telemetry.proto` fields 5/6
@@ -519,12 +693,16 @@ answers unambiguously (a `corr_id` present in the ring was genuinely
 pushed at some point — nothing "stale" about it the way a leftover
 scalar value could be).
 
-**AS-BUILT (unchanged from v4)**: `ReplyEnvelope`'s `ok` (`Ack`) and
-`err` (`Error`) oneof arms remain declared in the schema with **zero live
-producers** — `Comms::sendReply()` is called from exactly one call site
-(`App::Telemetry::emitPrimary()`), always with `body_kind = TLM`. A wire
-sniffer will never observe a `ReplyEnvelope{ok: ...}` or
-`ReplyEnvelope{err: ...}` frame from this firmware.
+**AS-BUILT, updated 132-011**: `ReplyEnvelope`'s `ok` (`Ack`) arm remains
+declared in the schema with **zero live producers**. `err` (`Error`) now
+has exactly ONE: `RobotLoop::handleGetConfig()`'s own `ERR_BADARG` reply
+to an unrecognized `GetConfig.target` (§6.1) — a wire sniffer CAN observe
+a `ReplyEnvelope{err: ...}` frame today, though only in that one
+circumstance. `Comms::sendReply()` now has TWO live call sites, not one:
+`App::Telemetry::emitPrimary()` (`body_kind = TLM`, every cycle,
+unsolicited) and `RobotLoop::handleGetConfig()` (`body_kind = CFG` or
+`ERR`, on demand, corr-id-matched). A wire sniffer will never observe a
+`ReplyEnvelope{ok: ...}` frame from this firmware.
 
 ### 7.2 Two kinds of ack ride the same ring
 

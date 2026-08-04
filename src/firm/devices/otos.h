@@ -93,6 +93,31 @@ namespace Devices {
 // clearance timers never interact with the motor leaves'.
 constexpr uint8_t kOtosDeviceAddr = 0x17;
 
+// scaleToRegister -- convert a calibration scale MULTIPLIER (e.g. 1.05, 1.0 =
+// no correction) to the chip's signed int8 register scalar (0.1%-per-LSB,
+// -127..127; `scalar = clamp(round((scale - 1.0) / 0.001), -127, 127)`).
+//
+// A free function, not a RealOtos member (132-010, the-configuration-
+// object.md trap 3): RealOtos::begin() (otos.cpp, the BOOT path) and
+// App::configureOtos() (app/boot_calibration.cpp, the LIVE wire-push path)
+// both need this EXACT conversion before calling setLinearScalar()/
+// setAngularScalar() below -- those two setters take the register domain
+// directly, never the multiplier. Trap 3 WAS exactly this conversion
+// existing on only the boot call site: the live path passed the multiplier
+// straight through, so a pushed `linearScale = 1.0` installed register value
+// 1 (a real +0.1% scalar) instead of register 0 (true unity). Living here,
+// at namespace scope, keeps it callable from both without requiring the
+// caller to hold a RealOtos instance (App::configureOtos() only ever holds
+// the abstract Devices::Otos&) and without duplicating the formula a second
+// time (a prior duplicate, `src/tests/sim/system/faults/
+// sim_fidelity_harness.cpp`'s own file-scope copy, predates this move and is
+// retired by the same ticket). Devices::-scoped rather than App::-scoped
+// because it is pure chip-register math with zero App::/Config::
+// dependency -- exposing it here does not weaken the devices/ isolation
+// invariant (src/firm/DESIGN.md §5) the way pulling in a Config:: type
+// would.
+int8_t scaleToRegister(float scale);
+
 // Otos — the abstract OTOS interface App:: drives (see this file's header
 // for the interface/implementation-split rationale). Two implementations:
 // RealOtos (below) and App::FakeOtos (app/fake_otos.h). Every method here
@@ -132,6 +157,16 @@ class Otos {
   virtual void setOffset(float x, float y, float heading) = 0;     // [mm] [mm] [rad]
   virtual void getOffset(float& x, float& y, float& heading) = 0;  // [mm] [mm] [rad]
   virtual void init() = 0;
+
+  // No Config::Robot-consuming configure() on THIS interface (132-007,
+  // the-configuration-object.md) -- this file's own "Scope changes"
+  // header section already establishes why: Devices-local
+  // Devices::OtosConfig exists instead of reusing a Config:: type
+  // specifically "so this leaf never includes config/" (the devices
+  // isolation invariant). App::configureOtos(Devices::Otos&, const
+  // Config::Robot&) (app/boot_calibration.h) is the Config::Robot-
+  // consuming entry point instead, calling setLinearScalar()/
+  // setAngularScalar()/setOffset() above.
 };
 
 // RealOtos — the SparkFun OTOS I2C leaf. All the behavior documented in
@@ -352,9 +387,10 @@ class RealOtos : public Otos {
   // Minimum spacing between real OTOS bus reads inside tick().
   static constexpr uint64_t kReadPeriod = 20000;  // [us]
 
-  // Convert a calibration scale multiplier (e.g. 1.05) to the chip's signed
-  // int8 register scalar (0.1% per LSB), clamped to [-127, 127].
-  static int8_t scaleToRegister(float scale);
+  // scaleToRegister() -- MOVED (132-010) to a Devices::-namespace-scope free
+  // function, above `class Otos`: begin() below calls it unqualified (same
+  // namespace); see that declaration's own comment for why it is no longer
+  // a RealOtos member.
 
   // Applies a staged setPose() request — see tick()'s "Drain order" comment.
   void applyPendingPose();

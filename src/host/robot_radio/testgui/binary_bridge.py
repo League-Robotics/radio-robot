@@ -12,13 +12,21 @@ for, exactly THREE verbs still have a live binary-plane translation, each a
 short, direct call to a live ``NezhaProtocol`` method -- no intermediate
 translation layer, table, or reply-rendering module:
 
-- ``OI``/``OL``/``OA`` -- OTOS calibration, via ``NezhaProtocol.
-  otos_config()`` (``_handle_otos_patch()``).
-- ``SET key=value ...`` -- config push, via ``NezhaProtocol.set_config()``
-  (``_handle_set_patch()``). Stakeholder bench finding 2026-07-22: SET was
-  found rejecting nearly every pushed calibration value against real
+- ``OL``/``OA`` -- OTOS calibration, via ``NezhaProtocol.
+  set_config_field(robot_config_pb2.OTOS, "linear_scale"/"angular_scale",
+  value)`` (``_handle_otos_patch()``). 132-014 retargets this off the
+  retired ``OtosConfigPatch``/``otos_config()`` direct-patch-send mechanism
+  (109-004) now that ``config.proto`` is deleted (132-013). ``OI`` is
+  recognized but has NO live retarget -- see ``_handle_otos_patch()``'s own
+  doc comment for why (no successor field in ``robot_config.proto``'s
+  ``Otos`` group).
+- ``SET key=value ...`` -- config push, via ``NezhaProtocol.
+  set_config_field()`` per key (``_handle_set_patch()``), resolved through
+  ``protocol._SET_KEY_TARGETS``. Stakeholder bench finding 2026-07-22: SET
+  was found rejecting nearly every pushed calibration value against real
   hardware (log: ``'SET pid.kaw=0' rejected: ERR unavailable legacy verb
-  translation removed``) -- this direct call is the fix.
+  translation removed``) -- the original direct-call fix; 132-014 carries
+  it onto the new per-field wire primitive.
 - ``STREAM <period>`` -- telemetry mode, via ``NezhaProtocol.tlmOn()``/
   ``tlmOff()`` (``_handle_stream_patch()``, 128-004). The current wire has
   no per-call streaming PERIOD control (``TLM:ON``/``TLM:OFF`` are flat
@@ -64,16 +72,25 @@ never actually filed) at this docstring instead.
 from __future__ import annotations
 
 from robot_radio.robot import protocol
-from robot_radio.robot.pb2 import envelope_pb2
+from robot_radio.robot.pb2 import envelope_pb2, robot_config_pb2
 from robot_radio.robot.protocol import NezhaProtocol
 
-# OTOS-chip calibration verbs with a live direct-patch-send equivalent
-# (109-004, Architecture Revision 1): each constructs and sends an
-# OtosConfigPatch ConfigDelta directly via NezhaProtocol.otos_config().
+# OTOS-chip calibration verbs (109-004, Architecture Revision 1). 132-014
+# retargets OL/OA onto set_config_field(OTOS, ...) now that OtosConfigPatch/
+# ConfigDelta (config.proto) are deleted (132-013) -- see
+# _handle_otos_patch()'s own doc comment for OI's fate (no successor field).
 # OV (raw position write)/OP (position query)/OR (Kalman reset) have no
-# ConfigDelta field to patch and are not in this set -- they fall to the
+# config-group field to set and are not in this set -- they fall to the
 # generic unsupported reply below, same as before.
 _OTOS_PATCH_VERBS = frozenset({"OI", "OL", "OA"})
+
+_OI_NO_LIVE_TRIGGER_REPLY = (
+    "ERR unsupported OI -- robot_config.proto's Otos group has no live "
+    "chip-reinit trigger field (offset/scale values only); OtosConfigPatch's "
+    "old init trigger has no successor on the current wire (see "
+    "configurator.h's OTOS re-appliability-table row and binary_bridge.py's "
+    "own module docstring)"
+)
 
 _UNSUPPORTED_REPLY_FMT = (
     "ERR unsupported {verb} -- no binary-plane translation on the current "
@@ -83,34 +100,46 @@ _UNSUPPORTED_REPLY_FMT = (
 
 
 def _handle_otos_patch(proto: NezhaProtocol, verb: str, pos: list[str]) -> str:
-    """``OL <scale>``/``OA <scale>``/``OI`` -> direct ``OtosConfigPatch``
-    construct-and-send (109-004, Architecture Revision 1's direct-patch-send
-    mechanism), reusing ``NezhaProtocol.otos_config()`` -- the SAME
-    envelope-building path on every transport.
+    """``OL <scale>``/``OA <scale>`` -> ``set_config_field(OTOS,
+    "linear_scale"/"angular_scale", value)`` (132-014, retargeted off the
+    retired ``OtosConfigPatch``/``otos_config()`` direct-patch-send
+    mechanism, 109-004 -- ``OtosConfigPatch``/``ConfigDelta`` themselves are
+    deleted, 132-013). Same envelope-building path (``NezhaProtocol.
+    set_config_field()``) every transport now shares.
+
+    ``OI`` (chip re-init/Kalman-reset trigger) has NO retarget: robot_
+    config.proto's ``Otos`` group declares ``offset_x``/``offset_y``/
+    ``offset_yaw``/``linear_scale``/``angular_scale`` only -- the old
+    ``OtosConfigPatch.init`` fire-and-forget trigger has no
+    ``Config::Robot``-shaped successor field to address (confirmed by
+    reading ``robot_config.proto`` in full; ``configurator.h``'s own OTOS
+    re-appliability-table row calls this out explicitly: "its 6th field,
+    init, was a fire-and-forget trigger with no Config::Robot-shaped
+    successor and was never persisted either"). No wire traffic is sent
+    for ``OI`` -- it gets the SAME honest, immediate, no-round-trip
+    "unsupported" treatment ``OV``/``OP``/``OR`` already get below, not a
+    fabricated success.
 
     Returns a plain, hand-rolled ``OK``/``ERR`` reply line.
     """
+    if verb == "OI":
+        return _OI_NO_LIVE_TRIGGER_REPLY
+
+    field_name = "linear_scale" if verb == "OL" else "angular_scale"
+    if not pos:
+        return f"ERR badarg {verb} requires <scale>"
     try:
-        if verb == "OL":
-            if not pos:
-                return "ERR badarg OL requires <scale>"
-            corr_id = proto.otos_config(linear_scale=float(pos[0]))
-        elif verb == "OA":
-            if not pos:
-                return "ERR badarg OA requires <scale>"
-            corr_id = proto.otos_config(angular_scale=float(pos[0]))
-        else:  # OI
-            corr_id = proto.otos_config(init=True)
+        value = float(pos[0])
     except ValueError as exc:
         return f"ERR badarg {exc}"
+
+    try:
+        ack = proto.set_config_field(robot_config_pb2.OTOS, field_name, value)
     except ConnectionError as exc:
         return f"ERR unknown {exc}"
 
-    ack = proto.wait_for_ack(corr_id, timeout=500)
     if ack is None:
-        return f"ERR unknown {verb} timeout"
-    if not ack.ok:
-        return f"ERR nak {verb} err_code={ack.err_code}"
+        return f"ERR unknown {verb} timeout or rejected"
     return f"OK {verb.lower()}"
 
 
@@ -127,11 +156,17 @@ def _parse_set_kv(tokens: list[str]) -> dict[str, str]:
 
 
 def _handle_set_patch(proto: NezhaProtocol, tokens: list[str]) -> str:
-    """``SET key=value ...`` -> direct ``NezhaProtocol.set_config()`` binary
-    round trip -- the SAME direct-patch-send mechanism ``_handle_otos_patch()``
-    uses for ``OI``/``OL``/``OA`` above, and the SAME method
-    ``SimTransport._handle_config_set()`` (``transport.py``) already calls
-    for Sim.
+    """``SET key=value ...`` -> one ``set_config_field()`` round trip per
+    key (132-014, retargeted off the retired ``set_config()``-via-
+    ``ConfigDelta`` mechanism), resolving each flat key to its
+    ``(ConfigGroupTarget, field_name)`` pair via the SAME
+    ``protocol._SET_KEY_TARGETS`` vocabulary ``NezhaProtocol.set_config()``
+    itself now uses -- called DIRECTLY here (not through ``set_config()``)
+    so a per-key rejection (unknown field, ``ERR_NOT_LIVE`` on a boot-only
+    target, ``ERR_BUSY`` while a motor is moving) names the OFFENDING key
+    rather than collapsing every key's outcome into one generic failure.
+    The SAME method ``SimTransport._handle_config_set()`` (``transport.py``)
+    now also calls, for Sim.
 
     Returns a plain, hand-rolled ``OK set ...``/``ERR ...`` reply line.
     """
@@ -141,16 +176,22 @@ def _handle_set_patch(proto: NezhaProtocol, tokens: list[str]) -> str:
         return f"ERR badarg {exc}"
     if not kv:
         return "ERR badarg no key=value pairs"
-    bad = [k for k in kv if k not in protocol._ALL_SET_KEYS]
+    bad = [k for k in kv if k not in protocol._SET_KEY_TARGETS]
     if bad:
         return f"ERR badkey {bad[0]}"
     try:
         kwargs = {k: float(v) for k, v in kv.items()}
     except ValueError:
         return "ERR badarg bad value"
-    applied = proto.set_config(**kwargs)
-    if applied is None:
-        return "ERR badarg set failed"
+
+    applied: dict[str, str] = {}
+    for key, value in kwargs.items():
+        target, field_name = protocol._SET_KEY_TARGETS[key]
+        ack = proto.set_config_field(target, field_name, value)
+        if ack is None:
+            return f"ERR badarg set failed at {key}"
+        applied[key] = protocol._format_config_value(value)
+
     body = " ".join(f"{k}={v}" for k, v in applied.items())
     return f"OK set {body}"
 

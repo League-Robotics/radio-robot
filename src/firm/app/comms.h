@@ -123,16 +123,36 @@ class RadioTransport : public Transport {
 #endif  // HOST_BUILD
 
 // kMaxEnvelopeBytes -- the larger of the two generated per-direction
-// budgets (msg::wire::kCommandEnvelopeMaxEncodedSize (55) /
-// kReplyEnvelopeMaxEncodedSize (194)) -- one raw-byte scratch buffer,
+// budgets (msg::wire::kCommandEnvelopeMaxEncodedSize (154, as of 132-015 --
+// see that constant's own generated size-report comment, wire.h) /
+// kReplyEnvelopeMaxEncodedSize (192)) -- one raw-byte scratch buffer,
 // reused sequentially for an incoming decode or an outgoing encode (never
 // overlapping within a single call). Computed by the constexpr expression
 // itself so a future schema regeneration that changes either constant
 // updates this one automatically.
+//
+// 132-013 (patch-surface retirement): kCommandEnvelopeMaxEncodedSize jumped
+// from 55 to 234 -- not a regression, the expected cost of finally WIRING
+// SetConfigGroup (robot_config.proto's own ~220 B `body`, allocated by
+// ticket 001, unwired until now) into CommandEnvelope.cmd.config in place
+// of the deleted ConfigDelta (whose curated per-target live-tuning
+// messages never exceeded ~50 B).
+//
+// UPDATE, 132-015 (wire-budget emergency -- kFramedMaxBytes's own
+// static_assert margin had fallen to 1 byte): robot_config.proto's
+// SetConfigGroup.body/ConfigSnapshot.body `(max_count)` was re-sized from
+// 220 to 140 (real largest group, Planner at 117 B, plus modest headroom --
+// see that proto's own header comment for the rule and the stakeholder
+// direction behind it). That drops kCommandEnvelopeMaxEncodedSize's worst
+// arm (`config`) from 228 B to 148 B (total 234 -> 154) and
+// kReplyEnvelopeMaxEncodedSize's worst arm from `cfg`=228 B to `tlm`=188 B
+// (total 232 -> 192, `tlm` now the binding arm, not `cfg`) -- both
+// directions shrink; `tlm` was already close behind `cfg` and is now the
+// larger of the two ReplyEnvelope arms.
 constexpr uint16_t kMaxEnvelopeBytes =
     (msg::wire::kCommandEnvelopeMaxEncodedSize > msg::wire::kReplyEnvelopeMaxEncodedSize)
         ? msg::wire::kCommandEnvelopeMaxEncodedSize
-        : msg::wire::kReplyEnvelopeMaxEncodedSize;  // == 194
+        : msg::wire::kReplyEnvelopeMaxEncodedSize;  // == 192
 
 // kMaxCrcPayloadBytes -- kMaxEnvelopeBytes + 2 (the CRC-16 appended AFTER
 // the schema payload, per the CRC-then-COBS composition -- see comms.cpp's
@@ -140,14 +160,30 @@ constexpr uint16_t kMaxEnvelopeBytes =
 // buffer the COBS encode/decode step itself operates on. The command
 // prefix lives OUTSIDE the COBS region (see crcOverScope()'s own doc
 // comment, comms.cpp), so it does not affect this constant.
-constexpr uint16_t kMaxCrcPayloadBytes = kMaxEnvelopeBytes + 2;  // == 196
+constexpr uint16_t kMaxCrcPayloadBytes = kMaxEnvelopeBytes + 2;  // == 194
 
 // kFramedMaxBytes -- worst-case COBS-encoded length of kMaxCrcPayloadBytes
-// (196) zero-free bytes: cobsEncodedMaxLength(196) = 196 + 196/254 + 1 =
-// 197 (WireRuntime::cobsEncodedMaxLength()'s own documented formula). This
-// is the size of the COBS-encoded region ALONE, with 3B headroom, because
-// the ASCII command prefix is not part of this region (see kMaxLineBytes
-// below for the buffer that DOES need room for the prefix).
+// (194, down from 236 as of 132-015 -- see kMaxEnvelopeBytes's own doc
+// comment above for the SetConfigGroup.body/ConfigSnapshot.body
+// `(max_count)` shrink that caused this) zero-free bytes:
+// cobsEncodedMaxLength(194) = 194 + 194/254 + 1 = 195
+// (WireRuntime::cobsEncodedMaxLength()'s own documented formula). This is
+// the size of the COBS-encoded region ALONE, because the ASCII command
+// prefix is not part of this region (see kMaxLineBytes below for the
+// buffer that DOES need room for the prefix).
+//
+// 132-015: re-picked at 200 (computed-195 + 5B headroom, the same margin
+// convention as the "200 chosen pre-132-011" precedent this comment used
+// to cite), down from the hand-picked 238 that had been left over from
+// 132-013's config-arm wiring -- 238 was never wrong, just no longer
+// tight once the `body` cap shrank, and a stale wide margin here is
+// exactly the kind of drift this constant's own history warns about (it
+// silently stayed at 238 through 132-011/132-013's own GROWTH, each of
+// which re-picked it upward; nothing forces a re-pick on a SHRINK, so
+// this ticket did it explicitly). The static_assert below is this
+// constant's own safety net against the drift running the other way --
+// it fires the moment either generated envelope constant grows past what
+// this literal can cover, rather than silently overflowing a buffer.
 constexpr uint16_t kFramedMaxBytes = 200;
 static_assert(kFramedMaxBytes >= kMaxCrcPayloadBytes + kMaxCrcPayloadBytes / 254 + 1,
               "kFramedMaxBytes must cover cobsEncodedMaxLength(kMaxCrcPayloadBytes)");
@@ -179,6 +215,29 @@ constexpr uint16_t kMaxCommandPrefixBytes = static_cast<uint16_t>(maxVerbNameLen
 // transport's own trailing `\n` is one further byte, appended by the
 // transport itself, not counted here -- matches kFramedMaxBytes's own
 // convention of excluding the delimiter).
+//
+// RESOLVED, 132-015 (was FLAGGED at 132-011/132-013): this constant is now
+// 200 + kMaxCommandPrefixBytes (11, the `GET_CONFIG`/`CFG` verb pair's own
+// 10-byte name driving this) = 211 -- 39 bytes below
+// `Com::SerialPort::kTxBufferCapacity` (250, serial_port.h), the CODAL TX
+// ring buffer's own conservative ceiling (physical max 254), up from the
+// 1-byte margin (249 vs 250) this comment used to warn about. The fix was
+// robot_config.proto's SetConfigGroup.body/ConfigSnapshot.body
+// `(max_count)` shrink (220 -> 140, see that proto's own header comment)
+// cascading through kMaxEnvelopeBytes -> kMaxCrcPayloadBytes ->
+// kFramedMaxBytes (238 -> 200, re-picked, see that constant's own doc
+// comment) -> this constant. This is not a buffer-overflow risk
+// (`cobsOut`/`line` in comms.cpp are sized to these constants correctly)
+// either before or after -- but the PRE-132-015 1-byte margin was a real,
+// concrete headroom risk one layer down: `SerialPort::send()`'s own
+// backpressure check (`kTxBufferCapacity - txBufferedSize() < frameLen`)
+// meant a worst-case CFG reply competing with ANY other still-draining
+// serial traffic (e.g. a telemetry frame not yet fully flushed) could be
+// silently DROPPED under `Comms::sendReply()`'s async, drop-on-full
+// send() policy, not merely delayed -- and telemetry is always-on and
+// per-cycle, so that collision was likely, not merely possible. 39 bytes
+// of margin does not make a drop impossible, but it is no longer a
+// near-certainty on ordinary traffic.
 constexpr uint16_t kMaxLineBytes = kFramedMaxBytes + kMaxCommandPrefixBytes;
 
 enum class CmdStatus : uint8_t { kNone = 0, kDecoded = 1 };

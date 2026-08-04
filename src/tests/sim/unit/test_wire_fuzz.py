@@ -46,10 +46,11 @@ from _wire_diff_driver import (  # noqa: E402
     compile_harness,
     decode,
     encode_telemetry,
-    env_config_drivetrain,
+    env_config_group,
     env_move_twist,
     env_stop,
     parse_decode_line,
+    pb_robot_config,
     unknown_varint_field,
 )
 
@@ -62,14 +63,21 @@ from _wire_diff_driver import (  # noqa: E402
 
 _VALID_MOVE = env_move_twist(100, 500.0, 0.0, 3.0, stop_field="time", stop_value=700.0, timeout=5000.0,
                               replace=True, move_id=1)
-_VALID_CONFIG_DRIVETRAIN = env_config_drivetrain(
-    104, trackwidth=321.0, rotational_slip=0.75, ekf_q_xy=1.5, ekf_q_theta=2.5, ekf_r_otos_xy=3.5,
-    ekf_r_otos_theta=4.5)
+# 132-013 (patch-surface retirement): the CONFIG-arm seed message is now a
+# SetConfigGroup{target=WHEEL_CONTROL, body=WheelControl{...}} -- the
+# deleted env_config_drivetrain() built a ConfigDelta{drivetrain=...}
+# instead. Only the byte SHAPE matters for this fuzz corpus (truncated/
+# oversized/salted variants of a valid CONFIG-arm encoding), not which
+# group is pushed.
+_VALID_CONFIG_WHEEL_CONTROL = env_config_group(
+    104, pb_robot_config.WHEEL_CONTROL,
+    pb_robot_config.WheelControl(v_min=99.7, bias_max=23.8, tau_adapt=30.0, a_steady=30.0,
+                                  pid_kp=0.02, pid_ki=0.01, pid_i_max=10.0, pid_kaff=0.5, pid_max=0.9))
 _VALID_STOP = env_stop(105)
 
 _VALID_MESSAGES = {
     "move": (_VALID_MOVE, 100, "MOVE"),
-    "config_drivetrain": (_VALID_CONFIG_DRIVETRAIN, 104, "CONFIG"),
+    "config_wheel_control": (_VALID_CONFIG_WHEEL_CONTROL, 104, "CONFIG"),
     "stop": (_VALID_STOP, 105, "STOP"),
 }
 

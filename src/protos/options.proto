@@ -74,3 +74,29 @@ extend google.protobuf.FieldOptions {
 extend google.protobuf.EnumValueOptions {
   optional bool binary = 50100;
 }
+
+// Custom message option for config GROUP messages (132-001, sprint 132
+// "configuration discipline" -- robot_config.proto).
+//
+// (host_only) — true: this config group message (Identity/Connection/
+//               Vision) is host-only -- it exists purely for the host's
+//               own generated pydantic model / JSON Schema (gen_messages.py's
+//               ticket-002 emission modes), never generates a C++
+//               Config::Robot group member, never gets a wire codec, and
+//               carries no ConfigGroupTarget enum value. False/absent (the
+//               proto3 default): an ordinary robot-config group --
+//               gen_messages.py emits BOTH a C++ Config::Robot member and a
+//               wire codec for it, and it carries a matching
+//               ConfigGroupTarget enum value (robot_config.proto's own
+//               naming convention: group message name == enum value name,
+//               e.g. message Geometry <-> ConfigGroupTarget.GEOMETRY).
+//
+// A separate extend block (not folded into the FieldOptions block above):
+// FieldOptions and MessageOptions are different extended message types, so
+// their extension field numbers occupy independent number spaces --
+// starting this block at 50200 (rather than continuing 50007 or 50100)
+// keeps that distinction visible at a glance, the same reasoning the
+// EnumValueOptions block above already gives for its own 50100 start.
+extend google.protobuf.MessageOptions {
+  optional bool host_only = 50200;
+}

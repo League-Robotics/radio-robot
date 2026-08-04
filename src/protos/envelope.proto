@@ -2,8 +2,8 @@ syntax = "proto3";
 
 package robot;
 
-import "config.proto";
 import "options.proto";
+import "robot_config.proto";
 import "telemetry.proto";
 
 // ---------------------------------------------------------------------------
@@ -55,6 +55,8 @@ enum ErrCode {
   ERR_UNIMPLEMENTED  = 6;  // declared-only arm, no live consumer this sprint
   ERR_OVERSIZE       = 7;  // encoded reply would exceed the envelope cap
   ERR_NOT_CONFIGURED = 8;  // composition root refused MOVE -- config-completeness gate not yet satisfied (114-001)
+  ERR_NOT_LIVE       = 9;  // push to a boot-only ConfigGroupTarget (Configurator::applyGroup(), 132-008) -- rejected, not silently no-op'd
+  ERR_BUSY           = 10; // guarded live-config push refused because the target subsystem is in motion (Configurator::install(MOTORS), 132-008) -- retry at rest
 }
 
 // Flow-control ack -- unchanged shape (q/rem/t) from the pre-102 schema.
@@ -202,52 +204,17 @@ message Move {
   uint32 id      = 8;  // echoed in this command's COMPLETION ack (enqueue ack echoes corr_id)
 }
 
-// ConfigDelta -- unchanged from the pre-102 schema (096-001) except for the
-// `otos` arm (109-004): still references config.proto's curated Patch
-// types. Runtime application of a decoded `ConfigDelta` is a ticket-008-time
-// decision (architecture-update.md (103) Step 7 Open Question 3, not
-// pre-decided by this ticket) -- the schema exists so `Comms`/`main.cpp`'s
-// dispatch switch can decode it now, whether or not it is wired to
-// `bb`-equivalent state this sprint. `otos` (field 5, a fresh
-// never-before-used number, same convention CommandEnvelope's own new arms
-// follow -- `twist` at 103-001, since deleted 116-001; `move` at 116-001)
-// is the one exception: `RobotLoop::handleConfig` DOES apply it live, the
-// same way `motor` already is (see that method's own comment) -- restoring
-// the runtime OTOS-calibration path
-// `clasi/sprints/109-.../issues/otos-calibration-config-message.md`
-// describes.
-//
-// `planner` (field 3, PlannerConfigPatch) DELETED (115-003, gut S1): the
-// planner-config patch type it referenced (config.proto) is deleted
-// wholesale alongside planner.proto -- nothing in the S1 minimal firmware
-// persists or live-patches planner config. Field 3 is reserved below, not
-// reused.
-//
-// `watchdog` (field 4, uint32 sTimeout -- the pre-116 StreamingDriveWatchdog
-// window) DELETED (116-001, MOVE protocol cutover): every `Move` is now
-// self-bounding (its own stop condition or required `timeout`), so the
-// separate deadman/watchdog window this arm patched is gone along with
-// `App::Deadman` itself -- there is nothing left for it to configure. Field
-// 4 is reserved below, not reused. `ConfigTarget.CONFIG_WATCHDOG`
-// (config.proto) stays declared, unused -- same precedent `CONFIG_PLANNER`
-// already set after 115.
-//
-// `estimator` (field 6, EstimatorConfigPatch -- 117): App::StateEstimator's
-// own live fusion-weight tuning arm, the next free number after `reserved
-// 3, 4` and `otos = 5`. RobotLoop::handleConfig DOES apply it live (ticket
-// 003), the same way `otos` already is -- merging present fields onto
-// stateEstimator_.weights() and calling setWeights() -- but, unlike `otos`,
-// NEVER writes it into persistedTuning_/flash (see config.proto's own
-// EstimatorConfigPatch doc comment for why).
-message ConfigDelta {
-  reserved 3, 4;
-  oneof patch {
-    DrivetrainConfigPatch drivetrain = 1;
-    MotorConfigPatch      motor      = 2;
-    OtosConfigPatch       otos       = 5;
-    EstimatorConfigPatch  estimator  = 6;
-  }
-}
+// ConfigDelta -- DELETED (132-013, patch-surface retirement, the-
+// configuration-object.md). Carried config.proto's four curated
+// `*ConfigPatch` messages (drivetrain/motor/otos/estimator) through a
+// present-field-merge oneof -- config.proto's own `PatchKind`-shaped
+// `ConfigTarget` enum, `BoundMotorSide`, and all four Patch messages are
+// deleted wholesale alongside it (config.proto itself no longer exists).
+// This was the whole surface tickets 008-012's group/field wire arms
+// (SetConfigGroup/GetConfig/ConfigSnapshot/SetConfigField, robot_config.proto)
+// exist to replace: no patch, no presence flags, no read-merge-write. See
+// `CommandEnvelope.config`'s own doc comment immediately below for what
+// replaced it at the same field number.
 
 // One command in. corr_id is echoed back via the single ack slot riding in
 // every Telemetry push (telemetry.proto), NOT a per-command ReplyEnvelope --
@@ -276,6 +243,21 @@ message CommandEnvelope {
     // never-before-used field number (21, never 20 -- see the reserved
     // list's own comment above), never one of the reserved numbers above.
     //
+    // config(6) -- RETARGETED, 132-013 (patch-surface retirement): the
+    // arm keeps its pre-102 field NUMBER and its NAME (so
+    // WhichOneof("cmd").upper() still reads "CONFIG", matching
+    // commands.proto's own CONFIG verb, unchanged) -- only the message
+    // TYPE it carries changes, from the now-deleted `ConfigDelta` (a
+    // present-field-merge oneof of curated *ConfigPatch types) to
+    // `SetConfigGroup` (robot_config.proto, 132-001/008): a whole-group
+    // push, decoded straight into Configurator's owned Config::Robot with
+    // no patch, no presence flags, no merge (Configurator::applyGroup()).
+    // This is the same "reshape an existing arm's payload, keep its
+    // number" precedent `STOP`'s own meaning change already set (see this
+    // file's own header comment) -- not a "reserved, not reused" case,
+    // because the arm's CONCEPT ("push config") is unchanged, only its
+    // shape is.
+    //
     // wheels/estop (22/23) are the command-ingestion rework's two new arms
     // (command-ingestion-...-two-stops.md §2), also fresh, never-before-used
     // numbers. Their ARM NAMES are load-bearing, not cosmetic: both host
@@ -284,11 +266,40 @@ message CommandEnvelope {
     // (io/serial_conn.py / io/sim_config.py's own `_envelope_command_name()`),
     // so `wheels`/`estop` MUST spell commands.proto's WHEELS/ESTOP verbs
     // exactly. Renaming either arm silently breaks every frame's CRC.
-    ConfigDelta config = 6;
-    Stop        stop   = 13;
-    Move        move   = 21;
-    Wheels      wheels = 22;
-    Estop       estop  = 23;
+    //
+    // get_config(24) -- 132-011 (GetConfig/ConfigSnapshot wire read-back):
+    // another fresh, never-before-used field number (the next one free
+    // after wheels/estop), carrying robot_config.proto's `GetConfig`
+    // (a bare `ConfigGroupTarget target`). Same load-bearing-name rule as
+    // wheels/estop above: this arm's name uppercases to commands.proto's
+    // `GET_CONFIG` verb EXACTLY (WhichOneof("cmd").upper() == "GET_CONFIG"),
+    // which is why the arm is spelled with an underscore rather than one
+    // word -- see commands.proto's own GET_CONFIG/CFG doc comment.
+    //
+    // set_field(25) -- 132-012 (SetConfigField / Configurator::applyField(),
+    // the dev-mode single-value push): the next fresh field number after
+    // get_config, carrying robot_config.proto's `SetConfigField{target,
+    // field, value}` -- address a single already-live field by
+    // (ConfigGroupTarget, protobuf field number), never a string key. Same
+    // load-bearing-name rule as every arm above: this arm's name uppercases
+    // to commands.proto's `SET_FIELD` verb EXACTLY (WhichOneof("cmd").upper()
+    // == "SET_FIELD") -- see commands.proto's own SET_FIELD doc comment for
+    // why the verb (and therefore this arm) is spelled shorter than the
+    // `SetConfigField` message type it carries: the literal mirror
+    // "set_config_field"/"SET_CONFIG_FIELD" would push
+    // `Comms::kMaxCommandPrefixBytes`/`kMaxLineBytes` (comms.h) past
+    // `Com::SerialPort::kTxBufferCapacity` (250) -- `GET_CONFIG` (10 bytes)
+    // is already this schema's longest verb name and the sole driver of
+    // that 249-byte figure (132-011's own flagged headroom concern);
+    // "SET_FIELD" (9 bytes) stays under it, so this arm leaves that budget
+    // unchanged.
+    SetConfigGroup config     = 6;
+    Stop           stop       = 13;
+    Move           move       = 21;
+    Wheels         wheels     = 22;
+    Estop          estop      = 23;
+    GetConfig      get_config = 24;
+    SetConfigField set_field  = 25;
   }
 }
 
@@ -316,5 +327,24 @@ message ReplyEnvelope {
     Ack       ok   = 2;
     Error     err  = 3;
     Telemetry tlm  = 4;
+    // cfg(12) -- 132-011 (GetConfig/ConfigSnapshot wire read-back): the
+    // first genuinely NEW body arm since this message's pre-102 prune --
+    // free field numbers on this oneof start at 12 (reserved 5 to 11
+    // above). Carries robot_config.proto's `ConfigSnapshot`
+    // (`ConfigGroupTarget target` + the target's own encoded `body`
+    // bytes), `Comms::sendReply()`'s SYNCHRONOUS answer to a `get_config`
+    // request (§7.1's "no per-command ReplyEnvelope" framing describes
+    // move/config/stop's ack-ring path -- GetConfig is the one command
+    // that genuinely needs a direct reply, since a ring entry has no room
+    // for a group's worth of values). Unlike `get_config`'s own arm name
+    // (CommandEnvelope, above), this arm's name is NOT wire-derived --
+    // `Comms::sendReply()`'s outbound verb name comes from a hand-written
+    // `bodyKindToVerb()` switch on `body_kind`, not from
+    // `WhichOneof("body")` -- so "cfg" is a naming CHOICE, not a
+    // structural requirement; chosen to match commands.proto's own CFG
+    // verb and this project's long-anticipated "cfg reply" vocabulary
+    // (io/serial_conn.py's SerialConnection class docstring has named a
+    // future "cfg" reply verb since before this ticket existed).
+    ConfigSnapshot cfg = 12;
   }
 }

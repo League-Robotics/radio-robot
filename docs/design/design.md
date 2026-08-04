@@ -248,8 +248,8 @@ motion-stack excision):** `Motion::Executor`/`Motion::JerkTrajectory`/
 wholesale — the `motion/` directory (and `motion/DESIGN.md`) no longer
 exist. There is no arc/segment queue and no heading-source policy in
 S1's minimal firmware; the robot was, at that point, a pure
-TWIST-follower plus a deadman. `msg::PlannerConfig` and
-`PlannerConfigPatch` are gone with them (`planner.proto` deleted). This
+TWIST-follower plus a deadman. `msg::PlannerConfig` and its own curated
+live-tuning wire message are gone with them (`planner.proto` deleted). This
 is tagged `pre-gut-motion-stack` for full recoverability — the tag and
 sprint 115's own `architecture-update.md` are where to read about the
 pre-gut architecture, not this doc.
@@ -281,9 +281,9 @@ basis.velocity × age`, generalizing the deleted `HeadingSource::
 headingLead()` equation to the full body pose) plus a v1 complementary
 blend against OTOS heading/omega whose weights are fail-closed baked
 config, defaulting to 0.0 (encoder-only output this sprint, per
-stakeholder decision) and live-tunable via a new `ConfigDelta.estimator`
-(`EstimatorConfigPatch`) oneof arm, mirroring `OtosConfigPatch`'s
-existing merge-then-apply pattern — NOT persisted to flash (unlike motor
+stakeholder decision) and were live-tunable via a `ConfigDelta.estimator`
+oneof arm, mirroring the Otos live-tuning message's own existing
+merge-then-apply pattern — NOT persisted to flash (unlike motor
 gains/OTOS calibration; a reboot reverts to the baked default). The
 estimator's predictions are NOT exposed on the wire this sprint —
 validation (leave-one-out one-step-ahead RMS analysis) runs host-side
@@ -291,7 +291,14 @@ directly against the raw `EncoderReading`/`OtosReading` fields sprint 115
 already telemetered, via a captured TLM-log CSV, not a live query
 against the on-chip estimator instance. See
 [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) for the full
-detail.
+detail. **HISTORICAL as of 132-013 (patch-surface retirement) / 128-016
+(`App::StateEstimator` itself deleted as dead code):** `ConfigDelta` and
+the curated per-target live-tuning messages it carried (drivetrain/motor/
+otos/estimator) are deleted outright, replaced by `robot_config.proto`'s
+group/field wire arms (`SetConfigGroup`/`GetConfig`/`ConfigSnapshot`/
+`SetConfigField`); the ESTIMATOR group still decodes for read-back but
+reaches no live consumer (`Configurator::install(ESTIMATOR)` permanently
+returns `ERR_UNIMPLEMENTED`).
 
 **122 (motion-library extraction + loop-timing telemetry) — landed.**
 Stakeholder-directed two-layer restructuring (2026-07-24): the firmware

@@ -163,12 +163,32 @@ int main() {
   static App::RobotGraph graph = App::composeRobot(bus, clock, sleeper, serialLink, radioLink,
                                                    &tuningStore, banner, idLine);
 
-  graph.loadPersistedTuning();
-  graph.robotLoop().markConfigured();
-
   // RobotLoop::run() is boot() followed by cycle() forever; it is spelled
   // out here instead so the display can be turned off in between.
   graph.robotLoop().boot();
+
+  // 132-015 (trap 1, the-configuration-object.md): loadPersistedTuning()
+  // MUST run AFTER boot(), not before -- the pre-132-015 order here. Every
+  // Devices::RealOtos setter reapplyPersistedTuning()'s own OTOS branch
+  // reaches (App::configureOtos() -> setOffset()/setLinearScalar()/
+  // setAngularScalar(), otos.cpp) is a no-op until RealOtos::begin() sets
+  // initialized_ = true, and begin() itself only ever runs inside boot()'s
+  // own Preamble::step() loop (preamble.cpp's Otos slot) -- calling
+  // loadPersistedTuning() first meant a persisted OTOS scale/offset was
+  // SILENTLY discarded on every real boot: the write no-op'd here, and
+  // begin() then applied the BAKED scale anyway (it does not touch the
+  // offset registers at all), so nothing downstream ever saw the failure.
+  // begin() itself cannot be re-run to "fix" a too-early apply instead --
+  // it zeroes the chip's tracked pose and kicks IMU bias calibration,
+  // so re-running it would teleport the OTOS origin out from under
+  // odometry -- so the ordering itself had to move, not be worked around.
+  // boot() itself never reads tuningStore_/config_.otos, so this reorder
+  // changes nothing about what boot() does; it only changes whether the
+  // persisted OTOS values reach the chip once boot() is done. markConfigured()
+  // only needs to land before the first cycle() call below, so it moves
+  // down here with loadPersistedTuning() rather than staying split apart.
+  graph.loadPersistedTuning();
+  graph.robotLoop().markConfigured();
 
   // Boot is done and the first control cycle is next: give the LED matrix's
   // refresh timer back to the loop. Everything from here runs to the

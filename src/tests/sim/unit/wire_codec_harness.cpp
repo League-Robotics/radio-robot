@@ -371,47 +371,32 @@ void scenarioRoundTripStop() {
   checkTrue(out.cmd_kind == msg::CommandEnvelope::CmdKind::STOP, "cmd_kind == STOP");
 }
 
-void scenarioRoundTripConfigDrivetrainPatch() {
-  beginScenario("decode(): round-trip config arm -- ConfigDelta{drivetrain=DrivetrainConfigPatch} (2-level nested)");
-  Buf patch;
-  putFloatField(patch, 1, 150.0f);  // trackwidth
-  putFloatField(patch, 2, 0.9f);    // rotational_slip
+// 132-013 (patch-surface retirement): CommandEnvelope.config now carries
+// `SetConfigGroup{target, body}` (robot_config.proto), not the deleted
+// `ConfigDelta{drivetrain=DrivetrainConfigPatch, ...}` this scenario used
+// to round-trip -- see envelope.proto's own `config` arm doc comment for
+// the retarget. `body` is itself an opaque encoded group (Configurator::
+// applyGroup() decodes it separately, not this generic engine's job to
+// interpret) -- this scenario proves the OUTER 2-level nested decode
+// (CommandEnvelope.config -> SetConfigGroup.target/body) still works,
+// mirroring the pre-132-013 scenario's own "2-level nested" coverage
+// intent without asserting anything about a specific group's fields.
+void scenarioRoundTripConfigSetGroup() {
+  beginScenario("decode(): round-trip config arm -- SetConfigGroup{target, body} (2-level nested)");
+  Buf body;
+  putFloatField(body, 1, 42.0f);        // one opaque scalar field inside the group body
   Buf config;
-  putMessageField(config, 1, patch);  // ConfigDelta.patch.drivetrain, field 1
+  putVarintField(config, 1, 3);         // SetConfigGroup.target, field 1 (e.g. DRIVE == 3)
+  putMessageField(config, 2, body);     // SetConfigGroup.body, field 2 (bytes -- same wire type as a message)
   Buf env;
-  putMessageField(env, 6, config);    // CommandEnvelope.cmd.config, field 6
+  putMessageField(env, 6, config);      // CommandEnvelope.cmd.config, field 6
 
   msg::CommandEnvelope out;
   msg::wire::Result r = msg::wire::decode(out, env.data, static_cast<uint16_t>(env.len));
   checkTrue(r.ok, "config (2-level nested) decode succeeds");
   checkTrue(out.cmd_kind == msg::CommandEnvelope::CmdKind::CONFIG, "cmd_kind == CONFIG");
-  checkTrue(out.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::DRIVETRAIN, "patch_kind == DRIVETRAIN");
-  checkTrue(out.cmd.config.patch.drivetrain.trackwidth.has, "trackwidth.has == true");
-  checkFloatEq(out.cmd.config.patch.drivetrain.trackwidth.val, 150.0f, "trackwidth round-trips");
-  checkTrue(out.cmd.config.patch.drivetrain.rotational_slip.has, "rotational_slip.has == true");
-  checkFloatEq(out.cmd.config.patch.drivetrain.rotational_slip.val, 0.9f, "rotational_slip round-trips");
-  checkFalse(out.cmd.config.patch.drivetrain.ekf_q_xy.has, "ekf_q_xy.has stays false (never sent)");
-}
-
-// Confirms the DELETED ConfigDelta.watchdog arm's old field number (4) is
-// now treated exactly like any other unrecognized field within the nested
-// ConfigDelta message: skipped, never decoded into a live oneof arm
-// (116-001, MOVE protocol cutover -- see envelope.proto's own reserved-list
-// comment). `ConfigTarget.CONFIG_WATCHDOG` (config.proto) stays
-// declared-unused; this scenario proves the WIRE field itself is gone.
-void scenarioReservedConfigWatchdogFieldIgnored() {
-  beginScenario("decode(): reserved ConfigDelta.watchdog field (4) is skipped, not decoded");
-  Buf config;
-  putVarintField(config, 4, 5000);  // the deleted watchdog arm's old field number -- reserved, not reused
-  Buf env;
-  putMessageField(env, 6, config);  // CommandEnvelope.cmd.config, field 6
-
-  msg::CommandEnvelope out;
-  msg::wire::Result r = msg::wire::decode(out, env.data, static_cast<uint16_t>(env.len));
-  checkTrue(r.ok, "config decode succeeds despite the reserved field 4");
-  checkTrue(out.cmd_kind == msg::CommandEnvelope::CmdKind::CONFIG, "cmd_kind == CONFIG (the config arm itself still decodes)");
-  checkTrue(out.cmd.config.patch_kind == msg::ConfigDelta::PatchKind::NONE,
-            "patch_kind stays NONE -- field 4 sets no oneof arm, the schema no longer knows it");
+  checkU64Eq(static_cast<uint64_t>(out.cmd.config.target), 3, "target round-trips");
+  checkU64Eq(out.cmd.config.body_count, body.len, "body_count matches the encoded body length");
 }
 
 // ===========================================================================
@@ -717,8 +702,7 @@ int main() {
   scenarioRoundTripMoveWheelsAngle();
   scenarioReservedTwistArmIgnored();
   scenarioRoundTripStop();
-  scenarioRoundTripConfigDrivetrainPatch();
-  scenarioReservedConfigWatchdogFieldIgnored();
+  scenarioRoundTripConfigSetGroup();
   scenarioUnknownFieldSkipped();
   scenarioMalformedBufferRejected();
   scenarioEncodeAckHandParsed();

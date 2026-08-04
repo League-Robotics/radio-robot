@@ -45,56 +45,38 @@ float takeFloat(const Blob& blob, size_t& offset) {
   return v;
 }
 
-void putOptFloat(Blob& blob, size_t& offset, const msg::Opt<float>& v) {
-  putBool(blob, offset, v.has);
-  putFloat(blob, offset, v.val);
-}
-
-msg::Opt<float> takeOptFloat(const Blob& blob, size_t& offset) {
-  msg::Opt<float> v;
-  v.has = takeBool(blob, offset);
-  v.val = takeFloat(blob, offset);
-  return v;
-}
-
-// putMotorPatch/takeMotorPatch -- travel_calib, kp, ki, kff, i_max, kaw,
-// in that fixed order (kMotorPatchFields=6, persisted_tuning.h). `side`
-// is NOT part of the blob -- deserializeSnapshot() stamps it directly
-// (bookkeeping only, see TuningSnapshot's own doc comment).
-void putMotorPatch(Blob& blob, size_t& offset, const msg::MotorConfigPatch& p) {
-  putOptFloat(blob, offset, p.travel_calib);
-  putOptFloat(blob, offset, p.kp);
-  putOptFloat(blob, offset, p.ki);
-  putOptFloat(blob, offset, p.kff);
-  putOptFloat(blob, offset, p.i_max);
-  putOptFloat(blob, offset, p.kaw);
-}
-
-msg::MotorConfigPatch takeMotorPatch(const Blob& blob, size_t& offset) {
-  msg::MotorConfigPatch p;
-  p.travel_calib = takeOptFloat(blob, offset);
-  p.kp = takeOptFloat(blob, offset);
-  p.ki = takeOptFloat(blob, offset);
-  p.kff = takeOptFloat(blob, offset);
-  p.i_max = takeOptFloat(blob, offset);
-  p.kaw = takeOptFloat(blob, offset);
-  return p;
-}
-
 }  // namespace
 
+// serializeSnapshot()/deserializeSnapshot() -- fixed field order: the 3
+// group-presence bools first, then the 12 raw floats grouped
+// WHEEL_CONTROL(5)/MOTORS-travel_calib(2)/OTOS(5), matching
+// TuningSnapshot's own declaration order (persisted_tuning.h). No Opt<T>,
+// no per-field presence byte (132-013's reshape -- see this file's own
+// header doc comment): every float is written/read unconditionally, and
+// the 3 group-level bools are what a caller checks before trusting a
+// group's floats mean anything (reapplyPersistedTuning(), configurator.cpp).
 Blob serializeSnapshot(const TuningSnapshot& snapshot) {
   Blob blob{};
   size_t offset = 0;
 
-  putMotorPatch(blob, offset, snapshot.motorL);
-  putMotorPatch(blob, offset, snapshot.motorR);
+  putBool(blob, offset, snapshot.wheelControlTuned);
+  putBool(blob, offset, snapshot.motorsTravelCalibTuned);
+  putBool(blob, offset, snapshot.otosTuned);
 
-  putOptFloat(blob, offset, snapshot.otos.linear_scale);
-  putOptFloat(blob, offset, snapshot.otos.angular_scale);
-  putOptFloat(blob, offset, snapshot.otos.offset_x);
-  putOptFloat(blob, offset, snapshot.otos.offset_y);
-  putOptFloat(blob, offset, snapshot.otos.offset_yaw);
+  putFloat(blob, offset, snapshot.wheelControlPidKp);
+  putFloat(blob, offset, snapshot.wheelControlPidKi);
+  putFloat(blob, offset, snapshot.wheelControlPidIMax);
+  putFloat(blob, offset, snapshot.wheelControlPidKaff);
+  putFloat(blob, offset, snapshot.wheelControlPidMax);
+
+  putFloat(blob, offset, snapshot.motorsTravelCalibLeft);
+  putFloat(blob, offset, snapshot.motorsTravelCalibRight);
+
+  putFloat(blob, offset, snapshot.otosOffsetX);
+  putFloat(blob, offset, snapshot.otosOffsetY);
+  putFloat(blob, offset, snapshot.otosOffsetYaw);
+  putFloat(blob, offset, snapshot.otosLinearScale);
+  putFloat(blob, offset, snapshot.otosAngularScale);
 
   return blob;
 }
@@ -103,18 +85,24 @@ TuningSnapshot deserializeSnapshot(const Blob& blob) {
   TuningSnapshot snapshot;
   size_t offset = 0;
 
-  snapshot.motorL = takeMotorPatch(blob, offset);
-  snapshot.motorL.side = msg::BoundMotorSide::LEFT;
-  snapshot.motorR = takeMotorPatch(blob, offset);
-  snapshot.motorR.side = msg::BoundMotorSide::RIGHT;
+  snapshot.wheelControlTuned = takeBool(blob, offset);
+  snapshot.motorsTravelCalibTuned = takeBool(blob, offset);
+  snapshot.otosTuned = takeBool(blob, offset);
 
-  snapshot.otos.linear_scale = takeOptFloat(blob, offset);
-  snapshot.otos.angular_scale = takeOptFloat(blob, offset);
-  snapshot.otos.offset_x = takeOptFloat(blob, offset);
-  snapshot.otos.offset_y = takeOptFloat(blob, offset);
-  snapshot.otos.offset_yaw = takeOptFloat(blob, offset);
-  // .init deliberately left at its default (false) -- see
-  // TuningSnapshot's own doc comment.
+  snapshot.wheelControlPidKp = takeFloat(blob, offset);
+  snapshot.wheelControlPidKi = takeFloat(blob, offset);
+  snapshot.wheelControlPidIMax = takeFloat(blob, offset);
+  snapshot.wheelControlPidKaff = takeFloat(blob, offset);
+  snapshot.wheelControlPidMax = takeFloat(blob, offset);
+
+  snapshot.motorsTravelCalibLeft = takeFloat(blob, offset);
+  snapshot.motorsTravelCalibRight = takeFloat(blob, offset);
+
+  snapshot.otosOffsetX = takeFloat(blob, offset);
+  snapshot.otosOffsetY = takeFloat(blob, offset);
+  snapshot.otosOffsetYaw = takeFloat(blob, offset);
+  snapshot.otosLinearScale = takeFloat(blob, offset);
+  snapshot.otosAngularScale = takeFloat(blob, offset);
 
   return snapshot;
 }
@@ -140,6 +128,15 @@ namespace {
 // if a future field addition (persisted_tuning.h's kBlobSize) ever
 // outgrows the 4 keys this store may use, rather than silently
 // truncating the persisted state.
+//
+// 132-013 (patch-surface retirement): kBlobSize dropped from 85 to 51
+// bytes (kPayloadBytes 89 -> 55, kNumChunks 3 -> 2) -- the reshape (the
+// old curated Motor/Otos live-tuning messages' per-field 5-byte Opt<T>
+// packing -> plain 4-byte floats + 3 group-level presence bools) shrank
+// the blob even though the persisted FIELD SET is unchanged (see
+// TuningSnapshot's own doc comment, persisted_tuning.h). This frees
+// budget rather than consuming it: kNumChunks now has 2 full chunks of
+// headroom below the 4-chunk ceiling, not 1.
 constexpr int kChunkBytes = 32;  // codal's KEY_VALUE_STORAGE_VALUE_SIZE
 constexpr size_t kPayloadBytes = sizeof(uint32_t) + kBlobSize;  // version + blob
 constexpr int kNumChunks =

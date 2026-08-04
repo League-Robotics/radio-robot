@@ -222,29 +222,46 @@ def _build_stop_frame(corr_id: int) -> "tuple[bytes, bytes, bytes]":
     return raw_payload, frame, wire_line
 
 
-def _build_config_frame(corr_id: int, *, kp: float) -> "tuple[bytes, bytes, bytes]":
+def _build_set_field_frame(corr_id: int, *, kp: float) -> "tuple[bytes, bytes, bytes]":
     """Same shape as ``_build_stop_frame()`` for
-    ``CommandEnvelope{config: ConfigDelta{motor: MotorConfigPatch{kp: ...}}}``
-    -- the third command arm (alongside move/stop), 124-011's own addition
-    to this file's ack-observability coverage (the issue's "historical
-    framing" section specifically named ``config`` enqueue acks as one of
-    the three arms that scored ``ack=None`` pre-123-006, alongside
-    ``move_wheels``/``move_twist``). Exercises
-    ``RobotLoop::handleConfig()``'s MOTOR branch (robot_loop.cpp:321-349),
-    which acks unconditionally at the end -- no configuration-completeness
-    gate guards CONFIG the way one guards MOVE (that gate is
-    ``handleMove()``-only, robot_loop.cpp:217)."""
-    from robot_radio.io.wire_codec import encode_frame
-    from robot_radio.robot.pb2 import config_pb2
-    from robot_radio.robot.pb2 import envelope_pb2 as pb2
+    ``CommandEnvelope{set_field: SetConfigField{target: WHEEL_CONTROL,
+    field: pid_kp, value: kp}}`` -- the CONFIG-adjacent command arm
+    (alongside move/stop), 124-011's own addition to this file's
+    ack-observability coverage (the issue's "historical framing" section
+    specifically named ``config`` enqueue acks as one of the three arms
+    that scored ``ack=None`` pre-123-006, alongside ``move_wheels``/
+    ``move_twist``).
 
+    132-014 RETARGET: the original ``CommandEnvelope{config: ConfigDelta{
+    motor: MotorConfigPatch{kp}}}`` shape this function built no longer
+    exists -- ``config.proto`` (``ConfigDelta``/``*ConfigPatch``) is deleted
+    wholesale (132-013), and ``envelope.proto``'s ``config`` arm (field 6)
+    now carries ``robot_config.proto``'s ``SetConfigGroup`` (a WHOLE-group
+    push), not a single-field patch. ``set_field``
+    (``SetConfigField{target, field, value}``, field 25) is the field-level
+    counterpart 132-012 added -- the direct successor of "push one field,
+    kp" this test's own scope always was, now exercising
+    ``RobotLoop::routeCommand()``'s ``SET_FIELD`` case ->
+    ``Configurator::applyField()`` -- which, like the old MOTOR patch
+    branch, acks unconditionally: no configuration-completeness gate
+    guards CONFIG/SET_FIELD the way one guards MOVE (that gate is
+    ``handleMove()``-only, robot_loop.cpp:217). ``kp`` maps onto
+    ``WheelControl.pid_kp`` (App::Drive's unified wheel-speed controller,
+    130-005) -- the direct successor of the old MotorConfigPatch.kp this
+    function pushed."""
+    from robot_radio.io.wire_codec import encode_frame
+    from robot_radio.robot.pb2 import envelope_pb2 as pb2
+    from robot_radio.robot.pb2 import robot_config_pb2
+
+    field_number = robot_config_pb2.WheelControl.DESCRIPTOR.fields_by_name["pid_kp"].number
     envelope = pb2.CommandEnvelope(
         corr_id=corr_id,
-        config=pb2.ConfigDelta(motor=config_pb2.MotorConfigPatch(kp=kp)),
+        set_field=robot_config_pb2.SetConfigField(
+            target=robot_config_pb2.WHEEL_CONTROL, field=field_number, value=kp),
     )
     raw_payload = envelope.SerializeToString()
-    frame = encode_frame(raw_payload, command=b"CONFIG")
-    wire_line = b"CONFIG:" + frame
+    frame = encode_frame(raw_payload, command=b"SET_FIELD")
+    wire_line = b"SET_FIELD:" + frame
     return raw_payload, frame, wire_line
 
 
@@ -382,21 +399,24 @@ def test_stop_command_round_trips_through_real_codec_without_configuration():
         loop.disconnect()
 
 
-def test_config_enqueue_ack_round_trips_through_real_codec():
+def test_set_field_enqueue_ack_round_trips_through_real_codec():
     """124-011 (issue: telemetry-physical-layer-corruption-and-move-ack-
     observability.md): the third named arm the issue's "historical framing"
     section claimed scored ``ack=None`` pre-123-006 (alongside
     ``move_wheels``/``move_twist``, covered by the two tests above) --
-    ``config``. Same shape as the STOP companion above: an UNCONFIGURED
-    SimHarness (CONFIG's MOTOR branch has no configuration-completeness
-    gate, robot_loop.cpp:217 gates handleMove() only), a real
-    CommandEnvelope{config: ConfigDelta{motor: MotorConfigPatch{kp}}}
-    through the real host encoder -> real firmware demux/decode/dispatch ->
-    real firmware ack-ring push -> real firmware encode -> real host
-    decode."""
+    the CONFIG-adjacent arm (132-014: retargeted from ``config``/
+    ``ConfigDelta`` onto ``set_field``/``SetConfigField``, see
+    ``_build_set_field_frame()``'s own doc comment for the full
+    disposition). Same shape as the STOP companion above: an UNCONFIGURED
+    SimHarness (SET_FIELD has no configuration-completeness gate,
+    robot_loop.cpp:217 gates handleMove() only), a real
+    CommandEnvelope{set_field: SetConfigField{target: WHEEL_CONTROL,
+    field: pid_kp, value}} through the real host encoder -> real firmware
+    demux/decode/dispatch -> real firmware ack-ring push -> real firmware
+    encode -> real host decode."""
     corr_id = 40003
-    _, frame, wire_line = _build_config_frame(corr_id, kp=0.05)
-    assert 0x0A not in frame, "CONFIG frame unexpectedly contains a literal 0x0A byte"
+    _, frame, wire_line = _build_set_field_frame(corr_id, kp=0.05)
+    assert 0x0A not in frame, "SET_FIELD frame unexpectedly contains a literal 0x0A byte"
 
     loop = _make_loop()
     try:
@@ -405,9 +425,9 @@ def test_config_enqueue_ack_round_trips_through_real_codec():
         ack = _drain_ack(loop, corr_id, _ACK_POLL_CYCLES)
         assert ack is not None, (
             f"no ack for corr_id={corr_id} observed within {_ACK_POLL_CYCLES} cycles -- "
-            "CONFIG enqueue ack not observed"
+            "SET_FIELD enqueue ack not observed"
         )
-        assert ack.ok, f"CONFIG was rejected: err_code={ack.err_code}"
+        assert ack.ok, f"SET_FIELD was rejected: err_code={ack.err_code}"
     finally:
         loop.disconnect()
 

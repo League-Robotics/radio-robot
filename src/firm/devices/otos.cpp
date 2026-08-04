@@ -18,6 +18,24 @@ float clampf(float v, float lo, float hi) {
 }
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// scaleToRegister -- see its declaration comment (otos.h) for why this is a
+// Devices::-namespace-scope free function (132-010, trap 3) rather than a
+// RealOtos member: RealOtos::begin() below and App::configureOtos()
+// (app/boot_calibration.cpp) both call it, converting the SAME baked/pushed
+// multiplier through the SAME formula before reaching setLinearScalar()/
+// setAngularScalar().
+// ---------------------------------------------------------------------------
+
+int8_t scaleToRegister(float scale)
+{
+    // scalar = clamp(round((scale - 1.0) / 0.001), -127, 127).
+    float raw = roundf((scale - 1.0f) / 0.001f);
+    if (raw >  127.0f) raw =  127.0f;
+    if (raw < -127.0f) raw = -127.0f;
+    return static_cast<int8_t>(raw);
+}
+
 // Out-of-line anchor / key function for the abstract Otos base — see its
 // declaration comment (otos.h) for why this must not be `= default` in the
 // header.
@@ -266,19 +284,6 @@ void RealOtos::setAngularScalar(float scalar)
     if (!initialized_) return;
     int8_t clamped = static_cast<int8_t>(clampf(scalar, -127.0f, 127.0f));
     writeReg8(kRegAngularScalar, static_cast<uint8_t>(clamped));
-}
-
-// ---------------------------------------------------------------------------
-// scaleToRegister
-// ---------------------------------------------------------------------------
-
-int8_t RealOtos::scaleToRegister(float scale)
-{
-    // scalar = clamp(round((scale - 1.0) / 0.001), -127, 127).
-    float raw = roundf((scale - 1.0f) / 0.001f);
-    if (raw >  127.0f) raw =  127.0f;
-    if (raw < -127.0f) raw = -127.0f;
-    return static_cast<int8_t>(raw);
 }
 
 // ---------------------------------------------------------------------------

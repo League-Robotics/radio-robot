@@ -70,19 +70,6 @@ Devices::OtosConfig makeConfig(float linearScale, float angularScale) {
   return cfg;
 }
 
-// scaleToRegister() -- the EXACT same conversion Devices::Otos::
-// scaleToRegister() performs (otos.cpp, private) -- duplicated here per
-// this codebase's established per-file fixture-duplication convention
-// (devices_otos_harness.cpp's own kPosMmPerLsb/kHdgRadPerLsb precedent),
-// used by this harness to compute the compensating register value a real
-// OL/OA calibration push would send.
-int8_t scaleToRegister(float scale) {
-  float raw = std::round((scale - 1.0f) / 0.001f);
-  if (raw > 127.0f) raw = 127.0f;
-  if (raw < -127.0f) raw = -127.0f;
-  return static_cast<int8_t>(raw);
-}
-
 // ===========================================================================
 // 1. Zero-error exactness (109-007 AC): with every new knob left at its
 //    default (off), WheelPlant::reportedPosition() must match position()
@@ -162,8 +149,11 @@ void scenarioOtosRawScaleErrorDivergesThenCalibrationConverges() {
   // live OtosConfigPatch drives (RobotLoop::handleConfig -> Otos::
   // setLinearScalar()), computed exactly the way calibration_commands()
   // (push.py) derives it: scale = 1/(1+rawError), then scaleToRegister().
+  // Devices::scaleToRegister() (otos.h) -- a free function since 132-010
+  // (trap 3) -- replaces this file's former local duplicate of the SAME
+  // formula.
   float compensatingScale = 1.0f / (1.0f + kRawErrorLinear);
-  odom.setLinearScalar(static_cast<float>(scaleToRegister(compensatingScale)));
+  odom.setLinearScalar(static_cast<float>(Devices::scaleToRegister(compensatingScale)));
 
   nowUs += 20000;  // kReadPeriod -- otos.h's own rate-limit window
   odom.tick(nowUs);

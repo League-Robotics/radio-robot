@@ -54,11 +54,13 @@ def test_otos_boot_config_values_reads_tovez_json():
 
 def test_otos_boot_config_values_raises_with_no_robot_config():
     """Sprint 114 (config-as-truth completion): with no robot config at all,
-    the generator hard-fails on the first required key
-    (geometry.odometry_offset_mm.x) -- no more identity-default (zero
-    offset, 1.0 scale) source-side fallback."""
+    the generator hard-fails on the first required key (otos.offset_x --
+    132-017 JSON reshape retarget: was geometry.odometry_offset_mm.x
+    before the grouped-shape migration moved OTOS offsets/scales under
+    their own `otos` section) -- no more identity-default (zero offset,
+    1.0 scale) source-side fallback."""
     with pytest.raises(gbc.MissingRobotConfigKeyError,
-                        match="geometry.odometry_offset_mm.x"):
+                        match="otos.offset_x"):
         gbc.otos_boot_config_values({})
 
 

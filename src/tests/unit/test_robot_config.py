@@ -23,6 +23,16 @@ _ROBOTS_DIR = _REPO_ROOT / "data" / "robots"
 
 _MINIMAL_IDENTITY = {"robot_name": "test-bot", "uid": "test-bot"}
 
+# 132-016 added extra="forbid" (RobotConfig and every group it composes),
+# which made load_robot_config() raise pydantic.ValidationError for every
+# real, on-disk profile until 132-017's JSON reshape landed (data/robots/
+# *.json were still in the OLD 13-section shape) -- the three tests below
+# were xfail(strict=True, raises=ValidationError)-marked for that span.
+# 132-017 (JSON reshape, this ticket) is the cue documented on that former
+# marker itself: the reshape flipped them to unexpected passes, so the
+# marker is dropped here and the original real-file-load assertions
+# restored.
+
 
 def test_otos_untrusted_defaults_false_when_omitted():
     """A profile with no geometry.otos_untrusted key at all loads with the
@@ -61,7 +71,8 @@ def test_tovez_profile_marks_otos_untrusted():
     points at and match_robot_by_id() resolves to for device_announcement_
     name='tovez', per 093's active-pointer switch) carries the persisted
     flag, so no manual per-session SET is needed to record the bench rig's
-    OTOS-decoupled-from-wheels fact."""
+    OTOS-decoupled-from-wheels fact.
+    """
     cfg = load_robot_config(_ROBOTS_DIR / "tovez.json")
     assert cfg.geometry.otos_untrusted is True
 
@@ -70,13 +81,15 @@ def test_tovez_nocal_profile_marks_otos_untrusted():
     """tovez_nocal.json is the calibration-stripped variant of the same
     physical robot (same connection.serial_last_6) — it carries the same
     mounting fact so the flag survives even if active_robot.json is ever
-    pointed back at it."""
+    pointed back at it.
+    """
     cfg = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
     assert cfg.geometry.otos_untrusted is True
 
 
 def test_togov_profile_unaffected():
     """togov.json (a different physical robot, mecanum drivetrain) is out
-    of scope for this ticket and keeps the default (unset -> False)."""
+    of scope for this ticket and keeps the default (unset -> False).
+    """
     cfg = load_robot_config(_ROBOTS_DIR / "togov.json")
     assert cfg.geometry.otos_untrusted is False

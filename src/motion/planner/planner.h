@@ -107,6 +107,16 @@ class Planner {
                          float alphaDecel, float jerkMax, float yawJerkMax);
   const PlannerLimits& limits() const { return limits_; }
 
+  // No Config::Robot-consuming configure() on THIS class (132-007, the-
+  // configuration-object.md, sprint 132 "configuration discipline"):
+  // src/motion's own dependency rule (src/motion/DESIGN.md §3) forbids
+  // ANY Config::*/App::*/Devices::* dependency in this tree, no
+  // exception -- stricter than the (already strict) devices isolation
+  // invariant this project also has. App::configurePlanner(Motion::
+  // Planner&, const Config::Robot&) (src/firm/app/boot_calibration.h)
+  // is the Config::Robot-consuming entry point instead, calling
+  // applyShaperLimits() above.
+
   // True once applyShaperLimits() has ever landed real profile ceilings
   // (boot config or a wire EstimatorConfigPatch). The loop publishes
   // kFlagFaultShapingDisabled -- the loud off-state for the silent-off

@@ -71,9 +71,26 @@ _CPP_ROW_RE = re.compile(
 #             here regardless (a schema-level closed verb set, not a
 #             per-build one) so the host codec always recognizes "DBG:" as
 #             cleartext rather than counting it malformed.
+#   GET_CONFIG/CFG -- 132-011 (GetConfig/ConfigSnapshot wire read-back): the
+#             CONFIG binary arm's read-back half. GET_CONFIG (host->robot)
+#             carries CommandEnvelope.cmd.get_config; CFG (robot->host)
+#             carries ReplyEnvelope.body.cfg -- the first genuinely NEW
+#             binary command/reply PAIR added since WHEELS/ESTOP.
+#   SET_FIELD -- 132-012 (SetConfigField / Configurator::applyField()): the
+#             WRITE half of GET_CONFIG's read-back pair, host->robot,
+#             carrying CommandEnvelope.cmd.set_field (a single already-live
+#             field addressed by (ConfigGroupTarget, protobuf field
+#             number)). Deliberately spelled shorter than its own message
+#             type (SetConfigField) -- GET_CONFIG (10 bytes) is already this
+#             schema's longest verb name and the sole driver of
+#             Comms::kMaxCommandPrefixBytes/kMaxLineBytes (249 B, one byte
+#             below SerialPort::kTxBufferCapacity's 250); the literal mirror
+#             "SET_CONFIG_FIELD" (17 bytes) would push that past the ceiling,
+#             "SET_FIELD" (9 bytes) does not.
 _EXPECTED_CLEARTEXT = {"HELLO", "PING", "ID", "VER", "DEVICE", "PONG",
                        "READY", "STATUS", "HELP", "DBG"}
-_EXPECTED_BINARY = {"MOVE", "CONFIG", "STOP", "WHEELS", "ESTOP", "TLM", "OK", "ERR"}
+_EXPECTED_BINARY = {"MOVE", "CONFIG", "STOP", "WHEELS", "ESTOP", "TLM", "OK", "ERR",
+                    "GET_CONFIG", "CFG", "SET_FIELD"}
 
 
 def _parse_cpp_verb_table(commands_h: str) -> list[tuple[str, bool]]:

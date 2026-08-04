@@ -2,7 +2,29 @@
 // separate TU from boot_wiring.cpp.
 #include "app/boot_calibration.h"
 
+#include <cmath>
+
+// bootPlannerLimits() below reads Config::defaultPlannerLimits()/
+// Config::PlannerBootConfig directly -- 132-015 moved this include here
+// (from boot_calibration.h) since it is the only remaining use of
+// config/boot_config.h in this translation unit; the header itself no
+// longer names any boot_config.h type in its own declarations now that
+// DriveBootConfig/WheelControllerBootConfig are deleted.
+#include "config/boot_config.h"
+
 namespace App {
+
+namespace {
+
+// kConfigureRestVelocity -- mirrors NezhaMotor::kReconfigureRestVelocity/
+// MotorArmor::kRestVelocity (both 5.0f, nezha_motor.h/motor_armor.h) --
+// a leaf/subsystem-local constant for a similar guard, deliberately NOT
+// shared with either (nezha_motor.h's own kReconfigureRestVelocity
+// comment establishes this project's precedent: each guard gets its own
+// named constant at its own layer).
+constexpr float kConfigureRestVelocity = 5.0f;  // [mm/s]
+
+}  // namespace
 
 Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   Devices::MotorConfig cfg;
@@ -66,50 +88,53 @@ Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainC
   return out;
 }
 
-void installShaperLimits(Motion::Planner& planner, const Motion::PlannerLimits& limits) {
-  planner.applyShaperLimits(limits.ceilings.aMax, limits.ceilings.aDecel,
-                            limits.ceilings.alphaMax, limits.ceilings.alphaDecel,
-                            limits.ceilings.jerkMax, limits.ceilings.yawJerkMax);
+// installShaperLimits/installRotationCalibration/installDriveCalibration/
+// installWheelController -- DELETED, 132-015 (dead-code sweep). All three
+// were confirmed by a fresh grep to have zero remaining call sites
+// (Configurator::install(), configurator.cpp, does this fan-out inline
+// now, reading Config::Robot directly -- see this file's own header for
+// how that ticket-006 retarget left these with "no callers left"); see
+// boot_config.h's own note on DriveBootConfig/WheelControllerBootConfig
+// (deleted the same ticket) for the struct-level half of this cleanup.
+// installRotationCalibration itself was already deleted earlier (132-007).
+
+// configurePlanner -- see boot_calibration.h's own doc comment.
+void configurePlanner(Motion::Planner& planner, const Config::Robot& config) {
+  // 132-017 split: the six shaper ceilings live on config.plannerShaper
+  // now (a LIVE ConfigGroupTarget), not config.planner (the boot-only
+  // remainder) -- see robot_config.proto's PlannerShaper header comment.
+  planner.applyShaperLimits(config.plannerShaper.a_max, config.plannerShaper.a_decel,
+                            config.plannerShaper.alpha_max, config.plannerShaper.alpha_decel,
+                            config.plannerShaper.jerk_max, config.plannerShaper.yaw_jerk_max);
 }
 
-void installRotationCalibration(RobotLoop& robotLoop,
-                                const msg::DrivetrainConfig& drivetrainConfig) {
-  constexpr float kDegToRad = 3.14159265358979323846f / 180.0f;
-  robotLoop.setRotationCalibration(
-      drivetrainConfig.rotation_gain_pos, drivetrainConfig.rotation_offset * kDegToRad,
-      drivetrainConfig.rotation_gain_neg, drivetrainConfig.rotation_offset_neg * kDegToRad);
+// configureMotor -- see boot_calibration.h's own doc comment.
+bool configureMotor(Devices::Motor& motor, const Config::Robot& config, bool isLeft) {
+  const bool atRest =
+      std::fabs(motor.velocity()) < kConfigureRestVelocity && motor.appliedDuty() == 0.0f;
+  if (!atRest) return false;
+
+  motor.applyTravelCalib(isLeft ? config.motors.travel_calib_left
+                                : config.motors.travel_calib_right);
+  return true;
 }
 
-void installDriveCalibration(Drive& drive, const Config::DriveBootConfig& driveConfig) {
-  // MEASURED, NOT CONFIGURED (stakeholder, 2026-07-31): one baked constant
-  // for both wheels, deliberately ignoring driveConfig.dutyPerSpeedLeft/
-  // Right -- see Drive::kDutyPerSpeed's own doc comment (drive.h) for the
-  // measurement and rationale.
-  drive.setDutyPerSpeed(Drive::kDutyPerSpeed, Drive::kDutyPerSpeed);
-  drive.setWheelCorrection(
-      driveConfig.gainLeftAccel, driveConfig.interceptLeftAccel, driveConfig.gainLeftDecel,
-      driveConfig.interceptLeftDecel, driveConfig.gainRightAccel, driveConfig.interceptRightAccel,
-      driveConfig.gainRightDecel, driveConfig.interceptRightDecel);
-  drive.setCrawlPulse(driveConfig.crawlPulse);
-}
-
-void installWheelController(Drive& drive, const Config::WheelControllerBootConfig& config) {
-  Drive::ControlGains gains;
-  gains.kp = config.kp;
-  gains.ki = config.ki;
-  gains.iMax = config.iMax;
-  gains.kaff = config.kaff;
-  gains.pidMax = config.pidMax;
-  drive.setControlGains(gains);
-
-  Drive::AdaptationBounds bounds;
-  bounds.vMin = config.vMin;
-  bounds.biasMax = config.biasMax;
-  bounds.tauAdapt = config.tauAdapt;
-  bounds.aSteady = config.aSteady;
-  bounds.deficitThreshold = config.deficitThreshold;
-  bounds.deficitWindow = config.deficitWindow;
-  drive.setAdaptationBounds(bounds);
+// configureOtos -- see boot_calibration.h's own doc comment. linear_scale/
+// angular_scale are converted through Devices::scaleToRegister() (otos.h)
+// before reaching setLinearScalar()/setAngularScalar() -- those two setters
+// take the chip's raw int8 register domain directly, never the config
+// MULTIPLIER domain (1.0 = no correction) config.otos itself holds. This is
+// the SAME conversion RealOtos::begin() applies to the baked value at boot
+// (otos.cpp) -- 132-010 closes trap 3 (the-configuration-object.md) by
+// applying it here too, so a live OTOS push and a boot bake agree on what a
+// given multiplier means. setOffset()'s x/y/yaw are unaffected -- that
+// setter already takes the value directly, no domain conversion (otos.h's
+// own setOffset() doc comment spells out the distinction from the scale
+// registers).
+void configureOtos(Devices::Otos& otos, const Config::Robot& config) {
+  otos.setLinearScalar(static_cast<float>(Devices::scaleToRegister(config.otos.linear_scale)));
+  otos.setAngularScalar(static_cast<float>(Devices::scaleToRegister(config.otos.angular_scale)));
+  otos.setOffset(config.otos.offset_x, config.otos.offset_y, config.otos.offset_yaw);
 }
 
 }  // namespace App

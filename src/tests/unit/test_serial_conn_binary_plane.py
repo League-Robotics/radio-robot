@@ -60,7 +60,7 @@ import pytest
 
 from robot_radio.io.serial_conn import SerialConnection
 from robot_radio.io.wire_codec import encode_frame
-from robot_radio.robot.pb2 import envelope_pb2
+from robot_radio.robot.pb2 import envelope_pb2, robot_config_pb2
 
 from _wire_test_helpers import FakeSerial, binary_frame, text_line
 
@@ -98,21 +98,25 @@ def test_envelope_pb2_importable_and_roundtrips():
 
 def test_envelope_pb2_cross_file_import_resolves():
     """envelope_pb2.py contains bare top-level cross-file imports (protoc's
-    flat -I protos output, e.g. `import config_pb2 as config__pb2`) that
-    only resolve because src/host/robot_radio/robot/pb2/__init__.py inserts its
-    own directory onto sys.path before any *_pb2 submodule loads.
+    flat -I protos output, e.g. `import robot_config_pb2 as
+    robot_config__pb2`) that only resolve because
+    src/host/robot_radio/robot/pb2/__init__.py inserts its own directory
+    onto sys.path before any *_pb2 submodule loads.
 
-    104-002: ``drive`` (DrivetrainCommand) was pruned by 103-001 -- ``config``
-    (ConfigDelta -> DrivetrainConfigPatch, defined in config.proto) is the
-    P4 wire's live cross-file reference and exercises the actual
-    cross-module reference end to end, not just envelope_pb2's own
+    132-014: ``config`` (``SetConfigGroup``, defined in robot_config.proto)
+    is the P4 wire's live cross-file reference now -- ``config.proto``
+    (``ConfigDelta``/``DrivetrainConfigPatch``, this test's own pre-132-013
+    example) is deleted wholesale (patch-surface retirement). ``target``
+    is a ``robot_config_pb2.ConfigGroupTarget`` enum value, exercising the
+    actual cross-module reference end to end, not just envelope_pb2's own
     locally-defined messages."""
     env = envelope_pb2.CommandEnvelope()
-    env.config.drivetrain.trackwidth = 128.0
+    env.config.target = robot_config_pb2.GEOMETRY
+    env.config.body = b"\x00"
 
     assert env.WhichOneof("cmd") == "config"
-    assert env.config.WhichOneof("patch") == "drivetrain"
-    assert env.config.drivetrain.trackwidth == pytest.approx(128.0)
+    assert env.config.target == robot_config_pb2.GEOMETRY
+    assert env.config.body == b"\x00"
 
 
 # ---------------------------------------------------------------------------

@@ -62,15 +62,22 @@ class SimHarness {
   // (via a BootOverrides -- see this constructor's own comment below), so
   // the simulated OTOS chip and firmware's own odometry describe the same
   // wheelbase. Defaults to TestSim::kDefaultTrackWidth (SimPlant's own).
-  explicit SimHarness(float trackWidth = kDefaultTrackWidth)
+  //
+  // tuningStore: nullptr (the default) keeps persistence disabled, exactly
+  // as the pre-composeRobot() RobotLoop's own null tuningStore was --
+  // every pre-132-015 caller of this constructor is unaffected. 132-015
+  // (trap 1, the-configuration-object.md) added this parameter so a test
+  // can inject a real (or seeded-mock) Config::TuningStore and exercise
+  // loadPersistedTuning() through the SAME composition root main.cpp uses
+  // (see loadPersistedTuning() below for the call this enables).
+  explicit SimHarness(float trackWidth = kDefaultTrackWidth,
+                      Config::TuningStore* tuningStore = nullptr)
       : plant_(trackWidth),
         // PARITY (130-002): composeRobot() is the SAME function
         // src/firm/main.cpp calls -- the only leaf substituted here is the
         // bus (plant_, a TestSim::SimPlant, in main.cpp's
         // Devices::MicroBitI2CBus slot) and the transports (FakeTransport
         // in main.cpp's real SerialTransport/RadioTransport slots).
-        // tuningStore is null: persistence is disabled in the sim, exactly
-        // as the pre-composeRobot() RobotLoop's own null tuningStore was.
         //
         // THREE deliberate, explicit overrides (BootOverrides -- see its
         // own doc comment, app/boot_wiring.h, for the full rationale each):
@@ -102,14 +109,18 @@ class SimHarness {
         //     55.8mm off true ground truth in a test that explicitly zeroes
         //     every OTHER simulated OTOS fault knob).
         graph_(App::composeRobot(plant_, clock_, sleeper_, serialLink_, radioLink_,
-                                 /*tuningStore=*/nullptr, "DEVICE:NEZHA2:sim:sim_harness:1",
+                                 tuningStore, "DEVICE:NEZHA2:sim:sim_harness:1",
                                  "ID:unknown",
                                  App::BootOverrides{&trackWidth, &kSimControlPeriod,
                                                     &kSimControlPeriod, &kIdentityOtosConfig})) {
     // SIM OVERRIDE: composeRobot() already installed App::Drive's
-    // calibration via installDriveCalibration() (boot through the SAME
-    // path main.cpp uses), baking Drive::kDutyPerSpeed -- the MEASURED
-    // REAL-HARDWARE gearbox constant. That is wrong for THIS plant:
+    // calibration via Configurator::loadBaked()+install() (boot through
+    // the SAME path main.cpp uses), baking config_.drive.duty_per_speed_
+    // left/right -- the active robot JSON's own measured plant constant
+    // (132-009: Configurator::install() now reads this from the JSON
+    // rather than a hardcoded App::Drive::kDutyPerSpeed C++ literal, but
+    // it is still a REAL-HARDWARE gearbox measurement). That is wrong for
+    // THIS plant:
     // TestSim::WheelPlant is a fixed synthetic plant (velocity
     // kDefaultDutyVelMax at |duty| == 1), so its exact inverse is a fact
     // about the sim, not a per-robot measurement -- there is no robot JSON
@@ -317,6 +328,14 @@ class SimHarness {
   // configureMotor() calls have landed.
   bool isConfigured() const { return graph_.robotLoop().isConfigured(); }
 
+  // Thin passthrough to App::RobotGraph::loadPersistedTuning() (132-015,
+  // trap 1) -- NOT called automatically by boot() above, deliberately: a
+  // caller drives this explicitly, in whatever order relative to boot() it
+  // wants to exercise (main.cpp's own fixed order is boot() THEN this
+  // call -- see main.cpp's own comment for why). A no-op if this
+  // SimHarness was constructed with the default null tuningStore.
+  void loadPersistedTuning() { graph_.loadPersistedTuning(); }
+
   // The composed SimPlant -- exposes fault knobs (setDisconnected()/
   // freezePosition()/setDropoutRate()/setOtosDrift()) and the read/write
   // hook registration (setReadHook()/setWriteHook()) directly.
@@ -353,6 +372,13 @@ class SimHarness {
   // Configurator::applyMotorConfigPatch() implements (130-005).
   App::Drive& drive() { return graph_.drive(); }
   Motion::Planner& planner() { return graph_.planner(); }
+
+  // configurator -- 132-006: App::Configurator now owns the one
+  // Config::Robot instance (config()/loadBaked()/install(), configurator.h)
+  // -- exposed the same way drive()/planner() already are, so a test can
+  // read back what composeRobot() baked without reaching into graph_
+  // itself (private).
+  App::Configurator& configurator() { return graph_.configurator(); }
 
   // Concrete TestSim::SimClock&, not Devices::Clock& -- callers need the
   // setMicros()/advanceMicros() stepping surface only the concrete fake

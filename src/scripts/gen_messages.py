@@ -13,10 +13,43 @@ Flags
 -----
 --dry-run        Print what would be written without touching the filesystem.
 --emit-inventory Write docs/design/message-inventory.md (traceability table).
+
+Emission modes (132-002)
+-------------------------
+Beyond the C++ wire-message header above, this script now also emits, from
+`src/protos/robot_config.proto`'s SAME field-descriptor walk, two more
+targets scoped to that one schema's 10 groups (3 host-only: Identity/
+Connection/Vision; 7 robot-config: Geometry/Motors/Drive/WheelControl/
+Planner/Otos/Estimator):
+
+  - a pydantic `BaseModel` class per group, ALL 10 (host-only included) —
+    `src/host/robot_radio/config/robot_config_generated.py`.
+  - a JSON Schema document declaring all 10 groups —
+    `data/robots/robot_config.schema.json`.
+
+The C++ path skips a message carrying `option (host_only) = true`
+(`options.proto`) — those 3 groups exist purely for the two host-side
+targets above; the other 7 get a C++ struct AND a wire codec, exactly like
+every other message this generator has always emitted.
+
+Why here, not a separate generator (sprint 132 sprint.md Design Rationale
+Decision 1): `Config::Robot`'s group members ARE the generated wire-message
+C++ structs (`decodeInto`/`encodeInto` already write through an arbitrary
+`base + offset`, so a `Config::Robot.drive` sub-struct is a valid decode
+target with zero adapter code) — once the "C++ target" IS the wire target,
+a second generator producing a competing C++ type for the same schema would
+reintroduce the two-definitions drift this whole design exists to kill
+(`check_config_sync.py`'s reason for existing, deleted by ticket 004). Both
+new emission modes share `_group_field_rows()`, the same one-walk-many-
+targets shape `_build_field_table()`/`_emit_message()` already establish
+for the C++ side, so a field added to a robot_config.proto group reaches
+all three generated targets from one edit, never two independently
+hand-maintained ones.
 """
 
 import argparse
 import os
+import re
 import sys
 import tempfile
 from collections import deque
@@ -35,6 +68,36 @@ HOST_COMMANDS_OUT = (
     REPO_ROOT / "src" / "host" / "robot_radio" / "io" / "wire_commands.py"
 )
 
+# 132-002: robot_config.proto's two NEW generated targets (sprint 132
+# "configuration discipline" Step 1 — the same field-descriptor walk that
+# already emits robot_config.proto's C++ groups also emits a pydantic
+# BaseModel per group and a JSON Schema document). Deliberately NOT
+# src/host/robot_radio/config/robot_config.py — that file is still the
+# actively-imported, hand-written loader/validator (get_robot_config(),
+# list_robots(), derived-field computation) this ticket does not touch or
+# wire anything into (its own acceptance criterion: "does not yet wire the
+# generated header into anything ... generate correctly in isolation");
+# a later ticket (per sprint.md's own "What Changed" list, no ticket number
+# assigned) does the actual swap-in. GENERATED_ROBOT_CONFIG_PYDANTIC_OUT is
+# a new, standalone file for exactly that reason.
+#
+# data/robots/robot_config.schema.json, by contrast, has ZERO runtime
+# consumers today (confirmed: no `jsonschema` load of it anywhere in
+# src/, no `$schema` reference read back) — it is a pure documentation
+# artifact whose own `$comment` already names a baking pipeline deleted in
+# the 077 rebuild. sprint.md's own "What Changed" list names this exact
+# path as "generated, replacing the hand-maintained file" with no ticket
+# number attached, and ticket 002 is the only ticket whose acceptance
+# criteria mention JSON Schema generation at all — so this ticket writes
+# there directly. The result documents the END-STATE grouped shape while
+# data/robots/*.json itself stays old-shaped until ticket 017's reshape —
+# exactly the "broken in the middle, up-front-flagged" gap sprint.md's own
+# Design Rationale Decision 2 already names as expected, not a regression.
+GENERATED_ROBOT_CONFIG_PYDANTIC_OUT = (
+    REPO_ROOT / "src" / "host" / "robot_radio" / "config" / "robot_config_generated.py"
+)
+ROBOT_CONFIG_JSON_SCHEMA_OUT = REPO_ROOT / "data" / "robots" / "robot_config.schema.json"
+
 # ---------------------------------------------------------------------------
 # Extension field numbers defined in options.proto
 # ---------------------------------------------------------------------------
@@ -52,6 +115,12 @@ _FIELD_OPT_SCALE     = 50007
 # vs. EnumValueOptions are different extended message types). Used by
 # commands.proto's Verb enum (124-001, command-name registry).
 _ENUM_VALUE_OPT_BINARY = 50100
+
+# Extension field number for the (host_only) MESSAGE option (options.proto)
+# -- a fourth independent number space (MessageOptions vs. FieldOptions vs.
+# EnumValueOptions). Used by robot_config.proto's Identity/Connection/Vision
+# group messages (132-001/132-002, sprint 132 "configuration discipline").
+_MESSAGE_OPT_HOST_ONLY = 50200
 
 # The required proto3 zero value for commands.proto's Verb enum -- never a
 # real wire verb, excluded from every generated registry row (firmware
@@ -621,6 +690,57 @@ def _read_verb_binary_flag(value) -> bool:
     cleartext)."""
     opts = _parse_enum_value_options(value)
     return bool(opts.get(_ENUM_VALUE_OPT_BINARY, 0))
+
+
+def _parse_message_options(md) -> dict:
+    """Parse a DescriptorProto's serialized MessageOptions extension bytes
+    into {field_number: raw_value}.
+
+    Mirrors `_parse_enum_value_options()`'s own varint-walk exactly, but over
+    `md.options` (MessageOptions) rather than `value.options`
+    (EnumValueOptions) -- a third independent extension-number space
+    (options.proto's own comment on `(host_only)`, 132-001).
+    """
+    import struct
+
+    raw = md.options.SerializeToString()
+    pos = 0
+    out: dict = {}
+    while pos < len(raw):
+        tag, pos = _read_varint(raw, pos)
+        field_num = tag >> 3
+        wire_type = tag & 7
+        if wire_type == 0:  # varint (bool options: host_only)
+            val, pos = _read_varint(raw, pos)
+            out[field_num] = val
+        elif wire_type == 1:  # fixed64
+            (val,) = struct.unpack_from("<d", raw, pos)
+            pos += 8
+            out[field_num] = val
+        elif wire_type == 2:  # length-delimited
+            vlen, pos = _read_varint(raw, pos)
+            out[field_num] = raw[pos:pos + vlen]
+            pos += vlen
+        elif wire_type == 5:  # fixed32
+            (val,) = struct.unpack_from("<f", raw, pos)
+            pos += 4
+            out[field_num] = val
+        else:
+            break
+    return out
+
+
+def _read_message_host_only(md) -> bool:
+    """Return whether a message's (host_only) MessageOptions extension is
+    set true (default false). 132-002: robot_config.proto's Identity/
+    Connection/Vision groups carry `option (host_only) = true` -- those
+    groups generate a pydantic BaseModel + JSON Schema definition (both
+    emission modes below) but never a C++ struct (`_emit_file()`'s message
+    loop skips them) and never a wire codec (they are outside
+    `_compute_layout_check_structs()`'s CommandEnvelope/ReplyEnvelope
+    reachability walk regardless, so no separate skip is needed there)."""
+    opts = _parse_message_options(md)
+    return bool(opts.get(_MESSAGE_OPT_HOST_ONLY, 0))
 
 
 # ---------------------------------------------------------------------------
@@ -1867,6 +1987,7 @@ _WIRE_H_BANNER = """\
 #include <cstdint>
 
 #include "messages/envelope.h"
+#include "messages/robot_config.h"
 
 namespace msg {
 namespace wire {
@@ -1945,7 +2066,14 @@ uint16_t encode(const ReplyEnvelope& in, uint8_t* buf, uint16_t cap);
 // that could silently drift from it. Same never-partial/malformed-input
 // contract as decode(CommandEnvelope&, ...) above.
 Result decode(Telemetry& out, const uint8_t* buf, uint16_t len);
+"""
 
+# 132-008: closing tail, split off _WIRE_H_FOOTER so the per-robot-config-group
+# decode() declarations (_render_config_group_decode_decls(), one per
+# Geometry/Motors/Drive/WheelControl/Planner/Otos/Estimator -- see wire.cpp's
+# own _WIRE_CPP_PART3 doc comment for why these 7 need their own family) can
+# be inserted between the fixed footer above and this closing pair.
+_WIRE_H_CLOSE = """
 }  // namespace wire
 }  // namespace msg
 """
@@ -2266,9 +2394,23 @@ double scalarAsDouble(ScalarType type, const void* src) {
 // Validates (min)/(max)/(abs_max) INLINE during decodeInto()'s single pass
 // (no second validation walk) -- returns false on the FIRST bound this
 // value violates.
+//
+// 132-008: NaN explicitly rejected before the min/max/abs_max comparisons
+// below -- `v < fd.minVal`/`v > fd.maxVal` are BOTH false for a NaN `v`
+// (IEEE 754: every ordered comparison against NaN is false), so a NaN
+// payload would otherwise pass every bound a field declares and reach
+// Config::Robot uncaught (the-configuration-object.md's own "NaN defeats
+// bounds validation" finding). `v != v` is the portable NaN test (true iff
+// NaN, for both float and double promoted through scalarAsDouble()) --
+// deliberately not <cmath>'s std::isnan() to avoid a new include in this
+// fixed engine text for a one-line check. A field with no declared bound
+// (e.g. Geometry.rotational_slip's non-contiguous domain, robot_config.proto's
+// own documented exception) is unaffected -- the early return above already
+// skips it, matching today's "no bound means no validation" convention.
 bool validateBounds(const FieldDesc& fd, const void* src) {
   if ((fd.flags & (kHasMin | kHasMax | kHasAbsMax)) == 0) return true;
   const double v = scalarAsDouble(fd.scalarType, src);
+  if (v != v) return false;  // NaN
   if (fd.flags & kHasAbsMax) {
     const double av = v < 0.0 ? -v : v;
     if (av > static_cast<double>(fd.absMaxVal)) return false;
@@ -2280,6 +2422,92 @@ bool validateBounds(const FieldDesc& fd, const void* src) {
     if (v > static_cast<double>(fd.maxVal)) return false;
   }
   return true;
+}
+
+// setScalarField() -- 132-012 (SetConfigField / Configurator::applyField(),
+// the-configuration-object.md's own worked design: "Updating one value:
+// (target, field number, value)"). applyField()'s own engine -- "the loop
+// minus tag decoding," per that design doc. SAME field-number lookup
+// decodeInto() runs per incoming wire tag (below), but driven by an
+// explicit field NUMBER the caller already has instead of one just decoded
+// off the wire, and the SAME validateBounds() bounds check just above --
+// reused, not reimplemented, so a single-field push (SetConfigField) and a
+// whole-group push (SetConfigGroup/applyGroup(), 132-008) can never
+// validate a bound differently.
+//
+// `value` always arrives as a wire FLOAT (SetConfigField.value,
+// robot_config.proto) regardless of the target field's own native
+// ScalarType -- e.g. Motors.fwd_sign_left/right are int32, Estimator.
+// staleness is uint32 -- so this converts the incoming float to that
+// field's own representation (mirroring decodeScalarValue()/
+// encodeScalarValue()'s own per-ScalarType shape above) BEFORE calling
+// validateBounds(), which reads the value back out through
+// scalarAsDouble(), typed by fd->scalarType.
+//
+// Every robot_config.proto group field reachable from here is a plain
+// FieldKind::kScalar -- no Opt/oneof/nested-message field exists in any of
+// Geometry/Motors/Drive/WheelControl/Planner/Otos/Estimator today (this
+// file's own _robot_config_groups()/_build_field_table() doc comment,
+// gen_messages.py). Anything else is rejected with ERR_BADARG rather than
+// mishandled, the same posture decodeInto()'s own kMessage/kOneofMessage
+// cases take for a schema shape this sprint's config groups do not use.
+//
+// NaN/Inf rejection is the CALLER's job (Configurator::applyField(),
+// std::isfinite() on the raw incoming float, BEFORE this function ever
+// runs) -- not repeated here, so the "reject NaN before validateBounds()"
+// contract lives at exactly one call site rather than being duplicated
+// into this generated engine text too.
+Result setScalarField(void* base, const MessageTable& table, uint16_t fieldNumber, float value) {
+  const FieldDesc* fd = nullptr;
+  for (uint8_t i = 0; i < table.fieldCount; ++i) {
+    if (table.fields[i].number == fieldNumber) {
+      fd = &table.fields[i];
+      break;
+    }
+  }
+  if (fd == nullptr || fd->kind != FieldKind::kScalar) {
+    return Result{false, fieldNumber, ErrCode::ERR_BADARG};
+  }
+
+  uint8_t converted[sizeof(uint32_t)] = {};
+  size_t width = 0;
+  switch (fd->scalarType) {
+    case ScalarType::kFloat: {
+      width = sizeof(float);
+      std::memcpy(converted, &value, width);
+      break;
+    }
+    case ScalarType::kInt32:
+    case ScalarType::kSint32: {
+      const int32_t v = static_cast<int32_t>(value);
+      width = sizeof(v);
+      std::memcpy(converted, &v, width);
+      break;
+    }
+    case ScalarType::kUint32: {
+      const uint32_t v = static_cast<uint32_t>(value);
+      width = sizeof(v);
+      std::memcpy(converted, &v, width);
+      break;
+    }
+    case ScalarType::kBool:
+    case ScalarType::kEnum: {
+      converted[0] = static_cast<uint8_t>(value);
+      width = sizeof(uint8_t);
+      break;
+    }
+    default:
+      // kDouble/kInt64/kUint64/kNone: unreached by any robot_config.proto
+      // group field today (every field is float/int32/uint32/bool/enum) --
+      // reject cleanly rather than mis-convert if a future group field ever
+      // adds one of these.
+      return Result{false, fd->number, ErrCode::ERR_BADARG};
+  }
+
+  if (!validateBounds(*fd, converted)) return Result{false, fd->number, ErrCode::ERR_RANGE};
+
+  std::memcpy(static_cast<uint8_t*>(base) + fd->offset, converted, width);
+  return Result{true, fd->number, ErrCode::ERR_NONE};
 }
 
 // --- Generated per-message field tables (regenerated from protos/*.proto
@@ -2426,11 +2654,20 @@ Result decodeInto(void* base, const MessageTable& table, const uint8_t* buf, siz
 }
 
 // Scratch cap for a nested message's own encoded payload -- sized against
-// the largest NESTED message this schema declares (DeviceId, ~171B, never
-// itself nested inside another message -- it IS the top-level reply body),
-// not against the outer envelope budget (123-002: recomputed to 240B for
+// the largest NESTED message this schema declares (a message reached via
+// a kMessage/kOneofMessage field from CommandEnvelope/ReplyEnvelope, i.e.
+// anything in struct_order other than those two roots themselves), not
+// against the outer envelope budget (123-002: recomputed to 240B for
 // COBS+CRC overhead, was 186B pre-123) -- unaffected by that recompute
-// since no nested message here approaches either ceiling.
+// since no nested message here approaches either ceiling. This literal is
+// fixed engine text (identical on every regeneration, unlike the
+// schema-derived kWorstCaseNestedMessageSize + static_assert immediately
+// below it in the generated output, which recompute every run) -- raise
+// it by hand if that assert ever fires; see this constant's own name for
+// what the failure means (`encodeInto()` into an undersized scratch
+// buffer fails, `encodeNestedMessage()` returns false, and the caller
+// silently drops the whole frame at RUNTIME with a clean compile -- 132-002
+// deferred this ticket's own assert to 132-015).
 constexpr size_t kEncodeScratchCap = 220;
 
 bool encodeInto(const void* base, const MessageTable& table, uint8_t* buf, size_t cap, size_t* pos);
@@ -2617,7 +2854,19 @@ Result decode(Telemetry& out, const uint8_t* buf, uint16_t len) {
   if (buf == nullptr && len != 0) return Result{false, 0, ErrCode::ERR_DECODE};
   return decodeInto(&out, kTable_Telemetry, buf, static_cast<size_t>(len), 0);
 }
+"""
 
+# 132-008: the namespace-closing tail of wire.cpp, split off PART2 so the
+# per-robot-config-group decode() overloads (_render_config_group_decode_defs(),
+# schema-derived -- one per Geometry/Motors/Drive/WheelControl/Planner/Otos/
+# Estimator) can be inserted between PART2's fixed decode(Telemetry&, ...)
+# and this closing pair, exactly where decode(Telemetry&, ...) itself was
+# inserted before the SAME closing pair by 124-008. See _emit_wire_files()'s
+# own doc comment for why these 7 groups need their own decode() family at
+# all: they are not reachable from CommandEnvelope/ReplyEnvelope (struct_order's
+# BFS), so they never appear in kMessageTables[] and get no decode() overload
+# from the loop that builds one for every OTHER reachable struct.
+_WIRE_CPP_PART3 = """\
 }  // namespace wire
 }  // namespace msg
 """
@@ -2639,6 +2888,227 @@ def _render_arm_report(report: dict) -> str:
             f"non-oneof={report['non_oneof']}B => total={report['total']}B")
 
 
+def _worst_case_nested_message(struct_order: list[str], msg_map: dict, memo: dict) -> tuple[str, int]:
+    """(name, size) of the largest message actually reached via a
+    kMessage/kOneofMessage field somewhere below CommandEnvelope/
+    ReplyEnvelope -- i.e. every entry in `struct_order` EXCEPT the two
+    roots themselves (`_LAYOUT_CHECK_ROOTS`), which are the top-level
+    envelope bodies, never themselves nested inside another message and
+    so never routed through wire.cpp's `encodeNestedMessage()`/its
+    `kEncodeScratchCap`-sized scratch buffer. 132-015 (ticket 002 deferred
+    this): this is the exact worst case `kEncodeScratchCap` must cover."""
+    worst_name = ""
+    worst_size = 0
+    for name in struct_order:
+        if name in _LAYOUT_CHECK_ROOTS:
+            continue
+        size = _worst_case_message_size(name, msg_map, memo)
+        if size > worst_size:
+            worst_name, worst_size = name, size
+    return worst_name, worst_size
+
+
+def _render_encode_scratch_cap_assert(struct_order: list[str], msg_map: dict, memo: dict) -> str:
+    """Schema-derived companion to `_WIRE_CPP_PART2`'s fixed-text
+    `kEncodeScratchCap` declaration (132-015) -- recomputed every
+    regeneration, unlike that literal, so a future schema change that
+    pushes the largest nested message past `kEncodeScratchCap` fails to
+    COMPILE (this assert) instead of failing SILENTLY at runtime
+    (`encodeInto()` returns false into an undersized scratch buffer,
+    `encodeNestedMessage()` returns false, the caller drops the whole
+    frame -- clean compile, no error until the wire). Placed textually
+    after `_WIRE_CPP_PART2` (`kEncodeScratchCap`'s own declaration), which
+    is all this ordering requires -- both are ordinary namespace-scope
+    `constexpr` declarations, not a template parameter of PART2's fixed
+    text, so PART2 itself stays byte-identical across regenerations."""
+    worst_name, worst_size = _worst_case_nested_message(struct_order, msg_map, memo)
+    return (
+        f"// kEncodeScratchCap must cover the largest NESTED message this\n"
+        f"// schema currently declares -- computed by gen_messages.py's own\n"
+        f"// _worst_case_message_size() (the same routine that computes\n"
+        f"// kCommandEnvelopeMaxEncodedSize/kReplyEnvelopeMaxEncodedSize,\n"
+        f"// wire.h), not hand-verified prose. Currently: {worst_name}={worst_size}B.\n"
+        f"constexpr size_t kWorstCaseNestedMessageSize = {worst_size};\n"
+        f"static_assert(kEncodeScratchCap >= kWorstCaseNestedMessageSize,\n"
+        f'              "kEncodeScratchCap too small for the largest nested "\n'
+        f'              "message this schema declares -- see '
+        f'kWorstCaseNestedMessageSize");\n'
+    )
+
+
+# 132-008: robot_config.proto's 7 robot-config groups (Geometry/Motors/Drive/
+# WheelControl/Planner/Otos/Estimator) are NOT reachable from CommandEnvelope/
+# ReplyEnvelope -- SetConfigGroup.body is a placeholder `bytes` field, not a
+# message-typed oneof arm (robot_config.proto's own header comment) -- so
+# _compute_layout_check_structs()'s BFS never finds them, and the ordinary
+# per-struct_order loop in _emit_wire_files() never builds a FieldDesc table
+# or a decode() overload for any of them. Configurator::applyGroup() (132-008)
+# still needs exactly that: a way to decode a SetConfigGroup.body payload
+# straight into the matching Config::Robot member using this file's existing
+# schema-generic decodeInto()/validateBounds() machinery, not a hand-rolled
+# parser. These two helpers render that missing piece -- one FieldDesc table
+# plus one small `decode(<Group>&, ...)` overload per group, built the same
+# way decode(Telemetry&, ...) (124-008) was: a fixed-shape wrapper around the
+# SAME generic decodeInto(), pointed at that group's own kTable_<Group>. The
+# groups are deliberately kept OUT of kMessageTables[]/struct_order itself
+# (no nested-message field anywhere references them by tableIndex -- every
+# field robot_config.proto declares today is a flat scalar), so this stays a
+# strict addition: struct_order's existing reachable-set semantics (and
+# ticket 095-003's day-one layout-check gate) are untouched.
+def _render_config_group_decode_decls(group_names: list[str]) -> str:
+    if not group_names:
+        return ""
+    lines = [
+        "",
+        "// decode(<Group>&, ...) -- 132-008 addition, one overload per",
+        "// robot_config.proto robot-config group. See _render_config_group_",
+        "// decode_decls()'s own doc comment (gen_messages.py) for why these",
+        "// groups need their own decode() family instead of falling out of",
+        "// the normal CommandEnvelope/ReplyEnvelope-reachable set below.",
+        "// Same never-partial/malformed-input contract as decode(Telemetry&,",
+        "// ...) above.",
+    ]
+    for name in group_names:
+        lines.append(f"Result decode({name}& out, const uint8_t* buf, uint16_t len);")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_config_group_decode_defs(group_names: list[str]) -> str:
+    if not group_names:
+        return ""
+    lines = [
+        "// decode(<Group>&, ...) -- 132-008 addition; see wire.h's own",
+        "// declaration comment. Same full-object memset + null-check +",
+        "// decodeInto() shape as decode(Telemetry&, ...) above, against",
+        "// each group's own generated kTable_<Group>.",
+        "",
+    ]
+    for name in group_names:
+        lines.append(f"Result decode({name}& out, const uint8_t* buf, uint16_t len) {{")
+        lines.append("  std::memset(static_cast<void*>(&out), 0, sizeof(out));")
+        lines.append("  if (buf == nullptr && len != 0) return Result{false, 0, ErrCode::ERR_DECODE};")
+        lines.append(f"  return decodeInto(&out, kTable_{name}, buf, static_cast<size_t>(len), 0);")
+        lines.append("}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+# 132-011 (GetConfig/ConfigSnapshot wire read-back): the encode-direction
+# mirror of _render_config_group_decode_decls()/_render_config_group_
+# decode_defs() above. A ConfigSnapshot reply carries one group's CURRENT
+# value as raw encoded bytes (ConfigSnapshot.body) -- Configurator's own
+# read-back path needs a way to encode config_'s matching member using this
+# file's existing schema-generic encodeInto() machinery, not a hand-rolled
+# serializer, the exact same "reuse the generated engine" reasoning
+# 132-008's decode() family already established for the write direction.
+# Same "not reachable from CommandEnvelope/ReplyEnvelope's own BFS" fact
+# applies here as it did there (this file's own doc comment on
+# _robot_config_groups() above): a group struct is never itself a nested
+# MESSAGE field anywhere in the schema -- SetConfigGroup.body/ConfigSnapshot.
+# body are opaque `bytes`, not message-typed oneof arms -- so struct_order's
+# ordinary per-struct loop in _emit_wire_files() never builds an encode()
+# overload for any of them either.
+def _render_config_group_encode_decls(group_names: list[str]) -> str:
+    if not group_names:
+        return ""
+    lines = [
+        "",
+        "// encode(<Group>&, ...) -- 132-011 addition, one overload per",
+        "// robot_config.proto robot-config group -- the encode-direction",
+        "// counterpart of decode(<Group>&, ...) above (132-008), reusing the",
+        "// SAME generated encodeInto() engine msg::wire::encode(ReplyEnvelope&,",
+        "// ...) already uses. Configurator's read-back path (encodeSnapshot())",
+        "// calls these to fill a ConfigSnapshot.body. Returns the number of",
+        "// bytes written (0 is a LEGITIMATE result for an all-default-valued",
+        "// group, proto3 implicit presence -- not necessarily a failure; 0",
+        "// only means failure when `cap` is too small for the group's actual",
+        "// content, which never happens in production since `cap` is always",
+        "// ConfigSnapshot.body's own 220-byte capacity, comfortably above",
+        "// every group's measured worst case).",
+    ]
+    for name in group_names:
+        lines.append(f"uint16_t encode(const {name}& in, uint8_t* buf, uint16_t cap);")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_config_group_encode_defs(group_names: list[str]) -> str:
+    if not group_names:
+        return ""
+    lines = [
+        "// encode(<Group>&, ...) -- 132-011 addition; see wire.h's own",
+        "// declaration comment. Same shape as encode(ReplyEnvelope&, ...)",
+        "// above, against each group's own generated kTable_<Group>.",
+        "",
+    ]
+    for name in group_names:
+        lines.append(f"uint16_t encode(const {name}& in, uint8_t* buf, uint16_t cap) {{")
+        lines.append("  if (buf == nullptr) return 0;")
+        lines.append("  size_t pos = 0;")
+        lines.append(
+            f"  if (!encodeInto(&in, kTable_{name}, buf, static_cast<size_t>(cap), &pos)) return 0;")
+        lines.append("  return static_cast<uint16_t>(pos);")
+        lines.append("}")
+        lines.append("")
+    return "\n".join(lines)
+
+
+# 132-012 (SetConfigField / Configurator::applyField()): the single-field
+# mirror of _render_config_group_decode_decls()/_render_config_group_
+# decode_defs() (132-008) -- one small setField() overload per
+# robot_config.proto robot-config group, wrapping the SAME fixed-engine-text
+# setScalarField() (this file's _WIRE_CPP_PART1, right after
+# validateBounds()) against that group's own kTable_<Group>. Same "not
+# reachable from CommandEnvelope/ReplyEnvelope's own BFS" fact as decode()/
+# encode() above (_robot_config_groups()'s own doc comment) -- struct_order's
+# ordinary per-struct loop in _emit_wire_files() never builds one of these
+# either.
+def _render_config_group_setfield_decls(group_names: list[str]) -> str:
+    if not group_names:
+        return ""
+    lines = [
+        "",
+        "// setField(<Group>&, ...) -- 132-012 addition, one overload per",
+        "// robot_config.proto robot-config group -- Configurator::applyField()'s",
+        "// (SetConfigField) own single-field write path, reusing the SAME",
+        "// generated setScalarField() engine (this file's fixed engine text,",
+        "// alongside validateBounds()) against that group's own kTable_<Group>.",
+        "// Looks `fieldNumber` up by NUMBER (not by decoded wire tag), converts",
+        "// `value` to that field's own native scalar representation, validates",
+        "// it through the SAME validateBounds() decodeInto() uses, and on",
+        "// success writes it directly into `out` at the matching offset.",
+        "// Returns {false, fieldNumber, ERR_BADARG} for an unknown field",
+        "// number, {false, field.number, ERR_RANGE} for a bound violation",
+        "// (NaN included -- rejecting NaN before this call is the CALLER's",
+        "// job, Configurator::applyField()'s own std::isfinite() check), or",
+        "// {true, field.number, ERR_NONE} on success.",
+    ]
+    for name in group_names:
+        lines.append(f"Result setField({name}& out, uint16_t fieldNumber, float value);")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_config_group_setfield_defs(group_names: list[str]) -> str:
+    if not group_names:
+        return ""
+    lines = [
+        "// setField(<Group>&, ...) -- 132-012 addition; see wire.h's own",
+        "// declaration comment. Thin trampoline into setScalarField() (this",
+        "// file's fixed engine text) against each group's own generated",
+        "// kTable_<Group> -- same shape as decode()/encode()'s own per-group",
+        "// wrappers just above.",
+        "",
+    ]
+    for name in group_names:
+        lines.append(f"Result setField({name}& out, uint16_t fieldNumber, float value) {{")
+        lines.append(f"  return setScalarField(&out, kTable_{name}, fieldNumber, value);")
+        lines.append("}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _emit_wire_files(fds):
     """Emit src/firm/messages/wire.{h,cpp}. Returns (wire_h, wire_cpp, cmd_report,
     reply_report) -- the reports are also printed to stderr by the caller
@@ -2653,6 +3123,21 @@ def _emit_wire_files(fds):
     memo: dict = {}
     field_tables = {name: _build_field_table(name, msg_map[name], msg_map, table_index_of)
                      for name in struct_order}
+
+    # 132-008: robot_config.proto's robot-config groups -- see
+    # _render_config_group_decode_decls()'s own doc comment just above for why
+    # these need their own FieldDesc tables + decode() family. `table_index_of`
+    # (built from struct_order only) is safe to reuse unmodified here: every
+    # group message robot_config.proto declares is flat scalars, so
+    # _build_field_table() never looks up a nested-message tableIndex for them.
+    group_struct_order: list[str] = []
+    robot_config_fd = next((f for f in fds.file if f.name == _ROBOT_CONFIG_PROTO_NAME), None)
+    if robot_config_fd is not None:
+        for md in _robot_config_groups(robot_config_fd):
+            if _read_message_host_only(md):
+                continue  # Identity/Connection/Vision -- host-only, no wire codec
+            group_struct_order.append(md.name)
+            field_tables[md.name] = _build_field_table(md.name, md, msg_map, table_index_of)
 
     cmd_report = _envelope_worst_case_report("CommandEnvelope", "cmd", msg_map, memo)
     reply_report = _envelope_worst_case_report("ReplyEnvelope", "body", msg_map, memo)
@@ -2671,13 +3156,24 @@ def _emit_wire_files(fds):
               + f"static_assert(kReplyEnvelopeMaxEncodedSize <= {_ENVELOPE_BUDGET_BYTES},\n"
               + f'              "ReplyEnvelope worst-case encoded size exceeds the '
               + f'{_ENVELOPE_BUDGET_BYTES}-byte envelope budget");\n'
-              + _WIRE_H_FOOTER)
+              + _WIRE_H_FOOTER
+              + _render_config_group_decode_decls(group_struct_order)
+              + _render_config_group_encode_decls(group_struct_order)
+              + _render_config_group_setfield_decls(group_struct_order)
+              + _WIRE_H_CLOSE)
 
     cpp_parts = [_WIRE_CPP_PART1]
     for name in struct_order:
         cpp_parts.extend(_render_message_table(name, field_tables[name]))
+    for name in group_struct_order:
+        cpp_parts.extend(_render_message_table(name, field_tables[name]))
     cpp_parts.extend(_render_message_tables_array(struct_order))
     cpp_parts.append(_WIRE_CPP_PART2)
+    cpp_parts.append(_render_encode_scratch_cap_assert(struct_order, msg_map, memo))
+    cpp_parts.append(_render_config_group_decode_defs(group_struct_order))
+    cpp_parts.append(_render_config_group_encode_defs(group_struct_order))
+    cpp_parts.append(_render_config_group_setfield_defs(group_struct_order))
+    cpp_parts.append(_WIRE_CPP_PART3)
     wire_cpp = "\n".join(cpp_parts)
 
     return wire_h, wire_cpp, cmd_report, reply_report
@@ -2728,8 +3224,16 @@ def _emit_file(fd, file_messages: dict, file_enums: dict,
         if is_commands and ed.name == "Verb":
             _emit_verb_registry_cpp(ed, lines)
 
-    # Emit messages in this file
+    # Emit messages in this file. 132-002: a message carrying
+    # `option (host_only) = true` (robot_config.proto's Identity/Connection/
+    # Vision groups) is skipped here -- it still generates a pydantic
+    # BaseModel + JSON Schema definition (see _render_pydantic_module()/
+    # _render_json_schema_doc() below, which walk robot_config.proto's
+    # messages independently of this per-proto-file C++ emission loop), but
+    # never a C++ struct (options.proto's own (host_only) doc comment).
     for md in fd.message_type:
+        if _read_message_host_only(md):
+            continue
         want_setters = md.name in _SETTER_TYPES
         _emit_message(md, want_setters, lines, all_enums)
 
@@ -2803,6 +3307,282 @@ def _emit_inventory(file_descriptors) -> str:
 
 class GenMessagesError(RuntimeError):
     """Raised by _run_codegen_pipeline() on a codegen pipeline failure."""
+
+
+# ---------------------------------------------------------------------------
+# 132-002: pydantic + JSON Schema emission modes for robot_config.proto's
+# 10 groups (3 host-only + 7 robot-config) — sprint 132 "configuration
+# discipline" Step 1 (sprint.md Design Rationale Decision 1: this generator
+# is EXTENDED with new emission modes rather than built as a second,
+# competing generator — see this file's own module docstring addendum).
+# Both emission modes below render from the SAME `_group_field_rows()`
+# per-group field list, so neither can independently drift from the other
+# or from the C++ groups `_emit_file()` emits from the identical `md.field`
+# walk (one field-descriptor source, three targets).
+# ---------------------------------------------------------------------------
+
+_ROBOT_CONFIG_PROTO_NAME = "robot_config.proto"
+
+# robot_config.proto also declares 4 wire ENVELOPE messages
+# (SetConfigGroup/GetConfig/ConfigSnapshot/SetConfigField) alongside its 10
+# GROUP messages. An envelope message carries a `ConfigGroupTarget` plus a
+# `bytes body` or a `(field, value)` pair — it has no group-shaped field set
+# of its own, so both emission modes below exclude it by name, the same way
+# the C++ side never treats it as a "group" either.
+_CONFIG_ENVELOPE_MESSAGE_NAMES = frozenset(
+    ["SetConfigGroup", "GetConfig", "ConfigSnapshot", "SetConfigField"]
+)
+
+
+def _robot_config_groups(fd):
+    """Return robot_config.proto's 10 GROUP message descriptors (3
+    host-only, 7 robot-config), in the file's own declaration order,
+    excluding the 4 wire envelope messages the same file also declares."""
+    return [md for md in fd.message_type if md.name not in _CONFIG_ENVELOPE_MESSAGE_NAMES]
+
+
+def _group_field_rows(md) -> list:
+    """Walk one robot_config.proto GROUP message's fields into a flat,
+    order-preserving list of scalar field descriptors — the ONE walk both
+    `_render_pydantic_module()` and `_render_json_schema_doc()` render from,
+    so a field added to a group necessarily reaches both outputs together.
+
+    Every group message robot_config.proto declares today is flat scalars
+    only (no oneof, no proto3 `optional`, no repeated/message/enum field —
+    confirmed by reading the file). This walk raises rather than silently
+    guessing at an unreached shape, the same "flag, don't guess" posture
+    `_build_field_table()`'s own kOpt/TYPE_STRING branch already takes for
+    an unreached optional-string field.
+    """
+    rows: list = []
+    for field in md.field:
+        if field.HasField("oneof_index"):
+            raise GenMessagesError(
+                f"gen_messages pydantic/JSON-Schema codegen: {md.name}.{field.name} "
+                f"is a oneof/proto3-optional field — the group field-descriptor "
+                f"walk (132-002) only supports flat scalar fields today; extend "
+                f"_group_field_rows() before adding a field of this shape to a "
+                f"robot_config.proto group.")
+        if field.label == _LABEL_REPEATED or field.type in (_TYPE_MESSAGE, _TYPE_ENUM):
+            raise GenMessagesError(
+                f"gen_messages pydantic/JSON-Schema codegen: {md.name}.{field.name} "
+                f"is repeated/message/enum — the group field-descriptor walk "
+                f"(132-002) only supports flat scalar fields today; extend "
+                f"_group_field_rows() before adding a field of this shape to a "
+                f"robot_config.proto group.")
+        rows.append({
+            "name": field.name,
+            "number": field.number,
+            "type": field.type,
+            "min": _read_bound(field, _FIELD_OPT_MIN),
+            "max": _read_bound(field, _FIELD_OPT_MAX),
+            "abs_max": _read_bound(field, _FIELD_OPT_ABS_MAX),
+        })
+    return rows
+
+
+def _python_scalar_type(proto_type) -> str:
+    """Map a proto scalar field type to a Python/pydantic annotation — the
+    SAME shapes `_group_field_rows()` allows through."""
+    if proto_type in (_TYPE_FLOAT, _TYPE_DOUBLE):
+        return "float"
+    if proto_type in (_TYPE_INT32, _TYPE_SINT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64):
+        return "int"
+    if proto_type == _TYPE_BOOL:
+        return "bool"
+    if proto_type == _TYPE_STRING:
+        return "str"
+    if proto_type == _TYPE_BYTES:
+        return "bytes"
+    raise GenMessagesError(
+        f"gen_messages pydantic codegen: unsupported scalar proto type {proto_type!r}")
+
+
+def _python_default_literal(proto_type) -> str:
+    """Return a Python literal matching `_scalar_default()`'s C++ zero-value
+    convention, for the same field shapes `_python_scalar_type()` covers."""
+    if proto_type in (_TYPE_FLOAT, _TYPE_DOUBLE):
+        return "0.0"
+    if proto_type in (_TYPE_INT32, _TYPE_SINT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64):
+        return "0"
+    if proto_type == _TYPE_BOOL:
+        return "False"
+    if proto_type == _TYPE_STRING:
+        return '""'
+    if proto_type == _TYPE_BYTES:
+        return 'b""'
+    raise GenMessagesError(
+        f"gen_messages pydantic codegen: unsupported scalar proto type {proto_type!r}")
+
+
+_PYDANTIC_MODULE_BANNER = '''\
+"""robot_config_generated.py -- GENERATED pydantic BaseModel hierarchy (132-002).
+
+AUTO-GENERATED by scripts/gen_messages.py -- do not edit by hand.
+Source: protos/robot_config.proto -- Config::Robot's end-state 10-group
+schema (3 host-only: Identity/Connection/Vision; 7 robot-config: Geometry/
+Motors/Drive/WheelControl/Planner/Otos/Estimator), walked by the SAME
+field-descriptor pass that emits src/firm/messages/robot_config.h's C++
+group structs (host-only groups excluded there, included here — see
+options.proto's own (host_only) doc comment) and
+data/robots/robot_config.schema.json's JSON Schema document.
+
+One flat BaseModel class per group, field-for-field, no cross-field
+validation and no derived quantities (sprint 132 issue "the-configuration-
+object.md": "the object holds RAW file values" -- Config::Robot's own C++
+struct carries the identical constraint; derived quantities are Config::
+Robot METHODS, not schema fields).
+
+Every class sets ``model_config = ConfigDict(extra="forbid")`` (132-016,
+"the configuration object" issue's own Sequencing step 6: "extra='forbid'
+on the host model") -- an unrecognized JSON key under any group now raises
+``pydantic.ValidationError`` instead of pydantic's default ``extra=
+'ignore'`` silently dropping it. This is the fix for the issue's own
+measured cost: the old hand-written host model had 36 ``control`` fields
+where the robot JSON had 53, silently dropping 18 keys including
+``output_deadband``/``reversal_dwell`` (JSON: ``reversal_dwell_ms``),
+which ``gen_boot_config.py`` REQUIRES and refuses to build without.
+
+Wired into src/host/robot_radio/config/robot_config.py's actual loader/
+validator (get_robot_config()/list_robots()/derived-field computation) as
+of sprint 132 ticket 020 (see that module's own header for the
+composition). NOTE (132-016): ``data/robots/*.json`` are still in the OLD
+13-section shape as of this generation -- ticket 017's JSON reshape has
+not landed -- so ``extra='forbid'`` makes loading any CURRENT real robot
+JSON raise ``ValidationError`` until 017 lands. Expected and accepted
+mid-sprint breakage (see robot_config.py's own KNOWN GAP note); not a bug
+in this generator.
+
+Regenerate: python3 src/scripts/gen_messages.py
+"""
+
+from __future__ import annotations
+
+from pydantic import BaseModel, ConfigDict
+
+'''
+
+
+def _render_pydantic_module(groups) -> str:
+    """Render GENERATED_ROBOT_CONFIG_PYDANTIC_OUT's full content from
+    robot_config.proto's 10 group message descriptors — one flat BaseModel
+    class per group, in the file's own declaration order (host-only groups
+    included, unlike the C++ emission path).
+
+    Every class carries ``model_config = ConfigDict(extra="forbid")``
+    (132-016) — an unrecognized key under any group raises loudly instead
+    of pydantic's default ``extra='ignore'`` silently dropping it. This is
+    the class's first statement (before any field), so the "no rows"
+    branch no longer needs its own ``pass`` placeholder."""
+    lines: list = [_PYDANTIC_MODULE_BANNER.rstrip("\n"), ""]
+    for md in groups:
+        rows = _group_field_rows(md)
+        lines.append(f"class {md.name}(BaseModel):")
+        lines.append('    model_config = ConfigDict(extra="forbid")')
+        for row in rows:
+            py_type = _python_scalar_type(row["type"])
+            default = _python_default_literal(row["type"])
+            lines.append(f"    {row['name']}: {py_type} = {default}")
+        lines.append("")
+    return "\n".join(lines).rstrip("\n") + "\n"
+
+
+def _json_type_for_proto(proto_type) -> str:
+    """Map a proto scalar field type to a JSON Schema `type` keyword — the
+    SAME shapes `_group_field_rows()` allows through (no group field is
+    `bytes` today, so that shape is deliberately unhandled here, matching
+    `_group_field_rows()`'s own "flag, don't guess" posture for anything
+    unreached by the current schema)."""
+    if proto_type in (_TYPE_FLOAT, _TYPE_DOUBLE):
+        return "number"
+    if proto_type in (_TYPE_INT32, _TYPE_SINT32, _TYPE_INT64, _TYPE_UINT32, _TYPE_UINT64):
+        return "integer"
+    if proto_type == _TYPE_BOOL:
+        return "boolean"
+    if proto_type == _TYPE_STRING:
+        return "string"
+    raise GenMessagesError(
+        f"gen_messages JSON-Schema codegen: unsupported scalar proto type {proto_type!r}")
+
+
+def _snake_case(name: str) -> str:
+    """Convert a CapCamelCase group message name (e.g. "WheelControl") to
+    its lower_snake_case key (e.g. "wheel_control") — the shape ticket
+    017's reshaped robot JSON top-level keys are expected to use. Inverse
+    of `_cap_camel()` (snake -> Cap); JSON Schema's own top-level
+    `properties` keys are conventionally lower_snake_case, not a bare
+    CapCamel type name."""
+    s = re.sub(r"(.)([A-Z][a-z]+)", r"\1_\2", name)
+    s = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", s)
+    return s.lower()
+
+
+def _render_json_schema_doc(groups) -> dict:
+    """Render a JSON Schema (draft-07, matching data/robots/
+    robot_config.schema.json's own pre-existing `$schema`) document
+    declaring robot_config.proto's 10 groups — one `definitions` entry +
+    one top-level `properties` entry per group, walked from the SAME
+    `_group_field_rows()` `_render_pydantic_module()` uses.
+
+    Bounds ((min)/(max)/(abs_max)) ARE carried into `minimum`/`maximum`
+    here (unlike the pydantic classes above, which stay pure SHAPE — no
+    Field(ge=.../le=...) — per sprint.md's Out of Scope note: "generated
+    struct SHAPE, hand-written baking BEHAVIOR", the same split the C++
+    side already has). JSON Schema's `minimum`/`maximum` are declarative
+    shape, not imperative validation code, so carrying them here does not
+    cross that line the way baking a pydantic validator would.
+    """
+    definitions: dict = {}
+    properties: dict = {}
+    for md in groups:
+        rows = _group_field_rows(md)
+        field_props: dict = {}
+        for row in rows:
+            prop: dict = {"type": _json_type_for_proto(row["type"])}
+            if row["abs_max"] is not None:
+                prop["minimum"] = -row["abs_max"]
+                prop["maximum"] = row["abs_max"]
+            else:
+                if row["min"] is not None:
+                    prop["minimum"] = row["min"]
+                if row["max"] is not None:
+                    prop["maximum"] = row["max"]
+            field_props[row["name"]] = prop
+        definitions[md.name] = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": field_props,
+        }
+        properties[_snake_case(md.name)] = {"$ref": f"#/definitions/{md.name}"}
+
+    return {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "$id": "robot_config.schema.json",
+        "title": "RobotConfig",
+        "description": (
+            "GENERATED by scripts/gen_messages.py from src/protos/robot_config.proto "
+            "-- do not edit by hand. Declares Config::Robot's end-state grouped "
+            "shape: 10 groups (identity/connection/vision host-only; geometry/"
+            "motors/drive/wheel_control/planner/otos/estimator robot-config), one "
+            "per top-level property below, generated from the SAME "
+            "field-descriptor walk gen_messages.py's C++/pydantic emission modes "
+            "share (sprint 132 ticket 002). data/robots/*.json does not yet "
+            "validate against this document -- the JSON reshape migration is "
+            "sprint 132 ticket 017, scheduled last by explicit stakeholder "
+            "direction (clasi/sprints/132-.../sprint.md Design Rationale "
+            "Decision 2)."
+        ),
+        "type": "object",
+        "additionalProperties": False,
+        "properties": properties,
+        "definitions": definitions,
+    }
+
+
+def _render_json_schema_text(groups) -> str:
+    """JSON-serialize `_render_json_schema_doc()`'s output for a file write."""
+    import json
+    return json.dumps(_render_json_schema_doc(groups), indent=2) + "\n"
 
 
 def _run_codegen_pipeline():
@@ -2938,6 +3718,19 @@ def _run_codegen_pipeline():
         if verb_ed is not None:
             host_outputs[str(HOST_COMMANDS_OUT)] = _render_host_commands_module(verb_ed)
 
+    # ------------------------------------------------------------------
+    # 132-002: robot_config.proto's pydantic + JSON Schema emission modes.
+    # Both walk the SAME _group_field_rows() per-group field list (also the
+    # walk _emit_message() used above to emit outputs["robot_config.h"]'s
+    # C++ groups) -- one field-descriptor source, three targets, sprint.md
+    # Design Rationale Decision 1.
+    # ------------------------------------------------------------------
+    robot_config_fd = file_map.get(_ROBOT_CONFIG_PROTO_NAME)
+    if robot_config_fd is not None:
+        groups = _robot_config_groups(robot_config_fd)
+        host_outputs[str(GENERATED_ROBOT_CONFIG_PYDANTIC_OUT)] = _render_pydantic_module(groups)
+        host_outputs[str(ROBOT_CONFIG_JSON_SCHEMA_OUT)] = _render_json_schema_text(groups)
+
     return outputs, host_outputs, fds
 
 
@@ -2965,6 +3758,25 @@ def generate_command_registry() -> tuple[str, str]:
     """
     outputs, host_outputs, _fds = _run_codegen_pipeline()
     return outputs["commands.h"], host_outputs[str(HOST_COMMANDS_OUT)]
+
+
+def generate_robot_config_artifacts() -> tuple[str, str, str]:
+    """Run the codegen pipeline and return (robot_config_h_text,
+    pydantic_module_text, json_schema_text) -- ticket 002's three
+    generated robot_config.proto artifacts from one in-process run.
+
+    Public entry point for the 132-002 generation smoke test
+    (tests/unit/test_gen_messages_robot_config_emission.py), mirroring
+    `generate_command_registry()`'s own shape: all three texts come from
+    the SAME in-process run a real `python3 scripts/gen_messages.py`
+    invocation makes, not a re-derivation of it.
+    """
+    outputs, host_outputs, _fds = _run_codegen_pipeline()
+    return (
+        outputs["robot_config.h"],
+        host_outputs[str(GENERATED_ROBOT_CONFIG_PYDANTIC_OUT)],
+        host_outputs[str(ROBOT_CONFIG_JSON_SCHEMA_OUT)],
+    )
 
 
 # ---------------------------------------------------------------------------

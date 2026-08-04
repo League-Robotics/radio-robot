@@ -587,15 +587,20 @@ class SimLoop:
         gap between what a real serial boot bakes in and what a bare Sim
         session would otherwise run with:
 
-        - **Tier 1** (the live ``ConfigDelta``/SET wire plane -- fields
-          BOTH real hardware and this sim already apply identically via
-          ``RobotLoop::handleConfig()``): builds a ``NezhaProtocol``
+        - **Tier 1** (the live per-field SET wire plane -- fields BOTH real
+          hardware and this sim already apply identically via
+          ``Configurator::applyField()``): builds a ``NezhaProtocol``
           wrapping a ``SimConfigConn`` over this ``SimLoop`` and calls
           ``set_config(**calibration_kwargs(config))`` -- ticket 003's
-          extracted field-selection function. Reuses the EXACT
-          envelope-building/wire-key vocabulary hardware transports use
-          (109-002 Architecture Revision 1's "one mechanism, not a
-          Sim-specific fork") -- no Tier-1 field selection is
+          extracted field-selection function. 132-014: ``calibration_kwargs()``
+          now selects ml/mr/pid.* only (MOTORS.travel_calib_*/
+          WHEEL_CONTROL.pid_*) -- ``tw``/``rotSlip`` are deliberately NOT
+          selected any more (see that function's own docstring: GEOMETRY is
+          boot-only AND one of this sim's own justified ``BootOverrides``
+          divergences, trackWidth -- a live push must never reach it).
+          Reuses the EXACT envelope-building/wire-key vocabulary hardware
+          transports use (109-002 Architecture Revision 1's "one mechanism,
+          not a Sim-specific fork") -- no Tier-1 field selection is
           reimplemented here.
         - **Tier 2** (the boot-only fields with no live wire arm):
           calls ``motor_boot_config_for(config, port)`` (ticket 004's reuse
@@ -616,42 +621,42 @@ class SimLoop:
           0) regardless of a robot JSON's own
           ``calibration.rotation_gain``/``rotation_offset_deg`` values.
         - **Tier 3** (119 ticket 001,
-          kill-the-silent-off-shaping-config-boundary.md): the live
-          ``EstimatorConfigPatch`` wire arm -- ``App::StateEstimator``'s
-          fusion weights plus ``Motion::VelocityShaper``'s accel/jerk
-          ceilings (``push.estimator_kwargs(config)``, the SAME field
-          selection the TestGUI's own connect-time
-          ``_push_estimator_config()`` already used). Sent over the SAME
-          ``SimConfigConn`` Tier 1 already built (one config connection,
-          not a second one) via ``NezhaProtocol.estimator_config(**kwargs)``
-          -- fire-and-poll, like ``otos_config()``/``estimator_config()``
-          themselves, so this method polls the ack itself
-          (``SimConfigConn.poll_ack()``) and logs applied/rejected/timed-out
-          exactly like the TestGUI's own push -- but ONLY when a background
-          tick thread is running (``connect()``'s default). With no tick
-          thread (``connect(start_tick_thread=False)``, the deterministic/
-          manual-step shape ``turn_prediction_capture.py``/
-          ``test_tour_closure_gate.py`` use), nothing advances the sim
-          during a blocking ack poll, so this method skips it and logs what
-          is actually known (sent, via the SAME synchronous
-          ``_run_or_enqueue()`` path Tier 1/2 already rely on) instead of
-          either wasting real wall-clock time or misreporting a landed push
-          as a false timeout -- the caller's own subsequent ``step()``
-          calls are what actually apply it; polling the ack, if ever
-          needed, is the caller's own job from there (mirrors
-          ``SimConfigConn.send_envelope()``'s own documented
-          "reply=None... caller polls separately" contract). This is THE fix for the
-          issue this ticket closes: every ``configure_from_robot()`` caller
-          (GUI, bench scripts, tests, future scripts) now inherits
-          shaping/anticipation by default instead of running silently OFF
-          until a caller remembers a SEPARATE push -- the TestGUI's own
-          connect-time push becomes redundant-but-harmless (idempotent
-          acks) once this lands; no dedup is mandated by the issue, and
-          none was added (its own "dedup or leave harmless" framing). A
-          config carrying none of the nine estimator/shaper fields (rare --
-          every shipped robot JSON populates all nine) is a logged no-op,
-          never a raised exception -- ``estimator_kwargs()``'s own "return
-          ``{}``, caller must treat that as nothing to push" contract.
+          kill-the-silent-off-shaping-config-boundary.md, RETARGETED
+          132-014): ``App::StateEstimator``'s fusion weights plus
+          ``Motion::VelocityShaper``'s accel/jerk ceilings
+          (``push.estimator_kwargs(config)``, the SAME field selection the
+          TestGUI's own connect-time ``_push_estimator_config()`` uses),
+          pushed one ``set_config_field()`` round trip per field over the
+          SAME ``config_proto``/``SimConfigConn`` Tier 1 already built (one
+          config connection, not a second one) -- the old single
+          ``EstimatorConfigPatch`` envelope (``estimator_config(**kwargs)``)
+          this method used to build no longer exists (``config.proto``
+          deleted, 132-013); ``robot_config.proto`` spreads the same nine
+          fields across TWO ``ConfigGroupTarget``s now
+          (``push.ESTIMATOR_FIELDS``/``push.PLANNER_SHAPER_FIELDS`` name
+          the split).
+
+          ``ESTIMATOR`` is a HONEST DEAD END: it decodes but
+          ``install(ESTIMATOR)`` permanently returns ``ERR_UNIMPLEMENTED``
+          (``App::StateEstimator`` was already deleted as dead code before
+          this sprint, sprint 128 ticket 016 -- configurator.h's own
+          re-appliability table). ``PLANNER_SHAPER`` -- FIXED, 132-017
+          (JSON reshape ticket, stakeholder-sanctioned mid-sprint scope
+          addition): the six shaper-ceiling fields this method pushes now
+          land on their OWN ``ConfigGroupTarget``, split out of the
+          boot-only ``PLANNER`` group specifically because they carry
+          their own re-appliable setter (``Motion::Planner::
+          applyShaperLimits()``) -- a live push now genuinely lands, the
+          same capability this method had before sprint 132's schema
+          unification (132-002 through 132-013) temporarily regressed it.
+          See ``estimator_kwargs()``'s own docstring for the full
+          per-field target-split rationale.
+
+          A config carrying none of the nine estimator/shaper fields (rare
+          -- every shipped robot JSON populates all nine) is a logged
+          no-op, never a raised exception -- ``estimator_kwargs()``'s own
+          "return ``{}``, caller must treat that as nothing to push"
+          contract.
 
         Tier 1 runs first (the smaller, already-proven mechanism); Tier 2
         second; Tier 3 third. No tier's outcome depends on another's.
@@ -668,9 +673,11 @@ class SimLoop:
         """
         self._require_connected()
 
-        # ---- Tier 1: live ConfigDelta/SET wire plane -----------------------
-        from robot_radio.calibration.push import calibration_kwargs, estimator_kwargs
+        # ---- Tier 1: live per-field SET wire plane -------------------------
+        from robot_radio.calibration.push import (
+            ESTIMATOR_FIELDS, calibration_kwargs, estimator_kwargs)
         from robot_radio.io.sim_config import SimConfigConn
+        from robot_radio.robot.pb2 import robot_config_pb2
         from robot_radio.robot.protocol import NezhaProtocol
 
         # Kept as its own local (not just wrapped straight into NezhaProtocol)
@@ -719,59 +726,48 @@ class SimLoop:
             ctypes.c_float(drive_cfg["duty_per_speed_right"]),
             ctypes.c_float(drive_cfg["crawl_pulse"]))
 
-        # ---- Tier 3: live EstimatorConfigPatch wire arm (119 ticket 001) ---
+        # ---- Tier 3: estimator/shaper fields -- 132-014 RETARGET: the old
+        # single EstimatorConfigPatch envelope no longer exists; the same
+        # nine fields now span TWO ConfigGroupTarget groups. FIXED, 132-017:
+        # PLANNER_SHAPER (the six shaper-ceiling fields) is LIVE now, split
+        # out of the boot-only PLANNER group -- see this method's own
+        # docstring and estimator_kwargs()'s own docstring. ESTIMATOR
+        # remains a permanent, honest dead end (ERR_UNIMPLEMENTED). Still
+        # attempted and logged, never silently skipped -- "no silent
+        # no-ops."
         est_kwargs = estimator_kwargs(config)
         if not est_kwargs:
             logger.info(
                 "configure_from_robot(): no estimator/shaper fields on config -- "
-                "EstimatorConfigPatch push skipped")
+                "push skipped")
             return
 
-        try:
-            corr_id = config_proto.estimator_config(**est_kwargs)
-        except Exception as exc:  # noqa: BLE001 -- log, don't raise out of a boot-config call
-            logger.warning(
-                "configure_from_robot(): EstimatorConfigPatch push failed to send: %s", exc)
-            return
+        applied: list[str] = []
+        rejected: list[str] = []
+        for field_name, value in est_kwargs.items():
+            target = (robot_config_pb2.ESTIMATOR if field_name in ESTIMATOR_FIELDS
+                      else robot_config_pb2.PLANNER_SHAPER)
+            try:
+                ack = config_proto.set_config_field(target, field_name, value)
+            except Exception as exc:  # noqa: BLE001 -- log, don't raise out of a boot-config call
+                logger.warning(
+                    "configure_from_robot(): %s push failed to send: %s", field_name, exc)
+                rejected.append(field_name)
+                continue
+            (applied if ack is not None else rejected).append(field_name)
 
-        if self._thread is None or not self._thread.is_alive():
-            # No tick thread -- a deterministic/manual-step session
-            # (`connect(start_tick_thread=False)`, this class's own `step()`
-            # docstring). Nothing advances the sim without an explicit
-            # caller-driven `step()` call, so blocking here on a real-time
-            # `poll_ack()` would either waste up to its own timeout in real
-            # wall-clock seconds for an ack that can never arrive without a
-            # `step()`, or misreport "TIMED OUT" for a push that in fact
-            # landed (found running this exact path, turn_prediction_
-            # capture.py: the config command IS applied synchronously --
-            # `_run_or_enqueue()`'s own "run now if no tick thread" contract,
-            # the SAME mechanism Tier 1/2 above already rely on -- only its
-            # ACK is unobservable here). Log what is actually known (sent,
-            # not yet confirmed) and defer ack observation to the caller,
-            # exactly like `SimConfigConn.send_envelope()`'s own documented
-            # "reply=None... caller polls separately via poll_ack()"
-            # contract.
+        if rejected:
             logger.info(
-                "configure_from_robot(): sent %d/%d estimator/shaper fields (%s) -- no tick "
-                "thread running (manual-step session); step() the sim and poll corr_id=%d "
-                "for the ack if confirmation is needed",
-                len(est_kwargs), len(est_kwargs), sorted(est_kwargs), corr_id)
-            return
-
-        ack = sim_config_conn.poll_ack(corr_id, timeout=500)
-        if ack is None:
-            logger.warning(
-                "configure_from_robot(): EstimatorConfigPatch push (%d fields: %s) TIMED "
-                "OUT waiting for ack -- 0/%d confirmed applied",
-                len(est_kwargs), sorted(est_kwargs), len(est_kwargs))
-        elif not ack.ok:
-            logger.warning(
-                "configure_from_robot(): EstimatorConfigPatch push REJECTED (err_code=%s) -- "
-                "0/%d applied, %d rejected", ack.err_code, len(est_kwargs), len(est_kwargs))
+                "configure_from_robot(): pushed %d/%d estimator/shaper fields (%s) -- "
+                "%d rejected (%s), expected: ESTIMATOR has no live consumer "
+                "(ERR_UNIMPLEMENTED) as of sprint 132's own re-appliability "
+                "table -- PLANNER_SHAPER fields rejecting would be a "
+                "regression, not expected (132-017)",
+                len(applied), len(est_kwargs), sorted(applied), len(rejected), sorted(rejected))
         else:
             logger.info(
                 "configure_from_robot(): pushed %d/%d estimator/shaper fields (%s)",
-                len(est_kwargs), len(est_kwargs), sorted(est_kwargs))
+                len(applied), len(est_kwargs), sorted(applied))
 
     # ------------------------------------------------------------------
     # Tier-2 config-load readback (113-007) -- test-only diagnostic proving

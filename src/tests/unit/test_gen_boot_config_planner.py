@@ -92,9 +92,18 @@ def test_planner_config_for_config_reads_tovez_json():
 def test_planner_config_for_config_raises_with_no_robot_config():
     """Sprint 114 config-as-truth, extended to the planner block (129-009):
     with no robot config at all, the generator hard-fails on the first
-    required key (planner.plant_gain, read before the raw profile-ceiling
-    keys) -- no source-side fallback."""
-    with pytest.raises(gbc.MissingRobotConfigKeyError, match="planner.plant_gain"):
+    required key (planner.v_max, the first field this function's own
+    returned dict lists) -- no source-side fallback.
+
+    132-017 (JSON reshape ticket) found this assertion pre-existing-stale,
+    unrelated to the reshape itself: `plant_gain` has not been read by
+    `planner_config_for_config()` since 130-009 (it is no longer in the
+    function's own required-key list at all, see that function's own
+    docstring), so `planner.v_max` -- unchanged, first in the dict both
+    before and after 130-009 -- was already the actual first-raised key
+    pre-132-017 too. Fixed as a drive-by while retargeting this same
+    function's JSON paths; not caused by the retarget."""
+    with pytest.raises(gbc.MissingRobotConfigKeyError, match="planner.v_max"):
         gbc.planner_config_for_config({})
 
 
@@ -127,7 +136,11 @@ def test_generate_emits_default_planner_limits_byte_identical_to_pre_ticket_lite
     # Additive: pre-existing generated functions are still emitted.
     assert "void defaultMotorConfigs(msg::MotorConfig* out)" in content
     assert "msg::DrivetrainConfig defaultDrivetrainConfig()" in content
-    assert "DriveBootConfig defaultDriveConfig()" in content
+    # "DriveBootConfig defaultDriveConfig()" -- DELETED, 132-015 (dead-code
+    # sweep): Config::defaultDriveConfig() had zero remaining callers
+    # (superseded by Config::defaultDriveGroup(), msg::Drive) and is no
+    # longer emitted at all -- see config/boot_config.h's own note at that
+    # struct's former declaration site.
 
     # New (129-009): the planner boot-config generator function, carrying
     # tovez.json's real (pre-ticket-identical) values through as C++

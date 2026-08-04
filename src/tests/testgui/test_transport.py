@@ -381,10 +381,11 @@ def test_config_get_before_set_reports_no_data(transport: SimTransport) -> None:
 
 
 # ---------------------------------------------------------------------------
-# (e) 109-004: OL/OA/OI -- OtosConfigPatch direct-patch-send, exercised
-# end to end against the REAL compiled sim firmware (RobotLoop::
-# handleConfig's new OTOS case actually runs, not just the host-side
-# envelope construction test_protocol_config.py covers).
+# (e) 109-004, retargeted 132-014: OL/OA -- set_config_field(OTOS, ...)
+# direct-send, exercised end to end against the REAL compiled sim firmware
+# (RobotLoop::routeCommand()'s SET_FIELD case -> Configurator::applyField()
+# actually runs, not just host-side envelope construction). OI has no live
+# retarget -- see test_oi_has_no_live_retarget_against_the_real_sim_firmware.
 # ---------------------------------------------------------------------------
 
 def test_ol_round_trips_against_the_real_sim_firmware(transport: SimTransport) -> None:
@@ -397,9 +398,15 @@ def test_oa_round_trips_against_the_real_sim_firmware(transport: SimTransport) -
     assert reply == "OK oa", reply
 
 
-def test_oi_round_trips_against_the_real_sim_firmware(transport: SimTransport) -> None:
+def test_oi_has_no_live_retarget_against_the_real_sim_firmware(transport: SimTransport) -> None:
+    """132-014: robot_config.proto's Otos group carries offset/scale fields
+    only -- OtosConfigPatch's old init trigger has no successor field to
+    address (configurator.h's own OTOS re-appliability-table row). OI is
+    still RECOGNIZED (not the generic unsupported-verb reply) but sends no
+    envelope -- see binary_bridge.py's/SimTransport._handle_otos_patch()'s
+    own doc comment."""
     reply = transport.command("OI", read_timeout=500)
-    assert reply == "OK oi", reply
+    assert reply.startswith("ERR unsupported OI"), reply
 
 
 def test_ol_with_no_scale_is_badarg_no_wire_call(transport: SimTransport) -> None:
