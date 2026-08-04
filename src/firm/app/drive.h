@@ -104,6 +104,18 @@
 // is merely sent once. Do not fold this back into a single unconditional
 // write.
 //
+// LOAD-BEARING (the 2026-08-03 runaway, 133-001): that window is now armed
+// by tick() as well, on the nonzero->zero transition of the commanded duty
+// pair -- not only by estop(). Both of the pre-133 defences (this window's
+// `wheelsMoving` half, and NezhaMotor::writeRawDuty()'s own re-issue) gate
+// on the ENCODER, so both are disarmed by the same condition: a wheel that
+// reports at rest. Measured on vevov, 16/16: a stop issued once by a host
+// that then went quiet produced 936mm of continued travel with no decay,
+// and estop() failed 5 of 6 attempts. Arming on what was COMMANDED, with
+// no measured velocity in the condition, is what makes the re-assertion
+// independent of an encoder that may be wedged, stale, or manufacturing a
+// zero. Do not re-gate this arm on velocity.
+//
 // takeover() vs estop() (131-001, sprint 131 Design Rationale Decisions 1/2
 // -- closes the sprint-130 midpoint review's finding #1 / post-130 review
 // F5): before this ticket, RobotLoop::handleMove() called estop() to make
@@ -156,6 +168,26 @@
 // at routing (App::RobotLoop::routeCommand -- a WHEELS command clears the
 // planner, a MOVE clears Drive's armed command), and `owns()` below is how
 // the loop reads which one it currently is.
+//
+// THE cmdVelocity OWNERSHIP INVARIANT (133-001 -- stated in full, with its
+// history, at App::RobotLoop::publishWheels(), robot_loop.cpp):
+//
+//   cmdVelocity has exactly one DECIDER per cycle -- Motion::Planner::
+//   update() or App::Drive::update() -- and exactly one SAFETY ARBITER,
+//   App::RobotLoop, whose writes are restricted to zero, which runs after
+//   every decider and before actuation, and which supersedes all deciders.
+//   No other writer exists.
+//
+// What this means for Drive specifically: update() publishes ONLY while
+// Drive owns motion, and stops publishing entirely the cycle after its
+// command expires (`if (!owned) return;`). That silence is correct and
+// stays correct -- it is not Drive's job to keep asserting zero forever.
+// Covering the gap it leaves is the arbiter's job
+// (App::RobotLoop::zeroUnownedMotion(), which derives idleness from
+// owns() below rather than being handed ownership). Do NOT "fix" this by
+// making update() publish unconditionally: that would make Drive a
+// permanent decider and re-open the two-decider conflict routing exists to
+// prevent.
 #pragma once
 
 #include <cstdint>
@@ -551,10 +583,15 @@ class Drive {
   float writtenRight_ = 0.0f;  // [-1, 1]
 
   // Stop re-assertion (see this file's own header) -- counts down once per
-  // tick() call from kStopEnforceTicks after estop() arms it; tick()
-  // bypasses the quiet-at-zero shortcut while this is nonzero OR either
-  // wheel still measures above kRestVelocity, so a commanded stop keeps
-  // being handed to the leaves instead of being trusted after one write.
+  // tick() call from kStopEnforceTicks; tick() bypasses the quiet-at-zero
+  // shortcut while this is nonzero OR either wheel still measures above
+  // kRestVelocity, so a commanded stop keeps being handed to the leaves
+  // instead of being trusted after one write.
+  //
+  // TWO arming sites (133-001 added the second): estop(), and tick() itself
+  // on the nonzero->zero transition of the commanded duty pair. The second
+  // is the one that survives a wheel reporting at rest -- see tick()'s own
+  // comment at that site for why an encoder-gated arm is not enough.
   uint8_t stopEnforceCountdown_ = 0;
 
   // 30 cycles at RobotLoop::kCycle(50ms, 130-007: was 40ms) == 1.5s --

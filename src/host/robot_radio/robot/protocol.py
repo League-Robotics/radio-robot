@@ -1552,9 +1552,29 @@ class NezhaProtocol:
 
         ``duration`` is REQUIRED and must be positive (validated host-side
         to save a wire round trip for a command the firmware would reject
-        with ``ERR_BADARG``): a wheel command is always time-bounded, so a
-        dead host can never mean a runaway. There is no separate
-        ``timeout`` — the duration IS the backstop.
+        with ``ERR_BADARG``): a wheel command is always time-bounded. There
+        is no separate ``timeout`` — the duration IS the backstop.
+
+        **What that bound does and does not buy you (corrected 133-001).**
+        This docstring used to add "so a dead host can never mean a
+        runaway." That was false as shipped, and it was the reassurance
+        that kept anyone from checking. MEASURED on ``vevov`` 2026-08-03,
+        16/16 reproductions: a host that issued a stop ONCE and then went
+        quiet got **936 mm of continued travel with no decay** — still
+        going when the capture ended — and ``estop()`` failed 5 of 6
+        attempts. The duration expires correctly inside ``App::Drive``;
+        what failed was the expiry reaching the MOTOR. The Nezha brick
+        physically latches its last commanded speed and does not reset on
+        an nRF52 reset, so a single zero write that is lost on the bus is
+        permanent, not transient.
+
+        Sprint 133 ticket 001 closed both halves of that gap (a derived-idle
+        safety arbitration step in ``App::RobotLoop``, and arming the stop
+        re-assertion window on the commanded nonzero→zero transition rather
+        than on an encoder reading). Verified in sim and by construction as
+        of that ticket; hardware re-verification on ``tovez`` is ticket 004.
+        Until that lands, treat the time bound as a bound on what is
+        COMMANDED, not as a guarantee about the wheels.
 
         ``move_id`` is echoed in this command's COMPLETION ack, which lands
         when the duration expires; the ENQUEUE ack echoes the returned

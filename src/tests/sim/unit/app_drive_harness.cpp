@@ -1097,11 +1097,17 @@ void scenarioTakeoverDoesNotTouchStopReassertionCountdown() {
 
   drive.takeover();  // must NOT touch stopEnforceCountdown_
 
-  // If takeover() left the countdown alone, exactly (kStopEnforceTicks -
-  // kConsumed) more tick() calls re-issue setDuty(0) before the
-  // quiet-at-zero shortcut resumes; landing anywhere else (0 more -- reset
-  // to 0; kStopEnforceTicks more -- re-armed) falsifies the AC.
-  const int kRemaining = kStopEnforceTicks - kConsumed;
+  // 133-001 shifted the ledger by exactly one tick, and this scenario's
+  // arithmetic has to say so out loud. The FIRST of the kConsumed ticks
+  // above is itself a commanded nonzero->zero transition of the duty pair
+  // (writtenLeft_/Right_ were still the 0.5 pair from the setup tick, so
+  // alreadyQuiet is false on it), which now RE-ARMS the window to a full
+  // kStopEnforceTicks after its own decrement. Only the remaining
+  // (kConsumed - 1) ticks are net consumption. What this scenario actually
+  // asserts is unchanged: takeover() neither reset the countdown (0 more
+  // ticks) nor re-armed it (kStopEnforceTicks more) -- it left whatever was
+  // there alone.
+  const int kRemaining = kStopEnforceTicks - (kConsumed - 1);
   int callsBefore = left.setDutyCalls;
   for (int i = 0; i < kRemaining; ++i) drive.tick(wheelCmd(0.0f, 0.0f));
   checkTrue(left.setDutyCalls == callsBefore + kRemaining,
@@ -1113,6 +1119,82 @@ void scenarioTakeoverDoesNotTouchStopReassertionCountdown() {
   checkTrue(left.setDutyCalls == callsBefore,
            "the quiet-at-zero shortcut resumes exactly when the ORIGINAL estop()-armed countdown "
            "would have elapsed -- confirms takeover() didn't re-arm it");
+}
+
+// ===========================================================================
+// 10b. 133-001 (the 2026-08-03 runaway): the stop re-assertion window arms
+//    on the COMMANDED nonzero->zero transition of the duty pair, while the
+//    encoder reports at rest -- the exact condition that disarmed BOTH
+//    prior defences. Pre-133 the window was armed only by estop(), and its
+//    other half (`wheelsMoving`) reads the encoder, so a wheel reporting
+//    at rest left a plain commanded stop with exactly ONE write. The brick
+//    latches its last speed, so losing that one write is permanent.
+//
+//    MockMotor's velocity is pinned at 0 throughout -- if this scenario
+//    ever passes because a wheel was measurably moving, it is testing the
+//    OTHER half and proves nothing about this one.
+// ===========================================================================
+
+void scenarioCommandedStopArmsReassertionWithEncoderAtRest() {
+  beginScenario("133-001: a commanded nonzero->zero duty transition arms the stop-reassertion "
+                "window even with the encoder reading exactly at rest (no estop() involved)");
+
+  MockMotor left;
+  MockMotor right;
+  const float trackWidth = 200.0f;  // [mm]
+  App::Drive drive(left, right, trackWidth);
+  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
+
+  // At rest for the WHOLE scenario -- the encoder half of enforceStop
+  // (wheelsMoving) is false on every tick below, by construction.
+  left.setMockVelocity(0.0f);
+  right.setMockVelocity(0.0f);
+
+  drive.tick(wheelCmd(0.5f, 0.5f));  // a real nonzero write -> writtenLeft_/Right_ nonzero
+  checkTrue(left.setDutyCalls == 1 && right.setDutyCalls == 1,
+            "setup: the nonzero pair actually reached both leaves");
+
+  // The transition tick: commanded zero, nothing else changed, no estop().
+  drive.tick(wheelCmd(0.0f, 0.0f));
+  checkTrue(left.setDutyCalls == 2 && right.setDutyCalls == 2,
+            "setup: the first commanded zero is written once (true before 133-001 too)");
+  checkTrue(left.lastDutyCmd == 0.0f && right.lastDutyCmd == 0.0f,
+            "setup: that write really was a zero duty");
+
+  // THE REGRESSION. Pre-133-001 this loop produced ZERO further writes:
+  // alreadyQuiet held, stopEnforceCountdown_ was never armed (no estop()),
+  // and wheelsMoving was false -- so a stop whose single write was dropped
+  // on the wire was never re-issued, and the brick kept its latched speed
+  // with no witness. Post-133-001 the transition tick above armed the
+  // window, so the next kStopEnforceTicks ticks each re-issue setDuty(0).
+  constexpr int kStopEnforceTicks = 30;  // drive.h's own private constant -- duplicated per this
+                                          // harness's established fixture convention.
+  const int callsBeforeWindow = left.setDutyCalls;
+  for (int i = 0; i < kStopEnforceTicks; ++i) drive.tick(wheelCmd(0.0f, 0.0f));
+  checkTrue(left.setDutyCalls == callsBeforeWindow + kStopEnforceTicks,
+            "every tick inside the armed window re-issues setDuty(0) on the left leaf, with the "
+            "encoder at rest throughout");
+  checkTrue(right.setDutyCalls == callsBeforeWindow + kStopEnforceTicks, "same for the right leaf");
+  checkTrue(left.lastDutyCmd == 0.0f && right.lastDutyCmd == 0.0f,
+            "every re-issued write is a ZERO -- the window adds writes, it never invents a duty");
+
+  // The window is bounded, not a permanent re-write loop: once it elapses
+  // and the command is still an unchanged zero, the quiet-at-zero shortcut
+  // resumes (bus budget -- drive.h's own kStopEnforceTicks comment).
+  const int callsAfterWindow = left.setDutyCalls;
+  for (int i = 0; i < 10; ++i) drive.tick(wheelCmd(0.0f, 0.0f));
+  checkTrue(left.setDutyCalls == callsAfterWindow,
+            "past the window, an unchanged commanded zero stops being re-issued -- the arm is "
+            "one-shot per transition, not a standing re-write");
+  checkTrue(right.setDutyCalls == callsAfterWindow, "same for the right leaf");
+
+  // ... and it re-arms on the NEXT transition, not only the first one.
+  drive.tick(wheelCmd(0.5f, 0.5f));  // motion again
+  const int callsBeforeSecondStop = left.setDutyCalls;
+  drive.tick(wheelCmd(0.0f, 0.0f));  // second nonzero->zero transition
+  for (int i = 0; i < kStopEnforceTicks; ++i) drive.tick(wheelCmd(0.0f, 0.0f));
+  checkTrue(left.setDutyCalls == callsBeforeSecondStop + 1 + kStopEnforceTicks,
+            "a SECOND commanded stop re-arms the window the same way the first did");
 }
 
 // ===========================================================================
@@ -1595,6 +1677,7 @@ int main() {
   scenarioWheelsAndMoveReachIdenticalDriveBehavior();
   scenarioTakeoverPreservesLearnedStateEstopFullyResets();
   scenarioTakeoverDoesNotTouchStopReassertionCountdown();
+  scenarioCommandedStopArmsReassertionWithEncoderAtRest();
   scenarioReversalAfterConvergedForwardBiasDoesNotReduceMagnitude();
   scenarioBiasPersistsAcrossChainedTakeoverBoundaries();
   scenarioDifferentialTrimAtFloorBoundaryStaysProportional();

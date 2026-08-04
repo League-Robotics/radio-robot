@@ -542,6 +542,24 @@ void Drive::tick(const Types::RobotState& state) {
   const bool commandedStop = dutyLeft == 0.0f && dutyRight == 0.0f;
   const bool alreadyQuiet =
       commandedStop && writtenLeft_ == 0.0f && writtenRight_ == 0.0f;
+
+  // ARM ON EVERY STOP, not just estop() (133-001, the 2026-08-03 runaway).
+  // The window above was armed only by estop(), and its other half
+  // (`wheelsMoving`) reads the ENCODER -- so a stop whose single zero write
+  // is lost AND whose encoder reads at rest re-asserts nothing, which is
+  // precisely the state a wedged, stale, or manufactured-zero encoder
+  // produces. The brick physically latches its last commanded speed, so
+  // that combination is a permanent runaway with no witness (nezha_motor.h's
+  // own "LOAD-BEARING (129-001)" note describes the same trap one layer
+  // down). Arming here, on the nonzero->zero transition of the DUTY pair
+  // itself, makes re-assertion depend on what was COMMANDED rather than on
+  // what the encoder claims happened -- this condition reads no measured
+  // velocity at all. Self-limiting: once the zero write lands,
+  // writtenLeft_/Right_ are both 0, alreadyQuiet holds, and the window is
+  // not re-armed. Adds writes only -- a nonzero command never satisfies
+  // commandedStop.
+  if (commandedStop && !alreadyQuiet) stopEnforceCountdown_ = kStopEnforceTicks;
+
   if (alreadyQuiet && !enforceStop) return;
   left_.setDuty(dutyLeft);
   right_.setDuty(dutyRight);

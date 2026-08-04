@@ -374,6 +374,12 @@ void RobotLoop::handleEstop(const msg::CommandEnvelope& env) {
   // update() calls would land the same zeros at the end of this cycle
   // anyway, but an emergency stop should not depend on the rest of the
   // schedule running to completion to take effect.
+  //
+  // 133-001: this is App::RobotLoop acting as the SAFETY ARBITER, not as a
+  // third decider -- the same rule zeroUnownedMotion() runs under, stated
+  // in full at publishWheels() below. Zero-only, superseding every
+  // decider. It is an instance of the invariant, not an unexplained
+  // special case.
   state_.wheelLeft.cmdVelocity = 0.0f;
   state_.wheelRight.cmdVelocity = 0.0f;
   tlm_.ack(env.corr_id, 0);
@@ -439,6 +445,37 @@ void RobotLoop::boot() {
 
 // --- cycle() steps ---
 
+// UNOWNED-MOTION GUARD (133-001, the 2026-08-03 runaway). Measured on
+// vevov, 16/16 reproductions: after a WHEELS command expires with the host
+// silent, the wheels keep turning at the last commanded speed with no
+// decay -- 936mm of continued travel, still going when the capture ended,
+// and estop() failed to stop it in 5 of 6 attempts. The Nezha brick
+// physically latches its last commanded speed and does not reset on an
+// nRF52 reset, so a lost zero write is permanent, not transient.
+//
+// Every individual link was defensible in isolation, which is exactly why
+// this belongs here rather than inside one of them: Drive::update()
+// publishes one zero pair on the expiry cycle and then returns early
+// forever after (`if (!owned) return;`), and Planner::update() runs
+// unconditionally but republishes only ITS OWN idea of the command.
+// Nothing re-stated "no one is driving, so the speed is zero" on the
+// cycles in between.
+//
+// This states it, every cycle, ahead of the single actuation path, so the
+// wheels cannot inherit a stale target from a decider that has stopped
+// publishing. Idleness is DERIVED from the two existing public ownership
+// queries -- no new interface, no new handoff edge between the deciders,
+// and no idle owner that would have to be told to take over (see this
+// method's own doc comment, robot_loop.h, for why that distinction is the
+// whole design). Both deciders write cmdVelocity later in the same cycle
+// anyway, so when either owns the wheels this is a plain no-op.
+void RobotLoop::zeroUnownedMotion() {
+  if (planner_.active() || drive_.owns()) return;
+  // ONLY 0.0f is ever written here -- the monotone contract (robot_loop.h).
+  state_.wheelLeft.cmdVelocity = 0.0f;
+  state_.wheelRight.cmdVelocity = 0.0f;
+}
+
 void RobotLoop::publishWheel(Devices::Motor& motor,
                              Types::RobotState::Wheel& wheel,
                              uint8_t& positionEpoch, bool& clamped) {
@@ -459,12 +496,28 @@ void RobotLoop::publishWheel(Devices::Motor& motor,
   wheel.positionEpoch = positionEpoch;
 }
 
-// Deliberately does NOT touch wheel.cmdVelocity: that field has exactly one
-// writer per cycle -- whichever of Motion::Planner::update()/App::Drive::
-// update() currently owns motion, both of which run later in the pace
-// block. Publishing it from here as well would overwrite the owner's
-// staged command with the value being actuated THIS cycle, one generation
-// stale.
+// THE cmdVelocity OWNERSHIP INVARIANT (revised 133-001; this comment used
+// to claim "exactly one writer per cycle," which was already false on
+// master -- handleEstop() below has written cmdVelocity from the loop
+// since 128-001, with a comment explaining why that is correct. The honest
+// invariant was never "one writer"; it was "one decider plus a safety
+// override," merely undocumented):
+//
+//   cmdVelocity has exactly one DECIDER per cycle -- Motion::Planner::
+//   update() or App::Drive::update() -- and exactly one SAFETY ARBITER,
+//   App::RobotLoop, whose writes are restricted to zero, which runs after
+//   every decider and before actuation, and which supersedes all deciders.
+//   No other writer exists.
+//
+// App::RobotLoop's arbiter writes are exactly two, both zero-only:
+// zeroUnownedMotion() (the per-cycle derived-idle guard) and
+// handleEstop() (the ESTOP wire verb). Adding a third is a change to this
+// invariant, not a local edit.
+//
+// publishWheels() itself deliberately does NOT touch wheel.cmdVelocity --
+// it is neither a decider nor the arbiter, it is the measurement publisher.
+// Writing it from here would overwrite the owner's staged command with the
+// value being actuated THIS cycle, one generation stale.
 void RobotLoop::publishWheels() {
   bool clampedL = false;
   bool clampedR = false;
@@ -590,6 +643,12 @@ void RobotLoop::publishMoveResult(const Motion::TickResult& moveResult) {
 void RobotLoop::cycle() {
   state_.time.cycleStart = markTime();  // [ms] pace anchor + wire `now`
   const uint64_t cycleStartUs = clock_.nowMicros();  // [us]
+
+  // Safety arbitration, LAST thing before actuation: if neither decider
+  // owns motion, the commanded speed is zero (133-001). Zero-only by
+  // contract -- see this method's own doc comment (robot_loop.h) and its
+  // definition above.
+  zeroUnownedMotion();
 
   // Actuate the speeds the owning subsystem staged onto the blackboard last
   // cycle -- one actuation path regardless of which decider produced them

@@ -201,6 +201,26 @@ class RobotLoop {
 
   // --- cycle() steps, in schedule order ---
 
+  // SAFETY ARBITRATION (133-001), first in the schedule -- runs immediately
+  // ahead of drive_.tick(), the single actuation path.
+  //
+  // MONOTONE CONTRACT: this method may write ONLY 0.0f to cmdVelocity, and
+  // never a nonzero value. That restriction is what makes a loop-level
+  // write to a decider-owned field legitimate: a zero-only writer cannot
+  // originate motion, cannot fight a decider for control, and cannot
+  // produce a speed no decider asked for. Do not relax it -- the moment
+  // this method can emit a nonzero, App::RobotLoop becomes a third
+  // decider, and the cmdVelocity ownership invariant (stated in full at
+  // RobotLoop::publishWheels(), robot_loop.cpp) is void.
+  //
+  // Idleness is DERIVED (!planner_.active() && !drive_.owns()), never
+  // announced or acquired. There is deliberately no idle-owner subsystem:
+  // an owner must be told to take over, and the failure this guards is a
+  // decider that has silently STOPPED publishing -- which is exactly the
+  // case that would never tell anyone anything. See the .cpp's own comment
+  // at the call site for the measured defect (vevov, 2026-08-03).
+  void zeroUnownedMotion();
+
   // Publish one wheel's state section (rebaseline/clamp/read), after its
   // collect. `clamped` reports the defensive wire-bound clamp.
   void publishWheel(Devices::Motor& motor, Types::RobotState::Wheel& wheel,

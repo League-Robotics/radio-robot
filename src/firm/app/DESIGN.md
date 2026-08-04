@@ -1243,10 +1243,17 @@ called with real elapsed time between calls).
      `state.wheelLeft/Right.cmdVelocity` — but ONLY while Drive owns
      motion (`owns()` true this cycle); when the planner owns it,
      `update()` is a no-op on the blackboard, leaving `Motion::Planner::
-     update()` as the cycle's sole writer. Must run AFTER `Motion::
-     Planner::update()` in the cycle (`robot_loop.cpp`'s own ordering is
-     what enforces "exactly one writer per cycle" — see
-     `robot_state.h`'s own `cmdVelocity` field comment).
+     update()` as the cycle's sole *decider* write. Must run AFTER
+     `Motion::Planner::update()` in the cycle (`robot_loop.cpp`'s own
+     ordering is what enforces "exactly one decider per cycle"). The full
+     invariant is **one decider plus one zero-only safety arbiter**
+     (133-001): `App::RobotLoop` also writes this field, restricted to
+     `0.0f`, from `zeroUnownedMotion()` (every cycle, whenever neither
+     decider owns motion — Drive's `update()` deliberately stops
+     publishing after its command expires, and covering that gap is the
+     arbiter's job, not Drive's) and from `handleEstop()`. Stated in full
+     at `RobotLoop::publishWheels()` and in `robot_state.h`'s own
+     `cmdVelocity` field comment.
   There is no controller inside `Drive` — duty is open-loop from
   calibrated speed; closed-loop wheel control lives in `Motion::
   Planner`'s own duty stage. `Drive` depends on nothing but
