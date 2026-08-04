@@ -42,6 +42,22 @@ bool isLiveConfigurable(msg::ConfigGroupTarget target) {
 
 }  // namespace
 
+// stampSource()/configSource() -- 133-006 provenance. See configurator.h's
+// own doc comments for the placement rule (stamp at the mutation site, never
+// at a call site) and for why this is a side table rather than a field of
+// Config::Robot.
+void Configurator::stampSource(msg::ConfigGroupTarget target, msg::ConfigSource source) {
+  const auto slot = static_cast<size_t>(target);
+  if (slot == 0 || slot >= kGroupSourceSlots) return;
+  groupSource_[slot] = source;
+}
+
+msg::ConfigSource Configurator::configSource(msg::ConfigGroupTarget target) const {
+  const auto slot = static_cast<size_t>(target);
+  if (slot == 0 || slot >= kGroupSourceSlots) return msg::ConfigSource::CONFIG_SOURCE_UNSPECIFIED;
+  return groupSource_[slot];
+}
+
 Configurator::Configurator(Drive& drive, Devices::Motor& motorL,
                            Devices::Motor& motorR, Devices::Otos& otos,
                            Motion::Planner& planner,
@@ -130,6 +146,12 @@ void Configurator::reapplyPersistedTuning(const Config::TuningSnapshot& snapshot
     config_.wheelControl.pid_i_max = snapshot.wheelControlPidIMax;
     config_.wheelControl.pid_kaff = snapshot.wheelControlPidKaff;
     config_.wheelControl.pid_max = snapshot.wheelControlPidMax;
+    // 133-006: PERSISTED, not BAKED -- these values came out of flash, not
+    // out of the baked file, and reporting them as BAKED would be exactly
+    // the "robot running tuned values the read-back denies" dishonesty this
+    // provenance exists to remove. See robot_config.proto's ConfigSource.
+    stampSource(msg::ConfigGroupTarget::WHEEL_CONTROL,
+                msg::ConfigSource::CONFIG_SOURCE_PERSISTED);
     install(msg::ConfigGroupTarget::WHEEL_CONTROL);
   }
 
@@ -140,6 +162,7 @@ void Configurator::reapplyPersistedTuning(const Config::TuningSnapshot& snapshot
     // routed) -- install(MOTORS)'s ERR_BUSY guard should never trip here;
     // the return value is intentionally not checked, matching this
     // function's own pre-132-013 best-effort shape (void, no error path).
+    stampSource(msg::ConfigGroupTarget::MOTORS, msg::ConfigSource::CONFIG_SOURCE_PERSISTED);
     install(msg::ConfigGroupTarget::MOTORS);
   }
 
@@ -149,6 +172,7 @@ void Configurator::reapplyPersistedTuning(const Config::TuningSnapshot& snapshot
     config_.otos.offset_yaw = snapshot.otosOffsetYaw;
     config_.otos.linear_scale = snapshot.otosLinearScale;
     config_.otos.angular_scale = snapshot.otosAngularScale;
+    stampSource(msg::ConfigGroupTarget::OTOS, msg::ConfigSource::CONFIG_SOURCE_PERSISTED);
     install(msg::ConfigGroupTarget::OTOS);
   }
 
@@ -159,7 +183,7 @@ void Configurator::reapplyPersistedTuning(const Config::TuningSnapshot& snapshot
 // loadBaked() -- see configurator.h's own doc comment. One assignment per
 // msg::ConfigGroupTarget, straight from the generated, robot-JSON-baked
 // defaults (132-005) -- no derivation of its own.
-void Configurator::loadBaked() {
+void Configurator::loadBaked(const Config::WheelCorrection* wheelCorrectionOverride) {
   config_.geometry = Config::defaultGeometryGroup();
   config_.motors = Config::defaultMotorsGroup();
   config_.drive = Config::defaultDriveGroup();
@@ -168,6 +192,40 @@ void Configurator::loadBaked() {
   config_.plannerShaper = Config::defaultPlannerShaperGroup();
   config_.otos = Config::defaultOtosGroup();
   config_.estimator = Config::defaultEstimatorGroup();
+
+  // 133-005: the wheel-correction override, applied AFTER the bake so it
+  // wins over whatever data/robots/*.json currently holds -- see this
+  // method's own declaration comment and BootOverrides::wheelCorrection
+  // (app/boot_wiring.h). Deliberately overwrites config_ itself, not just
+  // the Drive install: read-back (config()/GetConfig(DRIVE)) then reports
+  // what this robot is ACTUALLY calibrated with, which is the whole point
+  // of the configuration object.
+  if (wheelCorrectionOverride != nullptr) {
+    config_.drive.wheel_gain_left_accel = wheelCorrectionOverride->gainLeftAccel;
+    config_.drive.wheel_intercept_left_accel = wheelCorrectionOverride->interceptLeftAccel;
+    config_.drive.wheel_gain_left_decel = wheelCorrectionOverride->gainLeftDecel;
+    config_.drive.wheel_intercept_left_decel = wheelCorrectionOverride->interceptLeftDecel;
+    config_.drive.wheel_gain_right_accel = wheelCorrectionOverride->gainRightAccel;
+    config_.drive.wheel_intercept_right_accel = wheelCorrectionOverride->interceptRightAccel;
+    config_.drive.wheel_gain_right_decel = wheelCorrectionOverride->gainRightDecel;
+    config_.drive.wheel_intercept_right_decel = wheelCorrectionOverride->interceptRightDecel;
+  }
+
+  // 133-006 provenance: everything this function established is BAKED --
+  // including a `wheelCorrectionOverride` DRIVE, which is a composition-root
+  // boot value (App::composeRobot()'s sim-plant identity fit, boot_wiring.h),
+  // not a runtime push. BAKED here means "came from boot-time composition",
+  // which is the distinction a caller asking "is the robot running what I
+  // pushed" actually needs; the override is deliberately NOT given a
+  // provenance of its own.
+  //
+  // This one loop is also the whole of "reset behaviour": a reset re-runs
+  // loadBaked(), which re-stamps every group BAKED, so a previously-LIVE
+  // group stops claiming to be live with no separate reset handling. Slot 0
+  // (CONFIG_GROUP_UNSPECIFIED) is not a group and is deliberately skipped.
+  for (size_t slot = 1; slot < kGroupSourceSlots; ++slot) {
+    groupSource_[slot] = msg::ConfigSource::CONFIG_SOURCE_BAKED;
+  }
 }
 
 // install() -- see configurator.h's own doc comment. PLANNER stays an
@@ -307,6 +365,15 @@ msg::ErrCode Configurator::applyGroup(msg::ConfigGroupTarget target, const uint8
       return msg::ErrCode::ERR_NOT_LIVE;
   }
 
+  // 133-006: stamp LIVE the moment config_ is committed, BEFORE install().
+  // Deliberately not conditioned on install() succeeding: by this point the
+  // group HAS been replaced, so a read-back returns the pushed values, and
+  // the honest answer to "where did what I am reading come from" is "a live
+  // push" whether or not the fan-out then reached a subsystem. ESTIMATOR is
+  // the standing example -- its install() is a permanent ERR_UNIMPLEMENTED,
+  // yet config_.estimator holds exactly what was pushed.
+  stampSource(target, msg::ConfigSource::CONFIG_SOURCE_LIVE);
+
   const msg::ErrCode result = install(target);
   if (result == msg::ErrCode::ERR_NONE) persistIfEligible(target);
   return result;
@@ -356,6 +423,13 @@ msg::ErrCode Configurator::applyField(msg::ConfigGroupTarget target, uint16_t fi
       return msg::ErrCode::ERR_NOT_LIVE;
   }
   if (!r.ok) return r.code;
+
+  // 133-006: stamp LIVE only once the single-field write actually landed
+  // (`r.ok`) -- every rejection path above returns with config_ untouched,
+  // so an unknown field / non-finite value / out-of-bounds push must not
+  // make the group claim it is live. Same "stamp at the mutation, before
+  // install()" rule applyGroup() documents above.
+  stampSource(target, msg::ConfigSource::CONFIG_SOURCE_LIVE);
 
   const msg::ErrCode result = install(target);
   if (result == msg::ErrCode::ERR_NONE) persistIfEligible(target);
@@ -463,6 +537,11 @@ msg::ErrCode Configurator::install(msg::ConfigGroupTarget target) {
 msg::ErrCode Configurator::encodeSnapshot(msg::ConfigGroupTarget target,
                                           msg::ConfigSnapshot& out) const {
   out.target = target;
+  // 133-006: provenance rides the REPLY, not the config struct. Set before
+  // the switch so every success path carries it; the ERR_BADARG path below
+  // returns without a body, and reporting a source for a group that was
+  // never encoded would be its own small lie -- hence the reset there.
+  out.source = configSource(target);
   uint16_t len = 0;
   switch (target) {
     case msg::ConfigGroupTarget::GEOMETRY:
@@ -494,6 +573,7 @@ msg::ErrCode Configurator::encodeSnapshot(msg::ConfigGroupTarget target,
       // Kept as an explicit default (not folded away) so a future
       // ConfigGroupTarget value added with no matching arm here fails
       // loudly (ERR_BADARG) rather than reading stale/zeroed body bytes.
+      out.source = msg::ConfigSource::CONFIG_SOURCE_UNSPECIFIED;
       return msg::ErrCode::ERR_BADARG;
   }
   out.body_count = static_cast<uint8_t>(len);

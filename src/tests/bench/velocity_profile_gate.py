@@ -867,13 +867,25 @@ def _assert_tuning(conn, proto, args) -> "dict[str, float]":
     pushed at all -- confirm every value LANDED, and return the
     WHEEL_CONTROL group as the robot reports it.
 
-    Opening this port RESETS the board (measured: uptime 29361 -> 34911 ms
-    held open, but ~4051 ms after a close/reopen, and suppressing DTR/RTS
-    does not prevent it). So every RAM-only value set by a DIFFERENT
-    process is already gone by the time this one runs. Asserting here,
-    inside the process that then streams the profile, is what makes a tuned
-    measurement possible at all -- an earlier sweep set values externally
-    and unknowingly measured the boot defaults every time.
+    Asserting tuning HERE, inside the process that then streams the
+    profile, is what makes a tuned measurement possible at all -- an
+    earlier sweep set values externally and unknowingly measured the boot
+    defaults every time. That remains the right structure regardless of
+    whether connecting resets the board, and it is why this gate was NOT
+    re-ordered when the DTR policy changed.
+
+    UNRESOLVED, and deliberately left that way (133-006): this docstring
+    used to assert "opening this port RESETS the board (measured: uptime
+    29361 -> 34911 ms held open, but ~4051 ms after a close/reopen, and
+    suppressing DTR/RTS does not prevent it)". A later direct-USB
+    measurement on `tovez` reached the opposite conclusion -- opening with
+    `dtr = False` and sending `HELLO` classified normally with the robot
+    clock NOT resetting -- and `SerialConnection` now opens that way. Both
+    measurements are recorded; neither has been re-run against `tovez`
+    since the policy changed, because the robot was unplugged for 133-006.
+    Re-measure before relying on either claim. What is NOT in doubt: this
+    function's own confirm-by-read-back discipline below, which does not
+    depend on the answer.
 
     Two confirmation mechanisms, one per channel, and NEITHER is an ack:
 

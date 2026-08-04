@@ -30,16 +30,19 @@ intentional internal ``_ser`` access points are:
                        the reader thread starts (device-detection phase only).
 - ``_reader_loop``  — sole owner of ``readline()`` after ``connect()`` returns.
 
-Connection handshake (sprint 036, ticket 007):
-----------------------------------------------
-``connect()`` now performs a HELLO-classify step before the reader thread starts:
+Connection handshake (sprint 036 ticket 007; DTR policy corrected 133-006):
+---------------------------------------------------------------------------
+``connect()`` performs a HELLO-classify step before the reader thread starts:
 
-1. The port is opened **with DTR asserted** (pyserial default).  DTR pulses on
-   open-time close/reopen, resetting any micro:bit on the port and causing it to
-   emit a ``DEVICE:`` announcement banner.  There is no ``dtr = False`` override.
+1. The port is opened with **DTR DEASSERTED** (``dtr = False``, an explicit
+   override of pyserial's default).  Connecting therefore no longer resets the
+   device -- see ``connect()``'s own "DTR policy" note for the measurements
+   that retired the sprint-036 assert-on-open behaviour, and for the silent
+   config loss it was causing.
 
 2. ``_banner_classify()`` sends ``HELLO`` repeatedly (up to ~10 times, ~200 ms
    apart) and reads each response until it captures a ``DEVICE:<ROLE>:...`` line.
+   ``HELLO`` is what actually elicits the banner; the reset never was.
    Parsed ROLE determines the connection mode:
 
    - ``RADIOBRIDGE`` → relay; proceed to ``_relay_handshake()``.
@@ -519,14 +522,11 @@ class SerialConnection:
     def connect(self, skip_ping: bool = False, reset: bool = False) -> dict[str, Any]:
         """Open port, classify device, run handshake, start reader thread.
 
-        Handshake algorithm (sprint 036, ticket 007):
+        Handshake algorithm (sprint 036 ticket 007; step 1 corrected 133-006):
 
-        1. Open the port with **DTR asserted** (pyserial default — no
-           ``dtr = False`` override).  Opening the port toggles DTR, which
-           resets any micro:bit (via the DAPLink) into a clean command plane.
-           The relay then emits a ``DEVICE:`` boot announcement.  Without a
-           reset (no DTR pulse) there is no boot banner; the classify step sends
-           ``HELLO`` to request one explicitly.
+        1. Open the port with **DTR deasserted** (``dtr = False``).  Connecting
+           does not reset the device; ``HELLO`` in step 2 is what produces the
+           ``DEVICE:`` banner.  See "DTR policy" below.
 
         2. ``_banner_classify()`` sends ``HELLO`` repeatedly (up to the
            ``_HELLO_CLASSIFY_TIMEOUT_S`` budget) until a ``DEVICE:<ROLE>:...``
@@ -549,11 +549,48 @@ class SerialConnection:
         daemon (sprint 065, ticket 005: arm-on-demand contract) -- call
         -- see this module's own docstring for why the daemon was deleted.
 
-        Notes on HUPCL and DTR:
-            On macOS/Linux close() pulses DTR via the HUPCL termios flag.
-            For the relay this is desirable (next open will reset it again).
-            For a direct robot connection it is undesirable (SET state lost).
-            The ``reset`` parameter and ``_disable_hupcl`` control this.
+        DTR policy (133-006 — corrects the sprint-036 rule, which was stale):
+
+            The port is opened with ``dtr = False``.  Connecting must not
+            reset the robot.  Sprint 036 asserted DTR on open and justified it
+            with "without a reset there is no boot banner, and the banner is
+            required for HELLO-classify."  That justification was wrong:
+            ``HELLO`` elicits the banner on demand, which is exactly what
+            ``_banner_classify()`` has always done.
+
+            What the reset actually cost was silent data loss.  A live config
+            push lives in RAM (``DRIVE`` is deliberately not flash-persisted —
+            see ``Configurator::persistIfEligible()``), so rebooting on every
+            connection erased it, with no error and no indication anything had
+            gone.  132-019 lost a whole bench measurement to this and only
+            caught it because it happened to read back.  Measured on ``tovez``
+            over direct USB, three consecutive opens under the old policy:
+            PONG t=817843 ms, then t=3085 ms, then t=3085 ms — the clock going
+            *backwards* is the reboot.  With ``dtr = False``: the ``DEVICE:``
+            banner still classifies and the clock does not reset.
+
+            The policy is GLOBAL, not per-role, and that is a measured result
+            rather than an assumption.  The relay was the open question — its
+            ``!GO`` data plane is stateful, so it was plausible that the dongle
+            needed the reset to be found in its control plane.  Measured on
+            ``getez`` (2026-08-04), three handshakes with no power cycle
+            between them: ``dtr = False`` classified and reached
+            ``# entering data plane`` every time, identically to ``dtr = True``.
+            ``!GO`` genuinely does gate the control plane (a ``?`` sent after
+            ``!GO`` gets silence, not the channel line) — yet a no-DTR reopen
+            finds the relay back in its control plane, because the relay leaves
+            the data plane when the host closes the port.  Nothing about the
+            relay path depends on the reset, so no ``RADIOBRIDGE`` exception is
+            carried here.
+
+            ``reset=True`` remains the one deliberate way to reboot the device
+            from this class: on macOS/Linux ``close()`` pulses DTR via the
+            HUPCL termios flag, and ``_disable_hupcl()`` (called when
+            ``reset`` is False) is what suppresses it.
+
+            Beyond the config bug this fixes something larger: you can now
+            observe a robot without rebooting it.  Every host connection used
+            to disturb the thing it was measuring.
 
         Radio channel note:
             Channel/group matching between relay and robot is a bench-setup
@@ -577,22 +614,25 @@ class SerialConnection:
         self._handshake_demux = ByteStreamDemuxer()
 
         try:
-            # Open the port with DTR asserted (pyserial default).
+            # Open the port with DTR DEASSERTED (133-006) -- connecting must
+            # not reset the device. See connect()'s own "DTR policy" docstring
+            # section for the measurements behind this, on both the direct-USB
+            # and the relay path.
             #
-            # Historical note: an earlier version of this code forced
-            # ``dtr=False`` to avoid resetting the device on open.  That
-            # worked for direct robot connections where the device was already
-            # running, but prevented the relay from emitting its DEVICE: banner
-            # (no DTR pulse → no reset → no boot announcement).  The banner is
-            # required for HELLO-classify.  DTR assertion is the correct default
-            # for the relay path; for direct connections it merely resets the
-            # robot into a clean state, which is benign.
+            # The comment that used to sit here claimed the opposite ("DTR
+            # assertion is the correct default for the relay path... the
+            # banner is required for HELLO-classify"). It was stale: HELLO
+            # elicits the banner, and the relay handshakes fine without the
+            # reset. Do not restore it.
             self._ser = serial.Serial(baudrate=self._baud, timeout=READ_TIMEOUT_S,
                                       dsrdtr=False, rtscts=False)
             self._ser.port = self._port
-            # Do NOT force dtr=False here.  Let DTR stay asserted (the
-            # dsrdtr=False kwarg above disables *hardware* flow-control, not
-            # the DTR signal itself; pyserial defaults DTR to True when opening).
+            # Must be set BEFORE open(): pyserial applies the attribute at
+            # open time, and asserting-then-clearing after the fact would
+            # still have pulsed the line, which is the whole thing being
+            # avoided. (dsrdtr=False above disables hardware flow control,
+            # not the DTR signal itself -- a different knob.)
+            self._ser.dtr = False
             self._ser.open()
             if not reset:
                 # On macOS/Linux, close() pulses DTR via the HUPCL termios
@@ -1721,11 +1761,26 @@ def probe_devices(read_timeout: int = 1200) -> list[dict[str, Any]]:  # [ms]
 
     Returns a list of dicts with port, lines, and a 'responsive' flag (True
     iff a DEVICE: banner line was seen within read_timeout).
+
+    Opened with ``dtr=False`` (133-006, same policy as ``connect()`` -- see
+    its own "DTR policy" note). This one matters more than it looks: probing
+    walks EVERY USB modem port, so with DTR asserted, merely asking "what is
+    plugged in?" rebooted every micro:bit on the hub -- the robot included,
+    discarding whatever live config it was holding. The reset was never load
+    bearing here either; this loop sends its own ``HELLO`` and reads the
+    answer, exactly as ``_banner_classify()`` does.
     """
     results = []
     for port in list_serial_ports():
         try:
-            ser = serial.Serial(port, BAUD_RATE, timeout=READ_TIMEOUT_S)
+            # Construct unopened, clear DTR, THEN open -- `dtr` is not a
+            # pyserial constructor kwarg (it raises "unexpected keyword
+            # arguments"), and setting it after open() would already have
+            # pulsed the line. Same three-step dance connect() does.
+            ser = serial.Serial(baudrate=BAUD_RATE, timeout=READ_TIMEOUT_S)
+            ser.port = port
+            ser.dtr = False
+            ser.open()
             time.sleep(0.25)
             ser.reset_input_buffer()
             lines: list[str] = []
@@ -1750,10 +1805,24 @@ def probe_devices(read_timeout: int = 1200) -> list[dict[str, Any]]:  # [ms]
                     break
                 if not chunk:
                     continue
-                for kind, payload in demux.feed(chunk):
-                    if kind == "binary":
+                # BUGFIX (133-006, incidental): this loop used to unpack
+                # `for kind, payload in demux.feed(chunk)`, but
+                # ByteStreamDemuxer.feed() returns a list of complete LINES
+                # (`list[bytes]`), not (kind, payload) pairs -- it has "no
+                # opinion" about binary vs cleartext by design, and leaves
+                # that classification to the caller. Every probe of a device
+                # that answered therefore died on "too many values to unpack
+                # (expected 2)", was swallowed by the enclosing `except
+                # Exception`, and reported as a bare {"port", "error"} row.
+                # Found while confirming probe_devices() still classifies with
+                # DTR deasserted; pre-existing and unrelated to that change,
+                # but it made the DTR claim unverifiable, so it is fixed here.
+                # `_is_binary_verb_line()` is the classification the old
+                # `kind` was reaching for.
+                for line in demux.feed(chunk):
+                    if _is_binary_verb_line(line):
                         continue
-                    text = payload.decode("utf-8", "ignore").strip()
+                    text = line.decode("utf-8", "ignore").strip()
                     if not text:
                         continue
                     lines.append(text)

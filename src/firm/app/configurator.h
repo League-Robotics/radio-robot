@@ -105,9 +105,11 @@
 // error code).
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 
 #include "app/drive.h"
+#include "config/boot_config.h"
 #include "config/persisted_tuning.h"
 #include "config/robot.h"
 #include "devices/motor.h"
@@ -160,7 +162,19 @@ class Configurator {
   // (every value here mirrors the robot JSON's raw fields, per the
   // issue's "the object holds RAW file values" rule). Idempotent; safe to
   // call again (e.g. a future reload).
-  void loadBaked();
+  //
+  // wheelCorrectionOverride (133-005, nullptr = no override, the hardware
+  // default): when non-null, config_.drive's eight wheel_gain_*/
+  // wheel_intercept_* fields are replaced by it AFTER the bake lands, so
+  // the whole downstream fan-out -- install(DRIVE) here, and every later
+  // Drive::configure(config_) -- sees the override rather than the baked
+  // robot-JSON value. This is the ONE seam that decides what a given
+  // composition root's Drive is calibrated with, which is exactly why the
+  // override belongs here and not at a post-construction setter a
+  // refactor can forget to re-apply. Only App::composeRobot() passes one,
+  // and only for the reason BootOverrides::wheelCorrection documents
+  // (app/boot_wiring.h).
+  void loadBaked(const Config::WheelCorrection* wheelCorrectionOverride = nullptr);
 
   // install() -- the boot-time fan-out: pushes config_'s re-appliable
   // groups into the subsystems that own them. The applyShaperLimits() call
@@ -265,12 +279,29 @@ class Configurator {
   // install() above, which fans out every group once, at construction.
   msg::ErrCode install(msg::ConfigGroupTarget target);
 
+  // configSource() -- 133-006: `target`'s PROVENANCE, i.e. where the values
+  // config() currently reports for it came from (msg::ConfigSource --
+  // BAKED / LIVE / PERSISTED; see robot_config.proto's own enum comment).
+  // Read-only; the value is written by the three paths that mutate config_
+  // and nowhere else (see stampSource() below).
+  //
+  // Returns CONFIG_SOURCE_UNSPECIFIED for CONFIG_GROUP_UNSPECIFIED and for
+  // any out-of-range target -- total, like every other accessor here.
+  msg::ConfigSource configSource(msg::ConfigGroupTarget target) const;
+
   // encodeSnapshot() -- 132-011: read-back's own encode step (the-
   // configuration-object.md: "GetConfig reads the object straight back
   // out"). Fills `out` with `target`'s CURRENT value from config_,
   // reusing the SAME generated per-group codec applyGroup()'s decode()
   // counterpart already uses (msg::wire::encode(<Group>&, ...),
   // gen_messages.py's 132-011 encode-direction addition).
+  //
+  // 133-006: also fills `out.source` from configSource(target) above, so a
+  // read-back answers "what is this group running" and "where did it come
+  // from" in the same round trip. Provenance rides the REPLY, never the
+  // config struct -- see robot_config.proto's ConfigSource enum for why
+  // (a `source` field inside a group would land in the robot JSON and
+  // break sprint 132's read-back-equals-file property).
   //
   // NOT gated by isLiveConfigurable()/the re-appliability table above --
   // that table governs WRITES (a boot-only group has no safe runtime
@@ -289,6 +320,22 @@ class Configurator {
   msg::ErrCode encodeSnapshot(msg::ConfigGroupTarget target, msg::ConfigSnapshot& out) const;
 
  private:
+  // stampSource() -- 133-006: the ONE writer of groupSource_. Called from
+  // exactly the three functions that mutate config_ -- loadBaked() (every
+  // group BAKED), reapplyPersistedTuning() (each restored group
+  // PERSISTED), and applyGroup()/applyField() (the pushed group LIVE) --
+  // and from nowhere else.
+  //
+  // Stamping at the MUTATION SITE rather than at call sites is the whole
+  // point: config_ is private and only configurator.cpp writes it, so
+  // "every write is stamped" is a property a reader can verify by reading
+  // one file, not a convention that rots. A future mutation path that
+  // forgets to stamp leaves a stale provenance -- which is why any new
+  // writer of config_ belongs in this file, next to the others.
+  //
+  // Out-of-range/UNSPECIFIED targets are ignored (no slot to write).
+  void stampSource(msg::ConfigGroupTarget target, msg::ConfigSource source);
+
   // persistIfEligible() -- 132-013: called from applyGroup()/applyField()
   // after install(target) succeeds. Snapshots config_'s CURRENT values for
   // `target`'s persisted subset (the re-appliability table's PERSISTENCE
@@ -317,6 +364,21 @@ class Configurator {
   // The one owned configuration object (132-006) -- see loadBaked()/
   // config()/install() above.
   Config::Robot config_ = {};
+
+  // Per-group provenance (133-006), indexed by ConfigGroupTarget's own
+  // integer value -- deliberately a SIDE TABLE here rather than a field of
+  // Config::Robot: the config object's shape is the robot JSON's shape
+  // (config/robot.h), and a runtime-assigned value has no business in a
+  // file. Slot 0 (CONFIG_GROUP_UNSPECIFIED) is never a real group and
+  // stays CONFIG_SOURCE_UNSPECIFIED forever.
+  //
+  // Zero-initialized to CONFIG_SOURCE_UNSPECIFIED, which is the honest
+  // answer for a Configurator whose loadBaked() has not run yet -- the
+  // values in config_ at that point are C++ zero-initialization, not the
+  // baked file.
+  static constexpr size_t kGroupSourceSlots =
+      static_cast<size_t>(msg::ConfigGroupTarget::PLANNER_SHAPER) + 1;
+  msg::ConfigSource groupSource_[kGroupSourceSlots] = {};
 };
 
 }  // namespace App

@@ -137,6 +137,13 @@ def push_gains(proto: Any, gains: "dict[str, float]", *,
 
     Raises TuningNotConfirmed on a NAK, a timeout, or a read-back
     disagreement.
+
+    This predates -- and is the model for -- the general
+    ``set_config_field(..., verify=True)`` path (133-006,
+    ``protocol.ConfigNotVerified``). It is deliberately NOT rewritten onto
+    it: this function pushes N fields and reads the group back ONCE, where
+    per-field verification would cost N read-backs for the same guarantee.
+    Use ``verify=True`` for one-off pushes; use this for a gain set.
     """
     from robot_radio.robot.pb2 import robot_config_pb2
 
@@ -188,7 +195,11 @@ def describe_persistence(fields: "dict[str, float]") -> "list[str]":
              for name, value in sorted(fields.items())]
     lines.append(
         "  NOTE: pid_* survive a reboot (flash); v_min / a_steady / "
-        "pos_err_max / duty gains do NOT -- they are RAM-only DBG pushes and "
-        "revert on the board reset that opening the port causes. Promote a "
-        "keeper into data/robots/<robot>.json.")
+        "pos_err_max / duty gains do NOT -- they are RAM-only and revert on "
+        "any power cycle. Promote a keeper into data/robots/<robot>.json.")
+    lines.append(
+        "  NOTE: since 133-006 connecting no longer resets the board, so a "
+        "RAM-only value now survives a reconnect within one power cycle. "
+        "Confirm with get_config_snapshot(...).source_name -- LIVE means a "
+        "push is still in force, BAKED means it is gone.")
     return lines

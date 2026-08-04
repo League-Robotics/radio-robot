@@ -105,7 +105,8 @@ Helpers:
         caught and the port is skipped.
 
     _relay_probe_banner(port, timeout_s) -> str | None
-        Real I/O probe.  Opens the port with DTR asserted (pyserial default),
+        Real I/O probe.  Opens the port with DTR deasserted (133-006 — a
+        discovery probe must not reboot the devices it walks past),
         sends ``HELLO`` (re-sent every ~0.4 s within the timeout window) and
         reads until a ``DEVICE:`` announcement line arrives.  Returns the
         banner line, or ``None`` on timeout or any I/O error.  Always closes
@@ -592,9 +593,12 @@ def _relay_probe_banner(port: str, timeout_s: float = 2.0) -> "str | None":
     open at all, so no banner is ever emitted; and even when a reset does
     happen, a micro:bit's boot time can exceed a short passive window.
 
-    Instead this function HELLO-classifies: after opening (DTR asserted by
-    default — do NOT pass ``dtr=False``), it sends ``HELLO\\n`` and reads
-    lines until one starts with ``DEVICE:`` or ``timeout_s`` elapses.
+    Instead this function HELLO-classifies: after opening (with ``dtr=False``
+    since 133-006 — probing must not reboot the devices it walks past; the
+    older "do NOT pass dtr=False" instruction here was stale, and matched a
+    claim in ``SerialConnection`` that has since been measured false), it
+    sends ``HELLO\\n`` and reads lines until one starts with ``DEVICE:`` or
+    ``timeout_s`` elapses.
     ``HELLO`` is re-sent every ``_RELAY_PROBE_HELLO_INTERVAL_S`` in case the
     first write lands while the device is still mid-boot. This is the same,
     bench-proven method ``SerialConnection`` already uses for the real
@@ -622,7 +626,23 @@ def _relay_probe_banner(port: str, timeout_s: float = 2.0) -> "str | None":
         # Short per-read timeout so the loop wakes up often enough to
         # re-send HELLO and re-check the overall deadline — NOT timeout_s,
         # which would let a single blocking readline() eat the whole budget.
-        ser = serial.Serial(port, 115200, timeout=0.2)
+        #
+        # dtr=False (133-006): this is a DISCOVERY probe — it opens every
+        # candidate port in turn, so asserting DTR rebooted the ROBOT as a
+        # side effect of looking for the relay, discarding any live config it
+        # was holding. Nothing here depended on the reset: this function
+        # already HELLO-classifies precisely because a passive boot-banner
+        # wait was found unreliable (see the docstring above), so it asks for
+        # the banner rather than waiting for one.
+        #
+        # Constructed unopened so DTR can be cleared BEFORE open(): `dtr` is
+        # not a pyserial constructor kwarg (it raises "unexpected keyword
+        # arguments"), and clearing it after open() would already have pulsed
+        # the line.
+        ser = serial.Serial(baudrate=115200, timeout=0.2)
+        ser.port = port
+        ser.dtr = False
+        ser.open()
         ser.reset_input_buffer()
         time.sleep(_RELAY_PROBE_SETTLE_S)
 

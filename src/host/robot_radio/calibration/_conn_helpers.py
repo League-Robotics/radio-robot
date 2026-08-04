@@ -45,7 +45,13 @@ class RelaySerial:
         import serial
         print(f"  Opening relay port {port} ...")
         self._s = serial.Serial(port, BAUD, timeout=0.3)
-        time.sleep(2.0)   # DTR reset + boot
+        # 2 s settle. This DELIBERATELY still opens with DTR asserted (this
+        # module exists to keep its own fine-grained reset control -- see the
+        # file header), unlike SerialConnection, which stopped asserting DTR
+        # in 133-006. The sleep was sized for "DTR reset + boot"; if this
+        # module is ever brought onto the shared connection path, the reset
+        # goes away and this wait becomes a plain settle pause.
+        time.sleep(2.0)
         self._s.reset_input_buffer()
 
     def _line(self, text: str, wait: float = 0.4) -> str:

@@ -284,6 +284,63 @@ enum ConfigGroupTarget {
   PLANNER_SHAPER = 8;
 }
 
+// ConfigSource -- 133-006 (A-live-config-push-is-wiped-by-the-next-reconnect.md,
+// "per-group config provenance, reported on the reply"): where the values a
+// group is CURRENTLY running came from. Reported per group on the
+// `ConfigSnapshot` reply below -- deliberately NOT a field of any group
+// message above.
+//
+// WHY NOT A GROUP FIELD: every group message here also generates the host
+// pydantic model AND `data/robots/robot_config.schema.json` (gen_messages.py's
+// `_robot_config_groups()`), so a `source` field inside a group would land in
+// the robot JSON -- and a FILE can never carry a runtime-assigned value, which
+// breaks sprint 132's headline read-back-equals-file property. Provenance is a
+// property of the ANSWER, not of the configuration, so it rides the reply
+// envelope. `_CONFIG_ENVELOPE_MESSAGE_NAMES` already excludes ConfigSnapshot
+// from both group-emission modes, so this placement is enforced structurally
+// rather than by convention.
+//
+// WHY PER-GROUP AND NOT ONE GLOBAL FLAG: config is seven groups and DRIVE may
+// be LIVE while PLANNER is still BAKED -- a single flag would have to lie about
+// one of them.
+//
+// Value names are prefixed because protoc scopes every enum VALUE name to the
+// whole `robot` package (see ConfigGroupTarget's own NAMING NOTE above); a bare
+// `LIVE`/`BAKED` would be a package-wide claim on those words.
+enum ConfigSource {
+  // Never reported by a real reply: proto3's required zero value, which
+  // doubles as the "this build predates provenance" reading for a host talking
+  // to older firmware (proto3 implicit presence omits a zero-valued field from
+  // the wire entirely).
+  CONFIG_SOURCE_UNSPECIFIED = 0;
+
+  // The generated, robot-JSON-baked `Config::default*Group()` values --
+  // `Configurator::loadBaked()`. Every group starts here at boot.
+  CONFIG_SOURCE_BAKED = 1;
+
+  // A live wire push landed on this group in the CURRENT power cycle --
+  // `Configurator::applyGroup()`/`applyField()`.
+  //
+  // SCOPE, and it is a narrow one: DRIVE and PLANNER_SHAPER are not persisted
+  // to flash (see configurator.h's PERSISTENCE SCOPE note), so for those groups
+  // LIVE survives only while the robot stays powered. After a power cycle they
+  // read BAKED by definition. This answers "is the robot running what I pushed"
+  // during a tuning session; it is not, and cannot be, a claim about surviving
+  // a power cycle.
+  CONFIG_SOURCE_LIVE = 2;
+
+  // Restored at boot from the flash-persisted tuning snapshot --
+  // `Configurator::reapplyPersistedTuning()`, reachable only for the three
+  // persisted groups (WHEEL_CONTROL / MOTORS.travel_calib / OTOS).
+  //
+  // This value exists because a flash-restored group came from NEITHER the
+  // baked file NOR a push in this session, and reporting it as BAKED would be a
+  // fresh instance of exactly the dishonesty this enum was added to remove --
+  // a robot running tuned values while the read-back claims it is running the
+  // file's. A later live push on the same group overwrites this with LIVE.
+  CONFIG_SOURCE_PERSISTED = 3;
+}
+
 // ===========================================================================
 // Robot-config groups -- each generates a C++ Config::Robot member AND a
 // wire codec (ticket 002); each carries the ConfigGroupTarget value of the
@@ -610,6 +667,12 @@ message GetConfig {
 message ConfigSnapshot {
   ConfigGroupTarget target = 1;
   bytes             body   = 2 [(max_count) = 140];  // see SetConfigGroup.body above -- split the group, don't grow this cap
+  // source -- 133-006: where `body`'s values came from (see ConfigSource
+  // above). Stamped by `Configurator::encodeSnapshot()` from the provenance
+  // the two config_ mutation paths recorded; costs 2 B of the reply envelope
+  // (1 B tag + 1 B varint) and the reply's worst case is `tlm`, not `cfg`, so
+  // this does not move kReplyEnvelopeMaxEncodedSize at all.
+  ConfigSource      source = 3;
 }
 
 // SetConfigField -- set exactly one field inside one group, addressed by

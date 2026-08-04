@@ -539,8 +539,9 @@ constexpr MessageTable kTable_Telemetry = { kFields_Telemetry, 20 };
 constexpr FieldDesc kFields_ConfigSnapshot[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kEnum, .offset = offsetof(ConfigSnapshot, target), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // target
     { .number = 2, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kBytes, .scalarType = ScalarType::kNone, .offset = offsetof(ConfigSnapshot, body_), .offset2 = offsetof(ConfigSnapshot, body_count), .oneofKindValue = 0, .cap = 140, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // body
+    { .number = 3, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kEnum, .offset = offsetof(ConfigSnapshot, source), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // source
 };
-constexpr MessageTable kTable_ConfigSnapshot = { kFields_ConfigSnapshot, 2 };
+constexpr MessageTable kTable_ConfigSnapshot = { kFields_ConfigSnapshot, 3 };
 
 constexpr FieldDesc kFields_MoveTwist[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(MoveTwist, v_x), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // v_x
