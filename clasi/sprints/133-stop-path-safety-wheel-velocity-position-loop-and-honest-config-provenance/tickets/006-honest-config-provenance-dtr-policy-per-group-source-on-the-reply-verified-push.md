@@ -2,7 +2,7 @@
 id: '006'
 title: 'Honest config provenance: DTR policy, per-group source on the reply, verified
   push'
-status: in-progress
+status: done
 use-cases:
 - SUC-005
 depends-on: []
