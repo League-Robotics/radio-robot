@@ -62,6 +62,7 @@ import types
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from robot_radio.calibration.sim_boot_config import (
     drive_boot_config_for, drivetrain_boot_config_for, motor_boot_config_for)
@@ -162,6 +163,16 @@ def test_motor_boot_config_for_grouped_object_reads_vel_filt_alpha_and_fwd_sign(
     assert other == {"vel_filt_alpha": 0.85, "fwd_sign": gbc.FWD_SIGN}
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValidationError,
+    reason=(
+        "data/robots/*.json still OLD-shaped; extra='forbid' (132-016) "
+        "makes load_robot_config() itself raise before this test's own "
+        "no-raise property (motor_boot_config_for's grouped-path read) is "
+        "ever reached -- blocked on ticket 017's JSON reshape"
+    ),
+)
 def test_motor_boot_config_for_real_robot_config_takes_the_grouped_path_no_raise():
     """A REAL load_robot_config() result (RobotConfig, 132-020's grouped
     shape) must not raise -- even though the JSON on disk is still
@@ -171,7 +182,13 @@ def test_motor_boot_config_for_real_robot_config_takes_the_grouped_path_no_raise
     path (which WOULD raise on a dict missing "control"). This is the
     exact regression this ticket closes: pre-132-014, this call raised
     MissingRobotConfigKeyError, cascading through SimLoop.
-    configure_from_robot() and the shared TestGUI fixture."""
+    configure_from_robot() and the shared TestGUI fixture.
+
+    132-016: xfail until ticket 017 -- see the marker above. load_robot_config()
+    itself now raises ValidationError (extra='forbid') before this test's
+    own scenario (a successfully-loaded grouped config not raising further
+    downstream) is reached.
+    """
     cfg = load_robot_config(_ROBOTS_DIR / "tovez.json")
 
     result = motor_boot_config_for(cfg, port=1)

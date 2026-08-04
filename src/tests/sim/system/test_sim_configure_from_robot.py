@@ -48,6 +48,7 @@ import pathlib
 import sys
 
 import pytest
+from pydantic import ValidationError
 
 # src/tests/sim/system/test_sim_configure_from_robot.py -> system -> sim ->
 # tests -> src -> repo root = FOUR hops from __file__ (the same convention
@@ -66,6 +67,23 @@ pytestmark = pytest.mark.skipif(
 
 _TRACK_WIDTH = 128.0  # [mm] matches tovez_nocal.json's own geometry.trackwidth
 
+# 132-016: RobotConfig now sets extra="forbid" (every group, and the root).
+# data/robots/tovez_nocal.json is still OLD-shaped (ticket 017's reshape has
+# not landed), so load_robot_config() now raises pydantic.ValidationError
+# for it -- see robot_config.py's own module docstring ("KNOWN GAP,
+# mid-sprint"). xfail(strict=True, raises=ValidationError) pins the two
+# tests below to this EXACT failure mode; ticket 017 landing should flip
+# them to unexpected passes (caught by strict=True), the cue to drop the
+# marker.
+_XFAIL_UNTIL_017 = pytest.mark.xfail(
+    strict=True,
+    raises=ValidationError,
+    reason=(
+        "data/robots/tovez_nocal.json still OLD-shaped; extra='forbid' "
+        "(132-016) rejects it until ticket 017's JSON reshape lands"
+    ),
+)
+
 
 def _make_loop():
     """A bare, headless ``SimLoop`` -- deterministic manual stepping
@@ -82,12 +100,16 @@ def _make_loop():
     return loop
 
 
+@_XFAIL_UNTIL_017
 def test_configure_from_robot_succeeds_headless_no_testgui_import():
     """Constructing a bare SimLoop (no SimTransport, no Qt) and calling
     configure_from_robot() with a tovez_nocal.json-loaded RobotConfig
     succeeds -- SUC-002's own acceptance criterion, proven concretely (not
     just by import-grep): no exception, and no NEW robot_radio.testgui
-    module enters sys.modules as a side effect of THIS call."""
+    module enters sys.modules as a side effect of THIS call.
+
+    132-016: xfail until ticket 017 -- see _XFAIL_UNTIL_017 above.
+    """
     from robot_radio.config.robot_config import load_robot_config
 
     config = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
@@ -109,13 +131,17 @@ def test_configure_from_robot_succeeds_headless_no_testgui_import():
         loop.disconnect()
 
 
+@_XFAIL_UNTIL_017
 def test_configure_from_robot_tier1_push_is_acked_by_firmware():
     """The Tier-1 ConfigDelta push configure_from_robot() sends is not just
     "sent without raising" -- it reaches RobotLoop::handleConfig() and gets
     ACKed. Steps a few cycles after the call (manual/deterministic mode) so
     the injected ConfigDelta command(s) are processed and their acks ride
     back out on a subsequent Telemetry push, then drains and asserts at
-    least one OK ack landed."""
+    least one OK ack landed.
+
+    132-016: xfail until ticket 017 -- see _XFAIL_UNTIL_017 above.
+    """
     from robot_radio.config.robot_config import load_robot_config
 
     config = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")

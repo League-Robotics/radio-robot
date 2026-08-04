@@ -35,11 +35,35 @@ from __future__ import annotations
 import types
 from pathlib import Path
 
+import pytest
+from pydantic import ValidationError
+
 from robot_radio.calibration.push import calibration_commands, calibration_kwargs
 from robot_radio.config.robot_config import load_robot_config
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ROBOTS_DIR = _REPO_ROOT / "data" / "robots"
+
+# 132-016: RobotConfig now sets extra="forbid" (every group, and the root).
+# data/robots/*.json are still OLD-shaped (ticket 017's reshape has not
+# landed), so load_robot_config() now raises pydantic.ValidationError for
+# every real, on-disk profile instead of silently loading it -- see
+# robot_config.py's own module docstring ("KNOWN GAP, mid-sprint"). The
+# three snapshot tests below load a real profile as their FIRST step, so
+# they are blocked on the same reshape; xfail(strict=True,
+# raises=ValidationError) pins them to this EXACT failure mode -- ticket
+# 017 landing should flip these to unexpected passes (caught by
+# strict=True), the cue to drop the marker and re-pin real snapshots
+# (this module's own header comment already flags _EXPECTED_COMMANDS_PRE_017
+# as a placeholder ticket 017 must re-differentiate).
+_XFAIL_UNTIL_017 = pytest.mark.xfail(
+    strict=True,
+    raises=ValidationError,
+    reason=(
+        "data/robots/*.json still OLD-shaped; extra='forbid' (132-016) "
+        "rejects real profiles until ticket 017's JSON reshape lands"
+    ),
+)
 
 
 def _cfg(*, motors=None, wheel_control=None, wheel_diameter_mm=80.77, robot_name="r"):
@@ -137,6 +161,7 @@ _EXPECTED_COMMANDS_PRE_017 = [
 ]
 
 
+@_XFAIL_UNTIL_017
 def test_calibration_commands_tovez_json_snapshot() -> None:
     cfg = load_robot_config(_ROBOTS_DIR / "tovez.json")
 
@@ -145,6 +170,7 @@ def test_calibration_commands_tovez_json_snapshot() -> None:
     assert cmds == _EXPECTED_COMMANDS_PRE_017
 
 
+@_XFAIL_UNTIL_017
 def test_calibration_commands_tovez_nocal_json_snapshot() -> None:
     cfg = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
 
@@ -153,11 +179,17 @@ def test_calibration_commands_tovez_nocal_json_snapshot() -> None:
     assert cmds == _EXPECTED_COMMANDS_PRE_017
 
 
+@_XFAIL_UNTIL_017
 def test_calibration_commands_is_calibration_kwargs_formatted_plus_otos() -> None:
     """calibration_commands() must be exactly calibration_kwargs()'s items,
     formatted, in the same order, with the OI/OL/OA suffix -- the "thin
     wrapper" acceptance criterion, asserted structurally rather than by
-    re-pinning a third snapshot."""
+    re-pinning a third snapshot.
+
+    132-016: xfail until ticket 017 -- see _XFAIL_UNTIL_017 above (the
+    loop's FIRST load_robot_config() call raises before either profile is
+    reached).
+    """
     for name in ("tovez.json", "tovez_nocal.json"):
         cfg = load_robot_config(_ROBOTS_DIR / name)
         kwargs = calibration_kwargs(cfg)

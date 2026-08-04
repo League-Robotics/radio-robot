@@ -91,6 +91,7 @@ import struct
 import sys
 
 import pytest
+from pydantic import ValidationError
 
 # src/tests/sim/system/test_sim_wire_loopback.py -> system -> sim -> tests ->
 # src -> repo root = FOUR hops from __file__ (same convention as this
@@ -455,6 +456,16 @@ def test_set_field_enqueue_ack_round_trips_through_real_codec():
         loop.disconnect()
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValidationError,
+    reason=(
+        "132-016: _configure() -> load_robot_config(tovez_nocal.json) now "
+        "raises pydantic.ValidationError (extra='forbid') -- data/robots/"
+        "tovez_nocal.json is still OLD-shaped until ticket 017's JSON "
+        "reshape lands"
+    ),
+)
 def test_move_completion_ack_arrives_on_a_later_frame_with_ack_corr_equal_to_move_id():
     """124-011: the issue's "historical framing" section only ever tested
     (and only ever localized the fix for) the ENQUEUE ack -- "also confirm

@@ -15,20 +15,35 @@ object.md": "the object holds RAW file values" -- Config::Robot's own C++
 struct carries the identical constraint; derived quantities are Config::
 Robot METHODS, not schema fields).
 
-NOT yet imported by src/host/robot_radio/config/robot_config.py's actual
-loader/validator (get_robot_config()/list_robots()/derived-field
-computation) -- this module is a standalone generated artifact as of
-sprint 132 ticket 002; the swap-in is a later ticket's job (see
-scripts/gen_messages.py's own GENERATED_ROBOT_CONFIG_PYDANTIC_OUT comment).
+Every class sets ``model_config = ConfigDict(extra="forbid")`` (132-016,
+"the configuration object" issue's own Sequencing step 6: "extra='forbid'
+on the host model") -- an unrecognized JSON key under any group now raises
+``pydantic.ValidationError`` instead of pydantic's default ``extra=
+'ignore'`` silently dropping it. This is the fix for the issue's own
+measured cost: the old hand-written host model had 36 ``control`` fields
+where the robot JSON had 53, silently dropping 18 keys including
+``output_deadband``/``reversal_dwell`` (JSON: ``reversal_dwell_ms``),
+which ``gen_boot_config.py`` REQUIRES and refuses to build without.
+
+Wired into src/host/robot_radio/config/robot_config.py's actual loader/
+validator (get_robot_config()/list_robots()/derived-field computation) as
+of sprint 132 ticket 020 (see that module's own header for the
+composition). NOTE (132-016): ``data/robots/*.json`` are still in the OLD
+13-section shape as of this generation -- ticket 017's JSON reshape has
+not landed -- so ``extra='forbid'`` makes loading any CURRENT real robot
+JSON raise ``ValidationError`` until 017 lands. Expected and accepted
+mid-sprint breakage (see robot_config.py's own KNOWN GAP note); not a bug
+in this generator.
 
 Regenerate: python3 src/scripts/gen_messages.py
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 class Identity(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     robot_name: str = ""
     uid: str = ""
     hardware_model: str = ""
@@ -36,10 +51,12 @@ class Identity(BaseModel):
     drivetrain_type: str = ""
 
 class Connection(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     device_announcement_name: str = ""
     serial_last_6: str = ""
 
 class Vision(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     robot_tag_id: int = 0
     tag_offset_x: float = 0.0
     tag_offset_y: float = 0.0
@@ -48,6 +65,7 @@ class Vision(BaseModel):
     camera_distance_scale: float = 0.0
 
 class Geometry(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     trackwidth: float = 0.0
     rotational_slip: float = 0.0
     rotation_gain_pos: float = 0.0
@@ -56,6 +74,7 @@ class Geometry(BaseModel):
     rotation_offset_neg: float = 0.0
 
 class Motors(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     travel_calib_left: float = 0.0
     travel_calib_right: float = 0.0
     fwd_sign_left: int = 0
@@ -70,6 +89,7 @@ class Motors(BaseModel):
     vel_filt_alpha: float = 0.0
 
 class Drive(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     duty_per_speed_left: float = 0.0
     duty_per_speed_right: float = 0.0
     crawl_pulse: float = 0.0
@@ -83,6 +103,7 @@ class Drive(BaseModel):
     wheel_intercept_right_decel: float = 0.0
 
 class WheelControl(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     v_min: float = 0.0
     bias_max: float = 0.0
     tau_adapt: float = 0.0
@@ -96,6 +117,7 @@ class WheelControl(BaseModel):
     pid_max: float = 0.0
 
 class Planner(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     v_max: float = 0.0
     a_max: float = 0.0
     a_decel: float = 0.0
@@ -114,6 +136,7 @@ class Planner(BaseModel):
     decel_plan_fraction: float = 0.0
 
 class Otos(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     offset_x: float = 0.0
     offset_y: float = 0.0
     offset_yaw: float = 0.0
@@ -121,6 +144,7 @@ class Otos(BaseModel):
     angular_scale: float = 0.0
 
 class Estimator(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     weight_heading_otos: float = 0.0
     weight_omega_otos: float = 0.0
     staleness: int = 0

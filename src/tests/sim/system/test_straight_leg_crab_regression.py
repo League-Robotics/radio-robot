@@ -57,6 +57,7 @@ import pathlib
 import sys
 
 import pytest
+from pydantic import ValidationError
 
 # src/tests/sim/system/test_straight_leg_crab_regression.py -> system -> sim
 # -> tests -> src -> repo root (mirrors test_sim_configure_from_robot.py's
@@ -112,6 +113,16 @@ def _make_loop():
     return loop
 
 
+@pytest.mark.xfail(
+    strict=True,
+    raises=ValidationError,
+    reason=(
+        "132-016: load_robot_config(tovez_nocal.json) now raises "
+        "pydantic.ValidationError (extra='forbid') -- data/robots/"
+        "tovez_nocal.json is still OLD-shaped until ticket 017's JSON "
+        "reshape lands. Not chased here -- see this ticket's own report."
+    ),
+)
 def test_straight_700mm_leg_at_150mms_ideal_chip_does_not_crab():
     """Permanent regression test for 118-001's straight-leg crab (119
     ticket 005) -- straight_drift_repro.py's own exact scenario, with

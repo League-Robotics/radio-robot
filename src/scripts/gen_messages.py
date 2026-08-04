@@ -3433,18 +3433,32 @@ object.md": "the object holds RAW file values" -- Config::Robot's own C++
 struct carries the identical constraint; derived quantities are Config::
 Robot METHODS, not schema fields).
 
-NOT yet imported by src/host/robot_radio/config/robot_config.py's actual
-loader/validator (get_robot_config()/list_robots()/derived-field
-computation) -- this module is a standalone generated artifact as of
-sprint 132 ticket 002; the swap-in is a later ticket's job (see
-scripts/gen_messages.py's own GENERATED_ROBOT_CONFIG_PYDANTIC_OUT comment).
+Every class sets ``model_config = ConfigDict(extra="forbid")`` (132-016,
+"the configuration object" issue's own Sequencing step 6: "extra='forbid'
+on the host model") -- an unrecognized JSON key under any group now raises
+``pydantic.ValidationError`` instead of pydantic's default ``extra=
+'ignore'`` silently dropping it. This is the fix for the issue's own
+measured cost: the old hand-written host model had 36 ``control`` fields
+where the robot JSON had 53, silently dropping 18 keys including
+``output_deadband``/``reversal_dwell`` (JSON: ``reversal_dwell_ms``),
+which ``gen_boot_config.py`` REQUIRES and refuses to build without.
+
+Wired into src/host/robot_radio/config/robot_config.py's actual loader/
+validator (get_robot_config()/list_robots()/derived-field computation) as
+of sprint 132 ticket 020 (see that module's own header for the
+composition). NOTE (132-016): ``data/robots/*.json`` are still in the OLD
+13-section shape as of this generation -- ticket 017's JSON reshape has
+not landed -- so ``extra='forbid'`` makes loading any CURRENT real robot
+JSON raise ``ValidationError`` until 017 lands. Expected and accepted
+mid-sprint breakage (see robot_config.py's own KNOWN GAP note); not a bug
+in this generator.
 
 Regenerate: python3 src/scripts/gen_messages.py
 """
 
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 '''
 
@@ -3453,13 +3467,18 @@ def _render_pydantic_module(groups) -> str:
     """Render GENERATED_ROBOT_CONFIG_PYDANTIC_OUT's full content from
     robot_config.proto's 10 group message descriptors — one flat BaseModel
     class per group, in the file's own declaration order (host-only groups
-    included, unlike the C++ emission path)."""
+    included, unlike the C++ emission path).
+
+    Every class carries ``model_config = ConfigDict(extra="forbid")``
+    (132-016) — an unrecognized key under any group raises loudly instead
+    of pydantic's default ``extra='ignore'`` silently dropping it. This is
+    the class's first statement (before any field), so the "no rows"
+    branch no longer needs its own ``pass`` placeholder."""
     lines: list = [_PYDANTIC_MODULE_BANNER.rstrip("\n"), ""]
     for md in groups:
         rows = _group_field_rows(md)
         lines.append(f"class {md.name}(BaseModel):")
-        if not rows:
-            lines.append("    pass")
+        lines.append('    model_config = ConfigDict(extra="forbid")')
         for row in rows:
             py_type = _python_scalar_type(row["type"])
             default = _python_default_literal(row["type"])

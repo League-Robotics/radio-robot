@@ -29,14 +29,31 @@ KNOWN GAP, mid-sprint (sprint 132 "the configuration object"): today's
 ``data/robots/*.json`` files are still in the OLD 13-section shape
 (``calibration``/``control`` as flat dumping grounds feeding five
 firmware destinations) — the JSON reshape to match the new
-consumer-grouped shape is ticket 017, scheduled deliberately last. Until
-then, loading a real robot JSON through this module silently drops every
-value that lived under the old ``calibration``/``control``/(old-shape)
-``drive`` sections (pydantic's default ``extra='ignore'`` on every group
-model), because those fields now live at different JSON paths under the
-new group names. This is expected and accepted for this ticket — mirrors
-ticket 016's own "expected to fail until 017" posture — not a bug to work
-around here.
+consumer-grouped shape is ticket 017, scheduled deliberately last.
+
+UPDATED by ticket 016: every group model (generated and hand-declared
+alike) plus ``RobotConfig`` itself now sets ``model_config =
+ConfigDict(extra="forbid")``. An unrecognized key anywhere in a robot
+JSON now raises ``pydantic.ValidationError`` LOUDLY instead of pydantic's
+former default ``extra='ignore'`` silently dropping it — closing the
+measured gap that cost 18 ``control.*`` keys (including
+``output_deadband``/``reversal_dwell``, which ``gen_boot_config.py``
+REQUIRES and refuses to build without) with no observable symptom on the
+host. The direct consequence, chosen and accepted deliberately (not a bug
+to work around here): because ``data/robots/*.json`` are still OLD-shaped,
+``load_robot_config()``/``get_robot_config()`` now RAISE for every real,
+on-disk robot profile — the old ``calibration``/``control`` top-level
+sections have no matching ``RobotConfig`` field at all, and several
+reshaped groups (``connection``, ``vision``, ``geometry``) carry old-shape
+keys the new schema doesn't recognize either. ``list_robots()`` degrades
+gracefully (its existing try/except skips unreadable files, logging a
+warning), so it returns an empty list for the real ``data/robots/``
+directory until 017 lands, rather than crashing. This is expected and
+accepted mid-sprint breakage — ticket 017's JSON reshape is the fix, not a
+gate on this ticket. Callers that need a REAL RobotConfig today (e.g. sim
+system tests exercising ``tovez_nocal.json``) will see their loads start
+raising too; see each affected test file's own note if updated for this
+ticket, or ticket 017's own report for what it re-greened.
 
 Resolution order for get_robot_config():
 1. ROBOT_CONFIG env var — full path to a JSON config file.
@@ -51,7 +68,7 @@ import os
 from pathlib import Path
 from typing import Optional
 
-from pydantic import BaseModel, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, field_validator, model_validator
 
 from robot_radio.config.robot_config_generated import (
     Connection,
@@ -103,30 +120,45 @@ VisionConfig = Vision
 # "stay in the file under the one-file rule but never cross the wire").
 # Stay hand-declared for that reason; this module's own derived
 # mm_per_tick computation is wheels/encoders' one real consumer.
+#
+# 132-016: extra='forbid' here too -- these sections are as much a part of
+# "an unrecognized key in a robot JSON fails loudly" as the generated
+# groups; excluding them from the generator's own schema (dead to
+# firmware) is not a reason to let a typo inside them vanish silently.
 # ---------------------------------------------------------------------------
 
 class OffsetXY(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     x: float = 0.0
     y: float = 0.0
 
 
 class WheelsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     wheel_diameter_mm: Optional[float] = None
     ticks_per_rev: Optional[float] = None
     ticks_per_mm: Optional[float] = None
 
 
 class EncodersConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     has_encoders: bool = False
     encoder_count: int = 0
 
 
 class GripperConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     has_gripper: bool = False
     gripper_offset_mm: Optional[OffsetXY] = None
 
 
 class PeripheralsConfig(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     # Digital port (J1..J4) the line laser is wired to. None = no laser
     # wired (fail-closed default -- a robot that doesn't set this explicitly
     # in its data/robots/*.json should not silently assume port 4 is wired).
@@ -162,7 +194,17 @@ class GeometryConfig(Geometry):
     on whether it belongs in the generated schema (flagged, not silently
     reconciled -- see ticket 132-020's own completion report for the
     follow-up).
+
+    ``model_config`` is INHERITED from ``Geometry`` (``extra="forbid"``,
+    132-016) -- pydantic v2 merges a subclass's own ``model_config`` with
+    every base's, so a plain, unconfigured subclass keeps the parent's
+    settings without redeclaring them (confirmed empirically). Restated
+    explicitly below anyway, for the same reason every other group in this
+    file states it explicitly: a reader scanning this file for "does this
+    forbid extra keys" should not have to check the generated module too.
     """
+    model_config = ConfigDict(extra="forbid")
+
     otos_untrusted: bool = False
 
     @field_validator("rotational_slip")
@@ -189,6 +231,17 @@ class GeometryConfig(Geometry):
 # ---------------------------------------------------------------------------
 
 class RobotConfig(BaseModel):
+    """The whole robot JSON, one field per top-level section.
+
+    ``extra="forbid"`` (132-016) catches an unrecognized TOP-LEVEL section
+    name too, not just an unrecognized key inside a known one -- e.g. the
+    OLD-shape file's own ``calibration``/``control`` sections (no matching
+    field here at all as of ticket 020's grouped-shape rewiring) now raise
+    at this level, before pydantic even descends into a sub-group's own
+    ``extra="forbid"``.
+    """
+    model_config = ConfigDict(extra="forbid")
+
     schema_version: int = 1
 
     # -- robot_config.proto's ten groups (132-020) --------------------------
