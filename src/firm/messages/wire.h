@@ -30,6 +30,7 @@
 #include <cstdint>
 
 #include "messages/envelope.h"
+#include "messages/robot_config.h"
 
 namespace msg {
 namespace wire {
@@ -106,6 +107,21 @@ uint16_t encode(const ReplyEnvelope& in, uint8_t* buf, uint16_t cap);
 // that could silently drift from it. Same never-partial/malformed-input
 // contract as decode(CommandEnvelope&, ...) above.
 Result decode(Telemetry& out, const uint8_t* buf, uint16_t len);
+
+// decode(<Group>&, ...) -- 132-008 addition, one overload per
+// robot_config.proto robot-config group. See _render_config_group_
+// decode_decls()'s own doc comment (gen_messages.py) for why these
+// groups need their own decode() family instead of falling out of
+// the normal CommandEnvelope/ReplyEnvelope-reachable set below.
+// Same never-partial/malformed-input contract as decode(Telemetry&,
+// ...) above.
+Result decode(Geometry& out, const uint8_t* buf, uint16_t len);
+Result decode(Motors& out, const uint8_t* buf, uint16_t len);
+Result decode(Drive& out, const uint8_t* buf, uint16_t len);
+Result decode(WheelControl& out, const uint8_t* buf, uint16_t len);
+Result decode(Planner& out, const uint8_t* buf, uint16_t len);
+Result decode(Otos& out, const uint8_t* buf, uint16_t len);
+Result decode(Estimator& out, const uint8_t* buf, uint16_t len);
 
 }  // namespace wire
 }  // namespace msg

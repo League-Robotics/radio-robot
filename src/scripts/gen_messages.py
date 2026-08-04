@@ -1987,6 +1987,7 @@ _WIRE_H_BANNER = """\
 #include <cstdint>
 
 #include "messages/envelope.h"
+#include "messages/robot_config.h"
 
 namespace msg {
 namespace wire {
@@ -2065,7 +2066,14 @@ uint16_t encode(const ReplyEnvelope& in, uint8_t* buf, uint16_t cap);
 // that could silently drift from it. Same never-partial/malformed-input
 // contract as decode(CommandEnvelope&, ...) above.
 Result decode(Telemetry& out, const uint8_t* buf, uint16_t len);
+"""
 
+# 132-008: closing tail, split off _WIRE_H_FOOTER so the per-robot-config-group
+# decode() declarations (_render_config_group_decode_decls(), one per
+# Geometry/Motors/Drive/WheelControl/Planner/Otos/Estimator -- see wire.cpp's
+# own _WIRE_CPP_PART3 doc comment for why these 7 need their own family) can
+# be inserted between the fixed footer above and this closing pair.
+_WIRE_H_CLOSE = """
 }  // namespace wire
 }  // namespace msg
 """
@@ -2386,9 +2394,23 @@ double scalarAsDouble(ScalarType type, const void* src) {
 // Validates (min)/(max)/(abs_max) INLINE during decodeInto()'s single pass
 // (no second validation walk) -- returns false on the FIRST bound this
 // value violates.
+//
+// 132-008: NaN explicitly rejected before the min/max/abs_max comparisons
+// below -- `v < fd.minVal`/`v > fd.maxVal` are BOTH false for a NaN `v`
+// (IEEE 754: every ordered comparison against NaN is false), so a NaN
+// payload would otherwise pass every bound a field declares and reach
+// Config::Robot uncaught (the-configuration-object.md's own "NaN defeats
+// bounds validation" finding). `v != v` is the portable NaN test (true iff
+// NaN, for both float and double promoted through scalarAsDouble()) --
+// deliberately not <cmath>'s std::isnan() to avoid a new include in this
+// fixed engine text for a one-line check. A field with no declared bound
+// (e.g. Geometry.rotational_slip's non-contiguous domain, robot_config.proto's
+// own documented exception) is unaffected -- the early return above already
+// skips it, matching today's "no bound means no validation" convention.
 bool validateBounds(const FieldDesc& fd, const void* src) {
   if ((fd.flags & (kHasMin | kHasMax | kHasAbsMax)) == 0) return true;
   const double v = scalarAsDouble(fd.scalarType, src);
+  if (v != v) return false;  // NaN
   if (fd.flags & kHasAbsMax) {
     const double av = v < 0.0 ? -v : v;
     if (av > static_cast<double>(fd.absMaxVal)) return false;
@@ -2737,7 +2759,19 @@ Result decode(Telemetry& out, const uint8_t* buf, uint16_t len) {
   if (buf == nullptr && len != 0) return Result{false, 0, ErrCode::ERR_DECODE};
   return decodeInto(&out, kTable_Telemetry, buf, static_cast<size_t>(len), 0);
 }
+"""
 
+# 132-008: the namespace-closing tail of wire.cpp, split off PART2 so the
+# per-robot-config-group decode() overloads (_render_config_group_decode_defs(),
+# schema-derived -- one per Geometry/Motors/Drive/WheelControl/Planner/Otos/
+# Estimator) can be inserted between PART2's fixed decode(Telemetry&, ...)
+# and this closing pair, exactly where decode(Telemetry&, ...) itself was
+# inserted before the SAME closing pair by 124-008. See _emit_wire_files()'s
+# own doc comment for why these 7 groups need their own decode() family at
+# all: they are not reachable from CommandEnvelope/ReplyEnvelope (struct_order's
+# BFS), so they never appear in kMessageTables[] and get no decode() overload
+# from the loop that builds one for every OTHER reachable struct.
+_WIRE_CPP_PART3 = """\
 }  // namespace wire
 }  // namespace msg
 """
@@ -2759,6 +2793,64 @@ def _render_arm_report(report: dict) -> str:
             f"non-oneof={report['non_oneof']}B => total={report['total']}B")
 
 
+# 132-008: robot_config.proto's 7 robot-config groups (Geometry/Motors/Drive/
+# WheelControl/Planner/Otos/Estimator) are NOT reachable from CommandEnvelope/
+# ReplyEnvelope -- SetConfigGroup.body is a placeholder `bytes` field, not a
+# message-typed oneof arm (robot_config.proto's own header comment) -- so
+# _compute_layout_check_structs()'s BFS never finds them, and the ordinary
+# per-struct_order loop in _emit_wire_files() never builds a FieldDesc table
+# or a decode() overload for any of them. Configurator::applyGroup() (132-008)
+# still needs exactly that: a way to decode a SetConfigGroup.body payload
+# straight into the matching Config::Robot member using this file's existing
+# schema-generic decodeInto()/validateBounds() machinery, not a hand-rolled
+# parser. These two helpers render that missing piece -- one FieldDesc table
+# plus one small `decode(<Group>&, ...)` overload per group, built the same
+# way decode(Telemetry&, ...) (124-008) was: a fixed-shape wrapper around the
+# SAME generic decodeInto(), pointed at that group's own kTable_<Group>. The
+# groups are deliberately kept OUT of kMessageTables[]/struct_order itself
+# (no nested-message field anywhere references them by tableIndex -- every
+# field robot_config.proto declares today is a flat scalar), so this stays a
+# strict addition: struct_order's existing reachable-set semantics (and
+# ticket 095-003's day-one layout-check gate) are untouched.
+def _render_config_group_decode_decls(group_names: list[str]) -> str:
+    if not group_names:
+        return ""
+    lines = [
+        "",
+        "// decode(<Group>&, ...) -- 132-008 addition, one overload per",
+        "// robot_config.proto robot-config group. See _render_config_group_",
+        "// decode_decls()'s own doc comment (gen_messages.py) for why these",
+        "// groups need their own decode() family instead of falling out of",
+        "// the normal CommandEnvelope/ReplyEnvelope-reachable set below.",
+        "// Same never-partial/malformed-input contract as decode(Telemetry&,",
+        "// ...) above.",
+    ]
+    for name in group_names:
+        lines.append(f"Result decode({name}& out, const uint8_t* buf, uint16_t len);")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_config_group_decode_defs(group_names: list[str]) -> str:
+    if not group_names:
+        return ""
+    lines = [
+        "// decode(<Group>&, ...) -- 132-008 addition; see wire.h's own",
+        "// declaration comment. Same full-object memset + null-check +",
+        "// decodeInto() shape as decode(Telemetry&, ...) above, against",
+        "// each group's own generated kTable_<Group>.",
+        "",
+    ]
+    for name in group_names:
+        lines.append(f"Result decode({name}& out, const uint8_t* buf, uint16_t len) {{")
+        lines.append("  std::memset(static_cast<void*>(&out), 0, sizeof(out));")
+        lines.append("  if (buf == nullptr && len != 0) return Result{false, 0, ErrCode::ERR_DECODE};")
+        lines.append(f"  return decodeInto(&out, kTable_{name}, buf, static_cast<size_t>(len), 0);")
+        lines.append("}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _emit_wire_files(fds):
     """Emit src/firm/messages/wire.{h,cpp}. Returns (wire_h, wire_cpp, cmd_report,
     reply_report) -- the reports are also printed to stderr by the caller
@@ -2773,6 +2865,21 @@ def _emit_wire_files(fds):
     memo: dict = {}
     field_tables = {name: _build_field_table(name, msg_map[name], msg_map, table_index_of)
                      for name in struct_order}
+
+    # 132-008: robot_config.proto's robot-config groups -- see
+    # _render_config_group_decode_decls()'s own doc comment just above for why
+    # these need their own FieldDesc tables + decode() family. `table_index_of`
+    # (built from struct_order only) is safe to reuse unmodified here: every
+    # group message robot_config.proto declares is flat scalars, so
+    # _build_field_table() never looks up a nested-message tableIndex for them.
+    group_struct_order: list[str] = []
+    robot_config_fd = next((f for f in fds.file if f.name == _ROBOT_CONFIG_PROTO_NAME), None)
+    if robot_config_fd is not None:
+        for md in _robot_config_groups(robot_config_fd):
+            if _read_message_host_only(md):
+                continue  # Identity/Connection/Vision -- host-only, no wire codec
+            group_struct_order.append(md.name)
+            field_tables[md.name] = _build_field_table(md.name, md, msg_map, table_index_of)
 
     cmd_report = _envelope_worst_case_report("CommandEnvelope", "cmd", msg_map, memo)
     reply_report = _envelope_worst_case_report("ReplyEnvelope", "body", msg_map, memo)
@@ -2791,13 +2898,19 @@ def _emit_wire_files(fds):
               + f"static_assert(kReplyEnvelopeMaxEncodedSize <= {_ENVELOPE_BUDGET_BYTES},\n"
               + f'              "ReplyEnvelope worst-case encoded size exceeds the '
               + f'{_ENVELOPE_BUDGET_BYTES}-byte envelope budget");\n'
-              + _WIRE_H_FOOTER)
+              + _WIRE_H_FOOTER
+              + _render_config_group_decode_decls(group_struct_order)
+              + _WIRE_H_CLOSE)
 
     cpp_parts = [_WIRE_CPP_PART1]
     for name in struct_order:
         cpp_parts.extend(_render_message_table(name, field_tables[name]))
+    for name in group_struct_order:
+        cpp_parts.extend(_render_message_table(name, field_tables[name]))
     cpp_parts.extend(_render_message_tables_array(struct_order))
     cpp_parts.append(_WIRE_CPP_PART2)
+    cpp_parts.append(_render_config_group_decode_defs(group_struct_order))
+    cpp_parts.append(_WIRE_CPP_PART3)
     wire_cpp = "\n".join(cpp_parts)
 
     return wire_h, wire_cpp, cmd_report, reply_report
