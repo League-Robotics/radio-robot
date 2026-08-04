@@ -17,6 +17,7 @@ enum class ConfigGroupTarget : uint8_t {
     PLANNER = 5,
     OTOS = 6,
     ESTIMATOR = 7,
+    PLANNER_SHAPER = 8,
 };
 
 // Geometry
@@ -86,13 +87,7 @@ struct WheelControl {
 // Planner
 struct Planner {
     float v_max = 0.0f;
-    float a_max = 0.0f;
-    float a_decel = 0.0f;
     float omega_max = 0.0f;
-    float alpha_max = 0.0f;
-    float alpha_decel = 0.0f;
-    float jerk_max = 0.0f;
-    float yaw_jerk_max = 0.0f;
     float control_period = 0.0f;
     float actuation_delay = 0.0f;
     float settle_rest_velocity = 0.0f;
@@ -101,6 +96,18 @@ struct Planner {
     float settle_epsilon_angular = 0.0f;
     float heading_hold_gain = 0.0f;
     float decel_plan_fraction = 0.0f;
+
+    // --- array / optional-string accessors ---
+};
+
+// PlannerShaper
+struct PlannerShaper {
+    float a_max = 0.0f;
+    float a_decel = 0.0f;
+    float alpha_max = 0.0f;
+    float alpha_decel = 0.0f;
+    float jerk_max = 0.0f;
+    float yaw_jerk_max = 0.0f;
 
     // --- array / optional-string accessors ---
 };

@@ -327,13 +327,16 @@ def _u32(v) -> str:
 def travel_calib_for_ports(cfg: dict):
     """Return a list of kMotorCount mm/deg values, one per port (1..N).
 
-    The left/right drive-pair ports take calibration.mm_per_wheel_deg_left/right
-    when the robot JSON supplies them; every other port (and the pair, when the
-    JSON omits them) uses the placeholder.
+    The left/right drive-pair ports take motors.travel_calib_left/right
+    (132-017 JSON reshape retarget -- was calibration.mm_per_wheel_deg_
+    left/right before the grouped-shape migration; same soft-presence
+    semantics, same placeholder fallback) when the robot JSON supplies
+    them; every other port (and the pair, when the JSON omits them) uses
+    the placeholder.
     """
-    cal = cfg.get("calibration", {}) or {}
-    left  = _get(cal, "mm_per_wheel_deg_left")
-    right = _get(cal, "mm_per_wheel_deg_right")
+    motors = cfg.get("motors", {}) or {}
+    left  = _get(motors, "travel_calib_left")
+    right = _get(motors, "travel_calib_right")
     out = []
     for port in range(1, K_MOTOR_COUNT + 1):
         if port == LEFT_PORT and left is not None:
@@ -363,9 +366,11 @@ def polled_for_ports():
 def fwd_sign_for_ports(cfg: dict):
     """Return a list of kMotorCount fwd_sign values, one per port (1..N).
 
-    Mirrors travel_calib_for_ports()'s exact shape: the left/right drive-pair
-    ports take calibration.fwd_sign_left/right when the robot JSON supplies
-    them; every other port (and the pair, when the JSON omits them) uses the
+    Mirrors travel_calib_for_ports()'s exact shape: the left/right
+    drive-pair ports take motors.fwd_sign_left/right (132-017 JSON reshape
+    retarget -- was calibration.fwd_sign_left/right before the
+    grouped-shape migration) when the robot JSON supplies them; every
+    other port (and the pair, when the JSON omits them) uses the
     FWD_SIGN placeholder.
 
     Unlike travel_calib, the drive pair is mirror-mounted (088-002 —
@@ -374,9 +379,9 @@ def fwd_sign_for_ports(cfg: dict):
     L/R targets must spin the two wheels in opposite raw-command directions
     to travel the same physical direction.
     """
-    cal = cfg.get("calibration", {}) or {}
-    left  = _get(cal, "fwd_sign_left")
-    right = _get(cal, "fwd_sign_right")
+    motors = cfg.get("motors", {}) or {}
+    left  = _get(motors, "fwd_sign_left")
+    right = _get(motors, "fwd_sign_right")
     out = []
     for port in range(1, K_MOTOR_COUNT + 1):
         if port == LEFT_PORT and left is not None:
@@ -390,18 +395,22 @@ def fwd_sign_for_ports(cfg: dict):
 
 def otos_boot_config_values(cfg: dict):
     """Return (offsetX, offsetY, offsetYaw, linearScale, angularScale) for the
-    OtosBootConfig struct (086-005), reading geometry.odometry_offset_mm's
-    x/y/yaw_rad and calibration.otos_linear_scale/otos_angular_scale.
+    OtosBootConfig struct (086-005), reading otos.offset_x/offset_y/
+    offset_yaw and otos.linear_scale/angular_scale (132-017 JSON reshape
+    retarget -- was geometry.odometry_offset_mm.{x,y,yaw_rad} +
+    calibration.otos_linear_scale/otos_angular_scale before the
+    grouped-shape migration; robot_config.proto's own header checklist
+    groups these under Otos, not Geometry).
 
     All five are REQUIRED as of sprint 114 (config-as-truth completion) --
     a robot JSON missing any of them fails the generator loudly rather than
     silently substituting the old identity defaults (zero offset, 1.0 scale).
     """
-    offset_x   = _require(cfg, "geometry", "odometry_offset_mm", "x")
-    offset_y   = _require(cfg, "geometry", "odometry_offset_mm", "y")
-    offset_yaw = _require(cfg, "geometry", "odometry_offset_mm", "yaw_rad")
-    linear_scale  = _require(cfg, "calibration", "otos_linear_scale")
-    angular_scale = _require(cfg, "calibration", "otos_angular_scale")
+    offset_x   = _require(cfg, "otos", "offset_x")
+    offset_y   = _require(cfg, "otos", "offset_y")
+    offset_yaw = _require(cfg, "otos", "offset_yaw")
+    linear_scale  = _require(cfg, "otos", "linear_scale")
+    angular_scale = _require(cfg, "otos", "angular_scale")
     return (float(offset_x), float(offset_y), float(offset_yaw),
             float(linear_scale), float(angular_scale))
 
@@ -409,55 +418,65 @@ def otos_boot_config_values(cfg: dict):
 def vel_gains_for_config(cfg: dict):
     """Return (kp, ki, kff, i_max, kaw, filt_alpha) for the velocity PID.
 
-    Read from the robot JSON's ``control`` block -- ALL SIX keys are
-    REQUIRED as of sprint 114 (config-as-truth completion; previously fell
-    back to bench-tuned firmware defaults when absent). NOTE: these keys
-    must be expressed in the NEW NezhaMotor duty [-1,1] plant scale
-    (kp ~ 0.002, kff ~ 0.0015), NOT the old RobotConfig PWM-percent scale
-    (kp ~ 0.3) — the robot JSON's ``control._vel_gains_domain`` marker
-    documents this.
+    Read from the robot JSON's ``motors`` block (132-017 JSON reshape
+    retarget -- was ``control`` before the grouped-shape migration) -- ALL
+    SIX keys are REQUIRED as of sprint 114 (config-as-truth completion;
+    previously fell back to bench-tuned firmware defaults when absent).
+    NOTE: these keys must be expressed in the NEW NezhaMotor duty [-1,1]
+    plant scale (kp ~ 0.002, kff ~ 0.0015), NOT the old RobotConfig
+    PWM-percent scale (kp ~ 0.3) — the robot JSON's own
+    ``motors._vel_gains_domain`` marker documents this.
     """
-    kp   = _require(cfg, "control", "vel_kp")
-    ki   = _require(cfg, "control", "vel_ki")
-    kff  = _require(cfg, "control", "vel_kff")
-    imax = _require(cfg, "control", "vel_imax")
-    kaw  = _require(cfg, "control", "vel_kaw")
-    filt = _require(cfg, "control", "vel_filt")
+    kp   = _require(cfg, "motors", "vel_kp")
+    ki   = _require(cfg, "motors", "vel_ki")
+    kff  = _require(cfg, "motors", "vel_kff")
+    imax = _require(cfg, "motors", "vel_i_max")
+    kaw  = _require(cfg, "motors", "vel_kaw")
+    filt = _require(cfg, "motors", "vel_filt_alpha")
     return float(kp), float(ki), float(kff), float(imax), float(kaw), float(filt)
 
 
 def output_deadband_for_config(cfg: dict):
-    """Return control.output_deadband (duty fraction [-1,1]) -- Devices::
+    """Return motors.output_deadband (duty fraction [-1,1]) -- Devices::
     NezhaMotor::writeShapedDuty()'s output-deadband floor (folded from the
     old MotorArmor base) and MotorArmor's own wedge-suspect motion-gate
-    threshold. REQUIRED as of sprint 114 ticket 003 (config-as-truth
-    completion) -- previously left unset (.has == false) on purpose, with
-    NezhaMotor's own kDefaultOutputDeadband (0.03) substituted in the
-    constructor whenever a config arrived unset; that substitution is gone,
-    so every robot JSON must now carry a real value."""
-    return float(_require(cfg, "control", "output_deadband"))
+    threshold. 132-017 JSON reshape retarget -- was control.output_deadband
+    before the grouped-shape migration. REQUIRED as of sprint 114 ticket 003
+    (config-as-truth completion) -- previously left unset (.has == false) on
+    purpose, with NezhaMotor's own kDefaultOutputDeadband (0.03) substituted
+    in the constructor whenever a config arrived unset; that substitution is
+    gone, so every robot JSON must now carry a real value."""
+    return float(_require(cfg, "motors", "output_deadband"))
 
 
 def reversal_dwell_for_config(cfg: dict):
-    """Return control.reversal_dwell_ms [ms] -- Devices::NezhaMotor::
+    """Return motors.reversal_dwell [ms] -- Devices::NezhaMotor::
     writeShapedDuty()'s reversal-dwell hold time (folded from the old
-    MotorArmor base). REQUIRED as of sprint 114 ticket 003 (config-as-truth
+    MotorArmor base). 132-017 JSON reshape retarget -- was
+    control.reversal_dwell_ms before the grouped-shape migration (the
+    JSON key's own "_ms" unit suffix is dropped per coding-standards.md
+    "no units in ANY identifier"; unit stays in this function's own "[ms]"
+    comment tag). REQUIRED as of sprint 114 ticket 003 (config-as-truth
     completion) -- previously left unset (.has == false) on purpose, with
     NezhaMotor's own kDefaultReversalDwell (100.0) substituted in the
     constructor whenever a config arrived unset; that substitution is gone,
     so every robot JSON must now carry a real value."""
-    return float(_require(cfg, "control", "reversal_dwell_ms"))
+    return float(_require(cfg, "motors", "reversal_dwell"))
 
 
 def trackwidth_for_config(cfg: dict) -> float:
     """Return geometry.trackwidth [mm] -> DrivetrainConfig.trackwidth.
-    REQUIRED as of sprint 114 (config-as-truth completion) -- previously
-    fell back to a 128.0mm placeholder when absent."""
+    Unchanged JSON path across the 132-017 reshape (trackwidth already
+    lived under `geometry` in the old shape too). REQUIRED as of sprint
+    114 (config-as-truth completion) -- previously fell back to a 128.0mm
+    placeholder when absent."""
     return float(_require(cfg, "geometry", "trackwidth"))
 
 
 def rotational_slip_for_config(cfg: dict) -> float:
-    """Return calibration.rotational_slip -> DrivetrainConfig.rotational_slip.
+    """Return geometry.rotational_slip -> DrivetrainConfig.rotational_slip.
+    132-017 JSON reshape retarget -- was calibration.rotational_slip
+    before the grouped-shape migration.
 
     The scrub factor: a differential robot skids its wheels sideways through
     a turn, so it rotates LESS than ideal kinematics (omega = (vR-vL)/b)
@@ -466,14 +485,21 @@ def rotational_slip_for_config(cfg: dict) -> float:
     (main.cpp does that division; trackwidth itself stays the physically
     measured wheel separation and must not be bent to absorb scrub).
 
-    Domain is `{0} u [0.5, 1.0]` (config.proto): 0 is the "uncalibrated"
-    sentinel and means apply no correction, NOT divide-by-zero.
+    Domain is `{0} u [0.5, 1.0]` (robot_config.proto): 0 is the
+    "uncalibrated" sentinel and means apply no correction, NOT
+    divide-by-zero.
     """
-    return float(_require(cfg, "calibration", "rotational_slip"))
+    return float(_require(cfg, "geometry", "rotational_slip"))
 
 
 def rotation_calibration_for_config(cfg: dict):
     """Return (gain_pos, offset_pos_deg, gain_neg, offset_neg_deg).
+
+    132-017 JSON reshape retarget -- was calibration.rotation_gain/
+    rotation_offset_deg/rotation_gain_neg/rotation_offset_deg_neg before
+    the grouped-shape migration; now geometry.rotation_gain_pos/
+    rotation_offset/rotation_gain_neg/rotation_offset_neg, matching
+    robot_config.proto's own Geometry message field names exactly.
 
     The measured affine turn response, `actual = gain*commanded + offset`,
     per direction of rotation. RobotLoop inverts it so an ANGLE-stopped move
@@ -482,11 +508,10 @@ def rotation_calibration_for_config(cfg: dict):
     Offsets stay in DEGREES here (the unit the robot JSON and a human use);
     main.cpp converts to radians at the seam.
     """
-    cal = cfg["calibration"]
-    return (float(_require(cfg, "calibration", "rotation_gain")),
-            float(_require(cfg, "calibration", "rotation_offset_deg")),
-            float(_require(cfg, "calibration", "rotation_gain_neg")),
-            float(_require(cfg, "calibration", "rotation_offset_deg_neg")))
+    return (float(_require(cfg, "geometry", "rotation_gain_pos")),
+            float(_require(cfg, "geometry", "rotation_offset")),
+            float(_require(cfg, "geometry", "rotation_gain_neg")),
+            float(_require(cfg, "geometry", "rotation_offset_neg")))
 
 
 def estimator_config_for_config(cfg: dict):
@@ -514,7 +539,11 @@ def estimator_config_for_config(cfg: dict):
     """
     heading_otos = _require(cfg, "estimator", "weight_heading_otos")
     omega_otos = _require(cfg, "estimator", "weight_omega_otos")
-    staleness = _require(cfg, "estimator", "staleness_ms")
+    # 132-017 JSON reshape retarget: staleness (not staleness_ms) -- the
+    # JSON key's own "_ms" unit suffix is dropped, matching
+    # robot_config.proto's Estimator.staleness field name exactly; unit
+    # stays in this function's own docstring/comment tags.
+    staleness = _require(cfg, "estimator", "staleness")
     return float(heading_otos), float(omega_otos), float(staleness)
 
 
@@ -532,15 +561,19 @@ def wheel_correction_for_config(cfg: dict):
     gain 1 / intercept 0 is the identity (an uncalibrated robot); a gain of
     0 or less is meaningless and aborts.
 
+    132-017 JSON reshape retarget: reads drive.wheel_gain_*/
+    wheel_intercept_* -- was control.wheel_gain_*/wheel_intercept_* before
+    the grouped-shape migration.
+
     All REQUIRED -- same fail-closed posture as every other baked field."""
     out = []
     for wheel in ("left", "right"):
         for direction in ("accel", "decel"):
-            gain = float(_require(cfg, "control", f"wheel_gain_{wheel}_{direction}"))
-            icpt = float(_require(cfg, "control", f"wheel_intercept_{wheel}_{direction}"))
+            gain = float(_require(cfg, "drive", f"wheel_gain_{wheel}_{direction}"))
+            icpt = float(_require(cfg, "drive", f"wheel_intercept_{wheel}_{direction}"))
             if gain <= 0.0:
                 raise SystemExit(
-                    f"control.wheel_gain_{wheel}_{direction} must be > 0 (got {gain})")
+                    f"drive.wheel_gain_{wheel}_{direction} must be > 0 (got {gain})")
             out.append((gain, icpt))
     return out
 
@@ -568,24 +601,32 @@ def drive_config_for_config(cfg: dict):
     at all -- an unconfigured Drive refuses to drive (drive.h), the same
     posture RobotLoop's `configured_` gate already takes for motion
     commands.
+
+    132-017 JSON reshape retarget: reads drive.duty_per_speed_left/right/
+    crawl_pulse -- was control.duty_per_speed_left/right/crawl_pulse
+    before the grouped-shape migration.
     """
-    duty_left = _require(cfg, "control", "duty_per_speed_left")
-    duty_right = _require(cfg, "control", "duty_per_speed_right")
-    crawl = _require(cfg, "control", "crawl_pulse")
+    duty_left = _require(cfg, "drive", "duty_per_speed_left")
+    duty_right = _require(cfg, "drive", "duty_per_speed_right")
+    crawl = _require(cfg, "drive", "crawl_pulse")
     return (float(duty_left), float(duty_right), float(crawl))
 
 
 def wheel_controller_config_for_config(cfg: dict) -> dict:
     """Return a dict of every Config::WheelControllerBootConfig field
     (boot_config.h), keyed by its C++ field name, read from the robot
-    JSON's `control.wheel_*`/`control.wheel_pid_*`/`control.wheel_deficit_*`
-    keys (130-004, wheel-speed-controller-moves-into-drive.md Phase 2).
+    JSON's `wheel_control.*` keys (130-004, wheel-speed-controller-moves-
+    into-drive.md Phase 2). 132-017 JSON reshape retarget: was
+    `control.wheel_*`/`control.wheel_pid_*`/`control.wheel_deficit_*`
+    before the grouped-shape migration -- the `wheel_`/`wheel_pid_`/
+    `wheel_deficit_` prefixes are dropped since the section itself is now
+    named `wheel_control` (matching robot_config.proto's WheelControl
+    message field names exactly).
 
     App::Drive's unified three-timescale wheel-speed controller: Stage
-    B's wire-tunable fast-PID gains (wheel_pid_kp/ki/i_max/kaff/max) and
-    Stage C/deficit-flag's generated-constant bounds (wheel_v_min/
-    wheel_bias_max/wheel_tau_adapt/wheel_a_steady/wheel_deficit_
-    threshold/wheel_deficit_window_ms).
+    B's wire-tunable fast-PID gains (pid_kp/ki/i_max/kaff/max) and
+    Stage C/deficit-flag's generated-constant bounds (v_min/bias_max/
+    tau_adapt/a_steady/deficit_threshold/deficit_window).
 
     All 11 REQUIRED, same fail-closed posture as every other field this
     generator bakes: a robot JSON missing any one of them fails codegen
@@ -595,24 +636,33 @@ def wheel_controller_config_for_config(cfg: dict) -> dict:
     not a placeholder standing in for a value the code requires nonzero.
     """
     return {
-        "vMin": float(_require(cfg, "control", "wheel_v_min")),
-        "biasMax": float(_require(cfg, "control", "wheel_bias_max")),
-        "tauAdapt": float(_require(cfg, "control", "wheel_tau_adapt")),
-        "aSteady": float(_require(cfg, "control", "wheel_a_steady")),
-        "deficitThreshold": float(_require(cfg, "control", "wheel_deficit_threshold")),
-        "deficitWindow": float(_require(cfg, "control", "wheel_deficit_window_ms")),
-        "kp": float(_require(cfg, "control", "wheel_pid_kp")),
-        "ki": float(_require(cfg, "control", "wheel_pid_ki")),
-        "iMax": float(_require(cfg, "control", "wheel_pid_i_max")),
-        "kaff": float(_require(cfg, "control", "wheel_pid_kaff")),
-        "pidMax": float(_require(cfg, "control", "wheel_pid_max")),
+        "vMin": float(_require(cfg, "wheel_control", "v_min")),
+        "biasMax": float(_require(cfg, "wheel_control", "bias_max")),
+        "tauAdapt": float(_require(cfg, "wheel_control", "tau_adapt")),
+        "aSteady": float(_require(cfg, "wheel_control", "a_steady")),
+        "deficitThreshold": float(_require(cfg, "wheel_control", "deficit_threshold")),
+        "deficitWindow": float(_require(cfg, "wheel_control", "deficit_window")),
+        "kp": float(_require(cfg, "wheel_control", "pid_kp")),
+        "ki": float(_require(cfg, "wheel_control", "pid_ki")),
+        "iMax": float(_require(cfg, "wheel_control", "pid_i_max")),
+        "kaff": float(_require(cfg, "wheel_control", "pid_kaff")),
+        "pidMax": float(_require(cfg, "wheel_control", "pid_max")),
     }
 
 
 def planner_config_for_config(cfg: dict) -> dict:
     """Return a dict of every Config::PlannerBootConfig field (boot_config.h),
-    keyed by its C++ field name, read from the robot JSON's `planner` block
-    (129-009, config consolidation; field set reduced 130-009).
+    keyed by its C++ field name, read from the robot JSON's `planner`
+    block (129-009, config consolidation; field set reduced 130-009) PLUS
+    the six shaper-ceiling fields, which 132-017 (JSON reshape ticket,
+    stakeholder-sanctioned mid-sprint Planner-split) moved to their OWN
+    top-level `planner_shaper` JSON section (see robot_config.proto's
+    PlannerShaper message header comment for why). This function still
+    returns ONE flat dict spanning both JSON sections, unchanged shape --
+    its two callers (defaultPlannerLimits(), the boot-only 16-field
+    PlannerBootConfig struct below, and defaultPlannerGroup()/
+    defaultPlannerShaperGroup(), Config::Robot's own SPLIT groups) need no
+    code changes from this retarget.
 
     Before 129-009 every one of these values was a C++ literal assembled
     directly in main.cpp's Motion::PlannerLimits construction -- this is
@@ -620,10 +670,11 @@ def planner_config_for_config(cfg: dict) -> dict:
     as still owed ("A planner-domain config surface can supersede these
     constants later").
 
-    All 18 raw keys are REQUIRED, same fail-closed posture as every other
-    field this generator bakes: a robot JSON missing the `planner` block
-    (or any key inside it) fails codegen loudly rather than a robot
-    inheriting another robot's plant measurements.
+    All 16 raw keys are REQUIRED, same fail-closed posture as every other
+    field this generator bakes: a robot JSON missing either the `planner`
+    or `planner_shaper` block (or any key inside either) fails codegen
+    loudly rather than a robot inheriting another robot's plant
+    measurements.
 
     130-009 (planner-honesty-pass-...limits-reduction.md item 3): cut the
     11 raw keys that fed PlannerLimits' now-deleted M4 duty-stage/settle-
@@ -634,18 +685,20 @@ def planner_config_for_config(cfg: dict) -> dict:
     (boot_config.h) for why each is gone. `plant_gain` is no longer read
     here (its only consumers, velKff/velKaff, are both cut); `plant_tau`
     is ALSO no longer read (its only consumer, trimKaff, is cut too) --
-    both keys may still be present in a robot JSON as recorded measured
-    data, simply unread by this function now.
+    both keys may still be present in a robot JSON (132-017: relocated to
+    `planner._plant_gain`/`_plant_tau`, underscore-prefixed -- recorded
+    measured data with no schema field, not silently dropped by the
+    reshape), simply unread by this function now.
     """
     return {
         "vMax": float(_require(cfg, "planner", "v_max")),
-        "aMax": float(_require(cfg, "planner", "a_max")),
-        "aDecel": float(_require(cfg, "planner", "a_decel")),
+        "aMax": float(_require(cfg, "planner_shaper", "a_max")),
+        "aDecel": float(_require(cfg, "planner_shaper", "a_decel")),
         "omegaMax": float(_require(cfg, "planner", "omega_max")),
-        "alphaMax": float(_require(cfg, "planner", "alpha_max")),
-        "alphaDecel": float(_require(cfg, "planner", "alpha_decel")),
-        "jerkMax": float(_require(cfg, "planner", "jerk_max")),
-        "yawJerkMax": float(_require(cfg, "planner", "yaw_jerk_max")),
+        "alphaMax": float(_require(cfg, "planner_shaper", "alpha_max")),
+        "alphaDecel": float(_require(cfg, "planner_shaper", "alpha_decel")),
+        "jerkMax": float(_require(cfg, "planner_shaper", "jerk_max")),
+        "yawJerkMax": float(_require(cfg, "planner_shaper", "yaw_jerk_max")),
 
         "controlPeriod": float(_require(cfg, "planner", "control_period")),
         "actuationDelay": float(_require(cfg, "planner", "actuation_delay")),
@@ -770,10 +823,12 @@ const char kRobotProfileName[] = "{profile_name}";
 const char kDrivetrainType[] = "{drivetrain_type}";
 
 void defaultMotorConfigs(msg::MotorConfig* out) {{
-    // Velocity PID gains — baked from the robot JSON's control.vel_* keys
-    // (093: now in the NezhaMotor duty [-1,1] plant scale, see the JSON's
-    // control._vel_gains_domain marker), falling back to bench-tuned firmware
-    // defaults when absent. Live-correctable per motor via `DEV M <n> CFG`.
+    // Velocity PID gains — baked from the robot JSON's motors.vel_* keys
+    // (132-017 JSON reshape retarget -- was control.vel_* before the
+    // grouped-shape migration; 093: now in the NezhaMotor duty [-1,1]
+    // plant scale, see the JSON's motors._vel_gains_domain marker),
+    // falling back to bench-tuned firmware defaults when absent.
+    // Live-correctable per motor via `DEV M <n> CFG`.
     msg::Gains velGains;
     velGains.kp = {_f(vel_kp)};
     velGains.ki = {_f(vel_ki)};
@@ -785,29 +840,35 @@ void defaultMotorConfigs(msg::MotorConfig* out) {{
         out[i] = msg::MotorConfig();
         out[i].setPort(i + 1);
         out[i].setVelGains(velGains);
-        // EMA coeff — from control.vel_filt (fallback default); a=0 would pin
-        // reported velocity at 0 forever regardless of real motion.
+        // EMA coeff — from motors.vel_filt_alpha (fallback default); a=0
+        // would pin reported velocity at 0 forever regardless of real
+        // motion.
         out[i].setVelFiltAlpha({_f(vel_filt)});
         // Write-shaping floor/hold — baked from the robot JSON's
-        // control.output_deadband/control.reversal_dwell_ms (sprint 114
-        // ticket 003, config-as-truth completion). REQUIRED as of this
+        // motors.output_deadband/motors.reversal_dwell (132-017 JSON
+        // reshape retarget -- was control.output_deadband/control.
+        // reversal_dwell_ms before the grouped-shape migration; sprint 114
+        // ticket 003, config-as-truth completion). REQUIRED as of that
         // ticket: Devices::NezhaMotor no longer substitutes a ship default
         // when these arrive unset, so every build must emit a real value.
         out[i].setOutputDeadband({_f(output_deadband)});   // [-1,1] fraction
         out[i].setReversalDwell({_f(reversal_dwell)});   // [ms]
     }}
 
-    // Per-port forward-sign — baked from the robot JSON's calibration.
-    // fwd_sign_{{left,right}} for the drive-pair ports
-    // (ports {LEFT_PORT}/{RIGHT_PORT}); other ports use the bench placeholder
-    // ({FWD_SIGN}). The drive pair is mirror-mounted, so left/right are
-    // expected to differ in sign (088-002 —
-    // clasi/issues/tovez-drive-motor-reversed-fwd-sign.md).
+    // Per-port forward-sign — baked from the robot JSON's motors.
+    // fwd_sign_{{left,right}} (132-017 JSON reshape retarget -- was
+    // calibration.fwd_sign_{{left,right}} before the grouped-shape
+    // migration) for the drive-pair ports (ports {LEFT_PORT}/{RIGHT_PORT});
+    // other ports use the bench placeholder ({FWD_SIGN}). The drive pair is
+    // mirror-mounted, so left/right are expected to differ in sign
+    // (088-002 — clasi/issues/tovez-drive-motor-reversed-fwd-sign.md).
 {fwd_sign_lines}
 
     // Per-port encoder travel calibration — baked from the robot JSON's
-    // calibration.mm_per_wheel_deg_{{left,right}} for the drive-pair ports
-    // (ports {LEFT_PORT}/{RIGHT_PORT}); other ports use the bench placeholder.
+    // motors.travel_calib_{{left,right}} (132-017 JSON reshape retarget --
+    // was calibration.mm_per_wheel_deg_{{left,right}} before the
+    // grouped-shape migration) for the drive-pair ports (ports
+    // {LEFT_PORT}/{RIGHT_PORT}); other ports use the bench placeholder.
 {calib_lines}
 
     // Per-port I2C flip-flop poll-schedule membership (091-002) — true for
@@ -837,9 +898,12 @@ msg::DrivetrainConfig defaultDrivetrainConfig() {{
 OtosBootConfig defaultOtosBootConfig() {{
     // 086-005 — additive to defaultMotorConfigs()/defaultDrivetrainConfig()
     // above; no existing mapping touched. Baked from the robot JSON's
-    // geometry.odometry_offset_mm (x/y/yaw_rad) and calibration.
-    // otos_linear_scale/otos_angular_scale where present; identity defaults
-    // (zero offset, 1.0 scale) otherwise. Boot-time-baked only -- see
+    // otos.offset_x/offset_y/offset_yaw and otos.linear_scale/
+    // angular_scale (132-017 JSON reshape retarget -- was geometry.
+    // odometry_offset_mm.{{x,y,yaw_rad}} + calibration.otos_linear_scale/
+    // otos_angular_scale before the grouped-shape migration) where
+    // present; identity defaults (zero offset, 1.0 scale) otherwise.
+    // Boot-time-baked only -- see
     // OtosBootConfig's own doc comment (src/firm/config/boot_config.h) for why
     // this is never a live SET/wire surface.
     OtosBootConfig cfg;
@@ -853,11 +917,13 @@ OtosBootConfig defaultOtosBootConfig() {{
 
 EstimatorBootConfig defaultEstimatorConfig() {{
     // 117 (predict-to-now estimator v1) — fail-closed baked from the robot
-    // JSON's estimator.weight_heading_otos/weight_omega_otos/staleness_ms
-    // (data/robots/robot_config.schema.json). Encoder-only v1 (stakeholder
-    // decision): both blend weights are committed 0.0 in every robot JSON
-    // this sprint -- see that JSON's own inline comment for the
-    // staleness_ms reasoning. NOT a live SET/wire surface itself -- see
+    // JSON's estimator.weight_heading_otos/weight_omega_otos/staleness
+    // (data/robots/robot_config.schema.json; 132-017 JSON reshape retarget
+    // -- was estimator.staleness_ms before the grouped-shape migration).
+    // Encoder-only v1 (stakeholder decision): both blend weights are
+    // committed 0.0 in every robot JSON this sprint -- see that JSON's own
+    // inline comment for the staleness reasoning. NOT a live SET/wire
+    // surface itself -- see
     // EstimatorBootConfig's own doc comment (src/firm/config/boot_config.h)
     // for the separate, volatile EstimatorConfigPatch live-tuning path.
     EstimatorBootConfig cfg;
@@ -928,9 +994,12 @@ PlannerBootConfig defaultPlannerLimits() {{
 // ---------------------------------------------------------------------------
 
 msg::Geometry defaultGeometryGroup() {{
-    // geometry.trackwidth, calibration.rotational_slip/rotation_gain*/
-    // rotation_offset*_deg -- see trackwidth_for_config()/
-    // rotational_slip_for_config()/rotation_calibration_for_config() above.
+    // geometry.trackwidth/rotational_slip/rotation_gain_pos/
+    // rotation_offset/rotation_gain_neg/rotation_offset_neg (132-017 JSON
+    // reshape retarget -- rotational_slip/rotation_* used to live under
+    // `calibration` before the grouped-shape migration) -- see
+    // trackwidth_for_config()/rotational_slip_for_config()/
+    // rotation_calibration_for_config() above.
     msg::Geometry cfg;
     cfg.trackwidth = {_f(trackwidth)};                  // [mm]
     cfg.rotational_slip = {_f(rot_slip)};                // scrub: actual/ideal rotation, 0 = uncalibrated
@@ -945,9 +1014,10 @@ msg::Motors defaultMotorsGroup() {{
     // Drive-pair-only slice of travel_calib_for_ports()/fwd_sign_for_ports()
     // (ports {LEFT_PORT}/{RIGHT_PORT} only -- Config::Robot's schema has no
     // per-port array, see this file's own comment above) plus
-    // control.vel_*/output_deadband/reversal_dwell_ms, shared by both bound
-    // motors (vel_gains_for_config()/output_deadband_for_config()/
-    // reversal_dwell_for_config() above).
+    // motors.vel_*/output_deadband/reversal_dwell (132-017 JSON reshape
+    // retarget -- all lived under `control` before the grouped-shape
+    // migration), shared by both bound motors (vel_gains_for_config()/
+    // output_deadband_for_config()/reversal_dwell_for_config() above).
     msg::Motors cfg;
     cfg.travel_calib_left = {_f(motors_travel_calib_left)};    // [mm/deg]
     cfg.travel_calib_right = {_f(motors_travel_calib_right)};  // [mm/deg]
@@ -965,10 +1035,13 @@ msg::Motors defaultMotorsGroup() {{
 }}
 
 msg::Drive defaultDriveGroup() {{
-    // control.duty_per_speed_left/right/crawl_pulse (drive_config_for_config()
-    // above) plus the Stage-A per-wheel commanded->actual correction
-    // (wheel_correction_for_config() above) -- this sprint's headline
-    // per-wheel drive calibration surface (SUC-006).
+    // drive.duty_per_speed_left/right/crawl_pulse (132-017 JSON reshape
+    // retarget -- was control.duty_per_speed_left/right/crawl_pulse
+    // before the grouped-shape migration; drive_config_for_config() above)
+    // plus the Stage-A per-wheel commanded->actual correction (drive.
+    // wheel_gain_*/wheel_intercept_*, wheel_correction_for_config() above)
+    // -- this sprint's headline per-wheel drive calibration surface
+    // (SUC-006).
     msg::Drive cfg;
     cfg.duty_per_speed_left = {_f(drive_duty_per_speed_left)};    // [duty/(mm/s)]
     cfg.duty_per_speed_right = {_f(drive_duty_per_speed_right)};  // [duty/(mm/s)]
@@ -985,8 +1058,10 @@ msg::Drive defaultDriveGroup() {{
 }}
 
 msg::WheelControl defaultWheelControlGroup() {{
-    // control.wheel_*/wheel_pid_*/wheel_deficit_* --
-    // wheel_controller_config_for_config() above.
+    // wheel_control.v_min/bias_max/tau_adapt/a_steady/deficit_threshold/
+    // deficit_window/pid_* (132-017 JSON reshape retarget -- was
+    // control.wheel_*/wheel_pid_*/wheel_deficit_* before the grouped-shape
+    // migration) -- wheel_controller_config_for_config() above.
     msg::WheelControl cfg;
     cfg.v_min = {_f(wheel_controller["vMin"])};                       // [mm/s]
     cfg.bias_max = {_f(wheel_controller["biasMax"])};                 // [mm/s]
@@ -1003,20 +1078,23 @@ msg::WheelControl defaultWheelControlGroup() {{
 }}
 
 msg::Planner defaultPlannerGroup() {{
-    // planner.* (planner_config_for_config() above). The formerly-DEAD
-    // shaper_* fields (control.a_max/a_decel/alpha_max/alpha_decel/j_max/
-    // yaw_jerk_max) are DELETED, 132-015 -- see robot_config.proto's own
-    // Planner message (now `reserved 17 to 22`) and this module's own
-    // note at defaultShaperConfig()'s former spot above.
+    // planner.* (planner_config_for_config() above) -- the BOOT-ONLY
+    // remainder. The six shaper-ceiling fields (a_max/a_decel/alpha_max/
+    // alpha_decel/jerk_max/yaw_jerk_max) are SPLIT OUT, 132-017 (JSON
+    // reshape ticket, stakeholder-sanctioned mid-sprint scope addition):
+    // see defaultPlannerShaperGroup() immediately below, and robot_config.
+    // proto's PlannerShaper message header comment for why. The formerly-
+    // DEAD shaper_* fields (control.a_max/a_decel/alpha_max/alpha_decel/
+    // j_max/yaw_jerk_max) are DELETED, 132-015 -- see robot_config.proto's
+    // own Planner message (now `reserved 17 to 22`) and this module's own
+    // note at defaultShaperConfig()'s former spot above. (Two DIFFERENT
+    // things share the word "shaper" here: 132-015 deleted a DEAD
+    // shaper_*-prefixed field set; 132-017 split a LIVE, un-prefixed
+    // a_max/... field set into its own group -- see PlannerShaper's own
+    // header comment for the distinction.)
     msg::Planner cfg;
     cfg.v_max = {_f(planner["vMax"])};                          // [mm/s]
-    cfg.a_max = {_f(planner["aMax"])};                          // [mm/s^2]
-    cfg.a_decel = {_f(planner["aDecel"])};                      // [mm/s^2]
     cfg.omega_max = {_f(planner["omegaMax"])};                  // [rad/s]
-    cfg.alpha_max = {_f(planner["alphaMax"])};                  // [rad/s^2]
-    cfg.alpha_decel = {_f(planner["alphaDecel"])};              // [rad/s^2]
-    cfg.jerk_max = {_f(planner["jerkMax"])};                    // [mm/s^3]
-    cfg.yaw_jerk_max = {_f(planner["yawJerkMax"])};              // [rad/s^3]
     cfg.control_period = {_f(planner["controlPeriod"])};        // [ms]
     cfg.actuation_delay = {_f(planner["actuationDelay"])};      // [ms]
     cfg.settle_rest_velocity = {_f(planner["settleRestVelocity"])};    // [mm/s]
@@ -1025,6 +1103,23 @@ msg::Planner defaultPlannerGroup() {{
     cfg.settle_epsilon_angular = {_f(planner["settleEpsilonAngular"])};  // [rad]
     cfg.heading_hold_gain = {_f(planner["headingHoldGain"])};   // [1/s]
     cfg.decel_plan_fraction = {_f(planner["decelPlanFraction"])};  // [1]
+    return cfg;
+}}
+
+msg::PlannerShaper defaultPlannerShaperGroup() {{
+    // planner.a_max/a_decel/alpha_max/alpha_decel/jerk_max/yaw_jerk_max
+    // (planner_config_for_config() above) -- the LIVE shaper-ceiling
+    // group split out of Planner, 132-017. Same JSON source keys (the
+    // `planner` section is not itself reshaped by this split -- only the
+    // GENERATED group these values are baked into changes), read once by
+    // planner_config_for_config() and reused here, not re-derived.
+    msg::PlannerShaper cfg;
+    cfg.a_max = {_f(planner["aMax"])};                // [mm/s^2]
+    cfg.a_decel = {_f(planner["aDecel"])};            // [mm/s^2]
+    cfg.alpha_max = {_f(planner["alphaMax"])};        // [rad/s^2]
+    cfg.alpha_decel = {_f(planner["alphaDecel"])};    // [rad/s^2]
+    cfg.jerk_max = {_f(planner["jerkMax"])};          // [mm/s^3]
+    cfg.yaw_jerk_max = {_f(planner["yawJerkMax"])};   // [rad/s^3]
     return cfg;
 }}
 
@@ -1047,7 +1142,7 @@ msg::Otos defaultOtosGroup() {{
 }}
 
 msg::Estimator defaultEstimatorGroup() {{
-    // estimator.weight_heading_otos/weight_omega_otos/staleness_ms --
+    // estimator.weight_heading_otos/weight_omega_otos/staleness --
     // estimator_config_for_config() above.
     msg::Estimator cfg;
     cfg.weight_heading_otos = {_f(estimator_heading_otos)};

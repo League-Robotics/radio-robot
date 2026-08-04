@@ -646,13 +646,7 @@ constexpr MessageTable kTable_WheelControl = { kFields_WheelControl, 11 };
 
 constexpr FieldDesc kFields_Planner[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, v_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // v_max
-    { .number = 2, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, a_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // a_max
-    { .number = 3, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, a_decel), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // a_decel
     { .number = 4, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, omega_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // omega_max
-    { .number = 5, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, alpha_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // alpha_max
-    { .number = 6, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, alpha_decel), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // alpha_decel
-    { .number = 7, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, jerk_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // jerk_max
-    { .number = 8, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, yaw_jerk_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // yaw_jerk_max
     { .number = 9, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, control_period), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // control_period
     { .number = 10, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, actuation_delay), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // actuation_delay
     { .number = 11, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, settle_rest_velocity), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // settle_rest_velocity
@@ -662,7 +656,17 @@ constexpr FieldDesc kFields_Planner[] = {
     { .number = 15, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, heading_hold_gain), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // heading_hold_gain
     { .number = 16, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, decel_plan_fraction), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // decel_plan_fraction
 };
-constexpr MessageTable kTable_Planner = { kFields_Planner, 16 };
+constexpr MessageTable kTable_Planner = { kFields_Planner, 10 };
+
+constexpr FieldDesc kFields_PlannerShaper[] = {
+    { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(PlannerShaper, a_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // a_max
+    { .number = 2, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(PlannerShaper, a_decel), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // a_decel
+    { .number = 3, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(PlannerShaper, alpha_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // alpha_max
+    { .number = 4, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(PlannerShaper, alpha_decel), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // alpha_decel
+    { .number = 5, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(PlannerShaper, jerk_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // jerk_max
+    { .number = 6, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(PlannerShaper, yaw_jerk_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // yaw_jerk_max
+};
+constexpr MessageTable kTable_PlannerShaper = { kFields_PlannerShaper, 6 };
 
 constexpr FieldDesc kFields_Otos[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Otos, offset_x), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // offset_x
@@ -1086,6 +1090,12 @@ Result decode(Planner& out, const uint8_t* buf, uint16_t len) {
   return decodeInto(&out, kTable_Planner, buf, static_cast<size_t>(len), 0);
 }
 
+Result decode(PlannerShaper& out, const uint8_t* buf, uint16_t len) {
+  std::memset(static_cast<void*>(&out), 0, sizeof(out));
+  if (buf == nullptr && len != 0) return Result{false, 0, ErrCode::ERR_DECODE};
+  return decodeInto(&out, kTable_PlannerShaper, buf, static_cast<size_t>(len), 0);
+}
+
 Result decode(Otos& out, const uint8_t* buf, uint16_t len) {
   std::memset(static_cast<void*>(&out), 0, sizeof(out));
   if (buf == nullptr && len != 0) return Result{false, 0, ErrCode::ERR_DECODE};
@@ -1137,6 +1147,13 @@ uint16_t encode(const Planner& in, uint8_t* buf, uint16_t cap) {
   return static_cast<uint16_t>(pos);
 }
 
+uint16_t encode(const PlannerShaper& in, uint8_t* buf, uint16_t cap) {
+  if (buf == nullptr) return 0;
+  size_t pos = 0;
+  if (!encodeInto(&in, kTable_PlannerShaper, buf, static_cast<size_t>(cap), &pos)) return 0;
+  return static_cast<uint16_t>(pos);
+}
+
 uint16_t encode(const Otos& in, uint8_t* buf, uint16_t cap) {
   if (buf == nullptr) return 0;
   size_t pos = 0;
@@ -1175,6 +1192,10 @@ Result setField(WheelControl& out, uint16_t fieldNumber, float value) {
 
 Result setField(Planner& out, uint16_t fieldNumber, float value) {
   return setScalarField(&out, kTable_Planner, fieldNumber, value);
+}
+
+Result setField(PlannerShaper& out, uint16_t fieldNumber, float value) {
+  return setScalarField(&out, kTable_PlannerShaper, fieldNumber, value);
 }
 
 Result setField(Otos& out, uint16_t fieldNumber, float value) {

@@ -113,12 +113,15 @@ Config::Robot sampleConfig() {
   config.wheelControl.deficit_threshold = 10.0f;
   config.wheelControl.deficit_window = 200.0f;
 
-  config.planner.a_max = 301.0f;
-  config.planner.a_decel = 251.0f;
-  config.planner.alpha_max = 6.1f;
-  config.planner.alpha_decel = 5.1f;
-  config.planner.jerk_max = 1501.0f;
-  config.planner.yaw_jerk_max = 31.0f;
+  // 132-017 split: the six shaper ceilings live on plannerShaper now, not
+  // planner (the boot-only remainder) -- see robot_config.proto's
+  // PlannerShaper message header comment.
+  config.plannerShaper.a_max = 301.0f;
+  config.plannerShaper.a_decel = 251.0f;
+  config.plannerShaper.alpha_max = 6.1f;
+  config.plannerShaper.alpha_decel = 5.1f;
+  config.plannerShaper.jerk_max = 1501.0f;
+  config.plannerShaper.yaw_jerk_max = 31.0f;
 
   config.otos.offset_x = -48.0f;    // [mm]
   config.otos.offset_y = 4.0f;      // [mm]
@@ -304,16 +307,16 @@ int main() {
     App::configurePlanner(planner, config);
 
     checkTrue(planner.shaperConfigured(), "shaperConfigured() after configurePlanner()");
-    checkFloatEq(planner.limits().ceilings.aMax, config.planner.a_max, "limits().ceilings.aMax");
-    checkFloatEq(planner.limits().ceilings.aDecel, config.planner.a_decel,
+    checkFloatEq(planner.limits().ceilings.aMax, config.plannerShaper.a_max, "limits().ceilings.aMax");
+    checkFloatEq(planner.limits().ceilings.aDecel, config.plannerShaper.a_decel,
                 "limits().ceilings.aDecel");
-    checkFloatEq(planner.limits().ceilings.alphaMax, config.planner.alpha_max,
+    checkFloatEq(planner.limits().ceilings.alphaMax, config.plannerShaper.alpha_max,
                 "limits().ceilings.alphaMax");
-    checkFloatEq(planner.limits().ceilings.alphaDecel, config.planner.alpha_decel,
+    checkFloatEq(planner.limits().ceilings.alphaDecel, config.plannerShaper.alpha_decel,
                 "limits().ceilings.alphaDecel");
-    checkFloatEq(planner.limits().ceilings.jerkMax, config.planner.jerk_max,
+    checkFloatEq(planner.limits().ceilings.jerkMax, config.plannerShaper.jerk_max,
                 "limits().ceilings.jerkMax");
-    checkFloatEq(planner.limits().ceilings.yawJerkMax, config.planner.yaw_jerk_max,
+    checkFloatEq(planner.limits().ceilings.yawJerkMax, config.plannerShaper.yaw_jerk_max,
                 "limits().ceilings.yawJerkMax");
   }
 

@@ -148,22 +148,29 @@ import "options.proto";
 //     wheel_pid_ki/wheel_pid_i_max/wheel_pid_kaff/wheel_pid_max -- 11
 //     REQUIRED fields. Field names mirror sprint.md's own Drive::
 //     configure() pseudocode verbatim (config.wheelControl.pidKp, etc.).
-//   planner_config_for_config()    -> Planner.v_max/a_max/a_decel/
-//                                      omega_max/alpha_max/alpha_decel/
-//                                      jerk_max/yaw_jerk_max/control_period/
-//                                      actuation_delay/settle_rest_velocity/
+//   planner_config_for_config()    -> Planner.v_max/omega_max/
+//                                      control_period/actuation_delay/
+//                                      settle_rest_velocity/
 //                                      settle_rest_omega/
 //                                      settle_epsilon_linear/
 //                                      settle_epsilon_angular/
 //                                      heading_hold_gain/decel_plan_fraction
+//                                      PLUS PlannerShaper.a_max/a_decel/
+//                                      alpha_max/alpha_decel/jerk_max/
+//                                      yaw_jerk_max
 //     planner.v_max/a_max/a_decel/omega_max/alpha_max/alpha_decel/
 //     jerk_max/yaw_jerk_max/control_period/actuation_delay/
 //     settle_rest_velocity/settle_rest_omega/settle_epsilon_linear/
 //     settle_epsilon_angular/heading_hold_gain/decel_plan_fraction -- 16
-//     REQUIRED fields (the function's own docstring says "18"; the actual
-//     `_require()` call count in the current source is 16 -- trusted over
-//     the stale docstring number). The LIVE planner-limits surface
-//     Motion::Planner actually consumes.
+//     REQUIRED fields total (the function's own docstring says "18"; the
+//     actual `_require()` call count in the current source is 16 --
+//     trusted over the stale docstring number), SPLIT (132-017) across
+//     TWO generated groups/gen_boot_config.py functions
+//     (`defaultPlannerGroup()`, 10 boot-only fields; `defaultPlannerShaper
+//     Group()`, the 6 live shaper-ceiling fields) even though the JSON
+//     source keys all still live under one `planner.*` section -- see
+//     PlannerShaper's own header comment above for why. The LIVE
+//     planner-limits surface Motion::Planner actually consumes.
 //   travel_calib_for_ports()       -> Motors.travel_calib_left/
 //                                      travel_calib_right          (soft)
 //   fwd_sign_for_ports()           -> Motors.fwd_sign_left/
@@ -261,13 +268,20 @@ message Vision {
 // ===========================================================================
 enum ConfigGroupTarget {
   CONFIG_GROUP_UNSPECIFIED = 0;  // proto3-required zero value; never a real target
-  GEOMETRY      = 1;
-  MOTORS        = 2;
-  DRIVE         = 3;
-  WHEEL_CONTROL = 4;
-  PLANNER       = 5;
-  OTOS          = 6;
-  ESTIMATOR     = 7;
+  GEOMETRY       = 1;
+  MOTORS         = 2;
+  DRIVE          = 3;
+  WHEEL_CONTROL  = 4;
+  PLANNER        = 5;
+  OTOS           = 6;
+  ESTIMATOR      = 7;
+  // PLANNER_SHAPER -- added 132-017 (JSON reshape ticket, stakeholder-
+  // sanctioned mid-sprint split, 2026-08-04): the six shaper ceilings
+  // (Planner.a_max/a_decel/alpha_max/alpha_decel/jerk_max/yaw_jerk_max, as
+  // this file originally declared them) split OUT of PLANNER into their
+  // own live target. See the PlannerShaper message's own header comment
+  // below for the full rationale.
+  PLANNER_SHAPER = 8;
 }
 
 // ===========================================================================
@@ -362,23 +376,35 @@ message WheelControl {
   float pid_max            = 11 [(min) = 0.0];  // [mm/s] total fast-loop authority clamp
 }
 
-// Planner -- Motion::Planner's tuning surface: profile ceilings, loop
-// timing, settle/rest, heading hold. Consumed by Motion::Planner via
-// Configurator::install(PLANNER). Fields 1-16 are the LIVE surface
-// (planner_config_for_config()); fields 17-22 are the DEAD
-// Config::ShaperBootConfig surface (shaper_config_for_config()) -- see this
-// file's own header checklist for why they are declared at all, and why
-// they are placed last (least-hot, correctly landing in the 2-byte-tag
-// range) pending ticket-015 deletion.
+// Planner -- Motion::Planner's BOOT-ONLY tuning surface: profile velocity/
+// omega ceilings, loop timing, settle/rest, heading hold. Consumed by
+// Motion::Planner via the boot-time-only Configurator::install() fan-out
+// (no live per-target push -- GEOMETRY/PLANNER stay boot-only,
+// configurator.cpp's isLiveConfigurable()).
+//
+// SPLIT, 132-017 (JSON reshape ticket, stakeholder-sanctioned mid-sprint
+// scope addition, 2026-08-04): this message used to also carry the six
+// shaper-ceiling fields (a_max/a_decel/alpha_max/alpha_decel/jerk_max/
+// yaw_jerk_max) -- 132-014's own the-configuration-object.md audit found
+// that folding them in here silently regressed them from genuinely LIVE
+// (their own pre-132 wire arm) to permanently boot-only, because ONE
+// coarse ConfigGroupTarget forces every field in it to share the SAME
+// re-appliability verdict, and `Motion::Planner::applyShaperLimits()`
+// already exists as one of the issue's own eight safely-re-appliable
+// setters (the-configuration-object.md's "boot-only vs live" table) --
+// only the REST of this message (v_max/omega_max/control_period/
+// actuation_delay/settle_*/heading_hold_gain/decel_plan_fraction) has no
+// post-construction setter at all and genuinely belongs boot-only. Field
+// numbers 2/3/5/6/7/8 (the six moved-out shaper fields) are `reserved`
+// below, not renumbered into the survivors -- this file's own
+// non-contiguous-numbering precedent (see the already-reserved 17-22
+// block this same message carried before this split) makes a low-churn,
+// no-renumber split lower-risk than shifting every surviving field's own
+// wire number. See the new PlannerShaper message immediately below for
+// the live half.
 message Planner {
   float  v_max                  = 1  [(min) = 0.0];  // [mm/s] linear velocity ceiling
-  float  a_max                  = 2  [(min) = 0.0];  // [mm/s^2] linear accel-ramp ceiling
-  float  a_decel                = 3  [(min) = 0.0];  // [mm/s^2] linear decel-taper ceiling
   float  omega_max              = 4  [(min) = 0.0];  // [rad/s] angular velocity ceiling
-  float  alpha_max              = 5  [(min) = 0.0];  // [rad/s^2] angular accel-ramp ceiling
-  float  alpha_decel            = 6  [(min) = 0.0];  // [rad/s^2] angular decel-taper ceiling
-  float  jerk_max                = 7  [(min) = 0.0];  // [mm/s^3] linear jerk ceiling
-  float  yaw_jerk_max            = 8  [(min) = 0.0];  // [rad/s^3] angular jerk ceiling
   float  control_period          = 9  [(min) = 0.0];  // [ms]
   float  actuation_delay         = 10 [(min) = 0.0];  // [ms] command-staged-to-wheels latency
   float  settle_rest_velocity    = 11 [(min) = 0.0];  // [mm/s]
@@ -388,6 +414,8 @@ message Planner {
   float  heading_hold_gain       = 15 [(min) = 0.0];  // [1/s] rad/s of correction per rad of error
   float  decel_plan_fraction     = 16 [(min) = 0.0];  // [1] fraction of decel ceiling to plan brake-start against
 
+  // a_max/a_decel/alpha_max/alpha_decel/jerk_max/yaw_jerk_max -- MOVED,
+  // 132-017: now PlannerShaper's own fields 1-6 (below), a LIVE target.
   // shaper_a_max/shaper_a_decel/shaper_alpha_max/shaper_alpha_decel/
   // shaper_j_max/shaper_yaw_jerk_max -- DELETED, 132-015: these mirrored
   // Config::ShaperBootConfig (boot_config.h), itself confirmed to have
@@ -399,9 +427,25 @@ message Planner {
   // wire-stability discipline applies to field NUMBERS too, matching
   // envelope.proto/telemetry.proto's established "reserved, not
   // reused" convention elsewhere in this schema).
-  reserved 17 to 22;
-  reserved "shaper_a_max", "shaper_a_decel", "shaper_alpha_max",
+  reserved 2, 3, 5, 6, 7, 8, 17 to 22;
+  reserved "a_max", "a_decel", "alpha_max", "alpha_decel", "jerk_max",
+      "yaw_jerk_max", "shaper_a_max", "shaper_a_decel", "shaper_alpha_max",
       "shaper_alpha_decel", "shaper_j_max", "shaper_yaw_jerk_max";
+}
+
+// PlannerShaper -- Motion::Planner's LIVE shaper-ceiling surface, split out
+// of Planner (132-017, above): the accel/decel/jerk profile ceilings
+// `Motion::Planner::applyShaperLimits()` already knows how to re-apply at
+// runtime (the-configuration-object.md's own re-appliability table lists
+// it among the eight safely re-appliable setters). Consumed via
+// Configurator::install(PLANNER_SHAPER) -- live, unlike Planner itself.
+message PlannerShaper {
+  float a_max        = 1 [(min) = 0.0];  // [mm/s^2] linear accel-ramp ceiling
+  float a_decel      = 2 [(min) = 0.0];  // [mm/s^2] linear decel-taper ceiling
+  float alpha_max    = 3 [(min) = 0.0];  // [rad/s^2] angular accel-ramp ceiling
+  float alpha_decel  = 4 [(min) = 0.0];  // [rad/s^2] angular decel-taper ceiling
+  float jerk_max     = 5 [(min) = 0.0];  // [mm/s^3] linear jerk ceiling
+  float yaw_jerk_max = 6 [(min) = 0.0];  // [rad/s^3] angular jerk ceiling
 }
 
 // Otos -- SparkFun OTOS mounting lever-arm offset and chip scale
@@ -499,6 +543,16 @@ message Estimator {
 // deliberately-shorter `SET_FIELD`, not a literal `SET_CONFIG_FIELD`
 // mirror of this message's own name). SetConfigGroup remains ticket 013's
 // job.)
+//
+// UPDATE, 132-017 -- Planner SPLIT into Planner (10 boot-only fields) +
+// PlannerShaper (6 live fields), per this file's own PlannerShaper header
+// comment above. This can only shrink the worst-case group further below
+// Motors' 72 B (both halves of the former 81 B Planner are now smaller
+// than Motors) -- `(max_count) = 140` is left at its 132-015 value rather
+// than shrunk again in the same pass that also reshapes the JSON; see
+// this ticket's own completion report for the freshly re-measured
+// per-group sizes and envelope totals after this split and the
+// regeneration it triggers.
 // ===========================================================================
 
 // SetConfigGroup -- push a whole group's worth of values in one frame.

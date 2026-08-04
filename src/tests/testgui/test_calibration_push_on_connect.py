@@ -561,20 +561,24 @@ def test_connect_with_real_tovez_nocal_config_does_not_hit_badkey_on_odom_offset
     from the current firmware/sim.
 
     109-002: the blanket "no REJECTED at all" assertion no longer holds.
-    132-014 changes WHICH keys are the known, expected rejections:
-    ``calibration_kwargs()`` no longer selects ``tw``/``rotSlip`` at all
-    (GEOMETRY is boot-only AND a sim divergence -- see that function's own
-    docstring), so they no longer appear in the push loop's own SET
-    sequence at all (unrelated to whether they'd be accepted). ``OI``
-    (no live retarget, see ``binary_bridge.py``) and ``OL``/``OA`` (132-014
-    KNOWN GAP: ``config.otos.linear_scale``/``angular_scale`` read their
-    proto3 zero default pending ticket 017's JSON reshape -- 0.0 is below
-    ``robot_config.proto``'s own ``(min) = 0.0001`` bound, so firmware
-    honestly rejects it with ``ERR_RANGE`` rather than the WRONG "1-LSB
-    scalar" trap 3 used to silently install) are now the three expected
-    rejections. What still must never happen is a REJECTED entry for
-    anything OTHER than those three (in particular, no ``badkey`` at all --
-    the odom-offset bug this test guards against).
+    132-014 changes WHICH keys are the known, POSSIBLE rejections (the
+    assertion below tolerates but does not require them): ``calibration_
+    kwargs()`` no longer selects ``tw``/``rotSlip`` at all (GEOMETRY is
+    boot-only AND a sim divergence -- see that function's own docstring),
+    so they no longer appear in the push loop's own SET sequence at all
+    (unrelated to whether they'd be accepted). ``OI`` has no live retarget
+    (see ``binary_bridge.py``) -- always a known-tolerated rejection.
+    ``OL``/``OA`` used to be a 132-014 KNOWN GAP (``config.otos.
+    linear_scale``/``angular_scale`` read their proto3 zero default,
+    below ``robot_config.proto``'s own ``(min) = 0.0001`` bound, so
+    firmware honestly rejected them with ``ERR_RANGE``) -- 132-017's JSON
+    reshape gave ``tovez_nocal.json`` real ``otos.linear_scale``/
+    ``angular_scale`` values (1.0/1.0, within bounds), so OL/OA are
+    typically ACCEPTED now; still allow-listed here (not asserted-absent)
+    since a rejection for either is not itself a symptom of the odom-
+    offset bug this test guards against. What still must never happen is
+    a REJECTED entry for anything OTHER than OI/OL/OA (in particular, no
+    ``badkey`` at all).
     """
     real_cfg_path = _REPO / "data" / "robots" / "tovez_nocal.json"
     assert real_cfg_path.exists(), f"missing {real_cfg_path}"
@@ -686,28 +690,28 @@ def test_robot_combo_change_while_connected_repushes_and_overwrites(
             "GET ml", read_timeout=500
         ), "connecting with 'tovez nocal' active must push its default travel calib"
 
-        # 132-014 KNOWN GAP: data/robots/*.json are still in the OLD
-        # 13-section shape (ticket 017 reshapes them) -- tovez.json's
-        # calibration.mm_per_wheel_deg_left=0.7165 lives at a JSON path
-        # config.motors (the new grouped shape) does not read yet, so
-        # BOTH profiles currently resolve ml to the SAME wheel-diameter
-        # fallback (see test_calibration_kwargs.py's own header comment
-        # for the identical finding). This can no longer prove "the
-        # re-push overwrote a DIFFERENT value" until ticket 017 lands --
-        # what it CAN still prove, and does: the combo switch re-triggers
-        # a real push (a second "[CAL] pushed" log line) without ever
-        # hitting ERR badkey, i.e. the re-push pipeline itself still
-        # works end to end.
+        # 132-014 KNOWN GAP, RESOLVED 132-017: before the JSON reshape,
+        # tovez.json's calibration.mm_per_wheel_deg_left=0.7165 lived at a
+        # JSON path config.motors (the new grouped shape) did not read
+        # yet, so BOTH profiles resolved ml to the SAME wheel-diameter
+        # fallback -- this assertion could only prove the re-push
+        # pipeline worked end to end, not that it overwrote a DIFFERENT
+        # value. 132-017's JSON reshape gave tovez.json a real
+        # motors.travel_calib_left (0.7165), now DISTINCT from
+        # tovez_nocal's wheel-diameter-derived fallback (_expected_ml()) --
+        # this is the STRONGER proof the original test name promised: the
+        # combo switch genuinely overwrites firmware with a different
+        # value, not merely re-sends the same one.
         log_before = _log_text(window)
         pushed_count_before = log_before.count("[CAL] pushed")
 
         robot_combo.setCurrentIndex(cal_idx)
         _spin_events(qapp, 0.3)
 
-        assert f"ml={_expected_ml()}" in transport.command("GET ml", read_timeout=500), (
+        assert "ml=0.7165" in transport.command("GET ml", read_timeout=500), (
             "switching to the calibrated 'tovez' robot while connected must "
-            "still re-push travel calib (pinned to the SAME fallback value "
-            "as nocal until ticket 017 reshapes the JSON)"
+            "re-push its own real travel_calib_left (0.7165), distinct from "
+            "nocal's wheel-diameter fallback"
         )
 
         log_text = _log_text(window)
@@ -735,14 +739,16 @@ def test_robot_combo_change_while_connected_repushes_and_overwrites(
 # the nine estimator/shaper fields no longer ride one binary-only
 # EstimatorConfigPatch ConfigDelta arm (config.proto, deleted 132-013) --
 # they now live on TWO robot_config.proto groups (config.estimator.*/
-# config.planner.*, see push.estimator_kwargs()'s own docstring for the
-# full field-by-field disposition) and are pushed via set_config_field()
-# per field. Both targets are honest dead ends now (ESTIMATOR:
-# ERR_UNIMPLEMENTED, PLANNER: ERR_NOT_LIVE) -- these tests cover the
+# config.planner_shaper.*, see push.estimator_kwargs()'s own docstring for
+# the full field-by-field disposition) and are pushed via
+# set_config_field() per field. FIXED, 132-017 (JSON reshape ticket,
+# stakeholder-sanctioned mid-sprint scope addition): PLANNER_SHAPER is now
+# LIVE, split out of the boot-only PLANNER group -- these tests cover the
 # selection function (unchanged shape, new sources) and the connect-time
-# push it feeds (__main__.py's _push_estimator_config()), now asserting the
-# HONEST rejection rather than a clean apply -- the SAME "Architecture
-# Revision retarget" pattern this file already applies to rotSlip/tw.
+# push it feeds (__main__.py's _push_estimator_config()), now asserting a
+# real apply for the six shaper fields and an honest rejection for the
+# three ESTIMATOR ones -- the SAME "Architecture Revision retarget"
+# pattern this file already applies to rotSlip/tw.
 #
 # 118 ticket 004 (land-at-zero-completion-delete-stop-lead.md): a former
 # fourth ``estimator.*`` field (a boot-time/live-tunable time-lead
@@ -753,11 +759,11 @@ def test_robot_combo_change_while_connected_repushes_and_overwrites(
 # ---------------------------------------------------------------------------
 
 
-def _estimator_cfg(*, estimator=None, planner=None, robot_name="r"):
+def _estimator_cfg(*, estimator=None, planner_shaper=None, robot_name="r"):
     return types.SimpleNamespace(
         robot_name=robot_name,
         estimator=estimator if estimator is not None else types.SimpleNamespace(),
-        planner=planner if planner is not None else types.SimpleNamespace(),
+        planner_shaper=planner_shaper if planner_shaper is not None else types.SimpleNamespace(),
     )
 
 
@@ -769,7 +775,7 @@ def test_estimator_kwargs_selects_estimator_and_shaper_fields_when_present() -> 
             weight_heading_otos=0.0, weight_omega_otos=0.0,
             staleness=60.0,
         ),
-        planner=types.SimpleNamespace(
+        planner_shaper=types.SimpleNamespace(
             a_max=800.0, a_decel=800.0, alpha_max=7.0, alpha_decel=7.0,
             jerk_max=5000.0, yaw_jerk_max=100.0,
         ),
@@ -796,7 +802,7 @@ def test_estimator_kwargs_omits_none_fields() -> None:
             weight_heading_otos=None, weight_omega_otos=None,
             staleness=60.0,
         ),
-        planner=types.SimpleNamespace(
+        planner_shaper=types.SimpleNamespace(
             a_max=None, a_decel=None, alpha_max=None, alpha_decel=None,
             jerk_max=None, yaw_jerk_max=None,
         ),
@@ -814,8 +820,9 @@ def test_estimator_kwargs_empty_when_config_has_neither_section() -> None:
 
 def test_estimator_kwargs_real_tovez_nocal_json_via_real_model() -> None:
     """End-to-end through the REAL pydantic model -- data/robots/
-    tovez_nocal.json read via RobotConfig.estimator/RobotConfig.planner
-    (132-020's grouped shape)."""
+    tovez_nocal.json read via RobotConfig.estimator/RobotConfig.
+    planner_shaper (132-020's grouped shape, planner_shaper split out by
+    132-017)."""
     from robot_radio.calibration.push import estimator_kwargs
     from robot_radio.config.robot_config import load_robot_config
 
@@ -835,25 +842,26 @@ def test_estimator_kwargs_real_tovez_nocal_json_via_real_model() -> None:
 def test_connect_pushes_estimator_config_and_reports_the_honest_rejection(
     qapp, monkeypatch, tmp_path
 ) -> None:
-    """132-014 retarget: Connect (Sim) with the real tovez_nocal.json active
-    still attempts all nine estimator/shaper fields, but BOTH their new
-    wire targets are honest dead ends (see this section's own header
-    comment) -- 0/9 applied, 9/9 rejected, is now the CORRECT, documented
-    outcome (matching __main__.py's own _push_estimator_config() log line
-    format), not a regression from the pre-132-014 "9/9 applied" behavior:
-    the old "9/9 applied" outcome was itself the trap (EstimatorConfigPatch
-    acking OK while landing nowhere, or -- for the six shaper fields --
-    genuinely live before this sprint's architecture made PLANNER
-    boot-only). A caller reading this log now sees an honest, named
-    rejection instead of a silently-accepted no-op."""
+    """132-014 retarget, FIXED 132-017 (JSON reshape ticket,
+    stakeholder-sanctioned mid-sprint scope addition): Connect (Sim) with
+    the real tovez_nocal.json active still attempts all nine
+    estimator/shaper fields -- PLANNER_SHAPER (the six shaper-ceiling
+    fields) is now LIVE, split out of the boot-only PLANNER group because
+    it carries its own re-appliable setter, so 6/9 applied, 3/9 rejected
+    (matching __main__.py's own _push_estimator_config() log line format)
+    is the CORRECT, documented outcome -- closing the 132-014-era "0/9
+    applied" regression (itself already a fix over the ORIGINAL trap:
+    EstimatorConfigPatch acking OK while landing nowhere). A caller
+    reading this log now sees a real apply for the shaper fields and an
+    honest, named rejection for ESTIMATOR alone."""
     cfg_path = _REPO / "data" / "robots" / "tovez_nocal.json"
     window, transport = _connect_gui_with_config(qapp, monkeypatch, tmp_path, cfg_path)
     try:
         log_text = _log_text(window)
-        assert "pushed 0/9 estimator/shaper fields" in log_text, (
-            f"estimator/shaper push did not report the expected 0/9 apply "
-            f"(both wire targets are honest dead ends this sprint):\n{log_text}"
+        assert "pushed 6/9 estimator/shaper fields" in log_text, (
+            f"estimator/shaper push did not report the expected 6/9 apply "
+            f"(PLANNER_SHAPER is live as of 132-017):\n{log_text}"
         )
-        assert "9 rejected" in log_text, log_text
+        assert "3 rejected" in log_text, log_text
     finally:
         _teardown(qapp, window)

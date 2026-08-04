@@ -65,7 +65,10 @@ _CAPI_SRC = _FIRM_DIR / "config" / "config_parity_capi.cpp"
 # Same order as ConfigParityGroup (config_parity_capi.h) and
 # src/firm/messages/robot_config.h's own struct declaration order --
 # also test_gen_messages_robot_config_emission.py's _ROBOT_CONFIG_GROUPS.
-_GROUPS = ("Geometry", "Motors", "Drive", "WheelControl", "Planner", "Otos", "Estimator")
+# PlannerShaper (132-017): split out of Planner -- see robot_config.proto's
+# PlannerShaper message header comment.
+_GROUPS = ("Geometry", "Motors", "Drive", "WheelControl", "Planner", "PlannerShaper",
+           "Otos", "Estimator")
 
 # robot-config group fields are exclusively float/int32/uint32 (4 bytes,
 # 4-byte-aligned) as of ticket 002's generator -- see robot_config.h. This

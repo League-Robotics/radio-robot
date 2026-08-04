@@ -95,19 +95,6 @@ def test_telemetry_drains_non_empty_after_twist_and_step(loop):
     assert frames[-1].enc is not None
 
 
-@pytest.mark.xfail(
-    reason="132-014 KNOWN GAP, blocked on ticket 017: this file's own `loop` "
-           "fixture configures via configure_from_robot(load_robot_config("
-           "tovez_nocal.json)) -- Tier 2's drive_boot_config_for() (132-014's "
-           "grouped-object fast path) now reads config.drive.duty_per_speed_"
-           "left/right DIRECTLY off that REAL RobotConfig, 0.0 (proto3 "
-           "default) since the JSON is still the OLD 13-section shape. "
-           "App::Drive's own fail-closed gate refuses to write ANY duty at "
-           "duty_per_speed=0.0 (drive.h), so the plant never moves -- same "
-           "root cause as test_sim_configure_from_robot.py's own xfail. Will "
-           "hold again once ticket 017 reshapes the JSON.",
-    strict=True,
-)
 def test_true_pose_advances_after_forward_twist(loop):
     pose0 = loop.get_true_pose()
     loop.twist(200.0, 0.0, 500.0)
@@ -148,14 +135,6 @@ def test_suspend_and_resume_telemetry_reader_toggle_on_telemetry(loop):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    reason="132-014 KNOWN GAP, blocked on ticket 017 -- same root cause as "
-           "test_true_pose_advances_after_forward_twist's own xfail: "
-           "duty_per_speed=0.0 (Tier 2's grouped-object fast path reading a "
-           "REAL, still-unreshaped RobotConfig) makes App::Drive refuse to "
-           "write any duty at all.",
-    strict=True,
-)
 def test_move_twist_distance_leg_advances_true_pose_and_encoders(loop):
     """A straight MoveTwist(v_x)+distance-stop Move drives the plant
     forward -- true pose x advances and encoder telemetry keeps flowing,
@@ -173,11 +152,6 @@ def test_move_twist_distance_leg_advances_true_pose_and_encoders(loop):
         "expected at least one TLMFrame with encoder data during the Move")
 
 
-@pytest.mark.xfail(
-    reason="132-014 KNOWN GAP, blocked on ticket 017 -- same root cause as "
-           "test_true_pose_advances_after_forward_twist's own xfail.",
-    strict=True,
-)
 def test_move_twist_angle_leg_advances_true_heading(loop):
     """A pure-rotation MoveTwist(omega)+angle-stop Move turns the plant --
     true heading advances."""
@@ -434,48 +408,63 @@ def test_tick_thread_slows_to_heartbeat_when_idle_and_resumes_on_command(loop):
 # 119 ticket 001 (kill-the-silent-off-shaping-config-boundary.md), RETARGETED
 # 132-014: configure_from_robot()'s Tier 3 no longer builds one
 # EstimatorConfigPatch envelope -- the nine fields split across TWO
-# ConfigGroupTargets (ESTIMATOR/PLANNER), both honest dead ends now (see
-# push.py's estimator_kwargs() docstring and sim_loop.py's own Tier 3
-# doc comment). The loud off-state flags bit 16
-# (TLMFrame.fault_shaping_disabled) this section also covers is a PERMANENT
-# consequence now, not a "config stripped" edge case: PLANNER is boot-only
-# in FULL (configurator.h's re-appliability table), so NO config, stripped
-# or not, can ever install shaper limits live any more -- shaping is
-# unconditionally off for every configure_from_robot() session until a
-# future ticket gives PLANNER (or a shaper-only subset of it) a live path.
-# See telemetry.h's kFlagFaultShapingDisabled doc comment.
+# ConfigGroupTargets (ESTIMATOR/PLANNER_SHAPER). FIXED, 132-017 (JSON
+# reshape ticket, stakeholder-sanctioned mid-sprint scope addition):
+# PLANNER_SHAPER (the six shaper-ceiling fields) is LIVE now, split out of
+# the boot-only PLANNER group specifically because it carries its own
+# re-appliable setter (Motion::Planner::applyShaperLimits()) -- see
+# push.py's estimator_kwargs() docstring and sim_loop.py's own Tier 3 doc
+# comment. ESTIMATOR remains a permanent, honest dead end. The
+# test_flags_bit16_shaping_disabled_asserts_when_push_stripped xfail below
+# is UNCHANGED by this split -- its own premise is about BOOT-TIME
+# behavior (loadBaked()+the boot-time no-arg install() already turning
+# shaping ON before any Tier 3 push happens at all), not about whether a
+# live per-target push can land; see that test's own xfail reason for the
+# 130-002 composition-root-unification root cause, which this split does
+# not touch.
 # ---------------------------------------------------------------------------
 
 
 def _stripped_config():
-    """The real tovez_nocal.json fixture with config.estimator/config.planner
-    both set to None -- 132-014: a REAL RobotConfig's grouped fields are
-    NEVER None (132-020's shape has no Optional wrapper on any group), so
-    the pre-132-014 approach (null out the nine individual fields via
-    RobotConfig.model_validate()) no longer produces a validation-passing
-    object at all (Estimator.weight_heading_otos etc. are plain floats, not
-    Optional[float]) -- assigning None to the WHOLE group post-construction
-    is the only way left to exercise estimator_kwargs()'s own "section is
-    None -> select nothing" path (its docstring's own contract), while
-    Tier 1/2 still see every other real group intact (motors/wheel_control/
-    drive/geometry/wheels untouched)."""
+    """The real tovez_nocal.json fixture with config.estimator/
+    config.planner_shaper both set to None -- 132-014: a REAL RobotConfig's
+    grouped fields are NEVER None (132-020's shape has no Optional wrapper
+    on any group), so the pre-132-014 approach (null out the nine
+    individual fields via RobotConfig.model_validate()) no longer produces
+    a validation-passing object at all (Estimator.weight_heading_otos etc.
+    are plain floats, not Optional[float]) -- assigning None to the WHOLE
+    group post-construction is the only way left to exercise
+    estimator_kwargs()'s own "section is None -> select nothing" path (its
+    docstring's own contract), while Tier 1/2 still see every other real
+    group intact (motors/wheel_control/drive/geometry/wheels untouched).
+
+    132-017: strips ``planner_shaper``, not ``planner`` -- the six shaper-
+    ceiling fields ``estimator_kwargs()`` selects moved off ``config.
+    planner`` onto their own ``config.planner_shaper`` group when Planner
+    split (JSON reshape ticket, stakeholder-sanctioned mid-sprint scope
+    addition); ``config.planner`` itself (the boot-only remainder) is no
+    longer one of the nine fields this helper's callers care about."""
     from robot_radio.config.robot_config import load_robot_config
 
     cfg = load_robot_config(_ACTIVE_ROBOT_JSON)
     cfg.estimator = None
-    cfg.planner = None
+    cfg.planner_shaper = None
     return cfg
 
 
 def test_configure_from_robot_pushes_estimator_config_and_logs_ack_counts(caplog):
     """The real tovez_nocal.json fixture carries all nine estimator/shaper
     fields -- configure_from_robot()'s Tier 3 push must still ATTEMPT all
-    nine (selection is unaffected by 132-014), but BOTH new wire targets
-    are honest dead ends now (ESTIMATOR: ERR_UNIMPLEMENTED, PLANNER:
-    ERR_NOT_LIVE) -- 0/9 applied, 9/9 rejected is the CORRECT, documented
-    outcome, mirroring __main__.py's own _push_estimator_config() log-line
-    format (applied/rejected logging is still this ticket's own acceptance
-    criterion, just with a different outcome than pre-132-014)."""
+    nine (selection is unaffected by 132-014). FIXED, 132-017 (JSON
+    reshape ticket, stakeholder-sanctioned mid-sprint scope addition):
+    PLANNER_SHAPER (the six shaper-ceiling fields) is now LIVE, split out
+    of the boot-only PLANNER group -- 6/9 applied (the shaper fields),
+    3/9 rejected (ESTIMATOR: permanent ERR_UNIMPLEMENTED) is the CORRECT,
+    documented outcome now, mirroring __main__.py's own
+    _push_estimator_config() log-line format (applied/rejected logging is
+    still this ticket's own acceptance criterion; the 132-014 era's 0/9
+    applied outcome was itself a temporary regression this split closes,
+    not the target state)."""
     import logging as _logging
 
     from robot_radio.config.robot_config import load_robot_config
@@ -486,10 +475,10 @@ def test_configure_from_robot_pushes_estimator_config_and_logs_ack_counts(caplog
         with caplog.at_level(_logging.INFO, logger="robot_radio.io.sim_loop"):
             sim.configure_from_robot(load_robot_config(_ACTIVE_ROBOT_JSON))
         messages = [r.message for r in caplog.records]
-        assert any("pushed 0/9 estimator/shaper fields" in m for m in messages), (
-            f"expected the honest 0/9 apply (both wire targets are dead "
-            f"ends this sprint) log line, got: {messages}")
-        assert any("9 rejected" in m for m in messages), messages
+        assert any("pushed 6/9 estimator/shaper fields" in m for m in messages), (
+            f"expected 6/9 applied (the now-live PLANNER_SHAPER fields) "
+            f"log line, got: {messages}")
+        assert any("3 rejected" in m for m in messages), messages
         assert not any("TIMED OUT" in m for m in messages), messages
     finally:
         sim.disconnect()

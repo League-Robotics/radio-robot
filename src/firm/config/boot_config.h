@@ -234,20 +234,25 @@ PlannerBootConfig defaultPlannerLimits();
 // `Configurator::loadBaked()`.
 //
 // Every consumer group in msg::ConfigGroupTarget gets one function here:
-// Geometry/Motors/Drive/WheelControl/Planner/Otos/Estimator. Motors'
-// travel_calib_left/right and fwd_sign_left/right are the drive-pair-only
-// slice of the per-port arrays defaultMotorConfigs() above bakes (no
-// per-port array in this schema -- see robot_config.proto's own header
-// checklist). Planner's trailing shaper_* fields are the currently-dead
-// Config::ShaperBootConfig surface, carried here on the same "every
-// _require() call site gets a schema field today" posture
-// robot_config.proto documents, flagged there for ticket-015 deletion.
+// Geometry/Motors/Drive/WheelControl/Planner/PlannerShaper/Otos/Estimator.
+// Motors' travel_calib_left/right and fwd_sign_left/right are the
+// drive-pair-only slice of the per-port arrays defaultMotorConfigs() above
+// bakes (no per-port array in this schema -- see robot_config.proto's own
+// header checklist). Planner/PlannerShaper -- SPLIT, 132-017 (JSON
+// reshape ticket, stakeholder-sanctioned mid-sprint scope addition): the
+// six shaper-ceiling fields (a_max/a_decel/alpha_max/alpha_decel/jerk_max/
+// yaw_jerk_max) moved from Planner (boot-only) into their own LIVE
+// PlannerShaper group -- see robot_config.proto's PlannerShaper message
+// header comment for why. The dead Config::ShaperBootConfig surface
+// (unrelated `shaper_*`-prefixed field set) was deleted outright, 132-015
+// -- not to be confused with this split.
 // ---------------------------------------------------------------------------
 msg::Geometry defaultGeometryGroup();
 msg::Motors defaultMotorsGroup();
 msg::Drive defaultDriveGroup();
 msg::WheelControl defaultWheelControlGroup();
 msg::Planner defaultPlannerGroup();
+msg::PlannerShaper defaultPlannerShaperGroup();
 msg::Otos defaultOtosGroup();
 msg::Estimator defaultEstimatorGroup();
 

@@ -186,8 +186,13 @@ def test_protoc_parses_the_full_proto_set(file_descriptor_set):
 
 
 HOST_ONLY_GROUPS = ("Identity", "Connection", "Vision")
+# PlannerShaper (132-017): split out of Planner mid-sprint, stakeholder-
+# sanctioned -- see robot_config.proto's PlannerShaper message header
+# comment for why (the six shaper-ceiling fields carry their own
+# re-appliable setter, unlike the rest of Planner).
 ROBOT_CONFIG_GROUPS = (
-    "Geometry", "Motors", "Drive", "WheelControl", "Planner", "Otos", "Estimator",
+    "Geometry", "Motors", "Drive", "WheelControl", "Planner", "PlannerShaper",
+    "Otos", "Estimator",
 )
 
 
@@ -225,6 +230,7 @@ def test_config_group_target_enum_has_one_value_per_robot_config_group(robot_con
         "Drive": "DRIVE",
         "WheelControl": "WHEEL_CONTROL",
         "Planner": "PLANNER",
+        "PlannerShaper": "PLANNER_SHAPER",
         "Otos": "OTOS",
         "Estimator": "ESTIMATOR",
     }
@@ -335,15 +341,19 @@ REQUIRED_FIELD_HOMES = [
     ("WheelControl", "pid_i_max"),
     ("WheelControl", "pid_kaff"),
     ("WheelControl", "pid_max"),
-    # planner_config_for_config()
+    # planner_config_for_config() -- SPLIT, 132-017 (JSON reshape ticket,
+    # stakeholder-sanctioned mid-sprint scope addition): the six shaper-
+    # ceiling fields moved to their own PlannerShaper group/PLANNER_SHAPER
+    # ConfigGroupTarget (live -- see that message's own header comment for
+    # why), leaving Planner itself boot-only.
     ("Planner", "v_max"),
-    ("Planner", "a_max"),
-    ("Planner", "a_decel"),
+    ("PlannerShaper", "a_max"),
+    ("PlannerShaper", "a_decel"),
     ("Planner", "omega_max"),
-    ("Planner", "alpha_max"),
-    ("Planner", "alpha_decel"),
-    ("Planner", "jerk_max"),
-    ("Planner", "yaw_jerk_max"),
+    ("PlannerShaper", "alpha_max"),
+    ("PlannerShaper", "alpha_decel"),
+    ("PlannerShaper", "jerk_max"),
+    ("PlannerShaper", "yaw_jerk_max"),
     ("Planner", "control_period"),
     ("Planner", "actuation_delay"),
     ("Planner", "settle_rest_velocity"),

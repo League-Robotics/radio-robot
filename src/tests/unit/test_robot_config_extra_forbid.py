@@ -59,6 +59,7 @@ from robot_radio.config.robot_config_generated import (
     Motors,
     Otos,
     Planner,
+    PlannerShaper,
     Vision,
     WheelControl,
 )
@@ -68,9 +69,12 @@ _ROBOTS_DIR = _REPO_ROOT / "data" / "robots"
 
 _MINIMAL_IDENTITY = {"robot_name": "test-bot", "uid": "test-bot"}
 
+# PlannerShaper (132-017): split out of Planner mid-sprint -- added here so
+# the dead-key-stays-excluded check (below) covers it too, not just the
+# nine groups that existed when this ticket-016 test file was written.
 _ALL_GENERATED_GROUPS = (
     Identity, Connection, Vision, Geometry, Motors, Drive, WheelControl,
-    Planner, Otos, Estimator,
+    Planner, PlannerShaper, Otos, Estimator,
 )
 
 # ---------------------------------------------------------------------------
@@ -210,28 +214,25 @@ def test_unrecognized_top_level_section_raises_loudly():
 
 
 # ---------------------------------------------------------------------------
-# AC 3 -- current robot JSONs are expected to FAIL extra='forbid' until
-# ticket 017's JSON reshape. Documented here as a direct, affirmative
-# demonstration (raising IS the currently-correct behavior, so this is a
-# normal passing test, not an xfail) -- see test_robot_config.py's
-# _XFAIL_UNTIL_017 marker for the pre-existing tests this same fact
-# blocks.
+# AC 3 -- UPDATED, 132-017 (JSON reshape landed): data/robots/*.json are now
+# in Config::Robot's grouped shape (the migration script's own commit) --
+# loading a real robot JSON now SUCCEEDS against extra='forbid' instead of
+# raising. This inverts the assertion this ticket-016-era test originally
+# made (see git history for the pre-017 "rejected_until_017_reshape" form,
+# which asserted ValidationError as the then-correct, expected outcome) --
+# see test_robot_config.py's _XFAIL_UNTIL_017-marked tests (132-017 unmarks
+# them the same way) for the ORIGINAL tests whose "checking a value past a
+# successful load" purpose this reshape finally unblocks.
 # ---------------------------------------------------------------------------
 
 @pytest.mark.parametrize("robot_json", ["tovez.json", "tovez_nocal.json", "togov.json"])
-def test_real_robot_json_rejected_until_017_reshape(robot_json):
-    """data/robots/*.json are still in the OLD 13-section shape (ticket
-    017's JSON reshape has not landed): the old calibration/control
-    top-level sections have no matching RobotConfig field at all, and
-    several reshaped groups (connection/vision/geometry) carry old-shape
-    keys the new schema doesn't recognize either. extra='forbid' (this
-    ticket) makes that raise pydantic.ValidationError instead of silently
-    dropping 18+ keys -- this is expected and accepted mid-sprint
-    breakage (this ticket's own note), not a bug to work around here. Not
-    marked xfail: raising IS the correct, intended outcome today, so
-    asserting it is a normal test, not an expected failure -- see
-    test_robot_config.py's _XFAIL_UNTIL_017 for tests whose ORIGINAL
-    purpose (checking a value past a successful load) is what's blocked.
+def test_real_robot_json_accepted_after_017_reshape(robot_json):
+    """data/robots/*.json are now in Config::Robot's grouped shape
+    (132-017's migration script, run once and committed) -- loading a real,
+    on-disk robot JSON succeeds against extra='forbid' with ZERO errors,
+    the headline acceptance criterion of ticket 017 itself. A
+    ValidationError here would mean either the migration script missed a
+    field or the generated schema and the reshaped file have drifted.
     """
-    with pytest.raises(ValidationError):
-        load_robot_config(_ROBOTS_DIR / robot_json)
+    cfg = load_robot_config(_ROBOTS_DIR / robot_json)
+    assert cfg is not None

@@ -133,23 +133,6 @@ def _expected_motor_config(cfg: dict, port: int) -> "dict[str, int]":
 # why vel_filt_alpha's own half of this coverage was retired, 125-003)
 # ---------------------------------------------------------------------------
 
-@pytest.mark.xfail(
-    reason="132-014 KNOWN GAP, blocked on ticket 017: configure_from_robot() "
-           "passes a REAL load_robot_config() RobotConfig into "
-           "motor_boot_config_for(), which (132-014's grouped-object fast "
-           "path) now reads config.motors.fwd_sign_left/right DIRECTLY --  "
-           "but data/robots/*.json are still the OLD 13-section shape, so "
-           "config.motors reads its proto3 zero default (0) instead of the "
-           "real calibration.fwd_sign_left/right (-1/+1) gen_boot_config.py "
-           "(the 'expected' side, called directly against the raw dict) "
-           "still reads correctly. Not a regression: a RobotConfig has no "
-           "way to recover the OLD JSON's real fwd_sign at all post-132-020 "
-           "(it does not retain the raw dict it was parsed from) -- this "
-           "golden-parity check cannot hold again until ticket 017 reshapes "
-           "the JSON so config.motors.fwd_sign_left/right actually carry "
-           "the real values.",
-    strict=True,
-)
 @pytest.mark.parametrize("robot_json", [_TOVEZ_NOCAL_JSON, _TOVEZ_JSON], ids=lambda p: p.stem)
 @pytest.mark.parametrize("port", [1, 2], ids=["left", "right"])
 def test_golden_parity_motor_config(robot_json, port):

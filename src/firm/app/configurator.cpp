@@ -25,6 +25,12 @@ bool isLiveConfigurable(msg::ConfigGroupTarget target) {
     case msg::ConfigGroupTarget::MOTORS:
     case msg::ConfigGroupTarget::OTOS:
     case msg::ConfigGroupTarget::ESTIMATOR:
+    case msg::ConfigGroupTarget::PLANNER_SHAPER:
+      // PLANNER_SHAPER (132-017 split): the six shaper-ceiling fields
+      // carry their own re-appliable setter (Motion::Planner::
+      // applyShaperLimits()) -- see configurator.h's re-appliability
+      // table for why this was split OUT of PLANNER rather than left
+      // boot-only alongside the rest of that group.
       return true;
     case msg::ConfigGroupTarget::GEOMETRY:
     case msg::ConfigGroupTarget::PLANNER:
@@ -87,9 +93,12 @@ void Configurator::persistIfEligible(msg::ConfigGroupTarget target) {
     case msg::ConfigGroupTarget::ESTIMATOR:
     case msg::ConfigGroupTarget::GEOMETRY:
     case msg::ConfigGroupTarget::PLANNER:
+    case msg::ConfigGroupTarget::PLANNER_SHAPER:
     case msg::ConfigGroupTarget::CONFIG_GROUP_UNSPECIFIED:
       // Not in the persisted-tuning precedent set -- configurator.h's own
-      // re-appliability table's PERSISTENCE SCOPE note.
+      // re-appliability table's PERSISTENCE SCOPE note. PLANNER_SHAPER
+      // (132-017, live but never persisted) is here on purpose, same as
+      // DRIVE above -- see that row's own doc comment.
       return;
   }
 
@@ -156,6 +165,7 @@ void Configurator::loadBaked() {
   config_.drive = Config::defaultDriveGroup();
   config_.wheelControl = Config::defaultWheelControlGroup();
   config_.planner = Config::defaultPlannerGroup();
+  config_.plannerShaper = Config::defaultPlannerShaperGroup();
   config_.otos = Config::defaultOtosGroup();
   config_.estimator = Config::defaultEstimatorGroup();
 }
@@ -208,9 +218,12 @@ void Configurator::loadBaked() {
 // built as the active robot, which was silently impossible before this
 // ticket.
 void Configurator::install() {
-  planner_.applyShaperLimits(config_.planner.a_max, config_.planner.a_decel,
-                              config_.planner.alpha_max, config_.planner.alpha_decel,
-                              config_.planner.jerk_max, config_.planner.yaw_jerk_max);
+  // 132-017 split: the six shaper ceilings now live on config_.plannerShaper
+  // (a LIVE ConfigGroupTarget), not config_.planner (the boot-only
+  // remainder) -- see configurator.h's re-appliability table.
+  planner_.applyShaperLimits(config_.plannerShaper.a_max, config_.plannerShaper.a_decel,
+                              config_.plannerShaper.alpha_max, config_.plannerShaper.alpha_decel,
+                              config_.plannerShaper.jerk_max, config_.plannerShaper.yaw_jerk_max);
 
   drive_.setDutyPerSpeed(config_.drive.duty_per_speed_left, config_.drive.duty_per_speed_right);
   drive_.configure(config_);
@@ -276,6 +289,13 @@ msg::ErrCode Configurator::applyGroup(msg::ConfigGroupTarget target, const uint8
       config_.estimator = decoded;
       break;
     }
+    case msg::ConfigGroupTarget::PLANNER_SHAPER: {
+      msg::PlannerShaper decoded;
+      const msg::wire::Result r = msg::wire::decode(decoded, wire, wireLen);
+      if (!r.ok) return r.code;
+      config_.plannerShaper = decoded;
+      break;
+    }
     case msg::ConfigGroupTarget::GEOMETRY:
     case msg::ConfigGroupTarget::PLANNER:
     case msg::ConfigGroupTarget::CONFIG_GROUP_UNSPECIFIED:
@@ -321,6 +341,9 @@ msg::ErrCode Configurator::applyField(msg::ConfigGroupTarget target, uint16_t fi
       break;
     case msg::ConfigGroupTarget::ESTIMATOR:
       r = msg::wire::setField(config_.estimator, fieldNumber, value);
+      break;
+    case msg::ConfigGroupTarget::PLANNER_SHAPER:
+      r = msg::wire::setField(config_.plannerShaper, fieldNumber, value);
       break;
     case msg::ConfigGroupTarget::GEOMETRY:
     case msg::ConfigGroupTarget::PLANNER:
@@ -409,6 +432,16 @@ msg::ErrCode Configurator::install(msg::ConfigGroupTarget target) {
       // reproduce under a new name.
       return msg::ErrCode::ERR_UNIMPLEMENTED;
 
+    case msg::ConfigGroupTarget::PLANNER_SHAPER:
+      // 132-017 split: the shaper ceilings' own re-appliable setter, the
+      // SAME Motion::Planner::applyShaperLimits() call install() (the
+      // no-arg boot fan-out, above) already makes -- a live push and a
+      // boot bake share one code path.
+      planner_.applyShaperLimits(config_.plannerShaper.a_max, config_.plannerShaper.a_decel,
+                                  config_.plannerShaper.alpha_max, config_.plannerShaper.alpha_decel,
+                                  config_.plannerShaper.jerk_max, config_.plannerShaper.yaw_jerk_max);
+      return msg::ErrCode::ERR_NONE;
+
     case msg::ConfigGroupTarget::GEOMETRY:
     case msg::ConfigGroupTarget::PLANNER:
     case msg::ConfigGroupTarget::CONFIG_GROUP_UNSPECIFIED:
@@ -446,6 +479,9 @@ msg::ErrCode Configurator::encodeSnapshot(msg::ConfigGroupTarget target,
       break;
     case msg::ConfigGroupTarget::PLANNER:
       len = msg::wire::encode(config_.planner, out.body_, sizeof(out.body_));
+      break;
+    case msg::ConfigGroupTarget::PLANNER_SHAPER:
+      len = msg::wire::encode(config_.plannerShaper, out.body_, sizeof(out.body_));
       break;
     case msg::ConfigGroupTarget::OTOS:
       len = msg::wire::encode(config_.otos, out.body_, sizeof(out.body_));

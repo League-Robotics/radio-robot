@@ -30,6 +30,9 @@
     "planner": {
       "$ref": "#/definitions/Planner"
     },
+    "planner_shaper": {
+      "$ref": "#/definitions/PlannerShaper"
+    },
     "otos": {
       "$ref": "#/definitions/Otos"
     },
@@ -282,31 +285,7 @@
           "type": "number",
           "minimum": 0.0
         },
-        "a_max": {
-          "type": "number",
-          "minimum": 0.0
-        },
-        "a_decel": {
-          "type": "number",
-          "minimum": 0.0
-        },
         "omega_max": {
-          "type": "number",
-          "minimum": 0.0
-        },
-        "alpha_max": {
-          "type": "number",
-          "minimum": 0.0
-        },
-        "alpha_decel": {
-          "type": "number",
-          "minimum": 0.0
-        },
-        "jerk_max": {
-          "type": "number",
-          "minimum": 0.0
-        },
-        "yaw_jerk_max": {
           "type": "number",
           "minimum": 0.0
         },
@@ -339,6 +318,36 @@
           "minimum": 0.0
         },
         "decel_plan_fraction": {
+          "type": "number",
+          "minimum": 0.0
+        }
+      }
+    },
+    "PlannerShaper": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "a_max": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "a_decel": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "alpha_max": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "alpha_decel": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "jerk_max": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "yaw_jerk_max": {
           "type": "number",
           "minimum": 0.0
         }

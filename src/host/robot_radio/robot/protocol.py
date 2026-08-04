@@ -983,6 +983,9 @@ _CONFIG_GROUP_NAMES: dict[int, str] = {
     robot_config_pb2.DRIVE: "Drive",
     robot_config_pb2.WHEEL_CONTROL: "WheelControl",
     robot_config_pb2.PLANNER: "Planner",
+    # PLANNER_SHAPER (132-017): split out of PLANNER -- see
+    # robot_config.proto's PlannerShaper message header comment.
+    robot_config_pb2.PLANNER_SHAPER: "PlannerShaper",
     robot_config_pb2.OTOS: "Otos",
     robot_config_pb2.ESTIMATOR: "Estimator",
 }
@@ -1649,18 +1652,17 @@ class NezhaProtocol:
     #     closed).
     #   - estimator_config()'s a_max/a_decel/alpha_max/alpha_decel/j_max/
     #     yaw_jerk_max -> folded into robot_config.proto's Planner message
-    #     (fields 2/3/5/6/7/8) instead of keeping their own dedicated live
-    #     wire arm -- PLANNER as a WHOLE is boot-only (ERR_NOT_LIVE,
-    #     configurator.h's own re-appliability table: "only the
-    #     (already-live) shaper ceilings are re-appliable, and those ride
-    #     the boot-time no-arg install(), not a per-target push"). Unlike
-    #     ESTIMATOR's weights, these six fields WERE genuinely live-tunable
-    #     before this sprint (a real, working EstimatorConfigPatch arm) --
-    #     folding them into a now-boot-only group is a real capability this
-    #     sprint's firmware architecture removed, not merely re-labeled;
-    #     flagged here rather than silently absorbed (see sim_loop.py's
-    #     configure_from_robot() Tier 3 for the host-side consequence and
-    #     ticket 014's own completion report for the full note).
+    #     (fields 2/3/5/6/7/8) at first, alongside the group's boot-only
+    #     rest -- a real, temporary capability regression (132-002 through
+    #     132-013): PLANNER as a WHOLE was boot-only (ERR_NOT_LIVE), so a
+    #     live push of these six genuinely-live-tunable-before-132 fields
+    #     got rejected. FIXED, 132-017 (JSON reshape ticket,
+    #     stakeholder-sanctioned mid-sprint scope addition): split into
+    #     their own PlannerShaper message/PLANNER_SHAPER ConfigGroupTarget,
+    #     which IS live (Motion::Planner::applyShaperLimits() was already
+    #     one of the-configuration-object.md's eight safely re-appliable
+    #     setters) -- set_config_field(robot_config_pb2.PLANNER_SHAPER,
+    #     ...) now lands the same way it did before sprint 132.
     # ------------------------------------------------------------------
 
     def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "AckEntry | None":  # [ms]

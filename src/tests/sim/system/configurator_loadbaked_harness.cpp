@@ -100,7 +100,7 @@ int main() {
 
   beginScenario(
       "Configurator::config() reflects the same baked values as the "
-      "active robot JSON's generated defaults, across all 7 groups");
+      "active robot JSON's generated defaults, across all 8 groups");
   const Config::Robot& config = sim.configurator().config();
 
   const msg::Geometry hwGeometry = Config::defaultGeometryGroup();
@@ -125,7 +125,13 @@ int main() {
 
   const msg::Planner hwPlanner = Config::defaultPlannerGroup();
   checkFloatEq(config.planner.v_max, hwPlanner.v_max, "planner.v_max");
-  checkFloatEq(config.planner.a_max, hwPlanner.a_max, "planner.a_max");
+  checkFloatEq(config.planner.heading_hold_gain, hwPlanner.heading_hold_gain,
+               "planner.heading_hold_gain");
+
+  // 132-017 split: the shaper ceilings live on plannerShaper now, not
+  // planner (the boot-only remainder).
+  const msg::PlannerShaper hwPlannerShaper = Config::defaultPlannerShaperGroup();
+  checkFloatEq(config.plannerShaper.a_max, hwPlannerShaper.a_max, "plannerShaper.a_max");
 
   const msg::Otos hwOtos = Config::defaultOtosGroup();
   checkFloatEq(config.otos.linear_scale, hwOtos.linear_scale, "otos.linear_scale");

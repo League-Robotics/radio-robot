@@ -100,9 +100,12 @@ Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainC
 
 // configurePlanner -- see boot_calibration.h's own doc comment.
 void configurePlanner(Motion::Planner& planner, const Config::Robot& config) {
-  planner.applyShaperLimits(config.planner.a_max, config.planner.a_decel,
-                            config.planner.alpha_max, config.planner.alpha_decel,
-                            config.planner.jerk_max, config.planner.yaw_jerk_max);
+  // 132-017 split: the six shaper ceilings live on config.plannerShaper
+  // now (a LIVE ConfigGroupTarget), not config.planner (the boot-only
+  // remainder) -- see robot_config.proto's PlannerShaper header comment.
+  planner.applyShaperLimits(config.plannerShaper.a_max, config.plannerShaper.a_decel,
+                            config.plannerShaper.alpha_max, config.plannerShaper.alpha_decel,
+                            config.plannerShaper.jerk_max, config.plannerShaper.yaw_jerk_max);
 }
 
 // configureMotor -- see boot_calibration.h's own doc comment.

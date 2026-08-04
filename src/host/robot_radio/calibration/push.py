@@ -214,10 +214,10 @@ def estimator_kwargs(config: Any) -> "dict[str, float]":
     """Select the fusion-weight + shaper-ceiling field set from *config*, as
     a flat ``{field_name: value}`` dict spanning TWO ``ConfigGroupTarget``s
     -- ``ESTIMATOR_FIELDS`` (``config.estimator.*``) and
-    ``PLANNER_SHAPER_FIELDS`` (``config.planner.*``). Callers push each key
-    via ``set_config_field(ESTIMATOR or PLANNER, key, value)``, selecting
-    the target with ``key in ESTIMATOR_FIELDS``/``key in
-    PLANNER_SHAPER_FIELDS`` (module-level constants above).
+    ``PLANNER_SHAPER_FIELDS`` (``config.planner_shaper.*``). Callers push
+    each key via ``set_config_field(ESTIMATOR or PLANNER_SHAPER, key,
+    value)``, selecting the target with ``key in ESTIMATOR_FIELDS``/``key
+    in PLANNER_SHAPER_FIELDS`` (module-level constants above).
 
     132-014: retargeted off the retired single ``EstimatorConfigPatch``
     binary arm (``config.proto``, one ``ConfigDelta.estimator`` patch
@@ -235,23 +235,28 @@ def estimator_kwargs(config: Any) -> "dict[str, float]":
         ``EstimatorConfigPatch``'s own "acks 0, lands nowhere" trap,
         closed) -- this function still selects them (read-back honesty),
         it is the CALLER's job to log/tolerate the rejection.
-      - ``config.planner.a_max``/``a_decel``/``alpha_max``/``alpha_decel``/
-        ``jerk_max``/``yaw_jerk_max`` -- ``Motion::VelocityShaper``'s
-        accel/jerk ceilings, formerly their OWN dedicated always-live wire
-        arm (riding the SAME ``EstimatorConfigPatch`` envelope as a
-        "smallest coherent path" convenience, config.proto's own doc
-        comment) -- now folded into ``robot_config.proto``'s ``Planner``
-        message, which is a BOOT-ONLY ``ConfigGroupTarget`` in full
-        (configurator.h's re-appliability table: "only the (already-live)
-        shaper ceilings are re-appliable, and those ride the boot-time
-        no-arg install(), not a per-target push"). This is a REAL
-        capability this sprint's firmware architecture removed, not a
-        renaming -- these six fields WERE genuinely live-tunable before
-        132; a live push now gets the honest ``ERR_NOT_LIVE`` every time.
-        Selected here anyway (read-back honesty, and so a caller sees the
-        same "attempted, rejected, logged" outcome sprint 132's own "no
-        silent no-ops" success criterion asks for) -- not because the push
-        can succeed.
+      - ``config.planner_shaper.a_max``/``a_decel``/``alpha_max``/
+        ``alpha_decel``/``jerk_max``/``yaw_jerk_max`` --
+        ``Motion::Planner``'s accel/jerk ceilings, formerly their OWN
+        dedicated always-live wire arm (riding the SAME
+        ``EstimatorConfigPatch`` envelope as a "smallest coherent path"
+        convenience, config.proto's own doc comment), then folded into
+        ``robot_config.proto``'s ``Planner`` message (a BOOT-ONLY
+        ``ConfigGroupTarget`` in full, 132-002 through 132-013) -- a real,
+        if temporary, capability REGRESSION this sprint's own architecture
+        introduced (a live push got the honest ``ERR_NOT_LIVE`` every
+        time, not a renaming).
+
+        FIXED, 132-017 (JSON reshape ticket, stakeholder-sanctioned
+        mid-sprint scope addition): the six fields split OUT of Planner
+        into their own ``PlannerShaper`` group/``PLANNER_SHAPER``
+        ``ConfigGroupTarget``, which IS live (its own setter,
+        ``Motion::Planner::applyShaperLimits()``, was already one of the
+        issue's eight safely re-appliable setters -- the coarse PLANNER
+        grouping was the only thing forcing it boot-only). Selected from
+        ``config.planner_shaper`` now, not ``config.planner`` -- the
+        pydantic model shape moved with the split (``robot_config.py``'s
+        own ``planner_shaper`` field).
 
     Each key is present only when *config* carries a non-``None`` value for
     it (``getattr`` returns ``None`` when the source group itself is
@@ -267,9 +272,9 @@ def estimator_kwargs(config: Any) -> "dict[str, float]":
         if value is not None:
             kwargs[attr] = float(value)
 
-    planner = getattr(config, "planner", None)
+    planner_shaper = getattr(config, "planner_shaper", None)
     for attr in PLANNER_SHAPER_FIELDS:
-        value = getattr(planner, attr, None) if planner is not None else None
+        value = getattr(planner_shaper, attr, None) if planner_shaper is not None else None
         if value is not None:
             kwargs[attr] = float(value)
 

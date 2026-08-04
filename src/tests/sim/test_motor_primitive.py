@@ -31,7 +31,6 @@ import math
 import pathlib
 
 import pytest
-from pydantic import ValidationError
 
 from robot_radio.io.sim_loop import SimLoop
 from robot_radio.testgui.transport import _sim_lib_path
@@ -206,30 +205,12 @@ def main() -> None:
 # leaving WheelPlant's own physics and the wire-level encoder-read path
 # unchanged -- see sim_plant.h's setFwdSign() comment for the full fix.
 
-# 132-016: RobotConfig now sets extra="forbid" (every group, and the root).
-# data/robots/tovez_nocal.json is still OLD-shaped (ticket 017's reshape
-# has not landed), so ideal_loop()'s load_robot_config() call now raises
-# pydantic.ValidationError -- see robot_config.py's own module docstring
-# ("KNOWN GAP, mid-sprint"). xfail(strict=True, raises=ValidationError)
-# pins both tests below to this EXACT failure mode.
-_XFAIL_UNTIL_017 = pytest.mark.xfail(
-    strict=True,
-    raises=ValidationError,
-    reason=(
-        "data/robots/tovez_nocal.json still OLD-shaped; extra='forbid' "
-        "(132-016) rejects it until ticket 017's JSON reshape lands"
-    ),
-)
-
-
-@_XFAIL_UNTIL_017
 def test_distance_encoder_and_otos_match_truth():
     d = distance_probe(150.0, 2.0)
     assert abs(d["enc"] - d["true_x"]) < 2.0, d
     assert abs(d["otos_x"] - d["true_x"]) < 2.0, d
 
 
-@_XFAIL_UNTIL_017
 def test_heading_encoder_and_otos_match_truth():
     h = heading_probe(1.0, 2.0)
     assert abs(h["pose_h"] - h["true_h"]) < 1.0, h

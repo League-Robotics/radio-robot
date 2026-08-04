@@ -16,9 +16,6 @@ tests/unit.
 import json
 from pathlib import Path
 
-import pytest
-from pydantic import ValidationError
-
 from robot_radio.config.robot_config import RobotConfig, load_robot_config
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -26,26 +23,15 @@ _ROBOTS_DIR = _REPO_ROOT / "data" / "robots"
 
 _MINIMAL_IDENTITY = {"robot_name": "test-bot", "uid": "test-bot"}
 
-# 132-016: RobotConfig (and every group it composes) now sets
-# extra="forbid". data/robots/*.json are still in the OLD 13-section
-# shape (ticket 017's JSON reshape has not landed), so load_robot_config()
-# now raises pydantic.ValidationError for every real, on-disk profile
-# instead of silently loading it with 18+ dropped/mismatched keys -- see
-# robot_config.py's own module docstring ("KNOWN GAP, mid-sprint") for the
-# full accounting. The three tests below exercise otos_untrusted through a
-# REAL file load and so are blocked on the same reshape; xfail(strict=True,
-# raises=ValidationError) pins them to this EXACT expected failure mode --
-# ticket 017 landing should flip these to unexpected passes (caught by
-# strict=True), which is the cue to drop the marker and restore the
-# original assertions, not treat them as still-broken.
-_XFAIL_UNTIL_017 = pytest.mark.xfail(
-    strict=True,
-    raises=ValidationError,
-    reason=(
-        "data/robots/*.json still OLD-shaped; extra='forbid' (132-016) "
-        "rejects real profiles until ticket 017's JSON reshape lands"
-    ),
-)
+# 132-016 added extra="forbid" (RobotConfig and every group it composes),
+# which made load_robot_config() raise pydantic.ValidationError for every
+# real, on-disk profile until 132-017's JSON reshape landed (data/robots/
+# *.json were still in the OLD 13-section shape) -- the three tests below
+# were xfail(strict=True, raises=ValidationError)-marked for that span.
+# 132-017 (JSON reshape, this ticket) is the cue documented on that former
+# marker itself: the reshape flipped them to unexpected passes, so the
+# marker is dropped here and the original real-file-load assertions
+# restored.
 
 
 def test_otos_untrusted_defaults_false_when_omitted():
@@ -80,39 +66,30 @@ def test_otos_untrusted_round_trips_false_explicit():
     assert cfg.model_dump()["geometry"]["otos_untrusted"] is False
 
 
-@_XFAIL_UNTIL_017
 def test_tovez_profile_marks_otos_untrusted():
     """The rig's actual profile (tovez.json — the one active_robot.json
     points at and match_robot_by_id() resolves to for device_announcement_
     name='tovez', per 093's active-pointer switch) carries the persisted
     flag, so no manual per-session SET is needed to record the bench rig's
     OTOS-decoupled-from-wheels fact.
-
-    132-016: xfail until ticket 017 — see _XFAIL_UNTIL_017 above.
     """
     cfg = load_robot_config(_ROBOTS_DIR / "tovez.json")
     assert cfg.geometry.otos_untrusted is True
 
 
-@_XFAIL_UNTIL_017
 def test_tovez_nocal_profile_marks_otos_untrusted():
     """tovez_nocal.json is the calibration-stripped variant of the same
     physical robot (same connection.serial_last_6) — it carries the same
     mounting fact so the flag survives even if active_robot.json is ever
     pointed back at it.
-
-    132-016: xfail until ticket 017 — see _XFAIL_UNTIL_017 above.
     """
     cfg = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
     assert cfg.geometry.otos_untrusted is True
 
 
-@_XFAIL_UNTIL_017
 def test_togov_profile_unaffected():
     """togov.json (a different physical robot, mecanum drivetrain) is out
     of scope for this ticket and keeps the default (unset -> False).
-
-    132-016: xfail until ticket 017 — see _XFAIL_UNTIL_017 above.
     """
     cfg = load_robot_config(_ROBOTS_DIR / "togov.json")
     assert cfg.geometry.otos_untrusted is False

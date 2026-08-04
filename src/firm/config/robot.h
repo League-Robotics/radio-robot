@@ -69,7 +69,8 @@ struct Robot {
   msg::Motors motors;
   msg::Drive drive;
   msg::WheelControl wheelControl;
-  msg::Planner planner;
+  msg::Planner planner;            // boot-only: v_max/omega_max/control_period/... (132-017 split)
+  msg::PlannerShaper plannerShaper;  // live: a_max/a_decel/alpha_max/alpha_decel/jerk_max/yaw_jerk_max (132-017 split)
   msg::Otos otos;
   msg::Estimator estimator;
 

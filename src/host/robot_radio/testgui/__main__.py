@@ -2264,21 +2264,24 @@ def _build_main_window():  # type: ignore[return]
         (132-013) -- the same nine fields now split across TWO
         ``ConfigGroupTarget``s (``push.ESTIMATOR_FIELDS``/
         ``push.PLANNER_SHAPER_FIELDS``), addressed via
-        ``NezhaProtocol.set_config_field()``. BOTH targets are honest dead
-        ends now (see ``push.estimator_kwargs()``'s own docstring):
-        ``ESTIMATOR`` decodes but ``install(ESTIMATOR)`` permanently
-        returns ``ERR_UNIMPLEMENTED`` (``App::StateEstimator`` was already
-        deleted as dead code before this sprint); ``PLANNER`` is boot-only
-        in full (``ERR_NOT_LIVE``) -- the six shaper-ceiling fields this
-        function used to land LIVE (closing
-        ``clasi/issues/wire-testgui-live-push-of-estimator-stop-lead.md``)
-        no longer can, a real capability sprint 132's firmware architecture
-        removed, not a rename. Still pushed and logged every Connect/
-        robot-select, both transports -- "selecting a robot must be
-        authoritative" and "no silent no-ops" both still apply even though
-        neither group can land any more; a caller reading the log sees an
-        honest, named rejection instead of the old patch's silent "acks 0,
-        lands nowhere."
+        ``NezhaProtocol.set_config_field()``. ``ESTIMATOR`` is an honest
+        dead end (see ``push.estimator_kwargs()``'s own docstring): it
+        decodes but ``install(ESTIMATOR)`` permanently returns
+        ``ERR_UNIMPLEMENTED`` (``App::StateEstimator`` was already deleted
+        as dead code before this sprint). ``PLANNER_SHAPER`` -- FIXED,
+        132-017 (JSON reshape ticket, stakeholder-sanctioned mid-sprint
+        scope addition): the six shaper-ceiling fields this function
+        pushes now land LIVE again (closing
+        ``clasi/issues/wire-testgui-live-push-of-estimator-stop-lead.md``
+        for a second time), split out of the boot-only ``PLANNER`` group
+        into their own re-appliable ``ConfigGroupTarget`` -- the temporary
+        regression sprint 132's own schema unification introduced
+        (132-002 through 132-013) is closed. Still pushed and logged every
+        Connect/robot-select, both transports -- "selecting a robot must
+        be authoritative" and "no silent no-ops" both still apply; a
+        caller reading the log sees an honest, named rejection for
+        ESTIMATOR and a real apply for PLANNER_SHAPER, instead of the old
+        patch's silent "acks 0, lands nowhere."
 
         ``proto`` is resolved the SAME way for both transport kinds
         (``SimTransport._config_proto`` / ``_HardwareTransport.protocol``)
@@ -2340,7 +2343,7 @@ def _build_main_window():  # type: ignore[return]
         rejected: "list[str]" = []
         for field_name, value in kwargs.items():
             target = (robot_config_pb2.ESTIMATOR if field_name in ESTIMATOR_FIELDS
-                      else robot_config_pb2.PLANNER)
+                      else robot_config_pb2.PLANNER_SHAPER)
             try:
                 ack = set_config_field(target, field_name, value)
             except Exception as exc:  # noqa: BLE001 — log, don't kill the GUI
@@ -2354,8 +2357,9 @@ def _build_main_window():  # type: ignore[return]
                 f"[CAL] pushed {len(applied)}/{len(kwargs)} estimator/shaper "
                 f"fields from robot '{cfg.robot_name}' ({sorted(applied)}) — "
                 f"{len(rejected)} rejected ({sorted(rejected)}): ESTIMATOR has "
-                f"no live consumer (ERR_UNIMPLEMENTED), PLANNER is boot-only "
-                f"(ERR_NOT_LIVE) as of sprint 132's own re-appliability table"
+                f"no live consumer (ERR_UNIMPLEMENTED) as of sprint 132's own "
+                f"re-appliability table -- PLANNER_SHAPER fields rejecting "
+                f"would be a regression, not expected (132-017)"
             )
         else:
             _append_log(

@@ -35,35 +35,29 @@ from __future__ import annotations
 import types
 from pathlib import Path
 
-import pytest
-from pydantic import ValidationError
-
 from robot_radio.calibration.push import calibration_commands, calibration_kwargs
 from robot_radio.config.robot_config import load_robot_config
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _ROBOTS_DIR = _REPO_ROOT / "data" / "robots"
 
-# 132-016: RobotConfig now sets extra="forbid" (every group, and the root).
-# data/robots/*.json are still OLD-shaped (ticket 017's reshape has not
-# landed), so load_robot_config() now raises pydantic.ValidationError for
-# every real, on-disk profile instead of silently loading it -- see
-# robot_config.py's own module docstring ("KNOWN GAP, mid-sprint"). The
-# three snapshot tests below load a real profile as their FIRST step, so
-# they are blocked on the same reshape; xfail(strict=True,
-# raises=ValidationError) pins them to this EXACT failure mode -- ticket
-# 017 landing should flip these to unexpected passes (caught by
-# strict=True), the cue to drop the marker and re-pin real snapshots
-# (this module's own header comment already flags _EXPECTED_COMMANDS_PRE_017
-# as a placeholder ticket 017 must re-differentiate).
-_XFAIL_UNTIL_017 = pytest.mark.xfail(
-    strict=True,
-    raises=ValidationError,
-    reason=(
-        "data/robots/*.json still OLD-shaped; extra='forbid' (132-016) "
-        "rejects real profiles until ticket 017's JSON reshape lands"
-    ),
-)
+# 132-016 added extra="forbid" (RobotConfig and every group it composes),
+# which made load_robot_config() raise pydantic.ValidationError for every
+# real, on-disk profile -- the three snapshot tests below were
+# xfail(strict=True, raises=ValidationError)-marked for that span, pinned
+# to a single shared placeholder snapshot (_EXPECTED_COMMANDS_PRE_017)
+# both profiles produced identically (tw/rotSlip aside, both profiles'
+# motors/wheel_control groups read their proto3 zero defaults before the
+# reshape gave them real, DIFFERENT values). 132-017 (JSON reshape, this
+# ticket) is the cue documented on that former marker itself: the reshape
+# flipped these to unexpected passes, so the marker is dropped and the
+# two profiles now get their own, genuinely different, re-differentiated
+# snapshots (see _EXPECTED_COMMANDS_TOVEZ/_EXPECTED_COMMANDS_TOVEZ_NOCAL
+# below) -- tovez.json carries real travel_calib_left/right (0.7165/
+# 0.7077) and a real OTOS scale (1.0275/0.987); tovez_nocal.json (the
+# deliberate no-calibration profile) has neither, so ml/mr fall back to
+# the wheel-diameter-derived default and OL/OA read the OTOS identity
+# (1.0/1.0).
 
 
 def _cfg(*, motors=None, wheel_control=None, wheel_diameter_mm=80.77, robot_name="r"):
@@ -141,13 +135,27 @@ def test_calibration_kwargs_never_includes_otos_keys() -> None:
 
 # ---------------------------------------------------------------------------
 # 2. calibration_commands() output -- snapshot pins against both real
-#    shipped profiles. 132-014: both currently produce the SAME snapshot --
-#    see this module's own header comment for why (expected, ticket-017-
-#    blocked, not a test bug).
+#    shipped profiles. 132-017 re-differentiated these: tovez.json carries
+#    real per-wheel travel_calib/OTOS-scale measurements; tovez_nocal.json
+#    (the deliberate no-calibration profile) does not, so it falls back to
+#    the wheel-diameter-derived ml/mr default and the OTOS identity scale.
 # ---------------------------------------------------------------------------
 
 
-_EXPECTED_COMMANDS_PRE_017 = [
+_EXPECTED_COMMANDS_TOVEZ = [
+    ("SET ml=0.716500", 200),
+    ("SET mr=0.707700", 200),
+    ("SET pid.kp=0", 200),
+    ("SET pid.ki=0", 200),
+    ("SET pid.kff=0", 200),
+    ("SET pid.iMax=0", 200),
+    ("SET pid.kaw=0", 200),
+    ("OI", 500),
+    ("OL 1.0275", 200),
+    ("OA 0.987", 200),
+]
+
+_EXPECTED_COMMANDS_TOVEZ_NOCAL = [
     ("SET ml=0.704851", 200),
     ("SET mr=0.704851", 200),
     ("SET pid.kp=0", 200),
@@ -156,39 +164,32 @@ _EXPECTED_COMMANDS_PRE_017 = [
     ("SET pid.iMax=0", 200),
     ("SET pid.kaw=0", 200),
     ("OI", 500),
-    ("OL 0", 200),
-    ("OA 0", 200),
+    ("OL 1", 200),
+    ("OA 1", 200),
 ]
 
 
-@_XFAIL_UNTIL_017
 def test_calibration_commands_tovez_json_snapshot() -> None:
     cfg = load_robot_config(_ROBOTS_DIR / "tovez.json")
 
     cmds = calibration_commands(cfg)
 
-    assert cmds == _EXPECTED_COMMANDS_PRE_017
+    assert cmds == _EXPECTED_COMMANDS_TOVEZ
 
 
-@_XFAIL_UNTIL_017
 def test_calibration_commands_tovez_nocal_json_snapshot() -> None:
     cfg = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
 
     cmds = calibration_commands(cfg)
 
-    assert cmds == _EXPECTED_COMMANDS_PRE_017
+    assert cmds == _EXPECTED_COMMANDS_TOVEZ_NOCAL
 
 
-@_XFAIL_UNTIL_017
 def test_calibration_commands_is_calibration_kwargs_formatted_plus_otos() -> None:
     """calibration_commands() must be exactly calibration_kwargs()'s items,
     formatted, in the same order, with the OI/OL/OA suffix -- the "thin
     wrapper" acceptance criterion, asserted structurally rather than by
     re-pinning a third snapshot.
-
-    132-016: xfail until ticket 017 -- see _XFAIL_UNTIL_017 above (the
-    loop's FIRST load_robot_config() call raises before either profile is
-    reached).
     """
     for name in ("tovez.json", "tovez_nocal.json"):
         cfg = load_robot_config(_ROBOTS_DIR / name)

@@ -36,6 +36,7 @@ hand-maintained lists.)
 | `gen_boot_config.py` | `build.py` codegen (every build) | `src/firm/config/boot_config.cpp` from the active robot's `data/robots/*.json` | live |
 | `gen_version.py` | `build.py` codegen (every build) | `src/firm/types/version_generated.h` from the root `pyproject.toml` version | live |
 | `gen_default_config.py` | nothing — `build.py` explicitly skips it | would produce `src/firm/robot/DefaultConfig.cpp` | **dead** — targets a `src/firm/robot/` directory that does not exist post-077 rebuild; see §6 |
+| `migrate_robot_json_to_grouped_shape.py` | by hand, once (132-017) | reshaped `data/robots/{tovez,togov,tovez_nocal}.json` (the OLD 13-section `control`/`calibration` dumping-ground shape into `Config::Robot`'s grouped shape) | **one-time, run and committed 2026-08-04** — not invoked by `build.py`; kept only as a record of the reshape and in case a future robot JSON needs the same migration from an old-shaped source |
 
 `gen_boot_config.py` and `gen_default_config.py` look like siblings (both
 "bake a robot JSON into a generated C++ config file") but are

@@ -119,13 +119,7 @@ class WheelControl(BaseModel):
 class Planner(BaseModel):
     model_config = ConfigDict(extra="forbid")
     v_max: float = 0.0
-    a_max: float = 0.0
-    a_decel: float = 0.0
     omega_max: float = 0.0
-    alpha_max: float = 0.0
-    alpha_decel: float = 0.0
-    jerk_max: float = 0.0
-    yaw_jerk_max: float = 0.0
     control_period: float = 0.0
     actuation_delay: float = 0.0
     settle_rest_velocity: float = 0.0
@@ -134,6 +128,15 @@ class Planner(BaseModel):
     settle_epsilon_angular: float = 0.0
     heading_hold_gain: float = 0.0
     decel_plan_fraction: float = 0.0
+
+class PlannerShaper(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    a_max: float = 0.0
+    a_decel: float = 0.0
+    alpha_max: float = 0.0
+    alpha_decel: float = 0.0
+    jerk_max: float = 0.0
+    yaw_jerk_max: float = 0.0
 
 class Otos(BaseModel):
     model_config = ConfigDict(extra="forbid")

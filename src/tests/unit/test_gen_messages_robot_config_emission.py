@@ -51,7 +51,8 @@ if str(_SCRIPTS_DIR) not in sys.path:
 import gen_messages  # noqa: E402  (path must be set up before this import)
 
 _ROBOT_CONFIG_GROUPS = (
-    "Geometry", "Motors", "Drive", "WheelControl", "Planner", "Otos", "Estimator",
+    "Geometry", "Motors", "Drive", "WheelControl", "Planner", "PlannerShaper",
+    "Otos", "Estimator",
 )
 _HOST_ONLY_GROUPS = ("Identity", "Connection", "Vision")
 _ALL_GROUPS = _HOST_ONLY_GROUPS + _ROBOT_CONFIG_GROUPS
@@ -152,10 +153,10 @@ def test_cpp_header_compiles_standalone_under_host_build(tmp_path, robot_config_
         '#include "messages/robot_config.h"\n'
         "int main() {\n"
         "    msg::Geometry g; msg::Motors mo; msg::Drive d; msg::WheelControl wc;\n"
-        "    msg::Planner pl; msg::Otos ot; msg::Estimator es;\n"
+        "    msg::Planner pl; msg::PlannerShaper ps; msg::Otos ot; msg::Estimator es;\n"
         "    msg::SetConfigGroup scg; msg::GetConfig gc; msg::ConfigSnapshot cs;\n"
         "    msg::SetConfigField scf;\n"
-        "    (void)g; (void)mo; (void)d; (void)wc; (void)pl; (void)ot; (void)es;\n"
+        "    (void)g; (void)mo; (void)d; (void)wc; (void)pl; (void)ps; (void)ot; (void)es;\n"
         "    (void)scg; (void)gc; (void)cs; (void)scf;\n"
         "    return 0;\n"
         "}\n"

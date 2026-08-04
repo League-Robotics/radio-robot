@@ -23,10 +23,12 @@ const char kRobotProfileName[] = "tovez";
 const char kDrivetrainType[] = "differential";
 
 void defaultMotorConfigs(msg::MotorConfig* out) {
-    // Velocity PID gains — baked from the robot JSON's control.vel_* keys
-    // (093: now in the NezhaMotor duty [-1,1] plant scale, see the JSON's
-    // control._vel_gains_domain marker), falling back to bench-tuned firmware
-    // defaults when absent. Live-correctable per motor via `DEV M <n> CFG`.
+    // Velocity PID gains — baked from the robot JSON's motors.vel_* keys
+    // (132-017 JSON reshape retarget -- was control.vel_* before the
+    // grouped-shape migration; 093: now in the NezhaMotor duty [-1,1]
+    // plant scale, see the JSON's motors._vel_gains_domain marker),
+    // falling back to bench-tuned firmware defaults when absent.
+    // Live-correctable per motor via `DEV M <n> CFG`.
     msg::Gains velGains;
     velGains.kp = 0.0016f;
     velGains.ki = 0.005f;
@@ -38,32 +40,38 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
         out[i] = msg::MotorConfig();
         out[i].setPort(i + 1);
         out[i].setVelGains(velGains);
-        // EMA coeff — from control.vel_filt (fallback default); a=0 would pin
-        // reported velocity at 0 forever regardless of real motion.
+        // EMA coeff — from motors.vel_filt_alpha (fallback default); a=0
+        // would pin reported velocity at 0 forever regardless of real
+        // motion.
         out[i].setVelFiltAlpha(0.3f);
         // Write-shaping floor/hold — baked from the robot JSON's
-        // control.output_deadband/control.reversal_dwell_ms (sprint 114
-        // ticket 003, config-as-truth completion). REQUIRED as of this
+        // motors.output_deadband/motors.reversal_dwell (132-017 JSON
+        // reshape retarget -- was control.output_deadband/control.
+        // reversal_dwell_ms before the grouped-shape migration; sprint 114
+        // ticket 003, config-as-truth completion). REQUIRED as of that
         // ticket: Devices::NezhaMotor no longer substitutes a ship default
         // when these arrive unset, so every build must emit a real value.
         out[i].setOutputDeadband(0.03f);   // [-1,1] fraction
         out[i].setReversalDwell(100.0f);   // [ms]
     }
 
-    // Per-port forward-sign — baked from the robot JSON's calibration.
-    // fwd_sign_{left,right} for the drive-pair ports
-    // (ports 1/2); other ports use the bench placeholder
-    // (1). The drive pair is mirror-mounted, so left/right are
-    // expected to differ in sign (088-002 —
-    // clasi/issues/tovez-drive-motor-reversed-fwd-sign.md).
+    // Per-port forward-sign — baked from the robot JSON's motors.
+    // fwd_sign_{left,right} (132-017 JSON reshape retarget -- was
+    // calibration.fwd_sign_{left,right} before the grouped-shape
+    // migration) for the drive-pair ports (ports 1/2);
+    // other ports use the bench placeholder (1). The drive pair is
+    // mirror-mounted, so left/right are expected to differ in sign
+    // (088-002 — clasi/issues/tovez-drive-motor-reversed-fwd-sign.md).
     out[0].setFwdSign(1);   // port 1
     out[1].setFwdSign(-1);   // port 2
     out[2].setFwdSign(1);   // port 3
     out[3].setFwdSign(1);   // port 4
 
     // Per-port encoder travel calibration — baked from the robot JSON's
-    // calibration.mm_per_wheel_deg_{left,right} for the drive-pair ports
-    // (ports 1/2); other ports use the bench placeholder.
+    // motors.travel_calib_{left,right} (132-017 JSON reshape retarget --
+    // was calibration.mm_per_wheel_deg_{left,right} before the
+    // grouped-shape migration) for the drive-pair ports (ports
+    // 1/2); other ports use the bench placeholder.
     out[0].setTravelCalib(0.7165f);   // [mm/deg] port 1
     out[1].setTravelCalib(0.7077f);   // [mm/deg] port 2
     out[2].setTravelCalib(0.487f);   // [mm/deg] port 3
@@ -99,9 +107,12 @@ msg::DrivetrainConfig defaultDrivetrainConfig() {
 OtosBootConfig defaultOtosBootConfig() {
     // 086-005 — additive to defaultMotorConfigs()/defaultDrivetrainConfig()
     // above; no existing mapping touched. Baked from the robot JSON's
-    // geometry.odometry_offset_mm (x/y/yaw_rad) and calibration.
-    // otos_linear_scale/otos_angular_scale where present; identity defaults
-    // (zero offset, 1.0 scale) otherwise. Boot-time-baked only -- see
+    // otos.offset_x/offset_y/offset_yaw and otos.linear_scale/
+    // angular_scale (132-017 JSON reshape retarget -- was geometry.
+    // odometry_offset_mm.{x,y,yaw_rad} + calibration.otos_linear_scale/
+    // otos_angular_scale before the grouped-shape migration) where
+    // present; identity defaults (zero offset, 1.0 scale) otherwise.
+    // Boot-time-baked only -- see
     // OtosBootConfig's own doc comment (src/firm/config/boot_config.h) for why
     // this is never a live SET/wire surface.
     OtosBootConfig cfg;
@@ -115,11 +126,13 @@ OtosBootConfig defaultOtosBootConfig() {
 
 EstimatorBootConfig defaultEstimatorConfig() {
     // 117 (predict-to-now estimator v1) — fail-closed baked from the robot
-    // JSON's estimator.weight_heading_otos/weight_omega_otos/staleness_ms
-    // (data/robots/robot_config.schema.json). Encoder-only v1 (stakeholder
-    // decision): both blend weights are committed 0.0 in every robot JSON
-    // this sprint -- see that JSON's own inline comment for the
-    // staleness_ms reasoning. NOT a live SET/wire surface itself -- see
+    // JSON's estimator.weight_heading_otos/weight_omega_otos/staleness
+    // (data/robots/robot_config.schema.json; 132-017 JSON reshape retarget
+    // -- was estimator.staleness_ms before the grouped-shape migration).
+    // Encoder-only v1 (stakeholder decision): both blend weights are
+    // committed 0.0 in every robot JSON this sprint -- see that JSON's own
+    // inline comment for the staleness reasoning. NOT a live SET/wire
+    // surface itself -- see
     // EstimatorBootConfig's own doc comment (src/firm/config/boot_config.h)
     // for the separate, volatile EstimatorConfigPatch live-tuning path.
     EstimatorBootConfig cfg;
@@ -190,9 +203,12 @@ PlannerBootConfig defaultPlannerLimits() {
 // ---------------------------------------------------------------------------
 
 msg::Geometry defaultGeometryGroup() {
-    // geometry.trackwidth, calibration.rotational_slip/rotation_gain*/
-    // rotation_offset*_deg -- see trackwidth_for_config()/
-    // rotational_slip_for_config()/rotation_calibration_for_config() above.
+    // geometry.trackwidth/rotational_slip/rotation_gain_pos/
+    // rotation_offset/rotation_gain_neg/rotation_offset_neg (132-017 JSON
+    // reshape retarget -- rotational_slip/rotation_* used to live under
+    // `calibration` before the grouped-shape migration) -- see
+    // trackwidth_for_config()/rotational_slip_for_config()/
+    // rotation_calibration_for_config() above.
     msg::Geometry cfg;
     cfg.trackwidth = 128.0f;                  // [mm]
     cfg.rotational_slip = 0.9117f;                // scrub: actual/ideal rotation, 0 = uncalibrated
@@ -207,9 +223,10 @@ msg::Motors defaultMotorsGroup() {
     // Drive-pair-only slice of travel_calib_for_ports()/fwd_sign_for_ports()
     // (ports 1/2 only -- Config::Robot's schema has no
     // per-port array, see this file's own comment above) plus
-    // control.vel_*/output_deadband/reversal_dwell_ms, shared by both bound
-    // motors (vel_gains_for_config()/output_deadband_for_config()/
-    // reversal_dwell_for_config() above).
+    // motors.vel_*/output_deadband/reversal_dwell (132-017 JSON reshape
+    // retarget -- all lived under `control` before the grouped-shape
+    // migration), shared by both bound motors (vel_gains_for_config()/
+    // output_deadband_for_config()/reversal_dwell_for_config() above).
     msg::Motors cfg;
     cfg.travel_calib_left = 0.7165f;    // [mm/deg]
     cfg.travel_calib_right = 0.7077f;  // [mm/deg]
@@ -227,10 +244,13 @@ msg::Motors defaultMotorsGroup() {
 }
 
 msg::Drive defaultDriveGroup() {
-    // control.duty_per_speed_left/right/crawl_pulse (drive_config_for_config()
-    // above) plus the Stage-A per-wheel commanded->actual correction
-    // (wheel_correction_for_config() above) -- this sprint's headline
-    // per-wheel drive calibration surface (SUC-006).
+    // drive.duty_per_speed_left/right/crawl_pulse (132-017 JSON reshape
+    // retarget -- was control.duty_per_speed_left/right/crawl_pulse
+    // before the grouped-shape migration; drive_config_for_config() above)
+    // plus the Stage-A per-wheel commanded->actual correction (drive.
+    // wheel_gain_*/wheel_intercept_*, wheel_correction_for_config() above)
+    // -- this sprint's headline per-wheel drive calibration surface
+    // (SUC-006).
     msg::Drive cfg;
     cfg.duty_per_speed_left = 0.001182f;    // [duty/(mm/s)]
     cfg.duty_per_speed_right = 0.001182f;  // [duty/(mm/s)]
@@ -247,8 +267,10 @@ msg::Drive defaultDriveGroup() {
 }
 
 msg::WheelControl defaultWheelControlGroup() {
-    // control.wheel_*/wheel_pid_*/wheel_deficit_* --
-    // wheel_controller_config_for_config() above.
+    // wheel_control.v_min/bias_max/tau_adapt/a_steady/deficit_threshold/
+    // deficit_window/pid_* (132-017 JSON reshape retarget -- was
+    // control.wheel_*/wheel_pid_*/wheel_deficit_* before the grouped-shape
+    // migration) -- wheel_controller_config_for_config() above.
     msg::WheelControl cfg;
     cfg.v_min = 99.7f;                       // [mm/s]
     cfg.bias_max = 23.8f;                 // [mm/s]
@@ -265,20 +287,23 @@ msg::WheelControl defaultWheelControlGroup() {
 }
 
 msg::Planner defaultPlannerGroup() {
-    // planner.* (planner_config_for_config() above). The formerly-DEAD
-    // shaper_* fields (control.a_max/a_decel/alpha_max/alpha_decel/j_max/
-    // yaw_jerk_max) are DELETED, 132-015 -- see robot_config.proto's own
-    // Planner message (now `reserved 17 to 22`) and this module's own
-    // note at defaultShaperConfig()'s former spot above.
+    // planner.* (planner_config_for_config() above) -- the BOOT-ONLY
+    // remainder. The six shaper-ceiling fields (a_max/a_decel/alpha_max/
+    // alpha_decel/jerk_max/yaw_jerk_max) are SPLIT OUT, 132-017 (JSON
+    // reshape ticket, stakeholder-sanctioned mid-sprint scope addition):
+    // see defaultPlannerShaperGroup() immediately below, and robot_config.
+    // proto's PlannerShaper message header comment for why. The formerly-
+    // DEAD shaper_* fields (control.a_max/a_decel/alpha_max/alpha_decel/
+    // j_max/yaw_jerk_max) are DELETED, 132-015 -- see robot_config.proto's
+    // own Planner message (now `reserved 17 to 22`) and this module's own
+    // note at defaultShaperConfig()'s former spot above. (Two DIFFERENT
+    // things share the word "shaper" here: 132-015 deleted a DEAD
+    // shaper_*-prefixed field set; 132-017 split a LIVE, un-prefixed
+    // a_max/... field set into its own group -- see PlannerShaper's own
+    // header comment for the distinction.)
     msg::Planner cfg;
     cfg.v_max = 400.0f;                          // [mm/s]
-    cfg.a_max = 300.0f;                          // [mm/s^2]
-    cfg.a_decel = 250.0f;                      // [mm/s^2]
     cfg.omega_max = 3.0f;                  // [rad/s]
-    cfg.alpha_max = 6.0f;                  // [rad/s^2]
-    cfg.alpha_decel = 5.0f;              // [rad/s^2]
-    cfg.jerk_max = 1500.0f;                    // [mm/s^3]
-    cfg.yaw_jerk_max = 30.0f;              // [rad/s^3]
     cfg.control_period = 50.0f;        // [ms]
     cfg.actuation_delay = 50.0f;      // [ms]
     cfg.settle_rest_velocity = 10.0f;    // [mm/s]
@@ -287,6 +312,23 @@ msg::Planner defaultPlannerGroup() {
     cfg.settle_epsilon_angular = 0.035f;  // [rad]
     cfg.heading_hold_gain = 0.0f;   // [1/s]
     cfg.decel_plan_fraction = 0.4f;  // [1]
+    return cfg;
+}
+
+msg::PlannerShaper defaultPlannerShaperGroup() {
+    // planner.a_max/a_decel/alpha_max/alpha_decel/jerk_max/yaw_jerk_max
+    // (planner_config_for_config() above) -- the LIVE shaper-ceiling
+    // group split out of Planner, 132-017. Same JSON source keys (the
+    // `planner` section is not itself reshaped by this split -- only the
+    // GENERATED group these values are baked into changes), read once by
+    // planner_config_for_config() and reused here, not re-derived.
+    msg::PlannerShaper cfg;
+    cfg.a_max = 300.0f;                // [mm/s^2]
+    cfg.a_decel = 250.0f;            // [mm/s^2]
+    cfg.alpha_max = 6.0f;        // [rad/s^2]
+    cfg.alpha_decel = 5.0f;    // [rad/s^2]
+    cfg.jerk_max = 1500.0f;          // [mm/s^3]
+    cfg.yaw_jerk_max = 30.0f;   // [rad/s^3]
     return cfg;
 }
 
@@ -309,7 +351,7 @@ msg::Otos defaultOtosGroup() {
 }
 
 msg::Estimator defaultEstimatorGroup() {
-    // estimator.weight_heading_otos/weight_omega_otos/staleness_ms --
+    // estimator.weight_heading_otos/weight_omega_otos/staleness --
     // estimator_config_for_config() above.
     msg::Estimator cfg;
     cfg.weight_heading_otos = 0.0f;

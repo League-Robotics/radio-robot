@@ -91,7 +91,6 @@ import struct
 import sys
 
 import pytest
-from pydantic import ValidationError
 
 # src/tests/sim/system/test_sim_wire_loopback.py -> system -> sim -> tests ->
 # src -> repo root = FOUR hops from __file__ (same convention as this
@@ -283,29 +282,6 @@ def _drain_ack(loop, corr_id: int, cycles: int):
     return None
 
 
-@pytest.mark.xfail(
-    reason="132-014 KNOWN GAP, blocked on ticket 017: _configure() pushes a "
-           "REAL load_robot_config(tovez_nocal.json) through "
-           "configure_from_robot() -> drive_boot_config_for(), which (for a "
-           "RobotConfig input) now reads config.drive.duty_per_speed_left/"
-           "right DIRECTLY (132-014's grouped-object fast path) instead of "
-           "gen_boot_config.py's raw-dict mapping -- but data/robots/"
-           "tovez_nocal.json is still the OLD 13-section shape, so "
-           "config.drive reads its proto3 zero default and App::Drive's "
-           "fail-closed gate refuses to write a duty at all. This is NOT a "
-           "regression introduced by switching which path sim_boot_config.py "
-           "takes: a RobotConfig has no way to recover the OLD JSON's real "
-           "control.duty_per_speed_left value at all post-132-020 (it does "
-           "not retain the raw dict it was parsed from), so the raw-dict "
-           "path was never reachable from this call site either. The "
-           "embedded-0x0A byte-decode proof this test's own name promises "
-           "already holds regardless (see the cmd_vel_left/right assertions "
-           "just above, which pass) -- only the FURTHER "
-           "physical-motion-actually-happened check below is blocked, "
-           "because it depends on Tier-2 drive calibration ticket 017's "
-           "JSON reshape restores.",
-    strict=True,
-)
 def test_move_wheels_with_embedded_0x0a_byte_round_trips_through_real_codec():
     """The money test: a MoveWheels command whose own serialized bytes
     embed a literal 0x0A (the 123-006 hazard shape) travels host-encode ->
@@ -456,16 +432,6 @@ def test_set_field_enqueue_ack_round_trips_through_real_codec():
         loop.disconnect()
 
 
-@pytest.mark.xfail(
-    strict=True,
-    raises=ValidationError,
-    reason=(
-        "132-016: _configure() -> load_robot_config(tovez_nocal.json) now "
-        "raises pydantic.ValidationError (extra='forbid') -- data/robots/"
-        "tovez_nocal.json is still OLD-shaped until ticket 017's JSON "
-        "reshape lands"
-    ),
-)
 def test_move_completion_ack_arrives_on_a_later_frame_with_ack_corr_equal_to_move_id():
     """124-011: the issue's "historical framing" section only ever tested
     (and only ever localized the fix for) the ENQUEUE ack -- "also confirm

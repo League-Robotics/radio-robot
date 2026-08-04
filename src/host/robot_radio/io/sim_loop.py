@@ -636,23 +636,20 @@ class SimLoop:
           (``push.ESTIMATOR_FIELDS``/``push.PLANNER_SHAPER_FIELDS`` name
           the split).
 
-          BOTH targets are now HONEST DEAD ENDS, not a functioning live
-          arm: ``ESTIMATOR`` decodes but ``install(ESTIMATOR)`` permanently
-          returns ``ERR_UNIMPLEMENTED`` (``App::StateEstimator`` was
-          already deleted as dead code before this sprint, sprint 128
-          ticket 016 -- configurator.h's own re-appliability table);
-          ``PLANNER`` is boot-only in full (``ERR_NOT_LIVE``) -- the six
-          shaper-ceiling fields THIS method used to land live now fold into
-          a group that has no per-target live push path at all
-          (configurator.h: "only the (already-live) shaper ceilings are
-          re-appliable, and those ride the boot-time no-arg install(), not
-          a per-target push"). This is a REAL capability sprint 132's
-          firmware architecture removed (these six fields WERE genuinely
-          live-tunable before it), not a mechanical rename -- flagged here,
-          not silently absorbed: every push below is still attempted and
-          logged (this sprint's own "no silent no-ops" discipline), but a
-          caller should not expect either target's push to ever land
-          again. See ``estimator_kwargs()``'s own docstring for the full
+          ``ESTIMATOR`` is a HONEST DEAD END: it decodes but
+          ``install(ESTIMATOR)`` permanently returns ``ERR_UNIMPLEMENTED``
+          (``App::StateEstimator`` was already deleted as dead code before
+          this sprint, sprint 128 ticket 016 -- configurator.h's own
+          re-appliability table). ``PLANNER_SHAPER`` -- FIXED, 132-017
+          (JSON reshape ticket, stakeholder-sanctioned mid-sprint scope
+          addition): the six shaper-ceiling fields this method pushes now
+          land on their OWN ``ConfigGroupTarget``, split out of the
+          boot-only ``PLANNER`` group specifically because they carry
+          their own re-appliable setter (``Motion::Planner::
+          applyShaperLimits()``) -- a live push now genuinely lands, the
+          same capability this method had before sprint 132's schema
+          unification (132-002 through 132-013) temporarily regressed it.
+          See ``estimator_kwargs()``'s own docstring for the full
           per-field target-split rationale.
 
           A config carrying none of the nine estimator/shaper fields (rare
@@ -731,10 +728,13 @@ class SimLoop:
 
         # ---- Tier 3: estimator/shaper fields -- 132-014 RETARGET: the old
         # single EstimatorConfigPatch envelope no longer exists; the same
-        # nine fields now span TWO ConfigGroupTarget groups, both honest
-        # dead ends (ESTIMATOR: ERR_UNIMPLEMENTED: PLANNER: ERR_NOT_LIVE --
-        # see this method's own docstring). Still attempted and logged,
-        # never silently skipped -- "no silent no-ops."
+        # nine fields now span TWO ConfigGroupTarget groups. FIXED, 132-017:
+        # PLANNER_SHAPER (the six shaper-ceiling fields) is LIVE now, split
+        # out of the boot-only PLANNER group -- see this method's own
+        # docstring and estimator_kwargs()'s own docstring. ESTIMATOR
+        # remains a permanent, honest dead end (ERR_UNIMPLEMENTED). Still
+        # attempted and logged, never silently skipped -- "no silent
+        # no-ops."
         est_kwargs = estimator_kwargs(config)
         if not est_kwargs:
             logger.info(
@@ -746,7 +746,7 @@ class SimLoop:
         rejected: list[str] = []
         for field_name, value in est_kwargs.items():
             target = (robot_config_pb2.ESTIMATOR if field_name in ESTIMATOR_FIELDS
-                      else robot_config_pb2.PLANNER)
+                      else robot_config_pb2.PLANNER_SHAPER)
             try:
                 ack = config_proto.set_config_field(target, field_name, value)
             except Exception as exc:  # noqa: BLE001 -- log, don't raise out of a boot-config call
@@ -760,8 +760,9 @@ class SimLoop:
             logger.info(
                 "configure_from_robot(): pushed %d/%d estimator/shaper fields (%s) -- "
                 "%d rejected (%s), expected: ESTIMATOR has no live consumer "
-                "(ERR_UNIMPLEMENTED) and PLANNER is boot-only (ERR_NOT_LIVE) "
-                "as of sprint 132's own re-appliability table",
+                "(ERR_UNIMPLEMENTED) as of sprint 132's own re-appliability "
+                "table -- PLANNER_SHAPER fields rejecting would be a "
+                "regression, not expected (132-017)",
                 len(applied), len(est_kwargs), sorted(applied), len(rejected), sorted(rejected))
         else:
             logger.info(

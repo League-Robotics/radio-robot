@@ -39,7 +39,8 @@
 //   | target        | live? | install(target) reaches                        | notes |
 //   |---------------|-------|--------------------------------------------------|-------|
 //   | GEOMETRY      | NO    | -- (ERR_NOT_LIVE)                                 | trackWidth has no post-construction setter anywhere (Drive/Odometry/Planner all bake it in at construction); rotation calibration installs once, at boot, via RobotLoop::configure() called directly from boot_wiring.cpp, not through this class |
-//   | PLANNER       | NO    | -- (ERR_NOT_LIVE)                                 | vMax/omegaMax/controlPeriod/actuationDelay/landing.*/headingHoldGain have no post-construction setter; only the (already-live) shaper ceilings are re-appliable, and those ride the boot-time no-arg install(), not a per-target push |
+//   | PLANNER       | NO    | -- (ERR_NOT_LIVE)                                 | vMax/omegaMax/controlPeriod/actuationDelay/landing.*/headingHoldGain have no post-construction setter -- the ONLY reason this group is boot-only. SPLIT (132-017) from the shaper ceilings below, which used to sit in this SAME group and were dragged down to boot-only by that coarse grouping even though they have their own re-appliable setter |
+//   | PLANNER_SHAPER| yes   | `Motion::Planner::applyShaperLimits()` (132-017)  | a_max/a_decel/alpha_max/alpha_decel/jerk_max/yaw_jerk_max -- split OUT of PLANNER (132-017, JSON reshape ticket, stakeholder-sanctioned mid-sprint scope addition) because this exact setter was ALREADY one of the-configuration-object.md's eight safely-re-appliable setters; the boot-time no-arg install() also still calls this same setter, so a wire push and a boot bake use the identical code path. NOT persisted -- same "no old curated live-tuning message for this field set" reasoning as DRIVE below; a live-pushed shaper ceiling reverts to the baked JSON default on reboot until re-pushed |
 //   | DRIVE         | yes   | `Drive::configure(config_)` (132-007)             | Stage A per-wheel gain/intercept + crawl pulse, via the existing `setWheelCorrection()`/`setCrawlPulse()`. NOT persisted (132-013) -- no old curated live-tuning wire message ever existed for these fields, so the persistence precedent leaves them boot-only-persisted (i.e. reset to the baked JSON default every reboot until live-tuned again) |
 //   | WHEEL_CONTROL | yes   | `Drive::configure(config_)` (132-007)             | SAME call as DRIVE -- Drive::configure() pulls Stage B/C gains/bounds from `config_.wheelControl` in the same pass it reads `config_.drive` from; one re-appliable unit from Drive's own point of view, two ConfigGroupTargets on the wire. PERSISTED (132-013) -- these 5 fields (pid_kp/pid_ki/pid_i_max/pid_kaff/pid_max) are the direct successor of the old curated Motor live-tuning message's kp/ki/i_max/kff/kaw, which already persisted |
 //   | MOTORS        | yes   | `App::configureMotor()` x2 (132-007), GUARDED     | refuses (returns false, applies nothing) while that side reports itself in motion -- surfaced as `ERR_BUSY`, never swallowed, so a caller can retry at rest. PARTIALLY PERSISTED (132-013) -- only travel_calib_left/travel_calib_right (the one MotorConfig field App::configureMotor() still live-applies, boot_calibration.h's own doc comment), matching the old curated Motor live-tuning message's travel_calib precedent exactly; fwd_sign/output_deadband/reversal_dwell/vel_* never persisted before and still don't |
@@ -58,6 +59,10 @@
 // change persisted -- Stage A never had a wire arm before this sprint, and
 // Estimator never persisted even when it did have one. GEOMETRY/PLANNER
 // are boot-only (never live-pushed at all) and were never candidates.
+// PLANNER_SHAPER (132-017, split out of PLANNER) is a live target but is
+// likewise left OUT of the persisted set, for the same "no old curated
+// live-tuning message ever persisted this field set" reasoning DRIVE's own
+// row above documents -- not an oversight.
 //
 // Owns three things that used to be scattered across RobotLoop (132-013,
 // patch-surface retirement -- REVISED from the four-thing list this
@@ -158,9 +163,13 @@ class Configurator {
   void loadBaked();
 
   // install() -- the boot-time fan-out: pushes config_'s re-appliable
-  // groups into the subsystems that own them. PLANNER stays an inline
-  // applyShaperLimits() call (boot-only -- no install(target) case exists
-  // for it). DRIVE/WHEEL_CONTROL are now retargeted (132-009) onto the SAME
+  // groups into the subsystems that own them. The applyShaperLimits() call
+  // here reads config_.plannerShaper (132-017 split) -- PLANNER itself
+  // (the boot-only remainder) has no post-construction setter and is
+  // reached only here, at boot, via loadBaked()/install(); PLANNER_SHAPER
+  // additionally has an install(target) case below for a LIVE per-target
+  // push, since the same setter is safely re-appliable. DRIVE/WHEEL_CONTROL
+  // are now retargeted (132-009) onto the SAME
   // `drive_.configure(config_)` call install(DRIVE)/install(WHEEL_CONTROL)
   // use below, rather than re-deriving Stage A/B/C inline a second time.
   // Deliberately NOT RobotLoop's own geometry/rotation configure()

@@ -1,0 +1,109 @@
+
+=== vMin sweep (Stage B inert, as shipped) ===
+  setting                  |   ratio L / R (%)      | down_err L/R | v@zero L/R | plat_pp L/R
+  ----------------------------------------------------------------------------------------------
+      attempt 1: only 50 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 5 samples (board likely reset mid-run) -- discarding
+  vmin 100                 |  118.7+- 2.0 / 110.0+- 2.5 |  57.6 /  46.9 | 119.9 / 110.4 |  41.6 /  46.7
+      attempt 1: only 7 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 5 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 51 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 20 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 6 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 6 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 7 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 6 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 7 samples (board likely reset mid-run) -- discarding
+  vmin 60                  | -- no usable runs --
+      attempt 1: only 10 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 34 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 9 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 12 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 8 samples (board likely reset mid-run) -- discarding
+  vmin 40                  |  112.6+- 0.2 / 103.8+- 0.3 |  52.0 /  38.9 |  58.8 /  51.7 |  50.9 /  49.6
+      attempt 1: only 11 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 10 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 39 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 8 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 9 samples (board likely reset mid-run) -- discarding
+  vmin 20                  |  111.6+- 0.3 / 101.8+- 1.3 |  46.6 /  39.1 |  50.2 /  44.1 |  38.7 /  51.7
+      attempt 1: only 9 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 20 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 12 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 38 samples (board likely reset mid-run) -- discarding
+  vmin 0                   |  111.5+- 0.1 / 100.7+- 1.7 |  47.7 /  32.1 |  74.5 /  67.0 |  50.3 /  53.9
+
+=== Stage B fast-PID sweep (vMin at boot default) ===
+  setting                  |   ratio L / R (%)      | down_err L/R | v@zero L/R | plat_pp L/R
+  ----------------------------------------------------------------------------------------------
+      attempt 1: only 40 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 15 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 13 samples (board likely reset mid-run) -- discarding
+  Stage B OFF (shipped)    |  118.0+- 1.6 / 108.0+- 0.3 |  59.6 /  45.3 | 119.7 / 106.2 |  61.7 /  62.2
+      attempt 1: only 34 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 8 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 44 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 11 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 45 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 29 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 17 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 26 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 23 samples (board likely reset mid-run) -- discarding
+  kp 0.1                   | -- no usable runs --
+      attempt 1: only 4 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 21 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 9 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 23 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 39 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 7 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 20 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 34 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 11 samples (board likely reset mid-run) -- discarding
+  kp 0.3                   | -- no usable runs --
+      attempt 1: only 43 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 38 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 9 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 18 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 8 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 9 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 29 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 4 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 6 samples (board likely reset mid-run) -- discarding
+  kp 0.6                   | -- no usable runs --
+      attempt 1: only 19 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 38 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 8 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 11 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 55 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 36 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 9 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 20 samples (board likely reset mid-run) -- discarding
+  kp 1.0                   |  114.0+- 0.0 / 110.0+- 0.0 |  44.3 /  40.6 | 105.3 /  99.7 |  36.0 /  41.0
+      attempt 1: only 36 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 6 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 20 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 24 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 8 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 35 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 23 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 8 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 7 samples (board likely reset mid-run) -- discarding
+  kp 0.3 ki 0.02           | -- no usable runs --
+      attempt 1: only 13 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 23 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 21 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 11 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 25 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 17 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 5 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 23 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 10 samples (board likely reset mid-run) -- discarding
+  kp 0.6 ki 0.05           | -- no usable runs --
+      attempt 1: only 5 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 34 samples (board likely reset mid-run) -- discarding
+      attempt 3: only 29 samples (board likely reset mid-run) -- discarding
+      attempt 1: only 11 samples (board likely reset mid-run) -- discarding
+      attempt 2: only 25 samples (board likely reset mid-run) -- discarding
+  kp 1.0 ki 0.10           |  115.0+- 1.7 / 111.4+- 0.8 |  45.1 /  41.2 | 103.9 / 102.0 |  70.4 /  70.1
+
+  results: /Volumes/Proj/proj/RobotProjects/radio-robot-elite/src/tests/bench/output/param_sweep_20260803/param_results.csv

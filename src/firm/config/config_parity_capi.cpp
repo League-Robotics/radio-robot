@@ -35,9 +35,9 @@ extern "C" {
 
 uint32_t configParityStructSizes(uint32_t* out, uint32_t count) {
   static const uint32_t kSizes[] = {
-      sizeof(msg::Geometry),     sizeof(msg::Motors),  sizeof(msg::Drive),
-      sizeof(msg::WheelControl), sizeof(msg::Planner), sizeof(msg::Otos),
-      sizeof(msg::Estimator),
+      sizeof(msg::Geometry),       sizeof(msg::Motors),  sizeof(msg::Drive),
+      sizeof(msg::WheelControl),   sizeof(msg::Planner), sizeof(msg::PlannerShaper),
+      sizeof(msg::Otos),           sizeof(msg::Estimator),
   };
   static_assert(sizeof(kSizes) / sizeof(kSizes[0]) ==
                     static_cast<uint32_t>(ConfigParityGroup::Count),
@@ -94,21 +94,31 @@ uint32_t configParityFieldOffsets(uint32_t group, uint32_t* out, uint32_t count)
       return writeCapped(kOffsets, sizeof(kOffsets) / sizeof(kOffsets[0]), out, count);
     }
     case ConfigParityGroup::Planner: {
-      // shaper_a_max/shaper_a_decel/shaper_alpha_max/shaper_alpha_decel/
-      // shaper_j_max/shaper_yaw_jerk_max -- DELETED, 132-015 (dead-code
-      // sweep; robot_config.proto's Planner message now `reserved`s
-      // field numbers 17-22 instead of declaring them, see that
-      // message's own trailing comment).
+      // a_max/a_decel/alpha_max/alpha_decel/jerk_max/yaw_jerk_max --
+      // MOVED, 132-017: now ConfigParityGroup::PlannerShaper's own fields
+      // (below), split out because they carry their own re-appliable
+      // setter (Motion::Planner::applyShaperLimits()) unlike the rest of
+      // this group. shaper_a_max/shaper_a_decel/shaper_alpha_max/
+      // shaper_alpha_decel/shaper_j_max/shaper_yaw_jerk_max -- DELETED,
+      // 132-015 (dead-code sweep; robot_config.proto's Planner message
+      // now `reserved`s those field numbers instead of declaring them,
+      // see that message's own trailing comment).
       using T = msg::Planner;
       static const uint32_t kOffsets[] = {
-          offsetof(T, v_max),                 offsetof(T, a_max),
-          offsetof(T, a_decel),                offsetof(T, omega_max),
-          offsetof(T, alpha_max),              offsetof(T, alpha_decel),
-          offsetof(T, jerk_max),               offsetof(T, yaw_jerk_max),
-          offsetof(T, control_period),         offsetof(T, actuation_delay),
-          offsetof(T, settle_rest_velocity),   offsetof(T, settle_rest_omega),
-          offsetof(T, settle_epsilon_linear),  offsetof(T, settle_epsilon_angular),
-          offsetof(T, heading_hold_gain),      offsetof(T, decel_plan_fraction),
+          offsetof(T, v_max),                 offsetof(T, omega_max),
+          offsetof(T, control_period),        offsetof(T, actuation_delay),
+          offsetof(T, settle_rest_velocity),  offsetof(T, settle_rest_omega),
+          offsetof(T, settle_epsilon_linear), offsetof(T, settle_epsilon_angular),
+          offsetof(T, heading_hold_gain),     offsetof(T, decel_plan_fraction),
+      };
+      return writeCapped(kOffsets, sizeof(kOffsets) / sizeof(kOffsets[0]), out, count);
+    }
+    case ConfigParityGroup::PlannerShaper: {
+      using T = msg::PlannerShaper;
+      static const uint32_t kOffsets[] = {
+          offsetof(T, a_max),   offsetof(T, a_decel),
+          offsetof(T, alpha_max), offsetof(T, alpha_decel),
+          offsetof(T, jerk_max),  offsetof(T, yaw_jerk_max),
       };
       return writeCapped(kOffsets, sizeof(kOffsets) / sizeof(kOffsets[0]), out, count);
     }

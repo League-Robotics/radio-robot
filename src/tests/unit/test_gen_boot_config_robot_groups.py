@@ -93,6 +93,10 @@ def test_generate_emits_all_seven_group_functions_additively():
     assert "msg::Drive defaultDriveGroup()" in content
     assert "msg::WheelControl defaultWheelControlGroup()" in content
     assert "msg::Planner defaultPlannerGroup()" in content
+    # 132-017: PlannerShaper split out of Planner (stakeholder-sanctioned
+    # mid-sprint scope addition) -- the six live shaper-ceiling fields get
+    # their own default*Group() function.
+    assert "msg::PlannerShaper defaultPlannerShaperGroup()" in content
     assert "msg::Otos defaultOtosGroup()" in content
     assert "msg::Estimator defaultEstimatorGroup()" in content
 
@@ -167,16 +171,22 @@ def test_default_wheel_control_group_matches_tovez_json():
 
 
 def test_default_planner_group_matches_tovez_json():
-    """Planner: the live planner.* surface only -- the formerly-DEAD
-    shaper_* fields (robot_config.proto's own header checklist) are
-    DELETED, 132-015 (schema fields now `reserved`, C++ struct/generator
-    function gone -- see that message's own trailing comment and
-    config/boot_config.h's note at ShaperBootConfig's former declaration
-    site)."""
+    """Planner: the BOOT-ONLY planner.* surface -- v_max/omega_max/
+    control_period/actuation_delay/settle_*/heading_hold_gain/
+    decel_plan_fraction. The six shaper-ceiling fields (a_max/a_decel/
+    alpha_max/alpha_decel/jerk_max/yaw_jerk_max) are SPLIT OUT, 132-017
+    (JSON reshape ticket, stakeholder-sanctioned mid-sprint scope
+    addition) -- see test_default_planner_shaper_group_matches_tovez_json()
+    below. The formerly-DEAD shaper_* (prefixed) fields (robot_config.
+    proto's own header checklist) are separately DELETED, 132-015 (schema
+    fields now `reserved`, C++ struct/generator function gone -- see that
+    message's own trailing comment and config/boot_config.h's note at
+    ShaperBootConfig's former declaration site) -- NOT the same fields as
+    this split, see PlannerShaper's own header comment for the
+    distinction."""
     content = gbc.generate(_tovez_cfg(), "data/robots/tovez.json")
 
     assert "cfg.v_max = 400.0f;" in content
-    assert "cfg.a_max = 300.0f;" in content
     assert "cfg.control_period = 50.0f;" in content
     assert "cfg.actuation_delay = 50.0f;" in content
     # tovez.json's own planner.heading_hold_gain is 0.0 (130-011 zeroed the
@@ -187,6 +197,32 @@ def test_default_planner_group_matches_tovez_json():
     # DELETED, 132-015 -- confirm they stay gone.
     assert "shaper_a_max" not in content
     assert "shaper_yaw_jerk_max" not in content
+    # SPLIT OUT, 132-017 -- defaultPlannerGroup()'s own output must not
+    # carry the shaper-ceiling fields any more (they moved to
+    # defaultPlannerShaperGroup(), checked separately below); scoped to
+    # this one function's own generated body, not the whole file (the
+    # sibling defaultPlannerShaperGroup() legitimately DOES emit
+    # "cfg.a_max = ...").
+    planner_group_start = content.index("msg::Planner defaultPlannerGroup()")
+    planner_group_end = content.index("msg::PlannerShaper defaultPlannerShaperGroup()")
+    planner_group_body = content[planner_group_start:planner_group_end]
+    assert "cfg.a_max" not in planner_group_body
+    assert "cfg.yaw_jerk_max" not in planner_group_body
+
+
+def test_default_planner_shaper_group_matches_tovez_json():
+    """PlannerShaper: the LIVE shaper-ceiling surface split out of Planner
+    (132-017) -- a_max/a_decel/alpha_max/alpha_decel/jerk_max/
+    yaw_jerk_max, still read from the SAME `planner.*` JSON keys (the
+    reshape does not touch the JSON section boundary for these six)."""
+    content = gbc.generate(_tovez_cfg(), "data/robots/tovez.json")
+
+    assert "cfg.a_max = 300.0f;" in content
+    assert "cfg.a_decel = 250.0f;" in content
+    assert "cfg.alpha_max = 6.0f;" in content
+    assert "cfg.alpha_decel = 5.0f;" in content
+    assert "cfg.jerk_max = 1500.0f;" in content
+    assert "cfg.yaw_jerk_max = 30.0f;" in content
 
 
 def test_default_otos_group_matches_tovez_json():

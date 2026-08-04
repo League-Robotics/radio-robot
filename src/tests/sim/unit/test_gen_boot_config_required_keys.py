@@ -121,8 +121,8 @@ def _complete_cfg() -> dict:
 
 
 def _delete_key(cfg: dict, *path: str) -> None:
-    """Delete the leaf key at *path* (e.g. ``_delete_key(cfg, "control",
-    "vel_kp")`` deletes ``cfg["control"]["vel_kp"]``) in place."""
+    """Delete the leaf key at *path* (e.g. ``_delete_key(cfg, "motors",
+    "vel_kp")`` deletes ``cfg["motors"]["vel_kp"]``) in place."""
     cur = cfg
     for key in path[:-1]:
         cur = cur[key]
@@ -138,32 +138,41 @@ def _delete_key(cfg: dict, *path: str) -> None:
 # this ticket's explicit scope -- see sprint.md ticket 002's Approach step 1
 # and the "documented exception" paragraph of the Architecture Boundary
 # list).
+# 132-017 (JSON reshape ticket) retargeted every path below from the OLD
+# 13-section shape (control/calibration flat dumping grounds) onto
+# Config::Robot's grouped shape -- see gen_boot_config.py's own per-
+# function docstrings ("132-017 JSON reshape retarget") for the old-path
+# -> new-path mapping this list now reflects. planner.a_max/a_decel/
+# alpha_max/alpha_decel/jerk_max/yaw_jerk_max additionally moved to their
+# OWN top-level `planner_shaper` section (132-017's stakeholder-sanctioned
+# mid-sprint Planner split -- see robot_config.proto's PlannerShaper
+# message header comment), not just a section rename.
 _REQUIRED_KEY_PATHS = [
     ("geometry", "trackwidth"),
-    ("control", "vel_kp"),
-    ("control", "vel_ki"),
-    ("control", "vel_kff"),
-    ("control", "vel_imax"),
-    ("control", "vel_kaw"),
-    ("control", "vel_filt"),
-    ("control", "output_deadband"),
-    ("control", "reversal_dwell_ms"),
-    ("geometry", "odometry_offset_mm", "x"),
-    ("geometry", "odometry_offset_mm", "y"),
-    ("geometry", "odometry_offset_mm", "yaw_rad"),
-    ("calibration", "otos_linear_scale"),
-    ("calibration", "otos_angular_scale"),
+    ("motors", "vel_kp"),
+    ("motors", "vel_ki"),
+    ("motors", "vel_kff"),
+    ("motors", "vel_i_max"),
+    ("motors", "vel_kaw"),
+    ("motors", "vel_filt_alpha"),
+    ("motors", "output_deadband"),
+    ("motors", "reversal_dwell"),
+    ("otos", "offset_x"),
+    ("otos", "offset_y"),
+    ("otos", "offset_yaw"),
+    ("otos", "linear_scale"),
+    ("otos", "angular_scale"),
     ("estimator", "weight_heading_otos"),
     ("estimator", "weight_omega_otos"),
-    ("estimator", "staleness_ms"),
+    ("estimator", "staleness"),
     ("planner", "v_max"),
-    ("planner", "a_max"),
-    ("planner", "a_decel"),
+    ("planner_shaper", "a_max"),
+    ("planner_shaper", "a_decel"),
     ("planner", "omega_max"),
-    ("planner", "alpha_max"),
-    ("planner", "alpha_decel"),
-    ("planner", "jerk_max"),
-    ("planner", "yaw_jerk_max"),
+    ("planner_shaper", "alpha_max"),
+    ("planner_shaper", "alpha_decel"),
+    ("planner_shaper", "jerk_max"),
+    ("planner_shaper", "yaw_jerk_max"),
     ("planner", "control_period"),
     ("planner", "actuation_delay"),
     ("planner", "settle_rest_velocity"),

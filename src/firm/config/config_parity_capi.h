@@ -28,6 +28,7 @@ enum class ConfigParityGroup : uint32_t {
   Drive,
   WheelControl,
   Planner,
+  PlannerShaper,  // 132-017: split out of Planner -- see robot_config.proto
   Otos,
   Estimator,
   Count,  // sentinel -- the number of groups this file knows about

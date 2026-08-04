@@ -120,6 +120,7 @@ Result decode(Motors& out, const uint8_t* buf, uint16_t len);
 Result decode(Drive& out, const uint8_t* buf, uint16_t len);
 Result decode(WheelControl& out, const uint8_t* buf, uint16_t len);
 Result decode(Planner& out, const uint8_t* buf, uint16_t len);
+Result decode(PlannerShaper& out, const uint8_t* buf, uint16_t len);
 Result decode(Otos& out, const uint8_t* buf, uint16_t len);
 Result decode(Estimator& out, const uint8_t* buf, uint16_t len);
 
@@ -140,6 +141,7 @@ uint16_t encode(const Motors& in, uint8_t* buf, uint16_t cap);
 uint16_t encode(const Drive& in, uint8_t* buf, uint16_t cap);
 uint16_t encode(const WheelControl& in, uint8_t* buf, uint16_t cap);
 uint16_t encode(const Planner& in, uint8_t* buf, uint16_t cap);
+uint16_t encode(const PlannerShaper& in, uint8_t* buf, uint16_t cap);
 uint16_t encode(const Otos& in, uint8_t* buf, uint16_t cap);
 uint16_t encode(const Estimator& in, uint8_t* buf, uint16_t cap);
 
@@ -162,6 +164,7 @@ Result setField(Motors& out, uint16_t fieldNumber, float value);
 Result setField(Drive& out, uint16_t fieldNumber, float value);
 Result setField(WheelControl& out, uint16_t fieldNumber, float value);
 Result setField(Planner& out, uint16_t fieldNumber, float value);
+Result setField(PlannerShaper& out, uint16_t fieldNumber, float value);
 Result setField(Otos& out, uint16_t fieldNumber, float value);
 Result setField(Estimator& out, uint16_t fieldNumber, float value);
 

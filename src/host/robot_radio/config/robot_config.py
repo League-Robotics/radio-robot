@@ -79,6 +79,7 @@ from robot_radio.config.robot_config_generated import (
     Motors,
     Otos,
     Planner,
+    PlannerShaper,
     Vision,
     WheelControl,
 )
@@ -253,6 +254,14 @@ class RobotConfig(BaseModel):
     drive: Drive = Drive()
     wheel_control: WheelControl = WheelControl()
     planner: Planner = Planner()
+    # planner_shaper (132-017): split out of Planner, stakeholder-sanctioned
+    # mid-sprint scope addition -- the six shaper-ceiling fields
+    # (a_max/a_decel/alpha_max/alpha_decel/jerk_max/yaw_jerk_max) now carry
+    # their own ConfigGroupTarget (PLANNER_SHAPER, LIVE) because they have
+    # their own re-appliable setter (Motion::Planner::applyShaperLimits()),
+    # unlike the rest of Planner. See robot_config.proto's PlannerShaper
+    # message header comment for the full rationale.
+    planner_shaper: PlannerShaper = PlannerShaper()
     otos: Otos = Otos()
     estimator: Estimator = Estimator()
 
@@ -264,6 +273,51 @@ class RobotConfig(BaseModel):
 
     # Derived field — not stored in JSON, computed after load
     mm_per_tick: Optional[float] = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _strip_underscore_documentation_keys(cls, data):
+        """Strip every leading-underscore key, recursively, from the raw
+        JSON dict BEFORE pydantic validates it (132-017, JSON reshape).
+
+        Established project convention (pre-dating this ticket, e.g.
+        tovez.json's own ``_otos_linear_scale_note``/``_rotational_slip_
+        note``/``_vel_gains_domain``): a leading-underscore key anywhere in
+        a robot JSON is documentation/provenance, never live data — a
+        long-form measurement writeup, a domain note, or a recorded-but-
+        currently-unconsumed value (e.g. ``planner._plant_gain``, a
+        recorded plant-ID measurement no `_require()` call reads any
+        more). ``extra="forbid"`` (132-016) is exactly right for catching
+        a genuinely unrecognized or misspelled REAL field name, but would
+        otherwise also reject every one of these documentation keys the
+        moment they sit inside a group this generator's own schema
+        validates strictly (Geometry/Motors/Drive/WheelControl/Planner/
+        PlannerShaper/Otos/Estimator, and even the hand-declared host-only
+        sections) — since none of them, by design, declares an
+        ``Optional[str]`` field for a note nobody consumes.
+
+        Stripping happens HERE, on the raw dict, before any nested
+        ``BaseModel`` is constructed — a ``model_validator(mode="before")``
+        on the ROOT model receives the whole not-yet-parsed JSON tree, so
+        by the time pydantic descends into ``geometry``/``otos``/etc. the
+        underscore keys are already gone from those nested dicts too, and
+        every sub-model's own ``extra="forbid"`` never even sees them.
+        This does NOT touch the JSON FILE on disk — the notes stay
+        exactly where the migration script placed them, physically
+        alongside the field they document; this only shrinks what
+        pydantic is asked to validate.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        def strip(obj):
+            if isinstance(obj, dict):
+                return {k: strip(v) for k, v in obj.items() if not k.startswith("_")}
+            if isinstance(obj, list):
+                return [strip(v) for v in obj]
+            return obj
+
+        return strip(data)
 
     @model_validator(mode="after")
     def _resolve_encoder_fields(self) -> "RobotConfig":
