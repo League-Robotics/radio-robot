@@ -81,6 +81,29 @@ struct OtosBootConfig {
 // 1.0 scale = no correction) otherwise.
 OtosBootConfig defaultOtosBootConfig();
 
+// WheelCorrection — the eight commanded->actual values App::Drive::
+// setWheelCorrection() installs (msg::Drive's own wheel_gain_*/
+// wheel_intercept_* fields, in that method's parameter order). Declared
+// here, in config/, so App::BootOverrides can carry one WITHOUT
+// app/boot_wiring.h having to reach into app/drive.h for a parameter
+// bundle — config/ may only depend on messages/ (design.md §5), and this
+// type depends on neither.
+//
+// Defaults are IDENTITY (gain 1, intercept 0 = no correction), which is
+// also the only value a linear plant may ever be given — see
+// BootOverrides::wheelCorrection (app/boot_wiring.h) for why that override
+// exists and what it cost to learn.
+struct WheelCorrection {
+  float gainLeftAccel = 1.0f;
+  float interceptLeftAccel = 0.0f;   // [mm/s]
+  float gainLeftDecel = 1.0f;
+  float interceptLeftDecel = 0.0f;   // [mm/s]
+  float gainRightAccel = 1.0f;
+  float interceptRightAccel = 0.0f;  // [mm/s]
+  float gainRightDecel = 1.0f;
+  float interceptRightDecel = 0.0f;  // [mm/s]
+};
+
 // EstimatorBootConfig — App::StateEstimator's fail-closed boot-time
 // fusion-weight defaults, baked from the robot JSON's `estimator` section
 // (data/robots/robot_config.schema.json). Field-for-field mirror of

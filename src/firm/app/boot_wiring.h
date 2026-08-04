@@ -46,6 +46,11 @@
 //     zero-mounting-error sensor -- a real chip's measured lever-arm/scale
 //     correction has no counterpart to correct in it (found empirically,
 //     see the field's own doc comment for the measured symptom).
+//   - wheelCorrection (133-005, the FOURTH): same shape of argument as
+//     otosConfig, and added for the same reason after the same class of
+//     measured symptom -- TestSim::WheelPlant is linear, so a real
+//     gearbox's measured linearization has nothing to linearize in it.
+//     See the field's own doc comment for the regression that proved it.
 // Every override a caller sets must be commented AT THE CALL SITE
 // explaining why -- see TestSim::SimHarness's own composeRobot() call.
 #pragma once
@@ -98,6 +103,49 @@ struct BootOverrides {
   // and begin() itself applies config_'s own baked scale before any such
   // call could land, so the only safe seam is here, at bakeBootValues() time.
   const Devices::OtosConfig* otosConfig = nullptr;
+
+  // wheelCorrection -- the FOURTH genuinely-justified override (133-005),
+  // and the one with a price tag attached.
+  //
+  // App::Drive's Stage A commanded->actual correction (measured =
+  // gain*commanded + intercept, per wheel per direction of approach,
+  // docs/design/wheel-speed-command-mapping.md) LINEARIZES one physical
+  // drivetrain's gearbox. TestSim::WheelPlant is a plain first-order
+  // LINEAR plant with none of the nonlinearity it corrects for, so
+  // installing a hardware fit against it cancels nothing -- it just
+  // divides every commanded speed by that gain, and bends every leg,
+  // because the left and right gains deliberately differ. Identity (gain
+  // 1, intercept 0) is the only correct value for this plant.
+  //
+  // That rule is not new; only its ENFORCEMENT is. The host push path has
+  // always honoured it -- sim_boot_config.py's drive_boot_config_for()
+  // deliberately omits the wheel correction from what it pushes, and says
+  // so at length. What went wrong is that the SIM never needed the push:
+  // 130-002 unified the sim and hardware composition roots, so the sim's
+  // Drive takes its Stage A calibration from the BAKE (Config::
+  // defaultDriveGroup(), generated from data/robots/tovez.json) like real
+  // hardware does. The invariant survived on a coincidence -- the bake
+  // happened to hold identity -- and the coincidence was documented as if
+  // it were a guarantee ("deliberately left at composeRobot()'s own
+  // installed value", sim_harness.h).
+  //
+  // 132-019 fitted tovez's real gearbox on the bench and baked the result
+  // (gain 1.0 -> 0.9075 left / 0.8 right). The sim silently began running
+  // one warm physical drivetrain's linearization, 13% asymmetric, against
+  // a plant with no asymmetry at all. Measured cost, TOUR_1/ideal in
+  // src/tests/testgui/test_tour_closure_gate.py: worst per-turn error
+  // 21.8deg -> 53.8deg, every turn under-rotating. Nothing failed that
+  // was already passing, so it went unnoticed for a sprint.
+  //
+  // Hence a typed override rather than another comment: a caller whose
+  // plant is linear says so HERE, and Configurator::loadBaked() applies it
+  // to config_ before install(DRIVE) ever reads it. The hardware path is
+  // untouched -- main.cpp passes no override, so a real robot still gets
+  // its fitted gains from the file, which is the entire point of the
+  // configuration-discipline work. src/tests/sim/unit/
+  // sim_harness_configure_harness.cpp asserts the sim end of it, so the
+  // next composition-root refactor breaks a test instead of a tour.
+  const Config::WheelCorrection* wheelCorrection = nullptr;
 };
 
 // RobotGraph -- owns the WHOLE App::/Motion:: object graph: both drive

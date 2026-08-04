@@ -24,7 +24,13 @@
 //      Tests entry used for the same generated functions) -- mirroring
 //      composition_root_parity_harness.cpp's own "compare against the SAME
 //      generation the composition root used" pattern rather than
-//      re-parsing tovez.json independently.
+//      re-parsing tovez.json independently. ONE documented exception,
+//      133-005: drive.wheel_gain_*/wheel_intercept_*, which this harness's
+//      SimHarness deliberately overrides to identity (a real gearbox
+//      linearization has nothing to linearize in a linear plant) -- see
+//      that assertion's own comment below, and App::BootOverrides::
+//      wheelCorrection (app/boot_wiring.h) for the regression that made
+//      the override explicit.
 //   4. (132-007) RobotLoop::configure(const Config::Robot&) -- the one
 //      configure() entry point boot_wiring.cpp calls directly rather than
 //      through Configurator::install() (see that method's own doc comment,
@@ -117,8 +123,25 @@ int main() {
   const msg::Drive hwDrive = Config::defaultDriveGroup();
   checkFloatEq(config.drive.duty_per_speed_left, hwDrive.duty_per_speed_left,
                "drive.duty_per_speed_left");
-  checkFloatEq(config.drive.wheel_gain_left_accel, hwDrive.wheel_gain_left_accel,
-               "drive.wheel_gain_left_accel");
+  // 133-005: drive.wheel_gain_*/wheel_intercept_* are the ONE documented
+  // exception to this scenario's bake-parity rule, and deliberately so.
+  // This harness composes a TestSim::SimHarness, which declares an
+  // identity wheel correction through App::BootOverrides::wheelCorrection
+  // -- a real gearbox linearization has nothing to linearize in a linear
+  // plant, so the sim must NOT inherit the file's fitted gains. Asserting
+  // bake parity on them here would be asserting the very defect that cost
+  // sprint 132 a doubled turn error (see BootOverrides::wheelCorrection's
+  // own doc comment, app/boot_wiring.h).
+  //
+  // The check is not dropped, only MOVED to where it is true: the
+  // hardware path's "no override == the file wins" parity, and the sim
+  // path's identity invariant, are both asserted by
+  // src/tests/sim/unit/sim_harness_configure_harness.cpp's own scenario 4.
+  // crawl_pulse below keeps a second, unexempted Drive field in this
+  // scenario so the group is still covered here.
+  checkFloatEq(config.drive.crawl_pulse, hwDrive.crawl_pulse, "drive.crawl_pulse");
+  checkFloatEq(config.drive.wheel_gain_left_accel, 1.0f,
+               "drive.wheel_gain_left_accel is the sim's identity override, NOT the bake");
 
   const msg::WheelControl hwWheelControl = Config::defaultWheelControlGroup();
   checkFloatEq(config.wheelControl.pid_kp, hwWheelControl.pid_kp, "wheelControl.pid_kp");

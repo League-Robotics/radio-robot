@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: 'Turn-accuracy regression: A/B the distribution against the pre-132 merge-base'
-status: done
+status: in-progress
 use-cases:
 - SUC-004
 depends-on:
@@ -123,9 +123,15 @@ do not delete, move, or reorganize them.
       ruled out.
 - [x] `git stash` was not used at any point.
 - [x] Any fix beyond a trivial one is filed as an issue rather than implemented
-      here. *(No fix implemented. Two follow-ups named below for filing —
-      `clasi/issues/` was off-limits to this ticket, another agent was
-      triaging it concurrently.)*
+      here. *(Superseded by the reopen: the coordinator directed both fixes be
+      implemented in this ticket. Done — see Round 2. Two NEW follow-ups are
+      named at the end for the team-lead to file; `clasi/issues/` stayed
+      off-limits throughout, another agent was triaging it.)*
+- [x] **(added on reopen)** The sim no longer consumes the baked hardware wheel
+      correction, the hardware path is unchanged, and the invariant is enforced
+      by a test that is verified to fail without the fix.
+- [x] **(added on reopen)** Both realistic-profile distributions run again; the
+      `xfail` reason strings are corrected.
 
 ## Completion Notes
 
@@ -309,15 +315,202 @@ unchanged: `src/tests/testgui/test_tour_closure_gate.py` reports
 `test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band` the
 one hard failure.
 
-### Follow-ups to file (not filed here — `clasi/issues/` was in use)
+---
 
-1. **The sim inherits `tovez.json`'s baked wheel correction** — `composeRobot()`
-   installs `Config::boot_config`'s `wheel_gain_*` in the sim, defeating
-   `drive_boot_config_for()`'s deliberate exclusion. Owns the −30° step.
-   Every future bench fit baked into `tovez.json` will move the sim again.
-2. **`otos_config` deletion left both realistic-profile tour runs crashing**,
-   masked by `xfail(strict=False)`. Either restore the call against the new
-   config surface or make the module fail honestly.
+## Round 2 — the fixes (ticket reopened after the verdict above)
+
+The verification above stands unchanged. This section is what was done about
+it.
+
+### Fix 1 — the sim no longer consumes a hardware gearbox linearization
+
+Not by reverting `tovez.json`'s fitted gains: those are correct for `tovez`,
+and ticket 004 re-fits them on the stand. The defect was that the **sim**
+consumed them at all.
+
+`App::BootOverrides` (`src/firm/app/boot_wiring.h`) is the composition root's
+existing, documented seam for a justified sim/hardware divergence — it already
+carries three, one of which (`otosConfig`) exists for a structurally identical
+reason: a real chip's measured correction has nothing to correct in a perfect
+synthetic sensor. The wheel correction is the fourth, and it is applied at the
+one place that decides what a robot is calibrated with:
+
+- `Config::WheelCorrection` (`src/firm/config/boot_config.h`) — the eight
+  `wheel_gain_*`/`wheel_intercept_*` values, identity by default. Lives in
+  `config/` so `BootOverrides` need not reach into `app/drive.h` for a
+  parameter bundle.
+- `Configurator::loadBaked(const Config::WheelCorrection*)` — `nullptr` (the
+  hardware path, and `main.cpp` passes nothing) leaves the baked file values
+  exactly as before; non-null replaces them **in `config_`**, so the whole
+  downstream fan-out — `install(DRIVE)` and every later
+  `Drive::configure(config_)` — sees the override, and read-back
+  (`GetConfig(DRIVE)`) reports what the robot is actually running.
+- `TestSim::SimHarness` passes `&kIdentityWheelCorrection`.
+
+The hardware path is untouched by construction: no override, no change.
+
+**Why this cannot rot the way its predecessor did.** The old guard was a
+comment in `sim_harness.h` asserting that `composeRobot()` installs identity
+"from the baked `DriveBootConfig` defaults." That was a true *description* of
+what the bake happened to contain, and 132-019 changed the bake. The override
+does not describe the bake; it decides the value. And the invariant is now
+asserted: `src/tests/sim/unit/sim_harness_configure_harness.cpp` scenario 4
+checks three things, deliberately —
+
+1. a composed `SimHarness` really is identity (the invariant);
+2. `loadBaked(nullptr)` really does yield the **file's** values (the hardware
+   path is not weakened — ticket 004 depends on this);
+3. `loadBaked(&identity)` really does override them (the seam is load-bearing
+   whatever the bake holds today, so the scenario cannot go vacuously green if
+   a robot JSON returns to identity for unrelated reasons).
+
+It also prints the live baked gains, so a reader can see which case they are
+in. Verified to FAIL, not just pass: removing `&kIdentityWheelCorrection` from
+the `BootOverrides` initializer produces four named failures
+(`expected 1, got 0.9075` / `got 0.8`) rather than a silent pass.
+
+### Fix 2 — both realistic-profile distributions actually run again
+
+`NezhaProtocol.otos_config()` (deleted by 132-014) is replaced with the OTOS
+group's own live per-field arm, `set_config_field(OTOS, ...)`, which
+`install(OTOS)` applies (132-010). Two consequences handled:
+
+- `_compensating_register()` became `_compensating_scale()`. The old function
+  pre-encoded the multiplier into the chip's int8 register; 132-010 moved that
+  conversion firmware-side (`Devices::scaleToRegister()`), so pushing a
+  register value over the new surface would encode it twice.
+- `_SteppingConfigConn` — a `SimConfigConn` subclass whose `poll_ack()`
+  advances the sim instead of sleeping on a wall clock. These loops connect
+  with `start_tick_thread=False`, so the stock `poll_ack()` can only burn its
+  timeout and return `None`: the push lands, but a genuine `ERR_*` and a
+  healthy push are indistinguishable. `set_config_field()` resolves `poll_ack`
+  duck-typed, so this changes how the ack is observed without forking any of
+  the envelope-building path.
+
+The same treatment was applied to the `shaper_fields` block, which called the
+equally-deleted `estimator_config()` — dead today (no call site passes an
+override) but the identical landmine, now retargeted onto `PLANNER_SHAPER`.
+
+Both `xfail` reason strings were wrong and are corrected: the ideal one quoted
+"~0.2-2.2deg" measured in sprint 109, and the realistic one asserted a
+turn-accuracy result for a test that had not executed a leg since 132-014.
+
+### Post-fix distribution — same three-way table, plus the fix
+
+`TOUR_1/ideal`, commanded +90° every turn:
+
+| turn | pre-132 `2cb43292` | post-132 `9499f286` | HEAD before fix | **after fix** |
+|---|---|---|---|---|
+| 2 | −2.57 | −27.84 | −25.27 | **−7.97** |
+| 4 | −13.08 | −31.75 | −24.67 | **−14.05** |
+| 6 | −12.42 | −53.84 | −47.82 | **−17.05** |
+| 8 | −11.96 | −38.93 | −35.05 | **−22.10** |
+| 10 | −13.48 | −51.90 | −51.18 | **−22.02** |
+| 12 | −24.70 | −29.13 | −28.42 | **−19.39** |
+| **worst** | **24.70** | **53.84** | **51.18** | **22.10** |
+
+`TOUR_2/ideal`:
+
+| turn | cmd | pre-132 | post-132 | before fix | **after fix** |
+|---|---|---|---|---|---|
+| 2 | +90 | −2.57 | −27.84 | −25.27 | **−7.97** |
+| 4 | +124 | −13.29 | −32.74 | −25.44 | **−15.32** |
+| 6 | −217 | −14.33 | −50.75 | −44.31 | **−10.32** |
+| 8 | +146 | +5.19 | −20.10 | −26.25 | **+8.90** |
+| 10 | +215 | −16.67 | −42.98 | −51.95 | **−15.77** |
+| 12 | −90 | −8.15 | −32.78 | −33.83 | **−2.30** |
+| 14 | −90 | +12.78 | +9.36 | +7.84 | **+18.20** |
+| **worst** | | **16.67** | **50.75** | **51.95** | **18.20** |
+
+`TOUR_1/realistic` and `TOUR_2/realistic` are measurable at HEAD for the first
+time since sprint 132 (they were `SETUP FAILED` at both post-132 columns):
+
+| turn | TOUR_1 pre-132 | TOUR_1 **after fix** | TOUR_2 pre-132 | TOUR_2 **after fix** |
+|---|---|---|---|---|
+| 2 | −0.12 | **−3.32** | −0.12 | **−3.32** |
+| 4 | −18.56 | **−17.17** | −18.66 | **−16.50** |
+| 6 | −4.60 | **−7.05** | −2.90 | **+5.89** |
+| 8 | −14.60 | **−10.41** | +14.07 | **+10.59** |
+| 10 | −16.08 | **−14.20** | −20.89 | **−10.49** |
+| 12 | −13.45 | **−15.62** | −13.59 | **−0.67** |
+| 14 | — | — | +14.38 | **+15.35** |
+| **worst** | **18.56** | **17.17** | **20.89** | **16.50** |
+
+Closure improved too, most visibly on `TOUR_2/realistic`: 321.7 mm pre-132 →
+168.9 mm.
+
+### Verdict on the fix — restored
+
+Against the **distribution**, not the pass/fail. Every profile is back to its
+pre-132 magnitude or better: worst |error| 22.10 vs 24.70 (`TOUR_1/ideal`),
+18.20 vs 16.67 (`TOUR_2/ideal`), 17.17 vs 18.56 (`TOUR_1/realistic`), 16.50 vs
+20.89 (`TOUR_2/realistic`). The −30° step that 132-019 introduced is gone.
+
+**Honestly stated residual.** `TOUR_1/ideal`'s middle turns sit around −17 to
+−22 where pre-132 they clustered around −12. That is the 132-017 step, the one
+I could not attribute to a field after four tested-and-refuted hypotheses. Its
+worst case is *better* than pre-132's (22.10 vs 24.70) because pre-132's own
+turn 12 was −24.70, but the shape is not identical and I am not claiming it
+is. I hit the attempt cap honestly and left it, per instruction.
+
+### Test baseline — by identity
+
+Every current failure was checked against a worktree at **`aa90ad04`** — this
+ticket's own verification-only commit, which contains no source change of mine.
+That is the correct baseline for attributing *this* change; the sprint branch
+has moved a long way from master under tickets 001/002/003/006.
+
+Sim+unit slice: **3 failed / 1358 passed / 1 xfailed / 2 xpassed**. All three
+fail identically at `aa90ad04` — 132-019 fallout, not mine:
+
+- `test_gen_boot_config_planner.py::test_planner_config_for_config_reads_tovez_json`
+- `test_gen_boot_config_planner.py::test_generate_emits_default_planner_limits_byte_identical_to_pre_ticket_literals`
+- `test_gen_boot_config_robot_groups.py::test_default_drive_group_matches_tovez_json`
+
+The last one asserts `cfg.wheel_gain_left_accel = 1.0f;` against a `tovez.json`
+that 132-019 changed to `0.9075` — a generator-parity test nobody updated.
+Untouched here deliberately: this ticket must not make the hardware path's
+fitted gains look wrong, and ticket 004 is about to re-fit them anyway.
+
+testgui: **8 failed / 588 passed / 3 skipped / 11 xfailed**, all verified
+pre-existing at `aa90ad04`:
+
+- 5 × `test_relay_discovery.py::TestRelayProbeBannerHelloClassify::*` — these
+  are the coordinator's own "5 failed as of master" baseline.
+- 2 × `test_gui_button_acceptance.py::test_tour_{1,2}_runs_to_completion` —
+  leg 1 times out waiting for a terminal ack, identically at `aa90ad04`.
+- 1 × `test_tour_closure_gate.py::…_land_within_the_shaped_band` — the test
+  under study. Still fails, now at 14.06° against its 8.0° band; it failed
+  pre-132 too, at 24.70°. The band was NOT touched: widening it to green would
+  be hiding the result, which is the opposite of this ticket's purpose.
+
+**One test moved, and was fixed rather than suppressed.**
+`src/tests/sim/system/test_configurator_loadbaked.py::test_configurator_loadbaked_smoke`
+asserted the sim's `Configurator::config()` matches the bake field-for-field,
+including `drive.wheel_gain_left_accel == 0.9075` — i.e. it encoded exactly the
+defect as a requirement, which is why it started failing the moment the defect
+was fixed. Its Drive parity check now asserts the identity override (with
+`crawl_pulse` added so the group keeps an unexempted field in this scenario),
+and the parity it gave up is asserted properly, on both paths, by the new
+scenario 4 in `sim_harness_configure_harness.cpp`.
+
+A caution on the numbers: three other agents were committing to this branch
+during these runs (tickets 003 and 006), and one full-collection run taken
+while files changed underneath pytest reported six extra failures that did not
+reproduce in an isolated re-run minutes later. The per-directory runs above
+were taken against a quiescent tree and are the ones to trust.
+
+### Follow-ups (not filed here — `clasi/issues/` was in use)
+
+1. ~~The sim inherits `tovez.json`'s baked wheel correction~~ — **fixed above.**
+2. ~~`otos_config` deletion left both realistic-profile runs crashing~~ —
+   **fixed above.**
+3. **New, for the team-lead:** the three `gen_boot_config` parity tests above
+   still encode pre-132-019 literals and will keep failing until someone
+   re-baselines them against the current `tovez.json`. Ticket 004 re-fits those
+   same gains, so it is the natural place to do it.
+4. **New:** the 132-017 residual (`TOUR_1/ideal` middle turns ~−20 vs pre-132's
+   ~−12) remains unattributed. Four hypotheses refuted, listed above.
 
 ## Testing
 

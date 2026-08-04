@@ -111,7 +111,13 @@ RobotGraph::RobotGraph(Devices::I2CBus& bus, const Devices::Clock& clock, Device
   // Config::default*Group() functions, 132-005), and fans it out itself.
   // Both calls run AFTER every member above is constructed, exactly as the
   // pre-132-006 install*Calibration() calls did.
-  configurator_.loadBaked();
+  // 133-005: overrides.wheelCorrection (nullptr on hardware -- main.cpp
+  // passes none, so a real robot still boots the JSON's own fitted gains)
+  // is applied INSIDE loadBaked(), before install() fans config_ out to
+  // Drive::configure(). See BootOverrides::wheelCorrection's own doc
+  // comment (boot_wiring.h) for why the sim needs it and what it cost to
+  // find out.
+  configurator_.loadBaked(overrides.wheelCorrection);
   configurator_.install();
 
   // 132-007: rotation calibration now installs through RobotLoop's own

@@ -22,7 +22,8 @@ infrastructure earlier tickets already proved:
   ``set_enc_tick_quant()`` / ``set_enc_slip()`` (109-007) -- the sim
   fidelity knobs this ticket's "realistic error profile enabled" run turns
   on.
-- ``_SimConfigConn``/``NezhaProtocol.otos_config()`` (109-002/004) -- the
+- ``_SimConfigConn``/``NezhaProtocol.set_config_field(OTOS, ...)``
+  (109-002/004; retargeted 133-005 off the deleted ``otos_config()``) -- the
   SAME direct-patch-send mechanism a live TestGUI OL/OA calibration push (or
   connect-time calibration) uses, reused here to calibrate OUT the injected
   raw OTOS scale error before driving a tour -- see
@@ -235,14 +236,52 @@ _J_MAX = 5000.0         # [mm/s^3]
 _YAW_JERK_MAX = 100.0   # [rad/s^3]
 
 
-def _compensating_register(raw_error: float) -> float:
-    """Same conversion ``push.py``'s ``scale_to_int8()``/``Devices::Otos::
-    scaleToRegister()`` perform: a scale multiplier -> the chip's raw int8
-    register value (0.1%-per-LSB). Duplicated from
-    ``test_otos_calibration_convergence.py`` -- both are small, self-
-    contained test-local conversions, not shared library code."""
-    scale = 1.0 / (1.0 + raw_error)
-    return round((scale - 1.0) / 0.001)
+def _compensating_scale(raw_error: float) -> float:
+    """The scale MULTIPLIER that cancels *raw_error* (1.0 = no correction).
+
+    133-005: was ``_compensating_register()``, which additionally encoded
+    the multiplier into the OTOS chip's raw int8 register value
+    (0.1%-per-LSB, the pre-132 ``OL``/``OA`` text-verb domain). That
+    encoding moved FIRMWARE-side in 132-010 -- ``App::configureOtos()``
+    runs the multiplier through ``Devices::scaleToRegister()`` itself now,
+    so a live push and a boot bake finally agree on what a given
+    multiplier means (see ``push.otos_kwargs()``'s own docstring). Pushing
+    a pre-encoded register value over the new ``OTOS`` group would be
+    encoding it twice.
+    """
+    return 1.0 / (1.0 + raw_error)
+
+
+class _SteppingConfigConn(_SimConfigConn):
+    """A ``SimConfigConn`` whose ``poll_ack()`` ADVANCES the sim instead of
+    sleeping on a wall clock.
+
+    ``NezhaProtocol.set_config_field()`` looks up ``poll_ack`` on its
+    connection duck-typed, so this subclass changes how the ack is
+    observed without forking one line of the envelope-building path (109-
+    002 Architecture Revision 1's "one mechanism, not a Sim-specific
+    fork").
+
+    It is needed because this file's loops connect with
+    ``start_tick_thread=False`` -- the caller owns pacing (see
+    ``SimLoop``'s own module docstring). ``SimConfigConn.poll_ack()``
+    polls and ``time.sleep()``s, so with nothing stepping the sim it can
+    only ever burn its whole timeout and return ``None``: the command WAS
+    injected and does land on the next ``step()``, but the ack is
+    unobservable, so a genuine ``ERR_*`` rejection and a healthy push are
+    indistinguishable. Stepping here makes ``assert ack.ok`` mean
+    something in the deterministic regime, and costs virtual time instead
+    of half a wall-clock second per field.
+    """
+
+    def __init__(self, loop, *, deterministic: bool = True) -> None:
+        super().__init__(loop)
+        self._deterministic = deterministic
+
+    def poll_ack(self, corr_id: int, timeout: int = 500):  # [ms]
+        if not self._deterministic:
+            return super().poll_ack(corr_id, timeout=timeout)
+        return _wait_for_ack(self._loop, corr_id, deterministic=True)
 
 
 def _normalize_deg(delta_deg: float) -> float:
@@ -305,6 +344,7 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
                 j_max: "float | None" = None, yaw_jerk_max: "float | None" = None):
     from robot_radio.config.robot_config import load_robot_config
     from robot_radio.io.sim_loop import SimLoop
+    from robot_radio.robot.pb2 import robot_config_pb2
     from robot_radio.robot.protocol import NezhaProtocol
 
     lib_path = _sim_lib_path()
@@ -373,14 +413,25 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
     if yaw_jerk_max is not None:
         shaper_fields["yaw_jerk_max"] = yaw_jerk_max
 
+    # 133-005: retargeted off the deleted single-envelope
+    # `estimator_config(**kwargs)` (the EstimatorConfigPatch arm went with
+    # config.proto, 132-013) onto per-field SetConfigField pushes against
+    # the PLANNER_SHAPER group -- the group 132-017 split out of the
+    # boot-only PLANNER precisely so these six stay live-pushable
+    # (Motion::Planner::applyShaperLimits()). Only `j_max` needed renaming:
+    # the group calls it `jerk_max`. No current call site in this file
+    # passes an override, so this block was already dead -- and would have
+    # raised AttributeError the moment anyone used it, exactly the way the
+    # OTOS push below actually did for two sprints.
     if shaper_fields:
-        conn = _SimConfigConn(loop)
+        conn = _SteppingConfigConn(loop, deterministic=deterministic)
         proto = NezhaProtocol(conn)  # type: ignore[arg-type]
-        corr_id = proto.estimator_config(**shaper_fields)
-        ack = _wait_for_ack(loop, corr_id, deterministic=deterministic)
-        assert ack is not None and ack.ok, (
-            f"EstimatorConfigPatch shaper push failed to ack: {ack}"
-        )
+        for field_name, value in shaper_fields.items():
+            wire_field = "jerk_max" if field_name == "j_max" else field_name
+            ack = proto.set_config_field(robot_config_pb2.PLANNER_SHAPER, wire_field, value)
+            assert ack is not None and ack.ok, (
+                f"PLANNER_SHAPER.{wire_field}={value} push failed to ack: {ack}"
+            )
 
     if not realistic_errors:
         # Ideal chip: every knob explicit at its documented no-op default,
@@ -403,19 +454,30 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
     loop.set_enc_slip(1, _ENC_SLIP_RATE, _ENC_SLIP_MAG)
     loop.set_enc_slip(2, _ENC_SLIP_RATE, _ENC_SLIP_MAG)
 
-    # Calibrate OUT the raw OTOS scale error via the real OtosConfigPatch
-    # wire path -- see this file's own module docstring for why an
-    # uncalibrated OTOS is out of scope for this gate.
-    conn = _SimConfigConn(loop)
+    # Calibrate OUT the raw OTOS scale error over the real wire path -- see
+    # this file's own module docstring for why an uncalibrated OTOS is out
+    # of scope for this gate.
+    #
+    # 133-005: retargeted off `NezhaProtocol.otos_config()`, which 132-014
+    # DELETED along with the rest of the *ConfigPatch surface. This call
+    # had been raising AttributeError at setup ever since -- i.e. EVERY
+    # realistic-profile run in this module has been dying before it drove a
+    # single leg, for two sprints, while reporting as `xfailed` under a
+    # reason string blaming turn accuracy. It was invisible because the
+    # shaped-band test asserts on TOUR_1/ideal and never reaches the
+    # realistic legs, and because the four tests below are
+    # xfail(strict=False), which swallows a setup crash and a measured
+    # shortfall identically. The replacement is the OTOS group's own live
+    # per-field arm (install(OTOS) is re-appliable, 132-010).
+    conn = _SteppingConfigConn(loop, deterministic=deterministic)
     proto = NezhaProtocol(conn)  # type: ignore[arg-type]
-    corr_id = proto.otos_config(
-        linear_scale=_compensating_register(_OTOS_LINEAR_ERR),
-        angular_scale=_compensating_register(_OTOS_ANGULAR_ERR),
-    )
-    ack = _wait_for_ack(loop, corr_id, deterministic=deterministic)
-    assert ack is not None and ack.ok, (
-        f"OtosConfigPatch calibration push failed to ack: {ack}"
-    )
+    for field_name, raw_error in (("linear_scale", _OTOS_LINEAR_ERR),
+                                   ("angular_scale", _OTOS_ANGULAR_ERR)):
+        scale = _compensating_scale(raw_error)
+        ack = proto.set_config_field(robot_config_pb2.OTOS, field_name, scale)
+        assert ack is not None and ack.ok, (
+            f"OTOS.{field_name}={scale} calibration push failed to ack: {ack}"
+        )
     return loop
 
 
@@ -660,10 +722,12 @@ def _assert_tour_gate(gate: TourGateResult, *, tolerance_deg: float, label: str,
 
 _XFAIL_REASON_IDEAL = (
     "109-009 Impossibility Argument: ideal-chip tour turns still don't reach the "
-    "stakeholder's <0.05deg 'exact' bar (current per-turn errors ~0.2-2.2deg; see "
+    "stakeholder's <0.05deg 'exact' bar -- current per-turn errors run to ~22deg (see "
     "test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band()'s own "
-    "printed report) -- see clasi/issues/land-at-zero-at-orthogonal-chain-boundaries.md "
-    "for the live investigation into the dominant remaining error source."
+    "printed report for the live numbers; the '~0.2-2.2deg' this string used to quote "
+    "was measured in sprint 109 and had been stale for many sprints) -- see "
+    "clasi/issues/land-at-zero-at-orthogonal-chain-boundaries.md for the live "
+    "investigation into the dominant remaining error source."
 )
 
 _XFAIL_REASON_REALISTIC = (
@@ -671,7 +735,13 @@ _XFAIL_REASON_REALISTIC = (
     "uniformly land within the stakeholder's 1.0deg bar (same dominant error source "
     "as the ideal-chip xfail, plus sensor-error-injection noise) -- see "
     "clasi/issues/land-at-zero-at-orthogonal-chain-boundaries.md for the live "
-    "investigation."
+    "investigation. 133-005: this reason is HONEST AGAIN. Between 132-014 and "
+    "133-005 both realistic-profile tests raised AttributeError in _make_loop() "
+    "(NezhaProtocol.otos_config() had been deleted) and never drove a leg at all -- "
+    "xfail(strict=False) reports a setup crash and a measured shortfall identically, "
+    "so this string claimed a turn-accuracy result that nothing had measured for two "
+    "sprints. If this xfail ever needs re-reasoning again, CHECK FIRST that the body "
+    "actually ran."
 )
 
 
