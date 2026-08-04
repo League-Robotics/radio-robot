@@ -1,9 +1,8 @@
 ---
 id: '132'
-title: 'Configuration discipline: one owned object, live wire config with
-  read-back, patch-surface retirement, JSON reshape, and per-wheel drive
-  calibration on tovez'
-status: planning-docs
+title: 'Configuration discipline: one owned object, live wire config with read-back,
+  patch-surface retirement, JSON reshape, and per-wheel drive calibration on tovez'
+status: closed
 branch: sprint/132-configuration-discipline-read-back-and-per-wheel-drive-calibration-over-the-wire
 worktree: false
 use-cases: []
