@@ -180,6 +180,14 @@ class RobotLoop {
   void handleStop(const msg::CommandEnvelope& env);
   void handleEstop(const msg::CommandEnvelope& env);
 
+  // handleGetConfig() -- 132-011: the CONFIG binary arm's read-back half.
+  // Unlike every other case in routeCommand()'s switch, this one replies
+  // SYNCHRONOUSLY (Comms::sendReply(), a ReplyEnvelope{cfg: ConfigSnapshot}
+  // or {err: Error}) rather than through the ack ring -- a ring entry has
+  // no room for a group's worth of values. See configurator.h's
+  // encodeSnapshot() for the read-back itself.
+  void handleGetConfig(const msg::CommandEnvelope& env);
+
   // MOVE enqueue is idempotent on Move.id: a host that retries an enqueue
   // whose ack was lost re-sends the SAME id under a fresh corr_id, and
   // without this the move would execute twice. Move.id 0 means "unset" (the

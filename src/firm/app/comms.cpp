@@ -213,15 +213,16 @@ App::Comms::DbgAction classifyDbgArg(const uint8_t* data, uint16_t len) {
 
 // bodyKindToVerb() -- ReplyEnvelope::BodyKind (envelope.proto) and
 // msg::Verb (commands.proto) are two independently-generated enums over
-// the SAME three reply shapes (TLM/OK/ERR); this is the one seam that
-// maps between them so sendReply() can derive its outbound command name
-// from `reply.body_kind` alone -- no caller-supplied command string to
-// drift out of sync with the envelope it names.
+// the SAME reply shapes (TLM/OK/ERR, plus CFG as of 132-011); this is the
+// one seam that maps between them so sendReply() can derive its outbound
+// command name from `reply.body_kind` alone -- no caller-supplied command
+// string to drift out of sync with the envelope it names.
 msg::Verb bodyKindToVerb(msg::ReplyEnvelope::BodyKind kind) {
   switch (kind) {
     case msg::ReplyEnvelope::BodyKind::TLM: return msg::Verb::TLM;
     case msg::ReplyEnvelope::BodyKind::OK: return msg::Verb::OK;
     case msg::ReplyEnvelope::BodyKind::ERR: return msg::Verb::ERR;
+    case msg::ReplyEnvelope::BodyKind::CFG: return msg::Verb::CFG;
     case msg::ReplyEnvelope::BodyKind::NONE:
     default: return msg::Verb::VERB_UNSPECIFIED;
   }

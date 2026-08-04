@@ -65,10 +65,10 @@ struct Result {
 // computes, including ticket 004's cycle_busy/cycle_period primary-frame
 // migration (194B largest, up from 185B pre-migration -- the whole reason
 // this budget needed recomputing in the first place).
-//   CommandEnvelope: config=49B, stop=8B, move=38B, wheels=24B, estop=3B (worst=config=49B) + non-oneof=6B => total=55B
-//   ReplyEnvelope: ok=19B, err=10B, tlm=188B (worst=tlm=188B) + non-oneof=4B => total=192B
+//   CommandEnvelope: config=49B, stop=8B, move=38B, wheels=24B, estop=3B, get_config=5B (worst=config=49B) + non-oneof=6B => total=55B
+//   ReplyEnvelope: ok=19B, err=10B, tlm=188B, cfg=228B (worst=cfg=228B) + non-oneof=4B => total=232B
 constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 55;
-constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 192;
+constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 232;
 static_assert(kCommandEnvelopeMaxEncodedSize <= 240,
               "CommandEnvelope worst-case encoded size exceeds the 240-byte envelope budget");
 static_assert(kReplyEnvelopeMaxEncodedSize <= 240,
@@ -122,6 +122,26 @@ Result decode(WheelControl& out, const uint8_t* buf, uint16_t len);
 Result decode(Planner& out, const uint8_t* buf, uint16_t len);
 Result decode(Otos& out, const uint8_t* buf, uint16_t len);
 Result decode(Estimator& out, const uint8_t* buf, uint16_t len);
+
+// encode(<Group>&, ...) -- 132-011 addition, one overload per
+// robot_config.proto robot-config group -- the encode-direction
+// counterpart of decode(<Group>&, ...) above (132-008), reusing the
+// SAME generated encodeInto() engine msg::wire::encode(ReplyEnvelope&,
+// ...) already uses. Configurator's read-back path (encodeSnapshot())
+// calls these to fill a ConfigSnapshot.body. Returns the number of
+// bytes written (0 is a LEGITIMATE result for an all-default-valued
+// group, proto3 implicit presence -- not necessarily a failure; 0
+// only means failure when `cap` is too small for the group's actual
+// content, which never happens in production since `cap` is always
+// ConfigSnapshot.body's own 220-byte capacity, comfortably above
+// every group's measured worst case).
+uint16_t encode(const Geometry& in, uint8_t* buf, uint16_t cap);
+uint16_t encode(const Motors& in, uint8_t* buf, uint16_t cap);
+uint16_t encode(const Drive& in, uint8_t* buf, uint16_t cap);
+uint16_t encode(const WheelControl& in, uint8_t* buf, uint16_t cap);
+uint16_t encode(const Planner& in, uint8_t* buf, uint16_t cap);
+uint16_t encode(const Otos& in, uint8_t* buf, uint16_t cap);
+uint16_t encode(const Estimator& in, uint8_t* buf, uint16_t cap);
 
 }  // namespace wire
 }  // namespace msg

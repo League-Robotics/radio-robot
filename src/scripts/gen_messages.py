@@ -2851,6 +2851,66 @@ def _render_config_group_decode_defs(group_names: list[str]) -> str:
     return "\n".join(lines)
 
 
+# 132-011 (GetConfig/ConfigSnapshot wire read-back): the encode-direction
+# mirror of _render_config_group_decode_decls()/_render_config_group_
+# decode_defs() above. A ConfigSnapshot reply carries one group's CURRENT
+# value as raw encoded bytes (ConfigSnapshot.body) -- Configurator's own
+# read-back path needs a way to encode config_'s matching member using this
+# file's existing schema-generic encodeInto() machinery, not a hand-rolled
+# serializer, the exact same "reuse the generated engine" reasoning
+# 132-008's decode() family already established for the write direction.
+# Same "not reachable from CommandEnvelope/ReplyEnvelope's own BFS" fact
+# applies here as it did there (this file's own doc comment on
+# _robot_config_groups() above): a group struct is never itself a nested
+# MESSAGE field anywhere in the schema -- SetConfigGroup.body/ConfigSnapshot.
+# body are opaque `bytes`, not message-typed oneof arms -- so struct_order's
+# ordinary per-struct loop in _emit_wire_files() never builds an encode()
+# overload for any of them either.
+def _render_config_group_encode_decls(group_names: list[str]) -> str:
+    if not group_names:
+        return ""
+    lines = [
+        "",
+        "// encode(<Group>&, ...) -- 132-011 addition, one overload per",
+        "// robot_config.proto robot-config group -- the encode-direction",
+        "// counterpart of decode(<Group>&, ...) above (132-008), reusing the",
+        "// SAME generated encodeInto() engine msg::wire::encode(ReplyEnvelope&,",
+        "// ...) already uses. Configurator's read-back path (encodeSnapshot())",
+        "// calls these to fill a ConfigSnapshot.body. Returns the number of",
+        "// bytes written (0 is a LEGITIMATE result for an all-default-valued",
+        "// group, proto3 implicit presence -- not necessarily a failure; 0",
+        "// only means failure when `cap` is too small for the group's actual",
+        "// content, which never happens in production since `cap` is always",
+        "// ConfigSnapshot.body's own 220-byte capacity, comfortably above",
+        "// every group's measured worst case).",
+    ]
+    for name in group_names:
+        lines.append(f"uint16_t encode(const {name}& in, uint8_t* buf, uint16_t cap);")
+    lines.append("")
+    return "\n".join(lines)
+
+
+def _render_config_group_encode_defs(group_names: list[str]) -> str:
+    if not group_names:
+        return ""
+    lines = [
+        "// encode(<Group>&, ...) -- 132-011 addition; see wire.h's own",
+        "// declaration comment. Same shape as encode(ReplyEnvelope&, ...)",
+        "// above, against each group's own generated kTable_<Group>.",
+        "",
+    ]
+    for name in group_names:
+        lines.append(f"uint16_t encode(const {name}& in, uint8_t* buf, uint16_t cap) {{")
+        lines.append("  if (buf == nullptr) return 0;")
+        lines.append("  size_t pos = 0;")
+        lines.append(
+            f"  if (!encodeInto(&in, kTable_{name}, buf, static_cast<size_t>(cap), &pos)) return 0;")
+        lines.append("  return static_cast<uint16_t>(pos);")
+        lines.append("}")
+        lines.append("")
+    return "\n".join(lines)
+
+
 def _emit_wire_files(fds):
     """Emit src/firm/messages/wire.{h,cpp}. Returns (wire_h, wire_cpp, cmd_report,
     reply_report) -- the reports are also printed to stderr by the caller
@@ -2900,6 +2960,7 @@ def _emit_wire_files(fds):
               + f'{_ENVELOPE_BUDGET_BYTES}-byte envelope budget");\n'
               + _WIRE_H_FOOTER
               + _render_config_group_decode_decls(group_struct_order)
+              + _render_config_group_encode_decls(group_struct_order)
               + _WIRE_H_CLOSE)
 
     cpp_parts = [_WIRE_CPP_PART1]
@@ -2910,6 +2971,7 @@ def _emit_wire_files(fds):
     cpp_parts.extend(_render_message_tables_array(struct_order))
     cpp_parts.append(_WIRE_CPP_PART2)
     cpp_parts.append(_render_config_group_decode_defs(group_struct_order))
+    cpp_parts.append(_render_config_group_encode_defs(group_struct_order))
     cpp_parts.append(_WIRE_CPP_PART3)
     wire_cpp = "\n".join(cpp_parts)
 

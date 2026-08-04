@@ -46,9 +46,19 @@ arc/vw/turn/go_to/grip/zero_*/otos_*/port_*/stream/stream_fields/snap/
 stream_drive/wait_for_evt_done/cancel and the ``Stop`` stop-clause-token
 builder) — see this ticket's completion notes for the full disposition
 table. ``set_config()``/``set_config_binary()`` survive (target the still-
-live ``config`` arm); there is no live config READ-back path any more (the
-``get`` arm is reserved) — a genuine, permanent wire-schema gap until a
-future sprint adds one.
+live ``config`` arm).
+
+132-011 (GetConfig/ConfigSnapshot wire read-back) reopens the read-back gap
+104-002's note above described as "permanent": ``get_config()`` (below) is
+a NEW method, not a resurrection of the deleted 104-002 one of the same
+name -- it targets a genuinely new wire arm
+(``CommandEnvelope.cmd.get_config`` / ``ReplyEnvelope.body.cfg``,
+``GET_CONFIG``/``CFG`` in ``commands.proto``), not the reserved pre-104
+``get`` arm. Unlike ``move``/``config``/``stop`` (whose outcome rides the
+ack ring, §7.1 ``docs/protocol-v5.md``), ``get_config()`` sends via the
+BLOCKING ``send_envelope()``/``_send_envelope()`` and reads a genuinely
+synchronous ``ReplyEnvelope{cfg: ConfigSnapshot}`` back -- the one CONFIG
+binary-arm outcome that needs a real reply body, not just an ack.
 """
 
 from __future__ import annotations
@@ -67,7 +77,21 @@ from robot_radio.io.serial_conn import SerialConnection
 # robot_radio.robot's own __init__.py is still mid-execution (which is
 # always the case when this module is first loaded -- __init__.py imports
 # this module itself) never re-enters a partially-initialized module.
-from robot_radio.robot.pb2 import config_pb2, envelope_pb2, telemetry_pb2
+from robot_radio.robot.pb2 import config_pb2, envelope_pb2, robot_config_pb2, telemetry_pb2
+
+# robot_config_generated -- the GENERATED pydantic group model (132-002),
+# NOT robot_radio.config.robot_config's hand-written loader/validator
+# classes (a different, larger surface -- get_robot_config()/list_robots()/
+# derived fields/env-var resolution). get_config() (132-011, below) returns
+# ONE of these flat per-group models (Geometry/Motors/Drive/WheelControl/
+# Planner/Otos/Estimator), field-for-field identical to the wire group it
+# decodes -- matching the-configuration-object.md's "the object holds RAW
+# file values" rule on the host side too. Safe to import at module level
+# for the same reason config_pb2/envelope_pb2 above are (robot_radio.config
+# has no dependency back onto robot_radio.robot/robot_radio.io -- confirmed
+# by reading robot_config_generated.py/robot_config.py/config/__init__.py
+# in full: pydantic only).
+from robot_radio.config import robot_config_generated
 
 
 # ---------------------------------------------------------------------------
@@ -889,6 +913,26 @@ _ALL_SET_KEYS = frozenset(
     set(_DRIVETRAIN_KEYS) | set(_MOTOR_PID_KEYS) | {"ml", "mr"})
 
 
+# _CONFIG_GROUP_NAMES (132-011) -- ConfigGroupTarget wire value -> the
+# group's own name, shared verbatim by BOTH robot_config_pb2 (the real
+# compiled message class, e.g. robot_config_pb2.Drive) and
+# robot_config_generated (the generated pydantic class, e.g.
+# robot_config_generated.Drive) -- ticket 002's own field-descriptor walk
+# emits both from the SAME robot_config.proto message names, so one name
+# resolves the class on either side; get_config() (below) is the only
+# caller. robot_config_pb2.ConfigGroupTarget's CONFIG_GROUP_UNSPECIFIED (0)
+# is deliberately absent -- it is never a real target.
+_CONFIG_GROUP_NAMES: dict[int, str] = {
+    robot_config_pb2.GEOMETRY: "Geometry",
+    robot_config_pb2.MOTORS: "Motors",
+    robot_config_pb2.DRIVE: "Drive",
+    robot_config_pb2.WHEEL_CONTROL: "WheelControl",
+    robot_config_pb2.PLANNER: "Planner",
+    robot_config_pb2.OTOS: "Otos",
+    robot_config_pb2.ESTIMATOR: "Estimator",
+}
+
+
 def _format_config_value(value: Any) -> str:
     """Format a set_config() kwarg value into the SAME string shape the
     text plane's set_config() already produced -- floats to 6 significant
@@ -1161,6 +1205,67 @@ class NezhaProtocol:
         if ack is None or not ack.ok:
             return None
         return ack
+
+    # ------------------------------------------------------------------
+    # Config: GET (132-011, GetConfig/ConfigSnapshot wire read-back) --
+    # the machinery ``set_config_binary()``'s own docstring flags as
+    # long-standing gaps: unlike every other CONFIG-arm call above (whose
+    # outcome rides the ack ring, since the current firmware never sends a
+    # synchronous ``ReplyEnvelope{ok:...}``/``{err:...}``), GetConfig's
+    # firmware handler (``RobotLoop::handleGetConfig()``) genuinely DOES
+    # reply synchronously -- a group's worth of values has no room in a
+    # 4-deep ack-ring entry. ``get_config()`` therefore uses the BLOCKING
+    # ``send_envelope()``/``_send_envelope()`` path instead, exactly the
+    # machinery this class's own docstring already names
+    # (``SerialConnection.send_envelope()`` + its corr-id-keyed
+    # ``_reply_queues``, built for -- per that class's own docstring --
+    # "OK/ERR/CFG replies").
+    # ------------------------------------------------------------------
+
+    def get_config(self, target: int, *,
+                    read_timeout: int = 500,  # [ms]
+                    ) -> Any | None:
+        """Send ``GetConfig{target}``, return the target group's CURRENT
+        value as a typed, GENERATED pydantic model (``robot_config_
+        generated.<Group>`` -- ticket 002's own generated model, never a
+        raw dict), or ``None`` on an unknown target, a timeout, a
+        not-connected connection, or an ``err`` reply (e.g.
+        ``ERR_BADARG`` for a malformed target -- see ``RobotLoop::
+        handleGetConfig()``'s own doc comment).
+
+        ``target`` is a ``robot_config_pb2.ConfigGroupTarget`` value
+        (``robot_config_pb2.DRIVE``, ``robot_config_pb2.GEOMETRY``, ...).
+        Read-back is NOT gated by re-appliability the way a SET would be
+        (a future ticket's ``set_config_group()``) -- every robot-config
+        group reads back, including the boot-only ones (GEOMETRY/
+        PLANNER): ``Configurator::encodeSnapshot()`` (firmware) is
+        deliberately not gated by the same ``isLiveConfigurable()`` table
+        ``applyGroup()``/``install()`` use for writes.
+
+        The returned pydantic instance is built generically from the
+        REAL protobuf message's own field descriptor
+        (``robot_config_pb2.<Group>.FromString(reply.cfg.body)``) --
+        every field the wire group carries copies straight across, since
+        ticket 002's pydantic model and the real compiled protobuf
+        message are generated from the exact same robot_config.proto
+        field list and therefore always agree field-for-field.
+        """
+        group_name = _CONFIG_GROUP_NAMES.get(target)
+        if group_name is None:
+            return None
+
+        request = robot_config_pb2.GetConfig(target=target)
+        envelope = envelope_pb2.CommandEnvelope(get_config=request)
+        reply = self._send_envelope(envelope, read_timeout=read_timeout)
+        if reply is None or reply.WhichOneof("body") != "cfg":
+            return None
+
+        pb_cls = getattr(robot_config_pb2, group_name)
+        pydantic_cls = getattr(robot_config_generated, group_name)
+        pb_obj = pb_cls.FromString(reply.cfg.body)
+        return pydantic_cls(**{
+            field.name: getattr(pb_obj, field.name) for field in pb_obj.DESCRIPTOR.fields
+        })
 
     # ------------------------------------------------------------------
     # Drive commands

@@ -5,6 +5,7 @@
 
 #include "messages/common.h"
 #include "messages/config.h"
+#include "messages/robot_config.h"
 #include "messages/telemetry.h"
 
 
@@ -144,6 +145,7 @@ struct CommandEnvelope {
         MOVE = 3,
         WHEELS = 4,
         ESTOP = 5,
+        GET_CONFIG = 6,
     };
     CmdKind cmd_kind = CmdKind::NONE;
     union {
@@ -152,6 +154,7 @@ struct CommandEnvelope {
         Move move;
         Wheels wheels;
         Estop estop;
+        GetConfig get_config;
     } cmd = {};
 
     uint32_t corr_id = 0;
@@ -166,12 +169,14 @@ struct ReplyEnvelope {
         OK = 1,
         ERR = 2,
         TLM = 3,
+        CFG = 4,
     };
     BodyKind body_kind = BodyKind::NONE;
     union {
         Ack ok;
         Error err;
         Telemetry tlm;
+        ConfigSnapshot cfg;
     } body = {};
 
     uint32_t corr_id = 0;

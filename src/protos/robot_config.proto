@@ -471,10 +471,14 @@ message Estimator {
 // rather than to today's specific worst-field-count group, so a future
 // field added to any one group cannot silently outgrow `body` without
 // also tripping the scratch-buffer ceiling everything else already
-// shares. (Not wired into CommandEnvelope's own `cmd` oneof yet -- see
-// this file's own header comment -- so this has no effect on the 240 B
-// `_ENVELOPE_BUDGET_BYTES` static_assert today; that wiring is a later
-// ticket's job.)
+// shares. (132-011 wires GetConfig/ConfigSnapshot below into
+// CommandEnvelope.cmd/ReplyEnvelope.body -- envelope.proto's own
+// `get_config`/`cfg` arms -- proving `(max_count)=220` fits the 240 B
+// `_ENVELOPE_BUDGET_BYTES` static_assert with the reply's own non-oneof
+// bytes still inside it, tightly: see wire.h's generated size-report
+// comment for the exact measured total. SetConfigGroup/SetConfigField
+// remain UNWIRED as of 132-011 -- that is ticket 012/013's job, not this
+// one; GET is not gated behind SET landing first.)
 // ===========================================================================
 
 // SetConfigGroup -- push a whole group's worth of values in one frame.
@@ -487,13 +491,26 @@ message SetConfigGroup {
   bytes             body   = 2 [(max_count) = 220];  // encoded `target`'s own generated group message
 }
 
-// GetConfig -- request a read-back of one group.
+// GetConfig -- request a read-back of one group. Wired into
+// CommandEnvelope.cmd.get_config (envelope.proto, field 24) by 132-011 --
+// NOT gated by isLiveConfigurable()/the applyGroup() re-appliability table:
+// read-back works for every ConfigGroupTarget, including boot-only ones
+// (GEOMETRY/PLANNER) -- only WRITES (applyGroup()/install(target)) are
+// gated. `RobotLoop::routeCommand()`'s GET_CONFIG case reads
+// `Configurator::config()`'s matching group, encodes it via the SAME
+// generated per-group codec applyGroup()'s decode() counterpart already
+// uses (`msg::wire::encode(<Group>&, ...)`, 132-011's own encode-direction
+// addition to gen_messages.py's `_render_config_group_*` family), and
+// replies with a ConfigSnapshot through `Comms::sendReply()` -- a genuinely
+// synchronous per-command reply, unlike every other CONFIG-arm outcome
+// (which rides the ack ring, §7.1 docs/protocol-v5.md).
 message GetConfig {
   ConfigGroupTarget target = 1;
 }
 
 // ConfigSnapshot -- GetConfig's reply: the live, in-memory value of one
-// group, encoded the same way SetConfigGroup.body is.
+// group, encoded the same way SetConfigGroup.body is. Wired into
+// ReplyEnvelope.body.cfg (envelope.proto, field 12) by 132-011.
 message ConfigSnapshot {
   ConfigGroupTarget target = 1;
   bytes             body   = 2 [(max_count) = 220];

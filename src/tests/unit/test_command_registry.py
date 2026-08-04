@@ -71,9 +71,15 @@ _CPP_ROW_RE = re.compile(
 #             here regardless (a schema-level closed verb set, not a
 #             per-build one) so the host codec always recognizes "DBG:" as
 #             cleartext rather than counting it malformed.
+#   GET_CONFIG/CFG -- 132-011 (GetConfig/ConfigSnapshot wire read-back): the
+#             CONFIG binary arm's read-back half. GET_CONFIG (host->robot)
+#             carries CommandEnvelope.cmd.get_config; CFG (robot->host)
+#             carries ReplyEnvelope.body.cfg -- the first genuinely NEW
+#             binary command/reply PAIR added since WHEELS/ESTOP.
 _EXPECTED_CLEARTEXT = {"HELLO", "PING", "ID", "VER", "DEVICE", "PONG",
                        "READY", "STATUS", "HELP", "DBG"}
-_EXPECTED_BINARY = {"MOVE", "CONFIG", "STOP", "WHEELS", "ESTOP", "TLM", "OK", "ERR"}
+_EXPECTED_BINARY = {"MOVE", "CONFIG", "STOP", "WHEELS", "ESTOP", "TLM", "OK", "ERR",
+                    "GET_CONFIG", "CFG"}
 
 
 def _parse_cpp_verb_table(commands_h: str) -> list[tuple[str, bool]]:

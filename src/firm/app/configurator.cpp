@@ -452,4 +452,46 @@ msg::ErrCode Configurator::install(msg::ConfigGroupTarget target) {
   return msg::ErrCode::ERR_NOT_LIVE;
 }
 
+// encodeSnapshot() -- see configurator.h's own doc comment. Deliberately
+// NOT gated by isLiveConfigurable(): read-back is honest for every
+// ConfigGroupTarget, including the boot-only ones applyGroup()/install()
+// reject as writes (the-configuration-object.md's own testing note: "GET
+// still works for boot-only groups even though SET is rejected").
+msg::ErrCode Configurator::encodeSnapshot(msg::ConfigGroupTarget target,
+                                          msg::ConfigSnapshot& out) const {
+  out.target = target;
+  uint16_t len = 0;
+  switch (target) {
+    case msg::ConfigGroupTarget::GEOMETRY:
+      len = msg::wire::encode(config_.geometry, out.body_, sizeof(out.body_));
+      break;
+    case msg::ConfigGroupTarget::MOTORS:
+      len = msg::wire::encode(config_.motors, out.body_, sizeof(out.body_));
+      break;
+    case msg::ConfigGroupTarget::DRIVE:
+      len = msg::wire::encode(config_.drive, out.body_, sizeof(out.body_));
+      break;
+    case msg::ConfigGroupTarget::WHEEL_CONTROL:
+      len = msg::wire::encode(config_.wheelControl, out.body_, sizeof(out.body_));
+      break;
+    case msg::ConfigGroupTarget::PLANNER:
+      len = msg::wire::encode(config_.planner, out.body_, sizeof(out.body_));
+      break;
+    case msg::ConfigGroupTarget::OTOS:
+      len = msg::wire::encode(config_.otos, out.body_, sizeof(out.body_));
+      break;
+    case msg::ConfigGroupTarget::ESTIMATOR:
+      len = msg::wire::encode(config_.estimator, out.body_, sizeof(out.body_));
+      break;
+    case msg::ConfigGroupTarget::CONFIG_GROUP_UNSPECIFIED:
+    default:
+      // Kept as an explicit default (not folded away) so a future
+      // ConfigGroupTarget value added with no matching arm here fails
+      // loudly (ERR_BADARG) rather than reading stale/zeroed body bytes.
+      return msg::ErrCode::ERR_BADARG;
+  }
+  out.body_count = static_cast<uint8_t>(len);
+  return msg::ErrCode::ERR_NONE;
+}
+
 }  // namespace App

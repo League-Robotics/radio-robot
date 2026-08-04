@@ -4,6 +4,7 @@ package robot;
 
 import "config.proto";
 import "options.proto";
+import "robot_config.proto";
 import "telemetry.proto";
 
 // ---------------------------------------------------------------------------
@@ -286,11 +287,21 @@ message CommandEnvelope {
     // (io/serial_conn.py / io/sim_config.py's own `_envelope_command_name()`),
     // so `wheels`/`estop` MUST spell commands.proto's WHEELS/ESTOP verbs
     // exactly. Renaming either arm silently breaks every frame's CRC.
-    ConfigDelta config = 6;
-    Stop        stop   = 13;
-    Move        move   = 21;
-    Wheels      wheels = 22;
-    Estop       estop  = 23;
+    //
+    // get_config(24) -- 132-011 (GetConfig/ConfigSnapshot wire read-back):
+    // another fresh, never-before-used field number (the next one free
+    // after wheels/estop), carrying robot_config.proto's `GetConfig`
+    // (a bare `ConfigGroupTarget target`). Same load-bearing-name rule as
+    // wheels/estop above: this arm's name uppercases to commands.proto's
+    // `GET_CONFIG` verb EXACTLY (WhichOneof("cmd").upper() == "GET_CONFIG"),
+    // which is why the arm is spelled with an underscore rather than one
+    // word -- see commands.proto's own GET_CONFIG/CFG doc comment.
+    ConfigDelta config     = 6;
+    Stop        stop       = 13;
+    Move        move       = 21;
+    Wheels      wheels     = 22;
+    Estop       estop      = 23;
+    GetConfig   get_config = 24;
   }
 }
 
@@ -318,5 +329,24 @@ message ReplyEnvelope {
     Ack       ok   = 2;
     Error     err  = 3;
     Telemetry tlm  = 4;
+    // cfg(12) -- 132-011 (GetConfig/ConfigSnapshot wire read-back): the
+    // first genuinely NEW body arm since this message's pre-102 prune --
+    // free field numbers on this oneof start at 12 (reserved 5 to 11
+    // above). Carries robot_config.proto's `ConfigSnapshot`
+    // (`ConfigGroupTarget target` + the target's own encoded `body`
+    // bytes), `Comms::sendReply()`'s SYNCHRONOUS answer to a `get_config`
+    // request (§7.1's "no per-command ReplyEnvelope" framing describes
+    // move/config/stop's ack-ring path -- GetConfig is the one command
+    // that genuinely needs a direct reply, since a ring entry has no room
+    // for a group's worth of values). Unlike `get_config`'s own arm name
+    // (CommandEnvelope, above), this arm's name is NOT wire-derived --
+    // `Comms::sendReply()`'s outbound verb name comes from a hand-written
+    // `bodyKindToVerb()` switch on `body_kind`, not from
+    // `WhichOneof("body")` -- so "cfg" is a naming CHOICE, not a
+    // structural requirement; chosen to match commands.proto's own CFG
+    // verb and this project's long-anticipated "cfg reply" vocabulary
+    // (io/serial_conn.py's SerialConnection class docstring has named a
+    // future "cfg" reply verb since before this ticket existed).
+    ConfigSnapshot cfg = 12;
   }
 }

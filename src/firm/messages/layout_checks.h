@@ -45,12 +45,16 @@ static_assert(std::is_standard_layout<Wheels>::value,
               "msg::Wheels must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Estop>::value,
               "msg::Estop must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<GetConfig>::value,
+              "msg::GetConfig must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Ack>::value,
               "msg::Ack must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Error>::value,
               "msg::Error must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Telemetry>::value,
               "msg::Telemetry must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<ConfigSnapshot>::value,
+              "msg::ConfigSnapshot must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<DrivetrainConfigPatch>::value,
               "msg::DrivetrainConfigPatch must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<MotorConfigPatch>::value,

@@ -469,8 +469,11 @@ def test_set_ack_timeout_renders_set_failed(proto):
 
 
 def test_reply_oneof_no_longer_has_id_echo_helptext():
+    """132-011 adds `cfg` (ConfigSnapshot, GetConfig's synchronous reply) --
+    the body oneof's first genuinely NEW arm since the pre-102 prune this
+    test's own name refers to; id/echo/helptext stay gone."""
     fields = envelope_pb2.ReplyEnvelope.DESCRIPTOR.oneofs_by_name["body"].fields
-    assert {f.name for f in fields} == {"ok", "err", "tlm"}
+    assert {f.name for f in fields} == {"ok", "err", "tlm", "cfg"}
 
 
 @pytest.mark.skip(reason="DEPRECATED-COMMAND-INGEST -- the cmd oneof gained "

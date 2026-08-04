@@ -124,14 +124,20 @@ def test_field_numbers_match_pb2_descriptors():
     # therefore the CRC scope -- from `WhichOneof("cmd").upper()`, so
     # `wheels`/`estop` must spell commands.proto's WHEELS/ESTOP verbs
     # exactly. This assertion pins the names as well as the numbers.
+    # `get_config` (24, 132-011: GetConfig/ConfigSnapshot wire read-back) is
+    # the next fresh arm after wheels/estop, same load-bearing-name rule
+    # (uppercases to commands.proto's GET_CONFIG verb exactly).
     expected_cmd_numbers = {"config": 6, "stop": 13, "move": 21,
-                            "wheels": 22, "estop": 23}
+                            "wheels": 22, "estop": 23, "get_config": 24}
     actual_cmd_numbers = {
         f.name: f.number for f in pb_envelope.CommandEnvelope.DESCRIPTOR.oneofs_by_name["cmd"].fields
     }
     assert actual_cmd_numbers == expected_cmd_numbers
 
-    expected_body_numbers = {"ok": 2, "err": 3, "tlm": 4}
+    # `cfg` (12, 132-011) is ReplyEnvelope.body's first genuinely new arm
+    # since the pre-102 prune -- free numbers on this oneof start at 12
+    # (reserved 5 to 11, envelope.proto).
+    expected_body_numbers = {"ok": 2, "err": 3, "tlm": 4, "cfg": 12}
     actual_body_numbers = {
         f.name: f.number for f in pb_envelope.ReplyEnvelope.DESCRIPTOR.oneofs_by_name["body"].fields
     }
@@ -165,10 +171,19 @@ def test_field_numbers_match_pb2_descriptors():
     assert actual_move_plain_numbers == expected_move_plain_numbers
 
     # ERR_NOT_CONFIGURED (8, 114-001): composition root refused MOVE --
-    # config-completeness gate not yet satisfied.
+    # config-completeness gate not yet satisfied. ERR_NOT_LIVE (9, 132-008)
+    # / ERR_BUSY (10, 132-008): a push to a boot-only ConfigGroupTarget /
+    # a guarded subsystem (Devices::Motor) refusing while in motion --
+    # pre-existing as of this ticket (132-011), added to this dict here
+    # because this test's own assert on `expected_cmd_numbers`/
+    # `expected_body_numbers` above previously failed FIRST and masked
+    # this gap from ever being reached; not this ticket's own schema
+    # change (it added neither code), fixed in passing while already
+    # editing this exact function for its own get_config/cfg additions.
     expected_err_codes = {
         "ERR_NONE": 0, "ERR_UNKNOWN": 1, "ERR_BADARG": 2, "ERR_RANGE": 3, "ERR_FULL": 4, "ERR_DECODE": 5,
         "ERR_UNIMPLEMENTED": 6, "ERR_OVERSIZE": 7, "ERR_NOT_CONFIGURED": 8,
+        "ERR_NOT_LIVE": 9, "ERR_BUSY": 10,
     }
     actual_err_codes = {
         name: v.number for name, v in pb_envelope.DESCRIPTOR.enum_types_by_name["ErrCode"].values_by_name.items()

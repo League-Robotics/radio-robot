@@ -134,10 +134,45 @@ void RobotLoop::routeCommand(const Cmd& cmd) {
       // RobotLoop's whole job here is the ack.
       tlm_.ack(cmd.env.corr_id, configurator_.apply(cmd.env));
       break;
+    case msg::CommandEnvelope::CmdKind::GET_CONFIG:
+      handleGetConfig(cmd.env);
+      break;
     case msg::CommandEnvelope::CmdKind::NONE:
     default:
       break;
   }
+}
+
+// handleGetConfig() -- 132-011 (GetConfig/ConfigSnapshot wire read-back):
+// the one CONFIG-arm outcome that does NOT ride the ack ring (§7.1,
+// docs/protocol-v5.md) -- a ring entry has no room for a group's worth of
+// values, so this replies SYNCHRONOUSLY via Comms::sendReply(), the same
+// path App::Telemetry::emitPrimary() uses for its own unsolicited push
+// (the only other live call site, until now). Read-back is honest for
+// every ConfigGroupTarget, including boot-only ones (GEOMETRY/PLANNER) --
+// Configurator::encodeSnapshot() is deliberately NOT gated by
+// isLiveConfigurable() the way applyGroup()/install() are; only WRITES are
+// gated.
+void RobotLoop::handleGetConfig(const msg::CommandEnvelope& env) {
+  const msg::ConfigGroupTarget target = env.cmd.get_config.target;
+
+  msg::ConfigSnapshot snapshot;
+  const msg::ErrCode result = configurator_.encodeSnapshot(target, snapshot);
+
+  msg::ReplyEnvelope reply;
+  reply.corr_id = env.corr_id;
+  if (result == msg::ErrCode::ERR_NONE) {
+    reply.body_kind = msg::ReplyEnvelope::BodyKind::CFG;
+    reply.body.cfg = snapshot;
+  } else {
+    // An unrecognized target is reported, never silently dropped -- the
+    // same "loud rejection, not silence" discipline applyGroup()'s own
+    // ERR_NOT_LIVE rejection follows for writes.
+    reply.body_kind = msg::ReplyEnvelope::BodyKind::ERR;
+    reply.body.err.code = result;
+    reply.body.err.field = static_cast<uint32_t>(target);
+  }
+  comms_.sendReply(reply);
 }
 
 // Every MOVE goes to the planner, twist or wheels-velocity, whatever its

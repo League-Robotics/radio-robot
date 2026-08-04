@@ -183,6 +183,29 @@ class Configurator {
   // install() above, which fans out every group once, at construction.
   msg::ErrCode install(msg::ConfigGroupTarget target);
 
+  // encodeSnapshot() -- 132-011: read-back's own encode step (the-
+  // configuration-object.md: "GetConfig reads the object straight back
+  // out"). Fills `out` with `target`'s CURRENT value from config_,
+  // reusing the SAME generated per-group codec applyGroup()'s decode()
+  // counterpart already uses (msg::wire::encode(<Group>&, ...),
+  // gen_messages.py's 132-011 encode-direction addition).
+  //
+  // NOT gated by isLiveConfigurable()/the re-appliability table above --
+  // that table governs WRITES (a boot-only group has no safe runtime
+  // setter to re-apply); it says nothing about whether reading the value
+  // back out is safe, and it always is. GEOMETRY/PLANNER (boot-only for
+  // applyGroup()/install()) read back exactly like every live target.
+  //
+  // Returns ERR_BADARG for CONFIG_GROUP_UNSPECIFIED or any target this
+  // switch does not recognize -- `out` is left with `target` set but its
+  // `body`/`body_count` at their default (untouched) state, mirroring
+  // applyGroup()'s own "reject before touching anything meaningful"
+  // discipline in the read direction. `msg::wire::encode()` returning 0
+  // is NOT itself an error signal here (0 is the legitimate encoding of
+  // an all-default-valued group, proto3 implicit presence) -- see that
+  // function's own doc comment (wire.h).
+  msg::ErrCode encodeSnapshot(msg::ConfigGroupTarget target, msg::ConfigSnapshot& out) const;
+
  private:
   // Per-kind appliers, shared by apply() and reapplyPersistedTuning().
   void applyMotorConfigPatch(const msg::MotorConfigPatch& patch);
