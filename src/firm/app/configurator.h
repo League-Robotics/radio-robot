@@ -122,23 +122,32 @@ class Configurator {
   void loadBaked();
 
   // install() -- the boot-time fan-out: pushes config_'s re-appliable
-  // groups into the subsystems that own them, through the SAME setters
-  // the old free-function install*Calibration() family (boot_calibration.h)
-  // used -- installShaperLimits()/installDriveCalibration()/
-  // installWheelController()'s bodies, ported here reading config_ instead
-  // of a resolve()-computed struct. Deliberately NOT RobotLoop's own
-  // geometry/rotation configure() (RobotLoop is not a reference this
-  // class holds) -- 132-007 gave RobotLoop its own
-  // `configure(const Config::Robot&)` entry point instead, and
-  // boot_wiring.cpp calls it directly, right after loadBaked(), reading
-  // config() for its data exactly the way this method does. This
-  // method's own body is also NOT yet retargeted to call the new
-  // Drive::configure()/Motion::Planner-adapter/Motor-adapter/Otos-adapter
-  // entry points 132-007 added -- that retarget is tickets 009/010's job
-  // (Drive::kDutyPerSpeed-vs-JSON, OTOS/ESTIMATOR correctness); this is
-  // still a straightforward relocation of what already worked. This is the
-  // BOOT-TIME fan-out (every group, once, at construction) -- for a LIVE
-  // per-target push see install(ConfigGroupTarget) below.
+  // groups into the subsystems that own them. PLANNER stays an inline
+  // applyShaperLimits() call (boot-only -- no install(target) case exists
+  // for it). DRIVE/WHEEL_CONTROL are now retargeted (132-009) onto the SAME
+  // `drive_.configure(config_)` call install(DRIVE)/install(WHEEL_CONTROL)
+  // use below, rather than re-deriving Stage A/B/C inline a second time.
+  // Deliberately NOT RobotLoop's own geometry/rotation configure()
+  // (RobotLoop is not a reference this class holds) -- 132-007 gave
+  // RobotLoop its own `configure(const Config::Robot&)` entry point
+  // instead, and boot_wiring.cpp calls it directly, right after
+  // loadBaked(), reading config() for its data exactly the way this method
+  // does. MOTORS/OTOS boot values are installed even earlier, at
+  // CONSTRUCTION (boot_wiring.cpp's own bakeBootValues() feeds
+  // Devices::Motor's/RealOtos's constructors directly) -- this method does
+  // not re-touch them at boot; only a LIVE push reaches configureMotor()/
+  // configureOtos() (install(target) below).
+  //
+  // dutyPerSpeed (132-009): now sourced from config_.drive.duty_per_speed_
+  // left/right (the active robot JSON) instead of the hardcoded
+  // Drive::kDutyPerSpeed literal -- see configurator.cpp's own doc comment
+  // on this method for the full reversal reasoning (a stakeholder decision
+  // change, not an implementation detail). Still boot-only: neither
+  // Drive::configure() nor install(DRIVE) touch dutyPerSpeed live -- the
+  // wire's DRIVE group never carried it and still does not.
+  //
+  // This is the BOOT-TIME fan-out (every group, once, at construction) --
+  // for a LIVE per-target push see install(ConfigGroupTarget) below.
   void install();
 
   // applyGroup() -- 132-008: the live wire push path (the-configuration-

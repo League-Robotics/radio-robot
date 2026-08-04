@@ -50,6 +50,16 @@
 //     full-object-zero rationale decode(Telemetry&, ...) uses), which
 //     would zero the CURRENTLY LIVE group before it is even known whether
 //     the incoming push is valid.
+//   - (132-009) Boot-time install(): loadBaked()+install() (the no-arg,
+//     construction-time fan-out, distinct from every applyGroup()/
+//     install(target) scenario above, which is the LIVE wire-push path)
+//     sources dutyPerSpeed from config_.drive.duty_per_speed_left/right --
+//     the active robot JSON, via Config::defaultDriveGroup() -- rather
+//     than the historical Drive::kDutyPerSpeed C++ literal. This is the
+//     kDutyPerSpeed reversal ticket 009's own dispatch note calls out
+//     explicitly: see Configurator::install()'s doc comment
+//     (configurator.cpp) and Drive::kDutyPerSpeed's own doc comment
+//     (drive.h) for the full reasoning.
 //
 // Hand-rolled assertions, PASS/FAIL per scenario, nonzero exit on any
 // failure -- mirrors every other src/tests/sim/unit harness's own shape.
@@ -76,6 +86,7 @@
 #include "app/boot_calibration.h"
 #include "app/configurator.h"
 #include "app/drive.h"
+#include "config/boot_config.h"
 #include "config/robot.h"
 #include "devices/motor.h"
 #include "devices/otos.h"
@@ -543,13 +554,55 @@ int main() {
                 "config().drive.wheel_gain_left_accel still the last GOOD push's value");
   }
 
+  // --- Boot-time install(): dutyPerSpeed sourced from the file (132-009) --
+
+  beginScenario(
+      "loadBaked()+install() (the no-arg, BOOT-time fan-out -- distinct "
+      "from every applyGroup()/install(target) LIVE-push scenario above): "
+      "dutyPerSpeed is sourced from config_.drive.duty_per_speed_left/right "
+      "(the active robot JSON, via Config::defaultDriveGroup()), not the "
+      "historical Drive::kDutyPerSpeed C++ literal -- 132-009 reverses "
+      "07-31's MEASURED-NOT-CONFIGURED boot override per the 08-03 "
+      "configuration-discipline rule");
+  {
+    // loadBaked() fully overwrites config_ (one assignment per group, no
+    // merge) -- safe to call here regardless of every scenario above
+    // having already mutated config_/drive_/motorL_/motorR_.
+    configurator.loadBaked();
+    configurator.install();
+
+    const msg::Drive hwDrive = Config::defaultDriveGroup();
+    checkFloatEq(drive.dutyPerSpeedLeft(), hwDrive.duty_per_speed_left,
+                "drive.dutyPerSpeedLeft() reflects the baked JSON value, "
+                "not a hardcoded constant");
+    checkFloatEq(drive.dutyPerSpeedRight(), hwDrive.duty_per_speed_right,
+                "drive.dutyPerSpeedRight() reflects the baked JSON value, "
+                "not a hardcoded constant");
+    checkTrue(drive.calibrated(),
+              "drive.calibrated() is true after boot install() -- tick() "
+              "will actually write duty");
+
+    // The SAME boot install() call also retargets DRIVE/WHEEL_CONTROL onto
+    // Drive::configure(config_) (132-009) instead of re-deriving Stage
+    // A/B/C inline a second time -- confirm the fan-out still landed.
+    checkFloatEq(configurator.config().drive.wheel_gain_left_accel,
+                hwDrive.wheel_gain_left_accel,
+                "config().drive.wheel_gain_left_accel reflects loadBaked()");
+    const App::Drive::ControlGains& bootGains = drive.controlGains();
+    const msg::WheelControl hwWheelControl = Config::defaultWheelControlGroup();
+    checkFloatEq(bootGains.kp, hwWheelControl.pid_kp,
+                "controlGains().kp reflects the boot install() fan-out");
+  }
+
   std::printf("\n");
   if (g_failureCount == 0) {
     std::printf(
         "OK: applyGroup()/install(ConfigGroupTarget) classify boot-only vs. live "
-        "correctly, reject NaN and malformed pushes without partial commit, and "
+        "correctly, reject NaN and malformed pushes without partial commit, "
         "fan live pushes out to DRIVE/WHEEL_CONTROL/MOTORS/OTOS honestly (with "
-        "ESTIMATOR's known missing-consumer gap reported, not hidden)\n");
+        "ESTIMATOR's known missing-consumer gap reported, not hidden), and "
+        "loadBaked()+install() sources dutyPerSpeed from the file, not a "
+        "hardcoded constant (132-009)\n");
     return 0;
   }
   std::printf("FAILED: %d assertion(s) across the 132-008 applyGroup() tests\n", g_failureCount);

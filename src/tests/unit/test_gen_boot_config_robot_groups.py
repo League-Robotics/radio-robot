@@ -119,11 +119,19 @@ def test_default_drive_group_matches_tovez_json():
     """Drive: control.duty_per_speed_left/right/crawl_pulse plus the
     Stage-A per-wheel commanded->actual correction (identity on tovez.json
     as of 2026-07-31, see that file's own _wheel_correction_note) -- the
-    sprint's headline per-wheel drive-calibration surface (SUC-006)."""
+    sprint's headline per-wheel drive-calibration surface (SUC-006).
+
+    duty_per_speed_left/right corrected 0.00187325 -> 0.001182 (132-009,
+    the-configuration-object.md): the JSON field now matches
+    App::Drive::kDutyPerSpeed's own measured constant -- the value that has
+    actually been running on hardware since 2026-07-31 -- rather than the
+    stale figure the-configuration-object.md's Cause section cites as the
+    ~1.6x host-vs-firmware disagreement. See tovez.json's own
+    _duty_per_speed_correction_note for the full writeup."""
     content = gbc.generate(_tovez_cfg(), "data/robots/tovez.json")
 
-    assert "cfg.duty_per_speed_left = 0.00187325f;" in content
-    assert "cfg.duty_per_speed_right = 0.00187325f;" in content
+    assert "cfg.duty_per_speed_left = 0.001182f;" in content
+    assert "cfg.duty_per_speed_right = 0.001182f;" in content
     assert "cfg.crawl_pulse = 0.0f;" in content
     assert "cfg.wheel_gain_left_accel = 1.0f;" in content
     assert "cfg.wheel_intercept_left_accel = 0.0f;" in content

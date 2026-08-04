@@ -168,8 +168,8 @@ DriveBootConfig defaultDriveConfig() {
     // to one value, which is exactly why the per-wheel split has to be
     // baked here rather than left to it.
     DriveBootConfig cfg;
-    cfg.dutyPerSpeedLeft = 0.00187325f;    // [duty/(mm/s)]
-    cfg.dutyPerSpeedRight = 0.00187325f;  // [duty/(mm/s)]
+    cfg.dutyPerSpeedLeft = 0.001182f;    // [duty/(mm/s)]
+    cfg.dutyPerSpeedRight = 0.001182f;  // [duty/(mm/s)]
     cfg.crawlPulse = 0.0f;                  // [-1,1]; 0 = off
     cfg.gainLeftAccel = 1.0f;
     cfg.interceptLeftAccel = 0.0f;   // [mm/s]
@@ -295,8 +295,8 @@ msg::Drive defaultDriveGroup() {
     // (wheel_correction_for_config() above) -- this sprint's headline
     // per-wheel drive calibration surface (SUC-006).
     msg::Drive cfg;
-    cfg.duty_per_speed_left = 0.00187325f;    // [duty/(mm/s)]
-    cfg.duty_per_speed_right = 0.00187325f;  // [duty/(mm/s)]
+    cfg.duty_per_speed_left = 0.001182f;    // [duty/(mm/s)]
+    cfg.duty_per_speed_right = 0.001182f;  // [duty/(mm/s)]
     cfg.crawl_pulse = 0.0f;                    // [-1,1]; 0 = off
     cfg.wheel_gain_left_accel = 1.0f;
     cfg.wheel_intercept_left_accel = 0.0f;      // [mm/s]

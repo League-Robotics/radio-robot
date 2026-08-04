@@ -107,9 +107,13 @@ class SimHarness {
                                  App::BootOverrides{&trackWidth, &kSimControlPeriod,
                                                     &kSimControlPeriod, &kIdentityOtosConfig})) {
     // SIM OVERRIDE: composeRobot() already installed App::Drive's
-    // calibration via installDriveCalibration() (boot through the SAME
-    // path main.cpp uses), baking Drive::kDutyPerSpeed -- the MEASURED
-    // REAL-HARDWARE gearbox constant. That is wrong for THIS plant:
+    // calibration via Configurator::loadBaked()+install() (boot through
+    // the SAME path main.cpp uses), baking config_.drive.duty_per_speed_
+    // left/right -- the active robot JSON's own measured plant constant
+    // (132-009: Configurator::install() now reads this from the JSON
+    // rather than a hardcoded App::Drive::kDutyPerSpeed C++ literal, but
+    // it is still a REAL-HARDWARE gearbox measurement). That is wrong for
+    // THIS plant:
     // TestSim::WheelPlant is a fixed synthetic plant (velocity
     // kDefaultDutyVelMax at |duty| == 1), so its exact inverse is a fact
     // about the sim, not a per-robot measurement -- there is no robot JSON

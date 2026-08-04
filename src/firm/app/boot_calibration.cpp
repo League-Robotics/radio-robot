@@ -90,10 +90,9 @@ void installShaperLimits(Motion::Planner& planner, const Motion::PlannerLimits& 
 // own note at this declaration's old spot.
 
 void installDriveCalibration(Drive& drive, const Config::DriveBootConfig& driveConfig) {
-  // MEASURED, NOT CONFIGURED (stakeholder, 2026-07-31): one baked constant
-  // for both wheels, deliberately ignoring driveConfig.dutyPerSpeedLeft/
-  // Right -- see Drive::kDutyPerSpeed's own doc comment (drive.h) for the
-  // measurement and rationale.
+  // DEAD (see this function's own doc comment, boot_calibration.h) --
+  // body deliberately left at its pre-132-009 "MEASURED, NOT CONFIGURED"
+  // shape, not updated to match Configurator::install()'s reversal.
   drive.setDutyPerSpeed(Drive::kDutyPerSpeed, Drive::kDutyPerSpeed);
   drive.setWheelCorrection(
       driveConfig.gainLeftAccel, driveConfig.interceptLeftAccel, driveConfig.gainLeftDecel,

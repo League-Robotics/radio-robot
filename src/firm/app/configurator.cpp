@@ -233,48 +233,60 @@ void Configurator::loadBaked() {
   config_.estimator = Config::defaultEstimatorGroup();
 }
 
-// install() -- see configurator.h's own doc comment. Ports
-// installShaperLimits()/installDriveCalibration()/installWheelController()'s
-// bodies (boot_calibration.cpp, pre-132-006) unchanged in BEHAVIOR, reading
-// config_'s NEW group fields (populated by loadBaked(), immediately above)
-// instead of the OLD resolve()-computed Motion::PlannerLimits/
-// Config::DriveBootConfig/Config::WheelControllerBootConfig structs those
-// free functions used to take as parameters. Both old and new structs are
-// baked from the SAME robot-JSON `_require()` paths (132-005's own
-// completion note), so this is a relocation, not a behavior change.
+// install() -- see configurator.h's own doc comment. PLANNER stays an
+// inline call (boot-only, no install(target) case exists for it -- the
+// per-target re-appliability table, configurator.h). DRIVE/WHEEL_CONTROL
+// now call drive_.configure(config_) -- the SAME call install(DRIVE)/
+// install(WHEEL_CONTROL) uses (132-008) -- rather than re-deriving
+// Stage A/B/C inline a second time; this retarget is 132-009's own job
+// (configurator.h's "tickets 009/010's job" note, now resolved).
+//
+// dutyPerSpeed decision (132-009, a stakeholder-decision REVERSAL -- see
+// this file's own git history / the ticket for the full writeup):
+// REVERSED. Before this ticket, this line read
+// `drive_.setDutyPerSpeed(Drive::kDutyPerSpeed, Drive::kDutyPerSpeed)` --
+// "MEASURED, NOT CONFIGURED" (stakeholder, 2026-07-31), a hardcoded C++
+// constant applied identically to EVERY robot regardless of which JSON was
+// baked, deliberately ignoring config_.drive.duty_per_speed_left/right.
+// That decision solved a real problem (duty_per_speed and wheel_gain had
+// been circularly fitted against each other -- data/robots/tovez.json's own
+// `_wheel_correction_note`) but at the cost of two standing violations:
+// (1) the 2026-08-03 configuration-discipline rule
+// (.claude/rules/configuration-discipline.md) -- "every value the robot
+// uses comes from the file, no exceptions, at production boot" -- and (2)
+// this project's own §6 "no defaults, always configured" boot posture
+// (drive.h's dutyPerSpeedLeft_/Right_ doc comment: "Baking a value here is
+// what made one robot's gearboxes every robot's"), which a single baked
+// C++ literal shared across tovez/togov/tovez_nocal violates just as
+// directly as a hand-rolled default would. The design's own resolution
+// (the-configuration-object.md) is to keep dutyPerSpeed a ONE-population-
+// scale value with ALL per-wheel deviation expressed in wheel_gain/
+// intercept instead -- i.e. fix the circular-fit risk by CONVENTION (the
+// file's own left/right fields are measured together and kept equal,
+// never re-fit against wheel_gain residuals -- duty_sweep.py's own
+// "constant-free saturation reading" cross-check already enforces this in
+// practice), not by removing the value from the file entirely. Sourcing it
+// from config_.drive here is therefore BEHAVIOR-PRESERVING, not a new
+// calibration decision: data/robots/tovez.json/tovez_nocal.json's
+// duty_per_speed_left/right were corrected (132-009) from a stale
+// 0.00187325 (the ~1.6x error the-configuration-object.md's Cause section
+// cites) to 0.001182 -- the value that was ALREADY running on every robot
+// via the hardcoded constant this replaces, so no robot's actual boot
+// behavior changes the moment this lands. Drive::kDutyPerSpeed itself is
+// KEPT (drive.h) as the documented measurement this value traces to and
+// duty_sweep.py's own cross-check anchor, but is no longer read here.
+// togov.json's own duty_per_speed (its own 2026-07-27 sweep, a different
+// number) is deliberately left untouched -- see that file's own
+// _drive_calibration_note; it now finally takes effect if togov is ever
+// built as the active robot, which was silently impossible before this
+// ticket.
 void Configurator::install() {
   planner_.applyShaperLimits(config_.planner.a_max, config_.planner.a_decel,
                               config_.planner.alpha_max, config_.planner.alpha_decel,
                               config_.planner.jerk_max, config_.planner.yaw_jerk_max);
 
-  // MEASURED, NOT CONFIGURED (stakeholder, 2026-07-31): one baked constant
-  // for both wheels, deliberately ignoring config_.drive.duty_per_speed_left/
-  // right -- see Drive::kDutyPerSpeed's own doc comment (drive.h). Ticket
-  // 009 owns whether this reverses; not this ticket's call to make.
-  drive_.setDutyPerSpeed(Drive::kDutyPerSpeed, Drive::kDutyPerSpeed);
-  drive_.setWheelCorrection(
-      config_.drive.wheel_gain_left_accel, config_.drive.wheel_intercept_left_accel,
-      config_.drive.wheel_gain_left_decel, config_.drive.wheel_intercept_left_decel,
-      config_.drive.wheel_gain_right_accel, config_.drive.wheel_intercept_right_accel,
-      config_.drive.wheel_gain_right_decel, config_.drive.wheel_intercept_right_decel);
-  drive_.setCrawlPulse(config_.drive.crawl_pulse);
-
-  Drive::ControlGains gains;
-  gains.kp = config_.wheelControl.pid_kp;
-  gains.ki = config_.wheelControl.pid_ki;
-  gains.iMax = config_.wheelControl.pid_i_max;
-  gains.kaff = config_.wheelControl.pid_kaff;
-  gains.pidMax = config_.wheelControl.pid_max;
-  drive_.setControlGains(gains);
-
-  Drive::AdaptationBounds bounds;
-  bounds.vMin = config_.wheelControl.v_min;
-  bounds.biasMax = config_.wheelControl.bias_max;
-  bounds.tauAdapt = config_.wheelControl.tau_adapt;
-  bounds.aSteady = config_.wheelControl.a_steady;
-  bounds.deficitThreshold = config_.wheelControl.deficit_threshold;
-  bounds.deficitWindow = config_.wheelControl.deficit_window;
-  drive_.setAdaptationBounds(bounds);
+  drive_.setDutyPerSpeed(config_.drive.duty_per_speed_left, config_.drive.duty_per_speed_right);
+  drive_.configure(config_);
 }
 
 // applyGroup() -- see configurator.h's own doc comment. Boot-only targets

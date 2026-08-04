@@ -56,6 +56,21 @@ CORRECTIONS TO EARLIER VERSIONS OF THIS SCRIPT
    simultaneous case, and prints it prominently for cross-checking against the
    graded sweep's own duty=~1.0 rung.
 
+STATUS UPDATE (2026-08-03, ticket 132-009, the-configuration-object.md):
+point 3's "second, more subtle staleness bug" is RESOLVED, not merely
+described. `Configurator::install()` (configurator.cpp) now reads
+`config_.drive.duty_per_speed_left/right` from the active robot JSON
+instead of the hardcoded `Drive::kDutyPerSpeed` C++ literal -- a reversal
+of the 2026-07-31 "MEASURED, NOT CONFIGURED" decision, per the 2026-08-03
+configuration-discipline rule (every value the robot uses comes from the
+file). `data/robots/tovez.json`'s own `duty_per_speed_left/right` were
+corrected from the stale 0.00187325 to 0.001182 in the same ticket, so the
+JSON field and `KNOWN_DUTY_PER_SPEED` below now agree -- this script's own
+"hand-kept mirror, not a read" caveat on `KNOWN_DUTY_PER_SPEED` still
+holds (there is still no firmware->host config READ-BACK path as of this
+ticket; that lands in ticket 011), but the JSON is no longer a KNOWN-WRONG
+source to distrust on principle.
+
 THE ACCEL/DECEL SUBTLETY
 ------------------------
 `correctedCommand()` picks coefficients with `(|desired| > |previous|) ? accel :

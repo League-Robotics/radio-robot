@@ -77,6 +77,12 @@ Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainC
 // installShaperLimits -- marks shaping CONFIGURED through the same
 // applyShaperLimits() entry the wire push uses, with `limits`'s own
 // validated ceilings, so kFlagFaultShapingDisabled stays quiet.
+//
+// DEAD as of 132-006: Configurator::install() (configurator.cpp) calls
+// planner_.applyShaperLimits() inline instead of through this function --
+// no remaining call site. Kept, unremoved, as a documented conversion
+// helper pending a cleanup ticket's own call on deleting it (not this
+// ticket's scope).
 void installShaperLimits(Motion::Planner& planner, const Motion::PlannerLimits& limits);
 
 // installRotationCalibration -- DELETED (132-007). Superseded by
@@ -88,11 +94,21 @@ void installShaperLimits(Motion::Planner& planner, const Motion::PlannerLimits& 
 
 // installDriveCalibration -- installs this robot's own wheel calibration
 // (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
-// §6) onto drive: the measured plant-inverse duty-per-speed constant
-// (App::Drive::kDutyPerSpeed -- MEASURED, NOT CONFIGURED, stakeholder
-// 2026-07-31; deliberately NOT driveConfig.dutyPerSpeedLeft/Right, see
-// Drive::kDutyPerSpeed's own doc comment), the per-wheel gain/intercept
-// correction, and the crawl-pulse amplitude.
+// §6) onto drive: the plant-inverse duty-per-speed pair, the per-wheel
+// gain/intercept correction, and the crawl-pulse amplitude.
+//
+// DEAD as of 132-006/132-009: Configurator::install() (configurator.cpp)
+// does this inline instead -- no remaining call site. Its BODY still
+// reflects the PRE-132-009 "MEASURED, NOT CONFIGURED" framing (installs
+// App::Drive::kDutyPerSpeed for both wheels, ignoring driveConfig's own
+// dutyPerSpeedLeft/Right) -- that decision was REVERSED for the live
+// Configurator::install() path (see Drive::kDutyPerSpeed's own doc
+// comment, drive.h, and Configurator::install()'s, configurator.cpp, for
+// the full reasoning); this function's body was deliberately NOT updated
+// to match, since it has no caller to affect and editing dead code to
+// track a live decision it can no longer influence would only invite a
+// future reader to trust it again. Kept, unremoved, pending a cleanup
+// ticket's own call on deleting it (not this ticket's scope).
 void installDriveCalibration(Drive& drive, const Config::DriveBootConfig& driveConfig);
 
 // installWheelController -- installs App::Drive's unified three-timescale
@@ -101,6 +117,11 @@ void installDriveCalibration(Drive& drive, const Config::DriveBootConfig& driveC
 // adaptation bounds, both baked from the robot JSON's `control.wheel_*`
 // keys via Config::defaultWheelControllerConfig(). See that struct's own
 // doc comment (config/boot_config.h) for the field-for-field mapping.
+//
+// DEAD as of 132-006: Configurator::install() (configurator.cpp) does this
+// via drive_.configure(config_) instead -- no remaining call site. Kept,
+// unremoved, pending a cleanup ticket's own call on deleting it (not this
+// ticket's scope).
 void installWheelController(Drive& drive, const Config::WheelControllerBootConfig& config);
 
 // --- Config::Robot-consuming entry points (132-007, the-configuration-
