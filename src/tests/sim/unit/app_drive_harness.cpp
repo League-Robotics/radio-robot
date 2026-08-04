@@ -529,110 +529,530 @@ void scenarioBumplessTransferAcrossBiasUpdate() {
 // left at its all-zero default (Stage C stays off, isolating Stage B).
 // ===========================================================================
 
-void scenarioFastPidSteadyGateAndAntiWindup() {
-  beginScenario("Stage B: the fast PID's integrator engages only when steady (frozen while ramping, "
-                "not reset) and anti-winds-up against pidMax (130-005 coverage carried over from the "
-                "deleted Motion::WheelTrim suite)");
+void scenarioStageBITermIsAPositionTermWithNoSteadyGate() {
+  beginScenario("Stage B (133-002): the I term reads POSITION -- it tracks the position error "
+                "directly (no accumulator), it is NOT gated by aSteady, posErrMax clamps its INPUT "
+                "in mm and iMax clamps its OUTPUT in mm/s, and iMax == 0 turns it off entirely");
 
-  MockMotor left;
-  MockMotor right;
-  const float trackWidth = 200.0f;  // [mm]
-  App::Drive drive(left, right, trackWidth);
-  drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
+  const float cmd = 200.0f;         // [mm/s] commanded speed
+  const float dt = 0.05f;           // [s] one 50000us cycle
+  const float perCycle = cmd * dt;  // [mm] commanded travel per cycle == 10mm
 
   App::Drive::ControlGains gains;
-  gains.kp = 0.05f;
-  gains.ki = 0.5f;
-  gains.iMax = 50.0f;
-  gains.kaff = 0.05f;
-  gains.pidMax = 20.0f;  // deliberately small -- reachable within this test's tick budget
-  drive.setControlGains(gains);
+  gains.kp = 0.0f;    // P silenced: pidLeft() reads out the I term alone
+  gains.ki = 0.5f;    // [1/s] -- 0.5 mm/s of correction per mm of position error
+  gains.iMax = 500.0f;
+  gains.kaff = 0.0f;
+  gains.pidMax = 0.0f;  // no total clamp -- isolate the I path's own two bounds
 
   App::Drive::AdaptationBounds bounds;
   bounds.aSteady = 50.0f;  // [mm/s^2]
   // tauAdapt left at 0 (the all-zero default) -- Stage C stays off.
-  drive.setAdaptationBounds(bounds);
 
-  const float cmd = 200.0f;  // [mm/s] commanded speed
-  uint32_t now = 1000;
+  // Runs `cycles` ticks of a stalled wheel (position pinned at 0 while cmd
+  // is nonzero, so the position error is exactly the commanded travel so
+  // far) and returns the final Stage B output. `cmdAccel` is a parameter
+  // because the WHOLE POINT of one of the checks below is that it no
+  // longer matters to this stage.
+  auto runStalled = [&](int cycles, float cmdAccel, float posErrMax) -> float {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, /*trackWidth=*/200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
+    drive.setControlGains(gains);
+    App::Drive::AdaptationBounds b = bounds;
+    b.posErrMax = posErrMax;
+    drive.setAdaptationBounds(b);
 
-  // Phase 1: RAMPING (|cmdAccel| >= aSteady) with a persistent, large
-  // error (velocity held at exactly 0) -- the integrator must stay
-  // EXACTLY zero throughout, mirroring Motion::WheelTrim's own accel-phase
-  // gate. p+feed alone (0.05*200 + 0.05*100 = 15) stays under pidMax (20),
-  // so if the integral is genuinely frozen, pidLeft() is IDENTICAL and
-  // exact on every single tick -- no closed-form assumption needed beyond
-  // "the inputs don't change and neither does the gate".
-  const float kRampAccel = 100.0f;  // [mm/s^2] >= aSteady -- ramping
-  const float kExpectedRampPid = gains.kp * cmd + gains.kaff * kRampAccel;  // 15.0
-  for (int i = 0; i < 20; ++i) {
-    Types::RobotState state;
-    state.wheelLeft.cmdVelocity = cmd;
-    state.wheelLeft.cmdAccel = kRampAccel;
-    state.wheelLeft.velocity = 0.0f;  // stalled: a large, persistent error
-    state.wheelLeft.connected = true;
-    state.wheelLeft.sampleTime = now - 10;
-    state.time.cycleStart = now;
-    state.time.cyclePeriod = 50000;  // [us] -- dt = 0.05s
-    drive.tick(state);
-    checkFloatEq(drive.pidLeft(), kExpectedRampPid,
-                "ramping: pid is p+feed only, no integral growth (the integrator stayed frozen)");
-    now += 50;
+    uint32_t now = 1000;
+    for (int i = 0; i < cycles; ++i) {
+      Types::RobotState state;
+      state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.cmdAccel = cmdAccel;
+      state.wheelLeft.position = 0.0f;  // stalled -- travels nothing
+      state.wheelLeft.velocity = 0.0f;
+      state.wheelLeft.connected = true;
+      state.wheelLeft.sampleTime = now - 10;
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;  // [us] -- dt = 0.05s
+      drive.tick(state);
+      now += 50;
+    }
+    return drive.pidLeft();
+  };
+
+  // (a) The I term IS the position error, times ki -- exactly, with no
+  //     per-cycle accumulation constant of its own. The FIRST tick anchors
+  //     the reference (armed == false until then) and reports zero error,
+  //     so after N ticks the reference has advanced (N-1) cycles' worth.
+  //     This is a closed form, not a trend: it can only hold if the term
+  //     is a direct function of position, not a sum of velocity samples.
+  for (int cycles : {2, 5, 11, 21}) {
+    const float expectedError = static_cast<float>(cycles - 1) * perCycle;  // [mm]
+    checkFloatEq(runStalled(cycles, /*cmdAccel=*/0.0f, /*posErrMax=*/0.0f),
+                gains.ki * expectedError,
+                "the I term equals ki * (commanded travel since the anchor) exactly -- it reads "
+                "position, it does not accumulate velocity",
+                0.01f);
   }
 
-  // Phase 2: STEADY (|cmdAccel| < aSteady), same persistent error -- the
-  // integrator now engages and grows, and the total pid output clamps at
-  // pidMax without ever exceeding it (anti-windup): once the provisional
-  // sum is pinned against the clamp, fastPid() stops integrating further
-  // (the same pushingIntoClamp gate WheelTrim::compute() used to implement).
-  bool sawGrowth = false;
-  float previousPid = drive.pidLeft();
-  for (int i = 0; i < 50; ++i) {
-    Types::RobotState state;
-    state.wheelLeft.cmdVelocity = cmd;
-    state.wheelLeft.cmdAccel = 0.0f;  // steady
-    state.wheelLeft.velocity = 0.0f;  // same large, persistent error
-    state.wheelLeft.connected = true;
-    state.wheelLeft.sampleTime = now - 10;
-    state.time.cycleStart = now;
-    state.time.cyclePeriod = 50000;
-    drive.tick(state);
-    checkTrue(std::fabs(drive.pidLeft()) <= gains.pidMax + 1e-3f,
-             "pid never exceeds pidMax, even sustained (anti-windup)");
-    if (drive.pidLeft() > previousPid + 1e-6f) sawGrowth = true;
-    previousPid = drive.pidLeft();
-    now += 50;
+  // (b) NOT gated by aSteady. The old accumulator froze while
+  //     |cmdAccel| >= aSteady, which is where the residual distance error
+  //     was measurably being banked (a velocity loop can never repay
+  //     banked distance afterwards). A ramping wheel now produces the
+  //     IDENTICAL I term as a steady one.
+  const float steadyPid = runStalled(21, /*cmdAccel=*/0.0f, /*posErrMax=*/0.0f);
+  const float rampingPid = runStalled(21, /*cmdAccel=*/500.0f, /*posErrMax=*/0.0f);
+  checkFloatEq(rampingPid, steadyPid,
+              "a RAMPING wheel (|cmdAccel| well above aSteady) gets the same I term as a steady "
+              "one -- there is no steady gate left to freeze, which is the point");
+  checkTrue(std::fabs(steadyPid) > 1.0f,
+           "setup: the I term is genuinely nonzero, so (b) is not comparing two zeros");
+
+  // (c) posErrMax clamps the INPUT, in millimetres. With ki = 0.5 and a
+  //     3mm clamp the output pins at 1.5 mm/s no matter how far behind the
+  //     wheel falls -- and crucially, RAISING ki now raises the output
+  //     (see (e)) instead of shrinking the remembered distance, which is
+  //     the unit-domain bug this replaced.
+  const float kPosClamp = 3.0f;  // [mm]
+  checkFloatEq(runStalled(51, /*cmdAccel=*/0.0f, kPosClamp), gains.ki * kPosClamp,
+              "posErrMax clamps the position error itself, in mm: the I term pins at ki*posErrMax "
+              "however long the wheel stays behind");
+
+  // (d) iMax clamps the OUTPUT, in mm/s -- a DIFFERENT domain from (c),
+  //     and both are live at once. Deliberately asserted in the same
+  //     scenario as (c): "posErrMax replaces iMax" is the misreading this
+  //     ticket exists to make impossible.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, /*trackWidth=*/200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    App::Drive::ControlGains bothClamped = gains;
+    bothClamped.iMax = 1.0f;  // [mm/s] -- tighter than ki*posErrMax below
+    drive.setControlGains(bothClamped);
+    App::Drive::AdaptationBounds b = bounds;
+    b.posErrMax = 100.0f;  // [mm] -- deliberately generous, so iMax is what binds
+    drive.setAdaptationBounds(b);
+
+    uint32_t now = 1000;
+    for (int i = 0; i < 51; ++i) {
+      Types::RobotState state;
+      state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.position = 0.0f;
+      state.wheelLeft.connected = true;
+      state.wheelLeft.sampleTime = now - 10;
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;
+      drive.tick(state);
+      now += 50;
+    }
+    checkFloatEq(drive.pidLeft(), 1.0f,
+                "iMax clamps the I term's OUTPUT in mm/s, independently of posErrMax's mm clamp "
+                "on its input -- both bounds are live, neither replaces the other");
   }
-  checkTrue(sawGrowth,
-           "the integrator actually grew once steady (it was frozen during the ramp, not disabled "
-           "outright)");
-  checkFloatEq(drive.pidLeft(), gains.pidMax,
-              "pid settles PINNED at the clamp under a persistent error large enough to saturate it",
-              0.5f);
+
+  // (e) The direction that used to be backwards: with the position error
+  //     clamped in mm, MORE ki gives MORE correction. Under the old iMax-
+  //     clamps-ki*error form, the remembered distance was iMax/ki, so
+  //     raising ki SHRANK the memory and the sweep plateaued.
+  {
+    App::Drive::ControlGains lowKi = gains;
+    App::Drive::ControlGains highKi = gains;
+    lowKi.ki = 0.5f;
+    highKi.ki = 4.0f;
+
+    auto pidWith = [&](const App::Drive::ControlGains& g) -> float {
+      MockMotor left;
+      MockMotor right;
+      App::Drive drive(left, right, /*trackWidth=*/200.0f);
+      drive.setDutyPerSpeed(1.0f, 1.0f);
+      drive.setControlGains(g);
+      App::Drive::AdaptationBounds b = bounds;
+      b.posErrMax = kPosClamp;
+      drive.setAdaptationBounds(b);
+      uint32_t now = 1000;
+      for (int i = 0; i < 51; ++i) {
+        Types::RobotState state;
+        state.wheelLeft.cmdVelocity = cmd;
+        state.wheelLeft.position = 0.0f;
+        state.wheelLeft.connected = true;
+        state.wheelLeft.sampleTime = now - 10;
+        state.time.cycleStart = now;
+        state.time.cyclePeriod = 50000;
+        drive.tick(state);
+        now += 50;
+      }
+      return drive.pidLeft();
+    };
+
+    checkFloatEq(pidWith(lowKi), lowKi.ki * kPosClamp, "low ki: saturated I term is ki*posErrMax");
+    checkFloatEq(pidWith(highKi), highKi.ki * kPosClamp,
+                "HIGH ki: the saturated I term GROWS with ki -- the position memory is posErrMax "
+                "mm regardless of ki, not iMax/ki mm as the old clamp made it");
+  }
+
+  // (f) iMax == 0 turns the I term OFF ENTIRELY (fail closed), unchanged
+  //     from the accumulator era's "0 disables integration". Every shipped
+  //     robot JSON carries iMax = 0 today, so re-reading 0 as "unclamped"
+  //     would hand all of them unbounded I authority the first time a
+  //     nonzero ki was pushed.
+  {
+    App::Drive::ControlGains noIMax = gains;
+    noIMax.iMax = 0.0f;
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, /*trackWidth=*/200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setControlGains(noIMax);
+    drive.setAdaptationBounds(bounds);
+    uint32_t now = 1000;
+    for (int i = 0; i < 51; ++i) {
+      Types::RobotState state;
+      state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.position = 0.0f;
+      state.wheelLeft.connected = true;
+      state.wheelLeft.sampleTime = now - 10;
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;
+      drive.tick(state);
+      now += 50;
+    }
+    checkFloatEq(drive.pidLeft(), 0.0f,
+                "iMax == 0: the I term contributes exactly nothing, however large the position "
+                "error grows (fail closed, NOT 'unclamped')");
+  }
 }
 
 // ===========================================================================
-// 131-002 (issue A-commanded-zero-leaks-through-stage-b.md): commanded-zero
-// through Stage B, and Stage B's own freshness gate. correctedCommand()'s
-// `desired == 0.0f` guard (Stage A) has NO effect on Stage B -- fastPid() is
-// a fully separate computation on MEASURED velocity, so a wheel that has not
+// 133-002: positionError()'s three re-anchor guards, each proven
+// independently. All three must return EXACTLY zero error on the guarded
+// cycle and re-establish the origin, rather than correcting against a
+// reference that no longer means anything.
+// ===========================================================================
+
+void scenarioPositionErrorGuardsReAnchorWithoutCorrecting() {
+  beginScenario("133-002: positionError() re-anchors without correcting on commanded zero, an "
+                "epoch change, and a disconnect -- each guard proven on its own");
+
+  const float cmd = 200.0f;  // [mm/s]
+  const float perCycle = 10.0f;  // [mm] cmd * 0.05s
+
+  App::Drive::ControlGains gains;
+  gains.kp = 0.0f;    // P silenced: pidLeft() reads out the I term alone
+  gains.ki = 1.0f;    // [1/s] -- pidLeft() is then numerically the position error in mm
+  gains.iMax = 5000.0f;
+  gains.pidMax = 0.0f;
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.aSteady = 50.0f;
+
+  // Drives one tick with fully-specified wheel state; returns Stage B's
+  // output, which equals the position error [mm] under the gains above.
+  struct Rig {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive;
+    uint32_t now = 1000;
+    Rig(const App::Drive::ControlGains& g, const App::Drive::AdaptationBounds& b)
+        : drive(left, right, 200.0f) {
+      drive.setDutyPerSpeed(1.0f, 1.0f);
+      drive.setControlGains(g);
+      drive.setAdaptationBounds(b);
+    }
+    float step(float cmdVelocity, float position, bool connected, uint8_t epoch) {
+      Types::RobotState state;
+      state.wheelLeft.cmdVelocity = cmdVelocity;
+      state.wheelLeft.position = position;
+      state.wheelLeft.velocity = 0.0f;
+      state.wheelLeft.connected = connected;
+      state.wheelLeft.positionEpoch = epoch;
+      state.wheelLeft.sampleTime = now - 10;
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;  // [us]
+      drive.tick(state);
+      now += 50;
+      return drive.pidLeft();
+    }
+  };
+
+  // (a) COMMANDED ZERO -- stop is stop. A commanded-zero wheel reports no
+  //     error at all, and the reference it had built is DISCARDED: on
+  //     re-command, the error restarts from zero rather than resuming the
+  //     debt from before the stop. (Holding the old reference would make
+  //     Stage B a servo that creeps a stopped wheel back onto it -- the
+  //     runaway class 133-001 exists to prevent.)
+  {
+    Rig rig(gains, bounds);
+    rig.step(cmd, /*position=*/0.0f, true, 0);          // anchor
+    rig.step(cmd, /*position=*/0.0f, true, 0);          // 10mm behind
+    const float behind = rig.step(cmd, 0.0f, true, 0);  // 20mm behind
+    checkFloatEq(behind, 2.0f * perCycle, "setup: the wheel is genuinely 20mm behind its reference");
+
+    checkFloatEq(rig.step(/*cmdVelocity=*/0.0f, 0.0f, true, 0), 0.0f,
+                "commanded zero: Stage B contributes exactly 0.0 -- stop is stop");
+    rig.step(cmd, 0.0f, true, 0);  // re-command: this cycle re-arms the anchor
+    checkFloatEq(rig.step(cmd, 0.0f, true, 0), perCycle,
+                "after a commanded-zero period the reference is DISCARDED, not resumed: the error "
+                "restarts at one cycle's travel, not the 20mm+ owed before the stop");
+  }
+
+  // (b) EPOCH CHANGE -- RobotLoop rebaselined the register underneath us,
+  //     so `position` just stepped discontinuously. A step is not travel:
+  //     the loop must re-anchor on the new value, never charge the step to
+  //     the wheel as a huge instantaneous over-travel.
+  {
+    Rig rig(gains, bounds);
+    rig.step(cmd, /*position=*/1000.0f, true, /*epoch=*/0);  // anchor at 1000mm
+    checkFloatEq(rig.step(cmd, 1000.0f, true, 0), perCycle, "setup: 10mm behind before the rebaseline");
+
+    // The rebaseline: position drops to 0 AND the epoch increments. Read
+    // naively that is 1000mm of travel in one cycle.
+    checkFloatEq(rig.step(cmd, /*position=*/0.0f, true, /*epoch=*/1), 0.0f,
+                "epoch change: exactly 0.0 error -- the 1000mm discontinuity is NOT read as "
+                "travel, and the pre-step debt is not carried across it either");
+    // The re-anchor RE-ARMS in the same cycle here (unlike the
+    // commanded-zero case above, which leaves `armed` false because the
+    // wheel is not being commanded anywhere): the command is still live
+    // and the new reading is trustworthy, so no cycle is wasted.
+    checkFloatEq(rig.step(cmd, 0.0f, true, 1), perCycle,
+                "and the reference resumes cleanly from the new origin on the very next cycle");
+  }
+
+  // (c) DISCONNECT -- Devices::NezhaMotor::collectEncoder() hands back its
+  //     last good raw value on a failed read, so a disconnected wheel's
+  //     position is MANUFACTURED, not measured. Anchoring against it would
+  //     bank a fictitious deficit for as long as the bus stays down.
+  {
+    Rig rig(gains, bounds);
+    rig.step(cmd, /*position=*/0.0f, /*connected=*/true, 0);
+    checkFloatEq(rig.step(cmd, 0.0f, true, 0), perCycle, "setup: 10mm behind while connected");
+
+    checkFloatEq(rig.step(cmd, 0.0f, /*connected=*/false, 0), 0.0f,
+                "disconnected: exactly 0.0 error -- Stage B does not correct against a "
+                "manufactured position");
+    checkFloatEq(rig.step(cmd, 0.0f, /*connected=*/false, 0), 0.0f,
+                "and stays at 0.0 for as long as the wheel is disconnected (armed never latches "
+                "while connected is false)");
+    rig.step(cmd, 0.0f, /*connected=*/true, 0);  // reconnect: this cycle re-arms
+    checkFloatEq(rig.step(cmd, 0.0f, true, 0), perCycle,
+                "on reconnect the reference re-anchors on the live reading and starts fresh");
+  }
+}
+
+// ===========================================================================
+// 133-002, the headline defect: a DROPPED encoder sample must not
+// permanently delete real distance from the loop's position estimate.
+//
+// The old accumulator summed a derived velocity, gated by a freshness test
+// that FROZE the sum on exactly the ticks where distance was being
+// travelled unobserved -- so travel during a dropped sample was lost for
+// good. The position REGISTER carries that travel across the gap
+// (Devices::NezhaMotor::collectEncoder() returns the last good value, then
+// the next successful read reports the full advance), so the position-
+// domain term simply sees the truth again the moment it can look.
+//
+// Proven by equality, not by a trend: a run with dropped samples in the
+// middle must end at the IDENTICAL position error as a run with none, for
+// the same true travel.
+// ===========================================================================
+
+void scenarioDroppedSampleDoesNotDeleteDistanceFromThePositionEstimate() {
+  beginScenario("133-002: a stale/dropped encoder sample does not permanently delete distance from "
+                "Stage B's position estimate -- the register carries the truth across the gap");
+
+  const float cmd = 200.0f;         // [mm/s]
+  const float perCycle = 10.0f;     // [mm] commanded travel per 50ms cycle
+  const float trueRate = 9.0f;      // [mm] the wheel actually travels 90% of commanded
+
+  App::Drive::ControlGains gains;
+  gains.kp = 0.0f;    // P silenced: pidLeft() reads out the I term alone
+  gains.ki = 1.0f;    // [1/s] -- pidLeft() is then numerically the position error in mm
+  gains.iMax = 5000.0f;
+  gains.pidMax = 0.0f;
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.aSteady = 50.0f;
+  // posErrMax left at 0 (unclamped) so the full accumulated deficit is
+  // observable -- the clamp is scenario 7's subject, not this one's.
+
+  // Runs `cycles` ticks at a constant command. The wheel truly travels
+  // trueRate per cycle throughout. When `dropFrom <= i < dropUntil`, the
+  // REPORTED position is held at its pre-drop value (what a failed collect
+  // does) and then jumps to the true value on the next good read -- the
+  // wheel never stops moving, only the reporting does.
+  auto finalError = [&](int cycles, int dropFrom, int dropUntil) -> float {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, /*trackWidth=*/200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setControlGains(gains);
+    drive.setAdaptationBounds(bounds);
+
+    uint32_t now = 1000;
+    float heldPosition = 0.0f;  // [mm] what a stale register keeps reporting
+    for (int i = 0; i < cycles; ++i) {
+      const float truePosition = static_cast<float>(i) * trueRate;  // [mm]
+      const bool dropped = (i >= dropFrom && i < dropUntil);
+      if (!dropped) heldPosition = truePosition;
+
+      Types::RobotState state;
+      state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.position = heldPosition;
+      state.wheelLeft.velocity = 0.0f;
+      // connected stays TRUE: a stale read is not a disconnect. The
+      // register's value is the last TRUE position, held -- distinct from
+      // the manufactured value a disconnected wheel reports, which
+      // positionError() does re-anchor on (scenario 8c).
+      state.wheelLeft.connected = true;
+      state.wheelLeft.sampleTime = now - 10;
+      state.time.cycleStart = now;
+      state.time.cyclePeriod = 50000;  // [us]
+      drive.tick(state);
+      now += 50;
+    }
+    return drive.pidLeft();
+  };
+
+  const int kCycles = 41;
+  // Anchored on tick 0; the reference accumulates over the remaining 40
+  // cycles while the wheel truly travels 9mm per cycle from position 0.
+  const float expected = static_cast<float>(kCycles - 1) * (perCycle - trueRate);  // 40mm
+
+  const float clean = finalError(kCycles, /*dropFrom=*/-1, /*dropUntil=*/-1);
+  checkFloatEq(clean, expected,
+              "baseline (no dropped samples): the position error is the full accumulated deficit",
+              0.05f);
+
+  for (const auto& window : std::vector<std::pair<int, int>>{{5, 8}, {12, 20}, {30, 39}}) {
+    const float withDrops = finalError(kCycles, window.first, window.second);
+    checkFloatEq(withDrops, clean,
+                "a run with dropped samples ends at the IDENTICAL position error as a clean run -- "
+                "the distance travelled unobserved is recovered in full, not deleted",
+                0.05f);
+  }
+
+  // Not a trivially-passing check: the deficit being tracked is real and
+  // large compared with the tolerance above.
+  checkTrue(clean > 30.0f, "setup: the accumulated deficit is genuinely large (not ~0)");
+}
+
+// ===========================================================================
+// 133-002 (§7-E), LANDING UNVALIDATED: Drive::update() now publishes a
+// commanded-accel estimate on the WHEELS path, which nothing ever did
+// before -- the field held a stale planner value or zero while Drive owned
+// motion, so Stage B's feedforward multiplied zero and Stage C's steady
+// gate was pinned true, and the kff and aSteady sweeps each measured
+// nothing as a result.
+//
+// This scenario asserts exactly two things and deliberately no more,
+// because no measurement supports more: the estimate IS published and
+// tracks the sign/rough magnitude of a real command change, and it is
+// INERT at kaff == 0 (which every shipped robot JSON carries, and which
+// is the only reason this is safe to land ahead of ticket 004's bench
+// session). Sprint 133 Open Question 2 -- do not read this scenario as
+// closing it.
+// ===========================================================================
+
+void scenarioUpdatePublishesCmdAccelOnTheWheelsPathInertAtZeroKaff() {
+  beginScenario("133-002 (UNVALIDATED, Open Question 2): update() publishes a smoothed cmdAccel on "
+                "the WHEELS path, and it is INERT at kaff == 0");
+
+  MockMotor left;
+  MockMotor right;
+  App::Drive drive(left, right, /*trackWidth=*/200.0f);
+  drive.setDutyPerSpeed(1.0f, 1.0f);
+
+  Types::RobotState state;
+  state.time.cyclePeriod = 50000;  // [us] -- dt = 0.05s
+
+  // Baseline: an idle Drive publishes exactly zero accel.
+  drive.command(0.0f, 0.0f, /*duration=*/100000.0f, /*moveId=*/1, /*now=*/500);
+  drive.update(state, /*now=*/1000);
+  checkFloatEq(state.wheelLeft.cmdAccel, 0.0f, "an unchanging command publishes zero cmdAccel");
+
+  // A step up in commanded velocity produces a POSITIVE accel estimate,
+  // bounded above by the raw difference quotient (the first-order filter
+  // approaches it, never overshoots it on a single step).
+  drive.command(200.0f, 200.0f, /*duration=*/100000.0f, /*moveId=*/2, /*now=*/1000);
+  drive.update(state, /*now=*/1050);
+  const float rawStep = 200.0f / 0.05f;  // [mm/s^2] 4000
+  checkTrue(state.wheelLeft.cmdAccel > 0.0f,
+           "a step UP in commanded velocity publishes a positive cmdAccel");
+  checkTrue(state.wheelLeft.cmdAccel < rawStep,
+           "and it is SMOOTHED, strictly below the raw difference quotient -- the host re-arms "
+           "slower than kCycle, so a bare finite difference alternates a double-size spike with a "
+           "zero");
+  checkFloatEq(state.wheelRight.cmdAccel, state.wheelLeft.cmdAccel,
+              "both wheels get their own estimate, equal here because both were commanded equally");
+
+  // A step DOWN produces a negative estimate -- it is a signed accel, not
+  // a magnitude.
+  drive.command(0.0f, 0.0f, /*duration=*/100000.0f, /*moveId=*/3, /*now=*/1050);
+  drive.update(state, /*now=*/1100);
+  checkTrue(state.wheelLeft.cmdAccel < 0.0f,
+           "a step DOWN publishes a negative cmdAccel -- signed, not a magnitude");
+
+  // INERT at kaff == 0: Stage B's output is bit-identical whether the
+  // published accel is a large positive number or exactly zero. This is
+  // the property that makes landing an unvalidated estimator safe on
+  // every currently-shipped robot.
+  auto pidWithCmdAccel = [](float cmdAccel) -> float {
+    MockMotor l;
+    MockMotor r;
+    App::Drive d(l, r, /*trackWidth=*/200.0f);
+    d.setDutyPerSpeed(1.0f, 1.0f);
+    App::Drive::ControlGains gains;
+    gains.kp = 0.05f;
+    gains.ki = 0.5f;
+    gains.iMax = 50.0f;
+    gains.kaff = 0.0f;  // the shipped value on every robot JSON today
+    d.setControlGains(gains);
+
+    uint32_t now = 1000;
+    for (int i = 0; i < 10; ++i) {
+      Types::RobotState s;
+      s.wheelLeft.cmdVelocity = 200.0f;
+      s.wheelLeft.cmdAccel = cmdAccel;
+      s.wheelLeft.position = 0.0f;
+      s.wheelLeft.velocity = 0.0f;
+      s.wheelLeft.connected = true;
+      s.wheelLeft.sampleTime = now - 10;
+      s.time.cycleStart = now;
+      s.time.cyclePeriod = 50000;
+      d.tick(s);
+      now += 50;
+    }
+    return d.pidLeft();
+  };
+  checkFloatEq(pidWithCmdAccel(4000.0f), pidWithCmdAccel(0.0f),
+              "at kaff == 0 a large published cmdAccel changes Stage B's output by exactly nothing "
+              "-- the estimator is inert on every shipped robot, which is the only reason it lands "
+              "before its own measurement (Open Question 2)");
+}
+
+// ===========================================================================
+// 131-002 (issue A-commanded-zero-leaks-through-stage-b.md), carried
+// forward to the position domain by 133-002: commanded-zero through Stage
+// B, and what Stage B does with a reading it cannot trust.
+// correctedCommand()'s `desired == 0.0f` guard (Stage A) has NO effect on
+// Stage B -- it is a fully separate computation, so a wheel that has not
 // yet coasted to rest keeps a nonzero err even after its commanded speed
 // reaches exactly 0. The two scenarios below prove: (1) a commanded-zero
-// wheel writes exactly 0 duty every tick regardless of a pre-wound
-// integrator, and that integrator is FROZEN (not reset) across the whole
-// zero period; (2) a stale/disconnected/frozen wheel's integrator likewise
-// stays frozen rather than winding against a manufactured zero-velocity
-// reading (the same freshness conjunct Stage C's adaptBias() already uses).
+// wheel writes exactly 0 duty every tick and its position reference is
+// DISCARDED rather than resumed (133-002 inverted 131-002's "frozen, not
+// reset" contract here on purpose -- see the scenario's own Phase 3); (2) a
+// disconnected wheel still contributes exactly nothing, while a merely
+// STALE or FROZEN reading is now permitted to correct, bounded.
 // ===========================================================================
 
 // 9. Commanded speed exactly 0.0f -> Stage B's contribution and the written
-//    duty are exactly 0.0 every tick, no matter how long, regardless of the
-//    integrator's retained value -- and the integrator is FROZEN (not
-//    reset): re-commanding the ORIGINAL nonzero speed/error afterward
-//    resumes from at least the pre-zero pid value, never from scratch.
-void scenarioCommandedZeroForcesStageBToZeroAndFreezesIntegrator() {
+//    duty are exactly 0.0 every tick, no matter how long -- and the
+//    position reference is DISCARDED across the zero period, so motion
+//    resumes with no debt carried over from before the stop.
+void scenarioCommandedZeroForcesStageBToZeroAndDiscardsTheReference() {
   beginScenario("Stage B: commanded-zero forces the contribution and written duty to exactly 0.0, "
-                "and FREEZES (does not reset) the integrator across the zero period (131-002)");
+                "and DISCARDS the position reference across the zero period (131-002, 133-002)");
 
   MockMotor left;
   MockMotor right;
@@ -645,25 +1065,24 @@ void scenarioCommandedZeroForcesStageBToZeroAndFreezesIntegrator() {
   gains.ki = 0.5f;
   gains.iMax = 50.0f;
   gains.kaff = 0.0f;
-  gains.pidMax = 40.0f;  // reachable within this test's winding budget (see Phase 1 below)
+  gains.pidMax = 40.0f;
   drive.setControlGains(gains);
 
   App::Drive::AdaptationBounds bounds;
-  bounds.aSteady = 50.0f;  // [mm/s^2] -- cmdAccel always 0 below, so always "steady"
-  // tauAdapt left at 0 (all-zero default) -- Stage C stays off, isolating Stage B.
+  bounds.aSteady = 50.0f;  // [mm/s^2] -- no longer read by Stage B; Stage C is off (tauAdapt 0)
   drive.setAdaptationBounds(bounds);
 
   const float cmd = 200.0f;  // [mm/s] commanded cruise speed
   uint32_t now = 1000;
 
-  // Phase 1: wind the integrator to a known, comfortably-nonzero value
-  // (pins at pidMax=40 well within 10 cycles -- see
-  // scenarioFastPidSteadyGateAndAntiWindup()'s own arithmetic, identical
-  // gains/error) under a persistent, steady error.
+  // Phase 1: build a genuinely large position error -- the wheel is
+  // stalled (position pinned at 0) while 200 mm/s is commanded, so it
+  // falls 10mm further behind every cycle.
   for (int i = 0; i < 10; ++i) {
     Types::RobotState state;
     state.wheelLeft.cmdVelocity = cmd;
-    state.wheelLeft.velocity = 0.0f;  // stalled: a large, persistent error
+    state.wheelLeft.position = 0.0f;  // stalled -- travels nothing
+    state.wheelLeft.velocity = 0.0f;
     state.wheelLeft.connected = true;
     state.wheelLeft.sampleTime = now - 10;
     state.time.cycleStart = now;
@@ -672,15 +1091,16 @@ void scenarioCommandedZeroForcesStageBToZeroAndFreezesIntegrator() {
     now += 50;
   }
   const float pidBeforeZero = drive.pidLeft();
-  checkTrue(pidBeforeZero > 1.0f,
-           "setup: the integrator actually wound up to a nonzero value before the zero period");
+  checkTrue(pidBeforeZero > gains.kp * cmd + 1.0f,
+           "setup: the I term genuinely contributed on top of the p term before the zero period");
 
   // Phase 2: command exactly zero for many ticks -- Stage B's contribution
-  // and the written duty must be EXACTLY zero every single tick, regardless
-  // of the integrator's retained (nonzero) value.
+  // and the written duty must be EXACTLY zero every single tick, however
+  // far behind the wheel was when the stop arrived.
   for (int i = 0; i < 20; ++i) {
     Types::RobotState state;
     state.wheelLeft.cmdVelocity = 0.0f;
+    state.wheelLeft.position = 0.0f;
     state.wheelLeft.velocity = 0.0f;
     state.wheelLeft.connected = true;
     state.wheelLeft.sampleTime = now - 10;
@@ -694,34 +1114,57 @@ void scenarioCommandedZeroForcesStageBToZeroAndFreezesIntegrator() {
     now += 50;
   }
 
-  // Phase 3: re-command the ORIGINAL nonzero speed/error for exactly one
-  // tick. If the integrator had been RESET to 0 during the zero period, this
-  // tick's pid would be far below pidBeforeZero (starting from scratch). It
-  // is instead FROZEN at its pre-zero value throughout Phase 2, so this
-  // tick's pid must be at least pidBeforeZero.
-  Types::RobotState resumeState;
-  resumeState.wheelLeft.cmdVelocity = cmd;
-  resumeState.wheelLeft.velocity = 0.0f;
-  resumeState.wheelLeft.connected = true;
-  resumeState.wheelLeft.sampleTime = now - 10;
-  resumeState.time.cycleStart = now;
-  resumeState.time.cyclePeriod = 50000;
-  drive.tick(resumeState);
-  checkTrue(drive.pidLeft() >= pidBeforeZero - 1e-3f,
-           "resumed motion: pid picks up from at least the pre-zero value -- the integrator was "
-           "FROZEN across the commanded-zero period, not reset to 0");
+  // Phase 3: re-command the ORIGINAL speed. 133-002 DELIBERATELY INVERTED
+  // 131-002's contract here. There is no accumulator to freeze; there is a
+  // position reference, and a reference held across a stop would make
+  // Stage B a servo that drives a stopped wheel back onto a position it
+  // was told to abandon -- the runaway class 133-001 exists to prevent.
+  // So: the reference re-anchors, the debt is dropped, and the first cycle
+  // back reports the p term alone.
+  auto resume = [&]() {
+    Types::RobotState state;
+    state.wheelLeft.cmdVelocity = cmd;
+    state.wheelLeft.position = 0.0f;
+    state.wheelLeft.velocity = 0.0f;
+    state.wheelLeft.connected = true;
+    state.wheelLeft.sampleTime = now - 10;
+    state.time.cycleStart = now;
+    state.time.cyclePeriod = 50000;
+    drive.tick(state);
+    now += 50;
+  };
+  resume();
+  checkFloatEq(drive.pidLeft(), gains.kp * cmd,
+              "resumed motion: the first cycle back reports the p term alone -- the pre-stop "
+              "position debt was DISCARDED with the reference, never repaid after the stop");
+  resume();
+  checkTrue(drive.pidLeft() > gains.kp * cmd,
+           "and the reference then starts accumulating again from the new anchor (the loop is "
+           "re-armed, not disabled)");
 }
 
-// 10. A stale/disconnected/frozen wheel's Stage B integrator stays FROZEN
-//     (never winds), sharing the SAME freshness conjunct Stage C's
-//     adaptBias() already required (connected/wheelFrozenLeft/sampleTime
-//     age) -- exercised as three independent failure modes, each proven by
-//     the p-term-only value staying IDENTICAL across many ticks under a
-//     persistent error (mirrors scenarioFastPidSteadyGateAndAntiWindup()'s
-//     own ramping-phase proof technique).
-void scenarioStaleDisconnectedOrFrozenWheelFreezesStageBIntegrator() {
-  beginScenario("Stage B: a stale/disconnected/frozen wheel's integrator stays FROZEN, never "
-                "winding against a manufactured reading (131-002)");
+// 10. What Stage B does with a reading it cannot fully trust, in the
+//     POSITION domain (133-002 -- this replaces 131-002's velocity-domain
+//     freshness gate, which guarded a hazard that no longer reaches this
+//     term):
+//       (a) DISCONNECTED -- still contributes exactly nothing. The
+//           position a disconnected wheel reports is MANUFACTURED
+//           (collectEncoder() hands back lastGoodRawEnc_), so correcting
+//           against it would bank a fictitious deficit.
+//       (b) STALE BY AGE, connected -- now DOES correct. A stale register
+//           holds the last TRUE position; the travel it has not yet
+//           reported is not lost, it lands on the next good read (scenario
+//           7's own subject). Freezing here is what used to delete real
+//           distance permanently.
+//       (c) FROZEN (Health::wheelFrozenLeft) -- likewise corrects, and is
+//           BOUNDED: posErrMax caps how far behind a wheel may be counted
+//           as being, so a wedged encoder or a physically blocked wheel
+//           cannot bank unbounded catch-up debt and then sprint to repay
+//           it. Bounded authority, not frozen authority, is the new
+//           contract; the bound is asserted here explicitly.
+void scenarioDisconnectedContributesNothingStaleAndFrozenCorrectBounded() {
+  beginScenario("Stage B (133-002): a DISCONNECTED wheel contributes exactly nothing, while a "
+                "merely stale or frozen reading corrects -- bounded by posErrMax, not frozen");
 
   App::Drive::ControlGains gains;
   gains.kp = 0.05f;
@@ -731,10 +1174,12 @@ void scenarioStaleDisconnectedOrFrozenWheelFreezesStageBIntegrator() {
   gains.pidMax = 40.0f;
 
   App::Drive::AdaptationBounds bounds;
-  bounds.aSteady = 50.0f;  // [mm/s^2]
+  bounds.aSteady = 50.0f;   // [mm/s^2]
+  bounds.posErrMax = 4.0f;  // [mm] -- the bound under test in (b)/(c)
 
   const float cmd = 200.0f;  // [mm/s]
-  const float kExpectedPOnly = gains.kp * cmd;  // 10.0 -- integrator frozen at 0, no feed term
+  const float kPOnly = gains.kp * cmd;                          // 10.0 -- I term contributes 0
+  const float kBounded = kPOnly + gains.ki * bounds.posErrMax;  // 12.0 -- I term pinned at its clamp
 
   // (a) disconnected -- state.wheelLeft.connected == false throughout.
   {
@@ -749,22 +1194,23 @@ void scenarioStaleDisconnectedOrFrozenWheelFreezesStageBIntegrator() {
     for (int i = 0; i < 20; ++i) {
       Types::RobotState state;
       state.wheelLeft.cmdVelocity = cmd;
-      state.wheelLeft.velocity = 0.0f;  // manufactured zero on a failed collect -- large "error"
-      state.wheelLeft.connected = false;  // disconnected -- NOT fresh
+      state.wheelLeft.position = 0.0f;   // manufactured on a failed collect, not measured
+      state.wheelLeft.velocity = 0.0f;
+      state.wheelLeft.connected = false;  // disconnected
       state.wheelLeft.sampleTime = now - 10;
       state.time.cycleStart = now;
       state.time.cyclePeriod = 50000;
       drive.tick(state);
-      checkFloatEq(drive.pidLeft(), kExpectedPOnly,
-                  "disconnected: pid is p-term only, no integral growth -- Stage B never winds "
-                  "against a disconnected wheel");
+      checkFloatEq(drive.pidLeft(), kPOnly,
+                  "disconnected: pid is p-term only on EVERY tick -- Stage B never corrects "
+                  "against a manufactured position, and never latches armed while disconnected");
       now += 50;
     }
   }
 
-  // (b) stale sample age -- connected, but sampleTime()'s implied age
-  //     exceeds kMaxSampleAge (200ms), the same "not fresh" conjunct via a
-  //     different failure mode.
+  // (b) stale sample age -- connected, but the age implied by sampleTime
+  //     exceeds kMaxSampleAge (200ms). Stage C's adaptBias() still freezes
+  //     on this; Stage B deliberately does not.
   {
     MockMotor left;
     MockMotor right;
@@ -777,19 +1223,25 @@ void scenarioStaleDisconnectedOrFrozenWheelFreezesStageBIntegrator() {
     for (int i = 0; i < 20; ++i) {
       Types::RobotState state;
       state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.position = 0.0f;
       state.wheelLeft.velocity = 0.0f;
       state.wheelLeft.connected = true;
       state.wheelLeft.sampleTime = 0;  // ancient -- age (cycleStart - 0) always >> 200ms here
       state.time.cycleStart = now;
       state.time.cyclePeriod = 50000;
       drive.tick(state);
-      checkFloatEq(drive.pidLeft(), kExpectedPOnly,
-                  "stale sample age: pid is p-term only, no integral growth");
+      checkTrue(drive.pidLeft() <= kBounded + 1e-3f,
+               "stale sample age: the correction never exceeds p + ki*posErrMax -- a stale read "
+               "is allowed to correct, but only up to the configured position bound");
       now += 50;
     }
+    checkFloatEq(drive.pidLeft(), kBounded,
+                "and it does reach that bound: a stale reading is NOT frozen out, because the "
+                "register holds the last TRUE position rather than a manufactured one");
   }
 
-  // (c) frozen (Health::wheelFrozenLeft) -- the third fresh conjunct.
+  // (c) frozen (Health::wheelFrozenLeft) -- a wedged encoder, or a wheel
+  //     physically blocked. Same contract as (b): bounded, not frozen.
   {
     MockMotor left;
     MockMotor right;
@@ -799,20 +1251,24 @@ void scenarioStaleDisconnectedOrFrozenWheelFreezesStageBIntegrator() {
     drive.setAdaptationBounds(bounds);
 
     uint32_t now = 1000;
-    for (int i = 0; i < 20; ++i) {
+    for (int i = 0; i < 200; ++i) {
       Types::RobotState state;
       state.wheelLeft.cmdVelocity = cmd;
+      state.wheelLeft.position = 0.0f;        // wedged: the register never advances
       state.wheelLeft.velocity = 0.0f;
       state.wheelLeft.connected = true;
       state.wheelLeft.sampleTime = now - 10;  // fresh BY AGE ...
-      state.health.wheelFrozenLeft = true;    // ... but frozen -- still NOT fresh
+      state.health.wheelFrozenLeft = true;    // ... but diagnosed frozen
       state.time.cycleStart = now;
       state.time.cyclePeriod = 50000;
       drive.tick(state);
-      checkFloatEq(drive.pidLeft(), kExpectedPOnly,
-                  "frozen wheel: pid is p-term only, no integral growth");
+      checkTrue(drive.pidLeft() <= kBounded + 1e-3f,
+               "frozen wheel: the correction is capped at p + ki*posErrMax for as long as the "
+               "register stays wedged -- unbounded catch-up debt is what posErrMax exists to stop");
       now += 50;
     }
+    checkFloatEq(drive.pidLeft(), kBounded,
+                "sustained over 200 cycles it sits exactly ON the bound and never climbs past it");
   }
 }
 
@@ -1671,9 +2127,12 @@ int main() {
   scenarioBiasConvergesUnderKnownPlantGainError();
   scenarioBiasClampHoldsAgainstDivergentError();
   scenarioBumplessTransferAcrossBiasUpdate();
-  scenarioFastPidSteadyGateAndAntiWindup();
-  scenarioCommandedZeroForcesStageBToZeroAndFreezesIntegrator();
-  scenarioStaleDisconnectedOrFrozenWheelFreezesStageBIntegrator();
+  scenarioUpdatePublishesCmdAccelOnTheWheelsPathInertAtZeroKaff();
+  scenarioStageBITermIsAPositionTermWithNoSteadyGate();
+  scenarioPositionErrorGuardsReAnchorWithoutCorrecting();
+  scenarioDroppedSampleDoesNotDeleteDistanceFromThePositionEstimate();
+  scenarioCommandedZeroForcesStageBToZeroAndDiscardsTheReference();
+  scenarioDisconnectedContributesNothingStaleAndFrozenCorrectBounded();
   scenarioWheelsAndMoveReachIdenticalDriveBehavior();
   scenarioTakeoverPreservesLearnedStateEstopFullyResets();
   scenarioTakeoverDoesNotTouchStopReassertionCountdown();

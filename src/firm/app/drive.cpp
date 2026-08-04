@@ -33,6 +33,7 @@ void Drive::configure(const Config::Robot& config) {
   bounds.biasMax = config.wheelControl.bias_max;
   bounds.tauAdapt = config.wheelControl.tau_adapt;
   bounds.aSteady = config.wheelControl.a_steady;
+  bounds.posErrMax = config.wheelControl.pos_err_max;
   bounds.deficitThreshold = config.wheelControl.deficit_threshold;
   bounds.deficitWindow = config.wheelControl.deficit_window;
   setAdaptationBounds(bounds);
@@ -87,8 +88,14 @@ void Drive::estop() {
   // accumulating before it. NOT shared with takeover() (131-001) -- an
   // ownership handover must KEEP exactly this state, which is the whole
   // point of the split.
-  pidIntegralLeft_ = 0.0f;
-  pidIntegralRight_ = 0.0f;
+  //
+  // 133-002: Stage B's reset is now a re-anchor of the POSITION REFERENCE
+  // rather than a zeroing of an accumulator -- `PositionRef{}` clears
+  // `armed`, so the next tick() re-reads the encoder's current position
+  // as the new origin and reports exactly zero error for that cycle. A
+  // stop must not leave the loop still owing distance from before it.
+  posRefLeft_ = PositionRef{};
+  posRefRight_ = PositionRef{};
   biasLeft_ = 0.0f;
   biasRight_ = 0.0f;
   deficitSinceLeft_ = 0;
@@ -122,6 +129,46 @@ void Drive::update(Types::RobotState& state, uint32_t now) {
 
   state.wheelLeft.cmdVelocity = targetLeft_;
   state.wheelRight.cmdVelocity = targetRight_;
+
+  // cmdAccel on the WHEELS path -- 133-002. LANDS UNVALIDATED, ON PURPOSE:
+  // it is correct on its own terms (the field genuinely was never set here,
+  // which is WHY the earlier kff and aSteady sweeps each measured nothing
+  // -- `kaff * cmdAccel` was identically zero and `steady` was pinned
+  // true), but the tuning sweep run on top of it returned ~50% dead runs
+  // and it has never been shown to IMPROVE anything. It is INERT at
+  // kaff == 0, which every shipped robot JSON currently carries, and that
+  // is the only reason it is safe to land ahead of its own measurement.
+  // Sprint 133 Open Question 2 -- do not treat this as closed.
+  //
+  // Only Motion::Planner::update() wrote cmdAccel before this, so while
+  // Drive owned motion the field held a stale planner value or zero, and
+  // two whole mechanisms in tick() silently did nothing:
+  //   * Stage B's feedforward, kaff * cmdAccel, was identically ZERO, so a
+  //     ramp was tracked by P+I alone -- and a P+I loop tracking a ramp
+  //     lags by construction. Measured on the 200 mm/s trapezoid: lagging
+  //     on the up-ramp, near-perfect on the plateau, over-travelling on the
+  //     down-ramp, which is exactly that signature.
+  //   * `steady` (|cmdAccel| < aSteady) was ALWAYS true, so Stage C's bias
+  //     was never gated off during a ramp either.
+  //
+  // Smoothed, not a bare finite difference: the host re-arms WHEELS on its
+  // own tick (100 ms measured) while the loop runs at kCycle (50 ms), so
+  // the commanded velocity arrives as a STAIRCASE and a raw difference
+  // quotient alternates a double-size spike with a zero. A first-order
+  // filter recovers the underlying ramp slope instead of handing Stage B a
+  // square wave to feed forward.
+  const float dt = static_cast<float>(state.time.cyclePeriod) * 1e-6f;  // [s]
+  if (dt > 0.0f) {
+    const float rawLeft = (targetLeft_ - previousTargetLeft_) / dt;    // [mm/s^2]
+    const float rawRight = (targetRight_ - previousTargetRight_) / dt;  // [mm/s^2]
+    cmdAccelLeft_ += kAccelSmoothing * (rawLeft - cmdAccelLeft_);
+    cmdAccelRight_ += kAccelSmoothing * (rawRight - cmdAccelRight_);
+  }
+  previousTargetLeft_ = targetLeft_;
+  previousTargetRight_ = targetRight_;
+  state.wheelLeft.cmdAccel = cmdAccelLeft_;
+  state.wheelRight.cmdAccel = cmdAccelRight_;
+
   state.command.moveActive = commandActive_;
   state.command.mode = commandActive_ ? Types::Mode::Velocity : Types::Mode::Idle;
   state.command.v_x = 0.5f * (targetLeft_ + targetRight_);
@@ -255,42 +302,121 @@ void Drive::applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
   speedRight = rawRight * scale;
 }
 
-// Stage B -- the fast PID (small authority, never carries standing error
-// because Stage A+C already do -- see drive.h's own header). `integral`
-// is the caller's own persistent per-wheel state (pidIntegralLeft_/
-// Right_), mutated in place. `steady` gates the integrator exactly like
-// Motion::WheelTrim's own Hold-phase gate (wheel_trim.cpp) -- ramping
-// error is transient work that belongs to kaff/kp, not the integral;
-// outside `steady` the integrator is FROZEN, not reset, so a chain of
-// legs does not throw away trim it already learned. Anti-windup: do not
-// integrate further into a clamp the output is already pinned against
-// (same shape as WheelTrim::compute()'s own pushingIntoClamp gate).
-float Drive::fastPid(float& integral, float err, float aCmd, float dt,
-                     bool steady) const {
+// Stage B -- the fast controller (small authority, never carries standing
+// error because Stage A+C already do -- see drive.h's own header).
+//
+// THE I TERM IS A POSITION TERM (133-002, stakeholder observation
+// 2026-08-03). This used to be `integral += ki * err * dt`, and `err` is a
+// VELOCITY, so `err * dt` is MILLIMETRES: the accumulator was already
+// (commanded position - measured position), just computed the worst
+// possible way -- by summing a derived, quantized velocity whose own noise
+// is a FULL DUTY COUNT (sd 8.0 mm/s), gated by a freshness test that FROZE
+// the sum on precisely the samples where unobserved distance was being
+// travelled. The encoder's position register carried the truth the whole
+// time.
+//
+// So read the error instead of inferring it. `posError` comes straight from
+// that register (positionError(), below); the control law, its units, and
+// its output are otherwise unchanged -- ki is still [1/s], the term is
+// still millimetres of error turned into mm/s of correction, and the loop
+// still commands velocity, which is all the motor can take.
+//
+// Note what this DELETES: there is no accumulator, so there is no windup,
+// no `steady` gate to freeze it, no anti-windup pushingIntoClamp test, and
+// no reset to lose. A position error that appears while the loop is not
+// looking is simply still there when it looks again -- which is the entire
+// fix.
+//
+// Two clamps, two domains, both retained (drive.h's own header):
+// bounds_.posErrMax [mm] already bounded the INPUT inside positionError();
+// gains_.iMax [mm/s] bounds this term's OUTPUT. iMax == 0 still means the
+// I term is OFF ENTIRELY -- the same fail-closed reading the accumulator
+// era's `iMax > 0` guard had, kept deliberately so that every shipped
+// robot JSON (all carrying iMax = 0 today) cannot acquire UNBOUNDED I
+// authority the moment someone pushes a nonzero ki.
+float Drive::fastPid(float posError, float err, float aCmd) const {
   const float proportional = gains_.kp * err;
   const float feed = gains_.kaff * aCmd;
 
-  const bool clamped = gains_.pidMax > 0.0f;
-  const float provisional = proportional + feed + integral;
-  const bool pushingIntoClamp =
-      clamped && ((provisional >= gains_.pidMax && err > 0.0f) ||
-                  (provisional <= -gains_.pidMax && err < 0.0f));
-
-  if (steady && gains_.iMax > 0.0f && gains_.ki != 0.0f && !pushingIntoClamp &&
-      dt > 0.0f) {
-    integral += gains_.ki * err * dt;
+  float integral = 0.0f;  // [mm/s]
+  if (gains_.iMax > 0.0f) {
+    integral = gains_.ki * posError;
     if (integral > gains_.iMax) integral = gains_.iMax;
     if (integral < -gains_.iMax) integral = -gains_.iMax;
   }
-  // else FROZEN, not reset.
 
   float pid = proportional + feed + integral;
-  if (clamped) {
+  if (gains_.pidMax > 0.0f) {
     if (pid > gains_.pidMax) pid = gains_.pidMax;
     if (pid < -gains_.pidMax) pid = -gains_.pidMax;
   }
   if (!std::isfinite(pid)) return 0.0f;  // fail closed, never inject NaN
   return pid;
+}
+
+// The position error the I term consumes (133-002): the integral of the
+// COMMANDED speed -- our own signal, noise-free -- minus the wheel's own
+// measured travel since the reference was anchored.
+//
+// Re-anchors, returning EXACTLY zero error and correcting nothing,
+// whenever the reference cannot be trusted. Three conditions, each of
+// which earns its place:
+//
+//   * COMMANDED ZERO. Stop is stop. Holding position at a commanded zero
+//     would make this a servo, and a servo creeps a stopped wheel back
+//     onto its reference -- the exact runaway class 133-001 and
+//     nezha_motor.h's own LOAD-BEARING note exist to prevent. Losing the
+//     accumulated reference across a stop is the correct trade. This
+//     guard is why tick() calls this function EVERY cycle rather than
+//     short-circuiting it at commanded zero -- see that call site.
+//   * DISCONNECTED WHEEL. Devices::NezhaMotor::collectEncoder() returns
+//     `lastGoodRawEnc_` on a failed read (nezha_motor.cpp), so a
+//     disconnected wheel's position is a MANUFACTURED value, not a
+//     measurement -- and one that stops advancing while the wheel may
+//     still be turning. Anchoring against it would bank a fictitious
+//     deficit.
+//   * EPOCH CHANGE. App::RobotLoop rebaselines the position register as
+//     its raw value nears the wire's range (robot_state.h's own
+//     positionEpoch doc comment), which STEPS `position` discontinuously.
+//     A step is not travel.
+//
+// `armed` makes the anchor cycle itself report zero rather than a step:
+// the first cycle after any of the above establishes origin/epoch, and
+// only the NEXT cycle begins accumulating a reference against it.
+//
+// Deliberately NOT gated on sample freshness/staleness, unlike Stage C's
+// adaptBias() and unlike the accumulator this replaces (131-002's own
+// gate). A stale-but-connected reading is the LAST TRUE POSITION, held --
+// not a manufactured zero -- so the distance travelled while the loop was
+// not looking is still recorded in the register and lands in full on the
+// next good read. Freezing there is exactly the behavior that used to
+// delete real distance permanently. The authority this hands a
+// genuinely-wedged encoder is bounded by posErrMax, then by iMax, then by
+// pidMax.
+//
+// The error is clamped to ±posErrMax so a blocked or slipping wheel
+// cannot bank unbounded catch-up debt and then sprint to repay it the
+// moment it comes free. That clamp is in MILLIMETRES, which is the whole
+// point: the old iMax clamped ki*error, so raising ki silently SHRANK the
+// position memory (at ki=6, iMax=20 could remember only 3.3 mm -- less
+// than every residual being corrected).
+float Drive::positionError(float speed, const Types::RobotState::Wheel& wheel,
+                           PositionRef& ref, float dt) const {
+  if (speed == 0.0f || dt <= 0.0f || !wheel.connected ||
+      wheel.positionEpoch != ref.epoch || !ref.armed) {
+    ref.armed = (speed != 0.0f) && wheel.connected;
+    ref.epoch = wheel.positionEpoch;
+    ref.origin = wheel.position;
+    ref.reference = 0.0f;
+    return 0.0f;
+  }
+  ref.reference += speed * dt;                                  // [mm]
+  float error = ref.reference - (wheel.position - ref.origin);  // [mm]
+  if (bounds_.posErrMax > 0.0f) {
+    if (error > bounds_.posErrMax) error = bounds_.posErrMax;
+    if (error < -bounds_.posErrMax) error = -bounds_.posErrMax;
+  }
+  return error;
 }
 
 // Stage C -- bounded adaptation of the map's ONE additive parameter,
@@ -449,43 +575,67 @@ void Drive::tick(const Types::RobotState& state) {
                          sampleAge(state.time.cycleStart, state.wheelRight.sampleTime) <=
                              kMaxSampleAge;
 
-  // Stage B: the fast PID, small authority, on wheel-speed error.
-  // cyclePeriod is last cycle's measured period [us] -- consistent with
-  // every other value tick() reads here being "as of last cycle"
-  // (this function's own call site comment in robot_loop.cpp: "the
+  // Stage B: the fast controller, small authority -- P and feedforward on
+  // wheel-SPEED error, I on POSITION error (133-002, fastPid()'s own doc
+  // comment). cyclePeriod is last cycle's measured period [us] --
+  // consistent with every other value tick() reads here being "as of last
+  // cycle" (this function's own call site comment in robot_loop.cpp: "the
   // speeds the owning subsystem staged onto the blackboard LAST cycle").
+  //
+  // The per-wheel `steady` locals this block used to compute
+  // (|cmdAccel| < aSteady) are gone with 133-002's accumulator: their only
+  // consumer was Stage B's integrator gate. Stage C still gates on the
+  // same condition, but adaptBias() has always evaluated it itself.
   const float dt = static_cast<float>(state.time.cyclePeriod) * 1e-6f;  // [s]
   const float errLeft = speedLeft - state.wheelLeft.velocity;
   const float errRight = speedRight - state.wheelRight.velocity;
-  const bool steadyLeft = std::fabs(state.wheelLeft.cmdAccel) < bounds_.aSteady;
-  const bool steadyRight = std::fabs(state.wheelRight.cmdAccel) < bounds_.aSteady;
 
   // Commanded-zero guard (131-002): correctedCommand()'s own
   // `desired == 0.0f` guard (Stage A, above) has NO effect here -- Stage B
-  // is a fully separate computation reading the wheel's MEASURED
-  // velocity, and a wheel that has not yet physically coasted to rest
-  // keeps a nonzero err after its commanded speed reaches exactly 0
-  // (steadyLeft/Right can go true the instant the deceleration itself
-  // ends, well before the wheel actually stops -- the integrator would
-  // then resume winding against the residual coast-down error). Skip
-  // fastPid() OUTRIGHT for a commanded-zero wheel: no P/feedforward/clamp
-  // math runs, and the integrator is left completely untouched (frozen,
-  // not reset) -- "stop is stop" through Stage B too, matching
-  // correctedCommand()'s own guard and applySpeedFloor()'s own guard.
-  // Otherwise, additionally require this wheel's freshness (computed
-  // above) before the integrator may accumulate -- folded into the SAME
-  // `steady` parameter fastPid() already gates on, so a stale/
-  // disconnected/frozen reading freezes it exactly like the existing
-  // !steady case, rather than winding against a manufactured
-  // zero-velocity reading.
+  // is a fully separate computation, and a wheel that has not yet
+  // physically coasted to rest keeps a nonzero err after its commanded
+  // speed reaches exactly 0. Skip fastPid() OUTRIGHT for a commanded-zero
+  // wheel: no P/feedforward/clamp math runs at all -- "stop is stop"
+  // through Stage B too, matching correctedCommand()'s own guard and
+  // applySpeedFloor()'s own guard. positionError() carries the SAME
+  // commanded-zero condition independently (it re-anchors rather than
+  // holding position, which would make Stage B a servo and creep a
+  // stopped wheel), so the two agree by construction even though this
+  // call is skipped entirely.
+  //
+  // 133-002: the freshness conjunct this call site used to fold into
+  // fastPid()'s `steady` parameter is gone with the accumulator it gated.
+  // The hazard it addressed -- winding against a MANUFACTURED ZERO
+  // VELOCITY on a failed collect -- cannot reach the I term any more,
+  // because the I term reads position, not velocity. freshLeft/freshRight
+  // are still computed above and still gate Stage C's adaptBias(), which
+  // does still integrate a velocity error.
+  //
+  // positionError() is called UNCONDITIONALLY, every cycle, and only
+  // fastPid() is skipped at commanded zero. This ordering is load-bearing
+  // and is NOT how the source patch (issue B §7-D) had it: there, the
+  // whole expression was short-circuited on `speed == 0.0f`, which made
+  // positionError()'s OWN commanded-zero guard unreachable and left the
+  // reference alive across a stop. Two consequences, both wrong:
+  //   * the pre-stop position debt survived the stop and was repaid as a
+  //     sprint the moment motion resumed -- the loop chasing a position
+  //     it had been explicitly told to abandon; and
+  //   * the reference did not advance during the zero period while the
+  //     wheel DID coast forward, so the error went NEGATIVE by the coast
+  //     distance and the first correction after a stop pushed backwards.
+  // Calling it every cycle keeps the reference re-anchored on the live
+  // reading while stopped, so "stop is stop" holds for Stage B's STATE
+  // and not merely for its output. The output is still exactly 0.0 at
+  // commanded zero -- no P, no feedforward, no clamp math runs -- which is
+  // 131-002's own contract, unchanged.
+  const float posErrorLeft = positionError(speedLeft, state.wheelLeft, posRefLeft_, dt);
+  const float posErrorRight = positionError(speedRight, state.wheelRight, posRefRight_, dt);
   const float pidLeft = (speedLeft == 0.0f)
       ? 0.0f
-      : fastPid(pidIntegralLeft_, errLeft, state.wheelLeft.cmdAccel, dt,
-                steadyLeft && freshLeft);
+      : fastPid(posErrorLeft, errLeft, state.wheelLeft.cmdAccel);
   const float pidRight = (speedRight == 0.0f)
       ? 0.0f
-      : fastPid(pidIntegralRight_, errRight, state.wheelRight.cmdAccel, dt,
-                steadyRight && freshRight);
+      : fastPid(posErrorRight, errRight, state.wheelRight.cmdAccel);
   lastPidLeft_ = pidLeft;
   lastPidRight_ = pidRight;
 

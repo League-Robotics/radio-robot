@@ -371,9 +371,31 @@ message WheelControl {
   float deficit_window     = 6  [(min) = 0.0];  // [ms] deficit-flag sustain window
   float pid_kp             = 7  [(min) = 0.0];  // [1] dimensionless proportional gain
   float pid_ki             = 8  [(min) = 0.0];  // [1/s] integral gain
-  float pid_i_max          = 9  [(min) = 0.0];  // [mm/s] integrator clamp
+  float pid_i_max          = 9  [(min) = 0.0];  // [mm/s] I-term OUTPUT clamp (see pos_err_max)
   float pid_kaff           = 10 [(min) = 0.0];  // [s] accel feedforward
   float pid_max            = 11 [(min) = 0.0];  // [mm/s] total fast-loop authority clamp
+  // pos_err_max -- 133-002. Stage B's I term is a POSITION term (App::Drive::
+  // fastPid()/positionError(), drive.cpp): `integral = pid_ki * posError`,
+  // with posError in MILLIMETRES read from the encoder's position register.
+  //
+  // pos_err_max and pid_i_max clamp DIFFERENT DOMAINS and BOTH are
+  // load-bearing -- this pair is the whole point of the change, so do not
+  // "simplify" one away:
+  //   pos_err_max  [mm]    bounds the INPUT  -- position error, BEFORE pid_ki
+  //   pid_i_max    [mm/s]  bounds the OUTPUT -- pid_ki * posError, AFTER it
+  // Before 133-002 there was only pid_i_max, which -- because the accumulated
+  // quantity was already millimetres -- acted as a DISGUISED position limit of
+  // pid_i_max/pid_ki mm (at ki=6/iMax=20: 3.3 mm, smaller than every residual
+  // being chased, so RAISING ki SHRANK the loop's position memory). Clamping
+  // the input in millimetres is what lets pid_i_max be the honest velocity-
+  // authority bound it was always named for.
+  //
+  // 0 = unclamped position error, matching this message's own "0 = disabled"
+  // convention. Note pid_i_max's own 0 still means "the I term is off
+  // entirely" (App::Drive::fastPid()'s fail-closed posture, unchanged from the
+  // accumulator era) -- so a robot JSON shipping pid_i_max = 0 has no I term
+  // regardless of what this field says.
+  float pos_err_max        = 12 [(min) = 0.0];  // [mm] Stage B position-error clamp; 0 = unclamped
 }
 
 // Planner -- Motion::Planner's BOOT-ONLY tuning surface: profile velocity/

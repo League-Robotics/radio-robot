@@ -641,8 +641,9 @@ constexpr FieldDesc kFields_WheelControl[] = {
     { .number = 9, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(WheelControl, pid_i_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // pid_i_max
     { .number = 10, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(WheelControl, pid_kaff), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // pid_kaff
     { .number = 11, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(WheelControl, pid_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // pid_max
+    { .number = 12, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(WheelControl, pos_err_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // pos_err_max
 };
-constexpr MessageTable kTable_WheelControl = { kFields_WheelControl, 11 };
+constexpr MessageTable kTable_WheelControl = { kFields_WheelControl, 12 };
 
 constexpr FieldDesc kFields_Planner[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, v_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // v_max

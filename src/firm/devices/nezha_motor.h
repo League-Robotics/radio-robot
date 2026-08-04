@@ -194,6 +194,16 @@ class NezhaMotor : public Motor {
 
   // ---- Write path ----
   int8_t lastWrittenPct_ = -128;        // [%] sentinel (outside +/-100) forces the first write
+  // Sigma-delta accumulator for the integer-percent quantizer
+  // (writeRawDuty(), 133-002). Holds the residual between the duty
+  // actually wanted and the integer percent written, so the TIME-AVERAGED
+  // output resolves below one count -- one count is 8.46 mm/s at the
+  // measured plant gain, which is coarser than the imbalance the wheel
+  // controller is trying to correct. ZEROED ON COMMANDED STOP, always: a
+  // residual carried across a stop would round to +-1 and creep a stopped
+  // wheel, which is the runaway class this file's own LOAD-BEARING note
+  // exists to prevent.
+  float dutyCarry_ = 0.0f;  // [percent] fractional residual, [-1, 1]
   uint64_t lastWriteTimeUs_ = 0;        // [us]
 
   // ---- Write shaping: reversal dwell + output deadband — Nezha-brick

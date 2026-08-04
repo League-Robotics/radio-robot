@@ -80,6 +80,7 @@ struct WheelControl {
     float pid_i_max = 0.0f;
     float pid_kaff = 0.0f;
     float pid_max = 0.0f;
+    float pos_err_max = 0.0f;
 
     // --- array / optional-string accessors ---
 };

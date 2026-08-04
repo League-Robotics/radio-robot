@@ -72,6 +72,8 @@
     "pid_i_max": 0.0,
     "pid_kaff": 0.0,
     "pid_max": 0.0,
+    "pos_err_max": 0.0,
+    "_pos_err_max_note": "133-002: Stage B's position-error clamp [mm] -- the INPUT-side bound on the I term, distinct from pid_i_max's OUTPUT-side [mm/s] bound; both retained. 0 = unclamped, matching every other wheel_control key on this robot: togov has no drive characterization of its own, so both Stage B and Stage C stay disabled rather than borrowing tovez's numbers (see the note below).",
     "_wheel_controller_note": "130-004 (wheel-speed-controller-moves-into-drive.md): App::Drive's unified three-timescale controller. togov (mecanum, 4 wheels) has NO population duty-sweep characterization of its own -- ticket 001's sweep ran on tovez's differential drive pair only. All wheel_*/deficit_* keys held at 0 (both Stage B fast-PID AND Stage C bias-trim adaptation disabled, matching this file's own control.wheel_gain_*/_wheel_correction_note precedent of shipping IDENTITY/inert values rather than borrowing tovez's numbers for an uncharacterized drivetrain) -- unlike the planner._uncalibrated borrow-with-flag pattern elsewhere in this file, 0 here is a SAFE, meaningful disabled state (Stage A's existing conversion map keeps working unmodified), not a placeholder standing in for a value the code requires nonzero to function. Replace with togov's own duty-sweep results before enabling either stage."
   },
   "planner": {

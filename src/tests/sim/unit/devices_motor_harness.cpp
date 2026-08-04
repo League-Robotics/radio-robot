@@ -943,6 +943,107 @@ void scenarioExplicitZeroWriteShapingIsPassThrough() {
                "sign flip forwarded immediately at reversalDwell=0 -- no dwell armed");
 }
 
+// 10b. SIGMA-DELTA duty quantizer (133-002). The brick takes an INTEGER
+//      PERCENT, and at App::Drive::kDutyPerSpeed = 0.001182 one count is
+//      8.46 mm/s -- 5.6% of a 150 mm/s command, and roughly twenty times
+//      the left/right imbalance the wheel controller was being tuned to
+//      close. Plain rounding cannot represent a command between two
+//      counts at all, so no gain upstream can either.
+//
+//      Two properties, and the second is the safety one:
+//        (a) a duty strictly between two counts is represented ACROSS
+//            successive cycles -- the written percents straddle both
+//            neighbours and their mean is the fraction actually asked
+//            for, rather than every cycle truncating to the same count;
+//        (b) the carry is DISCARDED on a commanded zero. A residual left
+//            over from the last nonzero duty would round to +-1 on the
+//            next command and, worse, could creep a wheel that was told
+//            to stop. Sub-count fidelity across a stop is the correct
+//            thing to lose.
+void scenarioSigmaDeltaRepresentsSubCountDutyAndDropsCarryOnStop() {
+  beginScenario("writeRawDuty()'s sigma-delta represents a sub-count duty over successive cycles, "
+                "and discards its carry on a commanded zero (133-002)");
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus(plant);
+  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+
+  // (a) 12.3% -- strictly between counts 12 and 13. Plain lroundf() would
+  //     write 12 on every single cycle forever, an error of 0.3 of a count
+  //     held indefinitely in one direction.
+  {
+    Devices::MotorConfig cfg = baseNezhaConfig();
+    cfg.slewRate = 100.0f;  // no slew clamping -- isolates the quantizer
+    Devices::NezhaMotor m(plant, cfg);
+
+    const float duty = 0.123f;  // [-1,1] -> 12.3 percent
+    const int kTicks = 20;      // two full periods of the residual pattern
+    uint64_t nowUs = 50000;
+    float sumPct = 0.0f;
+    bool sawLow = false;
+    bool sawHigh = false;
+    for (int i = 0; i < kTicks; ++i) {
+      dutyTick(m, bus, wireAddr, duty, nowUs);
+      const float pct = m.appliedDuty() * 100.0f;  // [percent] the integer actually written
+      sumPct += pct;
+      if (pct < 12.5f) sawLow = true;
+      if (pct > 12.5f) sawHigh = true;
+      nowUs += 50000;
+    }
+
+    checkTrue(sawLow && sawHigh,
+             "the written percent straddles BOTH neighbouring counts -- it is not truncating to "
+             "one of them every cycle");
+    checkFloatEq(sumPct / static_cast<float>(kTicks), 12.3f,
+                "and the TIME-AVERAGED percent equals the fractional duty actually wanted, which "
+                "is the sub-count resolution the integer wire field cannot otherwise carry",
+                0.05f);
+  }
+
+  // (b) The carry is discarded on a commanded zero. Built as a
+  //     discriminator, not an inspection: 12.6% rounds to 13 and leaves a
+  //     -0.4 residual. Command zero, then command 12.6% again -- with the
+  //     carry cleared that is 13 again; with the carry carried across the
+  //     stop it would be 12.6 - 0.4 = 12.2, i.e. 12.
+  {
+    Devices::MotorConfig cfg = baseNezhaConfig();
+    cfg.slewRate = 100.0f;
+    Devices::NezhaMotor m(plant, cfg);
+
+    dutyTick(m, bus, wireAddr, 0.126f, 50000);
+    checkFloatEq(m.appliedDuty(), 0.13f,
+                "setup: 12.6% rounds up to count 13, leaving a -0.4 residual in the carry");
+
+    dutyTick(m, bus, wireAddr, 0.0f, 100000);
+    checkFloatEq(m.appliedDuty(), 0.0f,
+                "a commanded zero writes EXACTLY count 0 -- never +-1 off the back of a residual, "
+                "which would creep a stopped wheel");
+
+    dutyTick(m, bus, wireAddr, 0.126f, 150000);
+    checkFloatEq(m.appliedDuty(), 0.13f,
+                "and the SAME command after the stop rounds identically to the first time: the "
+                "carry was discarded at zero, not carried across it (a surviving -0.4 would have "
+                "written count 12 here)");
+  }
+
+  // (c) A commanded zero stays exactly zero however long it is held --
+  //     the carry cannot re-accumulate while the command is zero.
+  {
+    Devices::MotorConfig cfg = baseNezhaConfig();
+    cfg.slewRate = 100.0f;
+    Devices::NezhaMotor m(plant, cfg);
+
+    dutyTick(m, bus, wireAddr, 0.457f, 50000);  // build an arbitrary residual
+    uint64_t nowUs = 100000;
+    for (int i = 0; i < 20; ++i) {
+      dutyTick(m, bus, wireAddr, 0.0f, nowUs);
+      checkFloatEq(m.appliedDuty(), 0.0f,
+                  "commanded zero writes exactly 0 on every tick it is held -- the sigma-delta "
+                  "never accumulates a residual out of a zero command");
+      nowUs += 50000;
+    }
+  }
+}
+
 // sampleTime() (124-002, protocol-v5 §B2 prerequisite) -- 125-003: with the
 // freshness gate deleted, sampleTime() simply reported the nowUs of the most
 // recent tick() call. 131-002 (issue A-commanded-zero-leaks-through-stage-
@@ -1133,6 +1234,7 @@ int main() {
   scenarioApplyTravelCalibTakesEffectSameBootNoReflash();
   scenarioReconfigureGuardedWholeConfigReplacement();
   scenarioExplicitZeroWriteShapingIsPassThrough();
+  scenarioSigmaDeltaRepresentsSubCountDutyAndDropsCarryOnStop();
   scenarioSampleTimeReflectsMostRecentTick();
   scenarioSampleTimeHoldsLastSuccessfulCollectAcrossFailedCollects();
   scenarioRebaselinePreservesVelocityAcrossTheBoundary();

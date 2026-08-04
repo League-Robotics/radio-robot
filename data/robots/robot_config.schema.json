@@ -274,6 +274,10 @@
         "pid_max": {
           "type": "number",
           "minimum": 0.0
+        },
+        "pos_err_max": {
+          "type": "number",
+          "minimum": 0.0
         }
       }
     },

@@ -268,9 +268,10 @@ msg::Drive defaultDriveGroup() {
 
 msg::WheelControl defaultWheelControlGroup() {
     // wheel_control.v_min/bias_max/tau_adapt/a_steady/deficit_threshold/
-    // deficit_window/pid_* (132-017 JSON reshape retarget -- was
-    // control.wheel_*/wheel_pid_*/wheel_deficit_* before the grouped-shape
-    // migration) -- wheel_controller_config_for_config() above.
+    // deficit_window/pid_*/pos_err_max (132-017 JSON reshape retarget --
+    // was control.wheel_*/wheel_pid_*/wheel_deficit_* before the
+    // grouped-shape migration; pos_err_max added 133-002) --
+    // wheel_controller_config_for_config() above.
     msg::WheelControl cfg;
     cfg.v_min = 99.7f;                       // [mm/s]
     cfg.bias_max = 23.8f;                 // [mm/s]
@@ -283,6 +284,7 @@ msg::WheelControl defaultWheelControlGroup() {
     cfg.pid_i_max = 0.0f;    // [mm/s]
     cfg.pid_kaff = 0.0f;    // [s]
     cfg.pid_max = 0.0f;    // [mm/s]
+    cfg.pos_err_max = 0.0f;  // [mm]
     return cfg;
 }
 

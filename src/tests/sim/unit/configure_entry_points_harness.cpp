@@ -110,6 +110,7 @@ Config::Robot sampleConfig() {
   config.wheelControl.bias_max = 77.0f;
   config.wheelControl.tau_adapt = 8.0f;
   config.wheelControl.a_steady = 99.0f;
+  config.wheelControl.pos_err_max = 12.0f;  // [mm] 133-002
   config.wheelControl.deficit_threshold = 10.0f;
   config.wheelControl.deficit_window = 200.0f;
 
@@ -254,6 +255,12 @@ int main() {
     checkFloatEq(bounds.biasMax, config.wheelControl.bias_max, "adaptationBounds().biasMax");
     checkFloatEq(bounds.tauAdapt, config.wheelControl.tau_adapt, "adaptationBounds().tauAdapt");
     checkFloatEq(bounds.aSteady, config.wheelControl.a_steady, "adaptationBounds().aSteady");
+    // 133-002: pos_err_max's BAKE path lands here. Asserted right beside
+    // pid_i_max above because the two clamp DIFFERENT domains -- posErrMax
+    // is [mm] on Stage B's input, iMax is [mm/s] on its output -- and both
+    // must arrive, independently, from the same file.
+    checkFloatEq(bounds.posErrMax, config.wheelControl.pos_err_max,
+                "adaptationBounds().posErrMax [mm] -- distinct from controlGains().iMax [mm/s]");
     checkFloatEq(bounds.deficitThreshold, config.wheelControl.deficit_threshold,
                 "adaptationBounds().deficitThreshold");
     checkFloatEq(bounds.deficitWindow, config.wheelControl.deficit_window,

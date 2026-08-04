@@ -947,6 +947,12 @@ _SET_KEY_TARGETS: dict[str, "tuple[int, str]"] = {
     "pid.kff": (robot_config_pb2.WHEEL_CONTROL, "pid_kaff"),
     "pid.iMax": (robot_config_pb2.WHEEL_CONTROL, "pid_i_max"),
     "pid.kaw": (robot_config_pb2.WHEEL_CONTROL, "pid_max"),
+    # pid.posErrMax -- 133-002. Stage B's I term is a POSITION term, and
+    # this is the clamp on its INPUT, in millimetres. It is a SEPARATE
+    # domain from pid.iMax above (which clamps the same term's OUTPUT, in
+    # mm/s) -- both are live and both matter; setting one is not setting
+    # the other. See robot_config.proto's WheelControl.pos_err_max.
+    "pid.posErrMax": (robot_config_pb2.WHEEL_CONTROL, "pos_err_max"),
 }
 
 # PlannerConfigPatch/CONFIG_PLANNER -- DELETED (115-003, gut-to-minimal-
