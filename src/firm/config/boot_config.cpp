@@ -362,10 +362,12 @@ msg::Planner defaultPlannerGroup() {
 msg::Otos defaultOtosGroup() {
     // geometry.odometry_offset_mm.{x,y,yaw_rad}, calibration.
     // otos_linear_scale/otos_angular_scale -- otos_boot_config_values()
-    // above. NOTE (trap 3, sprint.md): these are the config MULTIPLIER
-    // domain (1.0 = no correction); reconciling the live wire push path to
-    // the chip's own scaleToRegister() conversion is ticket 010's job, not
-    // this ticket's.
+    // above. These are the config MULTIPLIER domain (1.0 = no correction),
+    // same as the robot JSON -- App::configureOtos() (app/boot_calibration.
+    // cpp) converts through Devices::scaleToRegister() before reaching the
+    // chip, the SAME conversion RealOtos::begin() applies to this baked
+    // value at boot (132-010 closed the live/boot domain mismatch, trap 3,
+    // sprint.md).
     msg::Otos cfg;
     cfg.offset_x = -47.7f;          // [mm]
     cfg.offset_y = 3.5f;          // [mm]

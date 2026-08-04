@@ -406,13 +406,15 @@ message Planner {
 
 // Otos -- SparkFun OTOS mounting lever-arm offset and chip scale
 // multipliers. Consumed by Devices::Otos via Configurator::install(OTOS).
-// NOTE (trap 3, sprint.md): `linear_scale`/`angular_scale` here are the
-// config MULTIPLIER domain (1.0 = no correction), the same domain
-// boot_config.h's OtosBootConfig already uses -- Devices::RealOtos::
-// begin() converts this multiplier through scaleToRegister() before
-// calling setLinearScalar()/setAngularScalar() (which take the chip's raw
-// int8 register value directly). Reconciling the LIVE wire push path to
-// apply that same conversion is ticket 010's job, not this ticket's.
+// `linear_scale`/`angular_scale` here are the config MULTIPLIER domain
+// (1.0 = no correction), the same domain boot_config.h's OtosBootConfig
+// already uses -- Devices::RealOtos::begin() converts this multiplier
+// through Devices::scaleToRegister() (otos.h) before calling
+// setLinearScalar()/setAngularScalar() (which take the chip's raw int8
+// register value directly). The LIVE wire push path (App::configureOtos(),
+// app/boot_calibration.cpp) applies that SAME conversion (132-010, trap 3
+// of sprint.md, closed) -- a live push and a boot bake now agree on what a
+// given multiplier means.
 message Otos {
   float offset_x     = 1;  // [mm] mounting offset from chassis centre to sensor
   float offset_y     = 2;  // [mm]
@@ -421,8 +423,16 @@ message Otos {
   float angular_scale = 5 [(min) = 0.0001];   // multiplier; 1.0 = no correction; must be positive
 }
 
-// Estimator -- App::StateEstimator's complementary-blend fusion weights.
-// Consumed by App::StateEstimator via Configurator::install(ESTIMATOR).
+// Estimator -- complementary-blend fusion weights. NO LIVE CONSUMER as of
+// 132-010 (trap 2, sprint.md, closed by making this permanent and
+// explicit, not by inventing one): `App::StateEstimator` was deleted
+// outright as dead code (sprint 128 ticket 016), and its one candidate
+// successor, `Motion::PoseTracker::blendHeading()`, had its only call site
+// deleted outright by 130-009 pending a from-scratch fusion redesign
+// (clasi/issues/later/estimator-v2-otos-fusion-sim-first.md).
+// `Configurator::install(ESTIMATOR)` decodes this group (read-back stays
+// honest) but permanently returns `ERR_UNIMPLEMENTED` -- there is nothing
+// to fan it out to until an estimator-v2 ticket exists.
 message Estimator {
   float  weight_heading_otos = 1 [(min) = 0.0, (max) = 1.0];  // blend weight: body heading vs OTOS heading
   float  weight_omega_otos   = 2 [(min) = 0.0, (max) = 1.0];  // blend weight: body omega vs OTOS omega

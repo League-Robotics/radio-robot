@@ -25,16 +25,27 @@
 //     is PER SIDE, not global: the side that is at rest still gets its
 //     travel_calib applied even when the push overall returns ERR_BUSY
 //     because the OTHER side is moving.
-//   - OTOS: decodes and installs via App::configureOtos() -- known gap
-//     (trap 3, the-configuration-object.md): the scale fields pass through
-//     with no scaleToRegister() conversion yet (ticket 010's job).
+//   - OTOS: decodes and installs via App::configureOtos() -- trap 3
+//     (the-configuration-object.md) CLOSED (132-010): the scale fields are
+//     converted through Devices::scaleToRegister() before reaching
+//     setLinearScalar()/setAngularScalar(), matching RealOtos::begin()'s
+//     own boot-time conversion. Covers both the general case and the
+//     ticket's own regression guard -- a pushed linearScale/angularScale
+//     of 1.0 (true unity) must land as register 0, not the old bug's
+//     register 1 (a real +0.1% scalar, "a 1-LSB scalar instead of unity").
 //   - ESTIMATOR: decodes into config_ (read-back stays honest) but
-//     install() returns ERR_UNIMPLEMENTED, not ERR_NONE -- there is no
-//     live consumer (App::StateEstimator was deleted as dead code, sprint
-//     128 ticket 016; ticket 010 adds a replacement reference). This is
-//     the ticket's own headline property demonstrated directly: config
-//     that acks OK and silently does nothing is worse than config that is
-//     rejected -- ESTIMATOR does neither.
+//     install() returns ERR_UNIMPLEMENTED, not ERR_NONE -- PERMANENTLY,
+//     not a to-be-filled gap (132-010 closes trap 2 by making this
+//     explicit rather than inventing a consumer): App::StateEstimator was
+//     deleted as dead code (sprint 128 ticket 016), and its one candidate
+//     successor -- Motion::PoseTracker::blendHeading() -- had its only
+//     call site and its own config fields deleted outright by 130-009 in
+//     favor of a from-scratch fusion redesign (clasi/issues/later/
+//     estimator-v2-otos-fusion-sim-first.md). Configurator holds no
+//     estimator-shaped reference. This is the ticket's own headline
+//     property demonstrated directly: config that acks OK and silently
+//     does nothing is worse than config that is rejected -- ESTIMATOR
+//     does neither.
 //   - NaN rejection: a NaN bit pattern in a bounded field (DRIVE.duty_per_
 //     speed_left, `(min) = 0.0`) is rejected (ERR_RANGE), not silently
 //     accepted -- bounds alone (`v < min`/`v > max`) are both false for
@@ -445,12 +456,13 @@ int main() {
                 "config().motors.travel_calib_left still reflects the decode");
   }
 
-  // --- OTOS: decode + configureOtos() (known trap-3 gap) -------------------
+  // --- OTOS: decode + configureOtos() (trap 3 CLOSED, 132-010) -------------
 
   beginScenario(
       "OTOS push decodes into config_ and reaches App::configureOtos() -- "
-      "known gap: scale fields pass through with no scaleToRegister() "
-      "conversion yet (trap 3, ticket 010's job)");
+      "scale fields are REGISTER-domain-converted via "
+      "Devices::scaleToRegister() before reaching setLinearScalar()/"
+      "setAngularScalar() (trap 3 closed, 132-010)");
   {
     uint8_t buf[128];
     size_t pos = 0;
@@ -463,18 +475,63 @@ int main() {
     const msg::ErrCode result = configurator.applyGroup(msg::ConfigGroupTarget::OTOS, buf, pos);
     checkEq(result, msg::ErrCode::ERR_NONE, "applyGroup(OTOS) result");
     checkFloatEq(configurator.config().otos.linear_scale, 1.03f,
-                "config().otos.linear_scale reflects the push");
-    checkFloatEq(otos.linearScalar, 1.03f,
-                "setLinearScalar() argument -- pass-through, not yet register-converted");
-    checkFloatEq(otos.offsetX, -48.0f, "setOffset() x argument");
+                "config().otos.linear_scale reflects the push (config_ itself stays "
+                "in the RAW multiplier domain, per the-configuration-object.md's "
+                "'the object holds RAW file values' rule)");
+    checkFloatEq(otos.linearScalar, static_cast<float>(Devices::scaleToRegister(1.03f)),
+                "setLinearScalar() argument is REGISTER-domain (scaleToRegister(1.03) "
+                "== 30), not the raw 1.03 multiplier -- trap 3 closed");
+    checkFloatEq(otos.angularScalar, static_cast<float>(Devices::scaleToRegister(0.98f)),
+                "setAngularScalar() argument is REGISTER-domain (scaleToRegister(0.98) "
+                "== -20)");
+    checkFloatEq(otos.offsetX, -48.0f,
+                "setOffset() x argument is unaffected -- no domain conversion for the "
+                "lever arm, only the scale registers");
   }
 
-  // --- ESTIMATOR: decode succeeds, install honestly reports no consumer ---
+  beginScenario(
+      "OTOS scale regression guard (trap 3's own acceptance criterion): a "
+      "pushed linearScale/angularScale of 1.0 (true unity) installs register "
+      "0 -- the SAME register value RealOtos::begin() installs for an "
+      "identical BAKED 1.0 multiplier, because both call sites now share the "
+      "one Devices::scaleToRegister() conversion. Also confirms the fix is "
+      "live: the OLD bug would have installed register 1 (setLinearScalar("
+      "1.0) with no conversion -> clamp+truncate -> register 1, a real "
+      "+0.1% scalar, 'a 1-LSB scalar instead of unity')");
+  {
+    uint8_t buf[64];
+    size_t pos = 0;
+    // encodeFloatField() skips a field whose value is exactly 0.0f (implicit
+    // presence) -- 1.0f is non-zero, so both fields are encoded normally.
+    checkTrue(encodeFloatField(4, 1.0f, buf, sizeof(buf), &pos), "encode linear_scale = 1.0");
+    checkTrue(encodeFloatField(5, 1.0f, buf, sizeof(buf), &pos), "encode angular_scale = 1.0");
+
+    const msg::ErrCode result = configurator.applyGroup(msg::ConfigGroupTarget::OTOS, buf, pos);
+    checkEq(result, msg::ErrCode::ERR_NONE, "applyGroup(OTOS, unity scale) result");
+
+    const float bootWouldInstall = static_cast<float>(Devices::scaleToRegister(1.0f));
+    checkFloatEq(bootWouldInstall, 0.0f,
+                "sanity: scaleToRegister(1.0) == register 0 -- true unity");
+    checkFloatEq(otos.linearScalar, bootWouldInstall,
+                "LIVE push of linearScale=1.0 installs the SAME register value "
+                "begin() would install for a BAKED linearScale=1.0 -- live and "
+                "boot paths agree on what '1.0' means");
+    checkFloatEq(otos.angularScalar, bootWouldInstall,
+                "LIVE push of angularScale=1.0 installs the SAME register value "
+                "begin() would install for a BAKED angularScale=1.0");
+  }
+
+  // --- ESTIMATOR: decode succeeds, install honestly reports PERMANENTLY no consumer ---
 
   beginScenario(
       "ESTIMATOR push decodes into config_ (read-back stays honest) but "
-      "install() returns ERR_UNIMPLEMENTED, not ERR_NONE -- no live consumer "
-      "exists yet (trap 2, ticket 010's job) -- this is NOT a silent no-op");
+      "install() returns ERR_UNIMPLEMENTED, not ERR_NONE -- PERMANENTLY, "
+      "not a to-be-filled gap (trap 2 closed, 132-010, by making the dead "
+      "end explicit: App::StateEstimator is dead code (128-016) and its "
+      "one candidate successor's call site was itself deliberately deleted "
+      "(130-009) pending a from-scratch fusion redesign, "
+      "clasi/issues/later/estimator-v2-otos-fusion-sim-first.md) -- this is "
+      "NOT a silent no-op");
   {
     uint8_t buf[64];
     size_t pos = 0;
@@ -485,7 +542,8 @@ int main() {
     const msg::ErrCode result = configurator.applyGroup(msg::ConfigGroupTarget::ESTIMATOR, buf, pos);
     checkEq(result, msg::ErrCode::ERR_UNIMPLEMENTED, "applyGroup(ESTIMATOR) result");
     checkFloatEq(configurator.config().estimator.weight_heading_otos, 0.7f,
-                "config().estimator.weight_heading_otos reflects the push despite ERR_UNIMPLEMENTED");
+                "config().estimator.weight_heading_otos reflects the push despite ERR_UNIMPLEMENTED "
+                "-- read-back stays honest even though there is nothing to fan the value out to");
   }
 
   // --- NaN rejection + no-partial-commit -----------------------------------
@@ -599,10 +657,12 @@ int main() {
     std::printf(
         "OK: applyGroup()/install(ConfigGroupTarget) classify boot-only vs. live "
         "correctly, reject NaN and malformed pushes without partial commit, "
-        "fan live pushes out to DRIVE/WHEEL_CONTROL/MOTORS/OTOS honestly (with "
-        "ESTIMATOR's known missing-consumer gap reported, not hidden), and "
-        "loadBaked()+install() sources dutyPerSpeed from the file, not a "
-        "hardcoded constant (132-009)\n");
+        "fan live pushes out to DRIVE/WHEEL_CONTROL/MOTORS/OTOS honestly -- OTOS's "
+        "scale domain now agrees with begin()'s boot conversion (trap 3 closed, "
+        "132-010) -- with ESTIMATOR's missing-consumer dead end reported "
+        "permanently, not hidden (trap 2 closed, 132-010), and loadBaked()+"
+        "install() sources dutyPerSpeed from the file, not a hardcoded constant "
+        "(132-009)\n");
     return 0;
   }
   std::printf("FAILED: %d assertion(s) across the 132-008 applyGroup() tests\n", g_failureCount);

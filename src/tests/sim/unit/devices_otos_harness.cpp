@@ -665,6 +665,38 @@ void scenarioSampleTimeReflectsLastRealReadAttemptNotCurrentNow() {
 // app_fake_otos_harness.cpp / test_app_fake_otos.py. The real leaf below no
 // longer has any synthetic-sample surface.)
 
+// 10. scaleToRegister() (132-010, trap 3, the-configuration-object.md):
+//     pure math, no bus traffic -- exercised directly now that it is a
+//     Devices::-namespace-scope free function (moved out of RealOtos's
+//     private section so App::configureOtos(), app/boot_calibration.cpp,
+//     can share this EXACT conversion with RealOtos::begin() below,
+//     otos.cpp). Before this move, a test could only reach this formula by
+//     duplicating it (this project's established fallback for a private
+//     leaf constant/formula, e.g. kPosMmPerLsb above) -- now it is called
+//     directly, so a future edit to the formula cannot drift silently past
+//     a stale duplicate.
+void scenarioScaleToRegisterConversion() {
+  beginScenario("scaleToRegister(): multiplier -> chip register, exact values and clamping");
+
+  checkNear(static_cast<float>(Devices::scaleToRegister(1.0f)), 0.0f, 1e-6f,
+            "1.0 (true unity) -> register 0 -- the exact value trap 3's bug got "
+            "wrong (the old pass-through installed register 1 instead)");
+  checkNear(static_cast<float>(Devices::scaleToRegister(1.03f)), 30.0f, 1e-6f,
+            "1.03 -> register 30 ((1.03 - 1.0) / 0.001)");
+  checkNear(static_cast<float>(Devices::scaleToRegister(0.98f)), -20.0f, 1e-6f,
+            "0.98 -> register -20 ((0.98 - 1.0) / 0.001)");
+  checkNear(static_cast<float>(Devices::scaleToRegister(1.0275f)), 28.0f, 1e-6f,
+            "1.0275 (tovez.json's own baked otos_linear_scale) -> register 28, "
+            "round-half-away-from-zero of 27.5");
+
+  // Clamping: a scale far outside the chip's representable +/-127 LSB range
+  // (+/-12.7%) saturates rather than wrapping or overflowing the int8_t cast.
+  checkNear(static_cast<float>(Devices::scaleToRegister(2.0f)), 127.0f, 1e-6f,
+            "a scale requesting +1000 LSB clamps to the register's +127 ceiling");
+  checkNear(static_cast<float>(Devices::scaleToRegister(0.5f)), -127.0f, 1e-6f,
+            "a scale requesting -500 LSB clamps to the register's -127 floor");
+}
+
 }  // namespace
 
 int main() {
@@ -678,6 +710,7 @@ int main() {
   scenarioSetPoseStagedReanchorAppliesAtNextTick();
   scenarioSecondaryPrimitivesRoundTrip();
   scenarioSampleTimeReflectsLastRealReadAttemptNotCurrentNow();
+  scenarioScaleToRegisterConversion();
 
   if (g_failureCount == 0) {
     std::printf("OK: all Devices::Otos scenarios passed\n");

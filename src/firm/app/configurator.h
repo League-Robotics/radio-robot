@@ -36,8 +36,8 @@
 //   | DRIVE         | yes   | `Drive::configure(config_)` (132-007)             | Stage A per-wheel gain/intercept + crawl pulse, via the existing `setWheelCorrection()`/`setCrawlPulse()` |
 //   | WHEEL_CONTROL | yes   | `Drive::configure(config_)` (132-007)             | SAME call as DRIVE -- Drive::configure() pulls Stage B/C gains/bounds from `config_.wheelControl` in the same pass it reads `config_.drive` from; one re-appliable unit from Drive's own point of view, two ConfigGroupTargets on the wire |
 //   | MOTORS        | yes   | `App::configureMotor()` x2 (132-007), GUARDED     | refuses (returns false, applies nothing) while that side reports itself in motion -- surfaced as `ERR_BUSY`, never swallowed, so a caller can retry at rest |
-//   | OTOS          | yes   | `App::configureOtos()` (132-007)                  | KNOWN GAP (trap 3, the-configuration-object.md): passes `linear_scale`/`angular_scale` straight through with no `scaleToRegister()` conversion -- same limitation `apply()`'s OLD `applyOtosPatch()` already has; reconciling it is ticket 010's job |
-//   | ESTIMATOR     | yes   | -- (`ERR_UNIMPLEMENTED`)                          | KNOWN GAP (trap 2, the-configuration-object.md): decodes into `config_.estimator` (read-back stays honest) but there is no live consumer -- `App::StateEstimator` was deleted outright as dead code (sprint 128 ticket 016) and this class holds no replacement reference yet; wiring one is ticket 010's job. `ERR_UNIMPLEMENTED`, not `OK`, so this does not silently reproduce trap 2 under a new name |
+//   | OTOS          | yes   | `App::configureOtos()` (132-007/010)              | trap 3 CLOSED (132-010): `linear_scale`/`angular_scale` are converted through `Devices::scaleToRegister()` before reaching `setLinearScalar()`/`setAngularScalar()`, matching `RealOtos::begin()`'s own boot-time conversion -- a live push and a boot bake now agree on what a given multiplier means. `apply()`'s OLD `applyOtosPatch()` still has the pass-through bug -- that surface is retired outright by ticket 013, not patched here |
+//   | ESTIMATOR     | yes   | -- (`ERR_UNIMPLEMENTED`, PERMANENT)               | trap 2 CLOSED (132-010) by making the dead end EXPLICIT rather than inventing a consumer: `App::StateEstimator` was deleted outright as dead code (sprint 128 ticket 016), and its one candidate successor -- `Motion::PoseTracker::blendHeading()` (`src/motion/planner/estimation.h`) -- had its only call site AND its own config fields (`PlannerLimits::headingOtosWeight`/`otosStaleness`) deleted outright by 130-009, in favor of a from-scratch fusion redesign tracked at `clasi/issues/later/estimator-v2-otos-fusion-sim-first.md`. Building a real consumer today would mean either resurrecting logic 130-009 deliberately retired, or building estimator-v2 itself -- both out of this ticket's scope (and the latter explicitly deferred by its own tracked issue). `Configurator` therefore holds NO estimator-shaped reference; `config_.estimator` still decodes correctly for read-back (`applyGroup()` never skips the decode for a live-classified target), but `install(ESTIMATOR)` returns `ERR_UNIMPLEMENTED` permanently until estimator-v2 gives it something real to call |
 //
 // Owns four things that used to be scattered across RobotLoop:
 //   1. The one Config::Robot instance -- loadBaked()/config()/install(),
@@ -52,10 +52,13 @@
 //   4. Pushing values into the subsystems that OWN them: motor gains and
 //      per-wheel calibration -> App::Drive and the two Devices::Motor
 //      leaves, shaper ceilings -> Motion::Planner, OTOS scalars and
-//      offsets -> the OTOS leaf. The ESTIMATOR patch's own
-//      weight_heading_otos/weight_omega_otos/staleness_ms fields are
-//      accepted on the wire but land nowhere -- there is no live consumer
-//      for them -- see apply()'s own ESTIMATOR-branch comment.
+//      offsets -> the OTOS leaf. The OLD ESTIMATOR patch surface's own
+//      weight_heading_otos/weight_omega_otos/staleness_ms fields are still
+//      accepted on the wire (that surface is unchanged here -- retired
+//      outright by ticket 013) but land nowhere, same as
+//      `install(ESTIMATOR)`'s own permanent `ERR_UNIMPLEMENTED` above --
+//      see apply()'s own ESTIMATOR-branch comment and the re-appliability
+//      table's ESTIMATOR row for the full 132-010 reasoning.
 //
 // Named `Configurator`, not `Config`, because `Config::` is already a
 // namespace in this tree (config/persisted_tuning.h) -- a class of that

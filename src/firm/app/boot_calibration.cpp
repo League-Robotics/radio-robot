@@ -138,10 +138,21 @@ bool configureMotor(Devices::Motor& motor, const Config::Robot& config, bool isL
   return true;
 }
 
-// configureOtos -- see boot_calibration.h's own doc comment.
+// configureOtos -- see boot_calibration.h's own doc comment. linear_scale/
+// angular_scale are converted through Devices::scaleToRegister() (otos.h)
+// before reaching setLinearScalar()/setAngularScalar() -- those two setters
+// take the chip's raw int8 register domain directly, never the config
+// MULTIPLIER domain (1.0 = no correction) config.otos itself holds. This is
+// the SAME conversion RealOtos::begin() applies to the baked value at boot
+// (otos.cpp) -- 132-010 closes trap 3 (the-configuration-object.md) by
+// applying it here too, so a live OTOS push and a boot bake agree on what a
+// given multiplier means. setOffset()'s x/y/yaw are unaffected -- that
+// setter already takes the value directly, no domain conversion (otos.h's
+// own setOffset() doc comment spells out the distinction from the scale
+// registers).
 void configureOtos(Devices::Otos& otos, const Config::Robot& config) {
-  otos.setLinearScalar(config.otos.linear_scale);
-  otos.setAngularScalar(config.otos.angular_scale);
+  otos.setLinearScalar(static_cast<float>(Devices::scaleToRegister(config.otos.linear_scale)));
+  otos.setAngularScalar(static_cast<float>(Devices::scaleToRegister(config.otos.angular_scale)));
   otos.setOffset(config.otos.offset_x, config.otos.offset_y, config.otos.offset_yaw);
 }
 

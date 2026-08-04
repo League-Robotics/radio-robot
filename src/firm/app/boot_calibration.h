@@ -168,10 +168,12 @@ void configurePlanner(Motion::Planner& planner, const Config::Robot& config);
 // configureOtos -- reuses setLinearScalar()/setAngularScalar()/
 // setOffset(), the SAME setters Configurator::applyOtosPatch() (the old
 // patch surface, configurator.cpp) already call. Trap 3's multiplier-
-// vs-register domain mismatch (Devices::RealOtos::scaleToRegister(),
-// otos.cpp) is UNTOUCHED here -- reconciling it is ticket 010's own job
-// (sprint.md); this function reuses the setter exactly as it exists
-// today, config.otos's multiplier-domain values passed straight through.
+// vs-register domain mismatch is CLOSED here (132-010): linear_scale/
+// angular_scale are converted through Devices::scaleToRegister() (otos.h,
+// a free function since 132-010 -- see its own doc comment) before
+// reaching the chip-level setters, the same conversion RealOtos::begin()
+// applies to the baked value at boot, so a live push and a boot bake now
+// agree on what a given multiplier means.
 void configureOtos(Devices::Otos& otos, const Config::Robot& config);
 
 }  // namespace App

@@ -82,8 +82,14 @@ uint32_t Configurator::apply(const msg::CommandEnvelope& env) {
     const msg::EstimatorConfigPatch& patch = config.patch.estimator;
 
     // weight_heading_otos/weight_omega_otos/staleness_ms: accepted on the
-    // wire, applied nowhere -- there is no live consumer for them. Only
-    // the shaper-ceiling fields below still reach a live consumer.
+    // wire, applied nowhere -- there is no live consumer for them, and
+    // (132-010) there permanently isn't one to wire to -- see
+    // install(ConfigGroupTarget::ESTIMATOR)'s own comment below for the
+    // full reasoning (App::StateEstimator deleted 128-016; its candidate
+    // successor's call site deleted 130-009 pending estimator-v2). This
+    // OLD patch surface itself is retired outright by ticket 013, not
+    // touched here. Only the shaper-ceiling fields below still reach a
+    // live consumer.
 
     // Shaper wire keys retarget the planner's live profile ceilings. Read
     // the planner's current limits, merge the present fields onto them, and
@@ -396,27 +402,41 @@ msg::ErrCode Configurator::install(msg::ConfigGroupTarget target) {
     }
 
     case msg::ConfigGroupTarget::OTOS:
-      // App::configureOtos() (132-007) passes linear_scale/angular_scale
-      // straight through to setLinearScalar()/setAngularScalar() -- the
-      // SAME multiplier-vs-register domain mismatch applyOtosPatch()
-      // (the OLD patch surface, above) already has (trap 3,
-      // the-configuration-object.md: RealOtos::begin() converts the same
-      // multiplier through scaleToRegister() first; this live path does
-      // not, yet). Reconciling the two is ticket 010's job, not this
-      // ticket's -- see that ticket's own file.
+      // App::configureOtos() (132-007, domain fix 132-010) now converts
+      // linear_scale/angular_scale through Devices::scaleToRegister()
+      // before calling setLinearScalar()/setAngularScalar() -- the SAME
+      // conversion RealOtos::begin() applies to the baked value at boot,
+      // closing trap 3 (the-configuration-object.md): a live push and a
+      // boot bake now agree on what a given multiplier means.
+      // applyOtosPatch() (the OLD patch surface, above) still has the
+      // pass-through bug -- that surface is retired outright by ticket
+      // 013, not patched here.
       App::configureOtos(otos_, config_);
       return msg::ErrCode::ERR_NONE;
 
     case msg::ConfigGroupTarget::ESTIMATOR:
-      // No live consumer exists yet: App::StateEstimator was deleted
-      // outright as dead code (sprint 128 ticket 016), and this class
-      // holds no reference to a replacement (ticket 010 adds one).
+      // PERMANENT, not a gap: closing trap 2 (the-configuration-object.md)
+      // means making this dead end EXPLICIT, not inventing a call site.
+      // App::StateEstimator was deleted outright as dead code (sprint 128
+      // ticket 016); its one candidate successor, Motion::PoseTracker::
+      // blendHeading() (src/motion/planner/estimation.h), had its only
+      // call site AND its own config fields (PlannerLimits::
+      // headingOtosWeight/otosStaleness) deleted outright by 130-009 in
+      // favor of a from-scratch fusion redesign tracked at
+      // clasi/issues/later/estimator-v2-otos-fusion-sim-first.md. Wiring
+      // ESTIMATOR to either would mean resurrecting logic 130-009
+      // deliberately retired, or building estimator-v2 itself -- neither
+      // is this ticket's job, and the sprint's own module boundary
+      // (sprint.md Step 3) is explicit that this sprint gives existing
+      // setters a wire path, it does not invent new firmware logic. So
+      // Configurator holds no estimator-shaped reference at all.
       // config_.estimator is still decoded and read-back-correct --
       // applyGroup() above already ran before install() is ever reached --
-      // but there is nothing here to fan it out TO yet. ERR_UNIMPLEMENTED
+      // but there is nothing here to fan it out TO, permanently, until an
+      // estimator-v2 ticket gives it a real consumer. ERR_UNIMPLEMENTED
       // reports that honestly instead of acking OK for a push that lands
-      // nowhere (trap 2, the-configuration-object.md) -- the exact silent
-      // no-op this sprint exists to close, not reproduce under a new name.
+      // nowhere -- the exact silent no-op this sprint exists to close, not
+      // reproduce under a new name.
       return msg::ErrCode::ERR_UNIMPLEMENTED;
 
     case msg::ConfigGroupTarget::GEOMETRY:

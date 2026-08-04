@@ -352,12 +352,17 @@ int main() {
 
   // --- App::configureOtos() ------------------------------------------------
 
-  beginScenario("configureOtos() applies scalars and offset via existing setters");
+  beginScenario(
+      "configureOtos() applies scalars (REGISTER-domain, via "
+      "Devices::scaleToRegister() -- trap 3 closed, 132-010) and offset "
+      "(unconverted) via existing setters");
   {
     RecordingOtos otos;
     App::configureOtos(otos, config);
-    checkFloatEq(otos.linearScalar, config.otos.linear_scale, "setLinearScalar() argument");
-    checkFloatEq(otos.angularScalar, config.otos.angular_scale, "setAngularScalar() argument");
+    checkFloatEq(otos.linearScalar, static_cast<float>(Devices::scaleToRegister(config.otos.linear_scale)),
+                "setLinearScalar() argument is REGISTER-domain, matching begin()'s own conversion");
+    checkFloatEq(otos.angularScalar, static_cast<float>(Devices::scaleToRegister(config.otos.angular_scale)),
+                "setAngularScalar() argument is REGISTER-domain, matching begin()'s own conversion");
     checkFloatEq(otos.offsetX, config.otos.offset_x, "setOffset() x argument");
     checkFloatEq(otos.offsetY, config.otos.offset_y, "setOffset() y argument");
     checkFloatEq(otos.offsetHeading, config.otos.offset_yaw, "setOffset() heading argument");
