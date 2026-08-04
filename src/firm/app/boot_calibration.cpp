@@ -4,6 +4,14 @@
 
 #include <cmath>
 
+// bootPlannerLimits() below reads Config::defaultPlannerLimits()/
+// Config::PlannerBootConfig directly -- 132-015 moved this include here
+// (from boot_calibration.h) since it is the only remaining use of
+// config/boot_config.h in this translation unit; the header itself no
+// longer names any boot_config.h type in its own declarations now that
+// DriveBootConfig/WheelControllerBootConfig are deleted.
+#include "config/boot_config.h"
+
 namespace App {
 
 namespace {
@@ -80,45 +88,15 @@ Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainC
   return out;
 }
 
-void installShaperLimits(Motion::Planner& planner, const Motion::PlannerLimits& limits) {
-  planner.applyShaperLimits(limits.ceilings.aMax, limits.ceilings.aDecel,
-                            limits.ceilings.alphaMax, limits.ceilings.alphaDecel,
-                            limits.ceilings.jerkMax, limits.ceilings.yawJerkMax);
-}
-
-// installRotationCalibration -- DELETED (132-007); see boot_calibration.h's
-// own note at this declaration's old spot.
-
-void installDriveCalibration(Drive& drive, const Config::DriveBootConfig& driveConfig) {
-  // DEAD (see this function's own doc comment, boot_calibration.h) --
-  // body deliberately left at its pre-132-009 "MEASURED, NOT CONFIGURED"
-  // shape, not updated to match Configurator::install()'s reversal.
-  drive.setDutyPerSpeed(Drive::kDutyPerSpeed, Drive::kDutyPerSpeed);
-  drive.setWheelCorrection(
-      driveConfig.gainLeftAccel, driveConfig.interceptLeftAccel, driveConfig.gainLeftDecel,
-      driveConfig.interceptLeftDecel, driveConfig.gainRightAccel, driveConfig.interceptRightAccel,
-      driveConfig.gainRightDecel, driveConfig.interceptRightDecel);
-  drive.setCrawlPulse(driveConfig.crawlPulse);
-}
-
-void installWheelController(Drive& drive, const Config::WheelControllerBootConfig& config) {
-  Drive::ControlGains gains;
-  gains.kp = config.kp;
-  gains.ki = config.ki;
-  gains.iMax = config.iMax;
-  gains.kaff = config.kaff;
-  gains.pidMax = config.pidMax;
-  drive.setControlGains(gains);
-
-  Drive::AdaptationBounds bounds;
-  bounds.vMin = config.vMin;
-  bounds.biasMax = config.biasMax;
-  bounds.tauAdapt = config.tauAdapt;
-  bounds.aSteady = config.aSteady;
-  bounds.deficitThreshold = config.deficitThreshold;
-  bounds.deficitWindow = config.deficitWindow;
-  drive.setAdaptationBounds(bounds);
-}
+// installShaperLimits/installRotationCalibration/installDriveCalibration/
+// installWheelController -- DELETED, 132-015 (dead-code sweep). All three
+// were confirmed by a fresh grep to have zero remaining call sites
+// (Configurator::install(), configurator.cpp, does this fan-out inline
+// now, reading Config::Robot directly -- see this file's own header for
+// how that ticket-006 retarget left these with "no callers left"); see
+// boot_config.h's own note on DriveBootConfig/WheelControllerBootConfig
+// (deleted the same ticket) for the struct-level half of this cleanup.
+// installRotationCalibration itself was already deleted earlier (132-007).
 
 // configurePlanner -- see boot_calibration.h's own doc comment.
 void configurePlanner(Motion::Planner& planner, const Config::Robot& config) {

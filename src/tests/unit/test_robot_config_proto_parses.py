@@ -176,7 +176,13 @@ def test_protoc_parses_the_full_proto_set(file_descriptor_set):
     here as an explicit, named test."""
     names = {fd.name for fd in file_descriptor_set.file}
     assert "robot_config.proto" in names
-    assert "config.proto" in names  # the legacy schema robot_config.proto coexists beside (ticket 013 deletes it)
+    # "config.proto" -- DELETED, ticket 013 (patch-surface retirement,
+    # wholesale). This assertion pre-dated that deletion (it originally
+    # documented the two schemas coexisting during the transition); fixed
+    # here (132-015) as a pre-existing, trivially-correct leftover found
+    # while auditing config.proto's own ConfigTarget/CONFIG_PLANNER/
+    # CONFIG_WATCHDOG fate for this ticket's own Description item 4.
+    assert "config.proto" not in names
 
 
 HOST_ONLY_GROUPS = ("Identity", "Connection", "Vision")
@@ -299,13 +305,11 @@ REQUIRED_FIELD_HOMES = [
     ("Estimator", "weight_heading_otos"),
     ("Estimator", "weight_omega_otos"),
     ("Estimator", "staleness"),
-    # shaper_config_for_config() — dead ShaperBootConfig, ticket 015 deletes
-    ("Planner", "shaper_a_max"),
-    ("Planner", "shaper_a_decel"),
-    ("Planner", "shaper_alpha_max"),
-    ("Planner", "shaper_alpha_decel"),
-    ("Planner", "shaper_j_max"),
-    ("Planner", "shaper_yaw_jerk_max"),
+    # shaper_config_for_config() -- DELETED, 132-015: dead ShaperBootConfig
+    # (zero live consumers) and its mirroring Planner.shaper_* schema
+    # fields are both gone; field numbers 17-22 are now `reserved` on the
+    # Planner message rather than declared (see that message's own
+    # trailing comment) -- no schema-home entries for them any more.
     # wheel_correction_for_config()
     ("Drive", "wheel_gain_left_accel"),
     ("Drive", "wheel_intercept_left_accel"),

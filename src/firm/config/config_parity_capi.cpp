@@ -94,6 +94,11 @@ uint32_t configParityFieldOffsets(uint32_t group, uint32_t* out, uint32_t count)
       return writeCapped(kOffsets, sizeof(kOffsets) / sizeof(kOffsets[0]), out, count);
     }
     case ConfigParityGroup::Planner: {
+      // shaper_a_max/shaper_a_decel/shaper_alpha_max/shaper_alpha_decel/
+      // shaper_j_max/shaper_yaw_jerk_max -- DELETED, 132-015 (dead-code
+      // sweep; robot_config.proto's Planner message now `reserved`s
+      // field numbers 17-22 instead of declaring them, see that
+      // message's own trailing comment).
       using T = msg::Planner;
       static const uint32_t kOffsets[] = {
           offsetof(T, v_max),                 offsetof(T, a_max),
@@ -104,9 +109,6 @@ uint32_t configParityFieldOffsets(uint32_t group, uint32_t* out, uint32_t count)
           offsetof(T, settle_rest_velocity),   offsetof(T, settle_rest_omega),
           offsetof(T, settle_epsilon_linear),  offsetof(T, settle_epsilon_angular),
           offsetof(T, heading_hold_gain),      offsetof(T, decel_plan_fraction),
-          offsetof(T, shaper_a_max),           offsetof(T, shaper_a_decel),
-          offsetof(T, shaper_alpha_max),       offsetof(T, shaper_alpha_decel),
-          offsetof(T, shaper_j_max),           offsetof(T, shaper_yaw_jerk_max),
       };
       return writeCapped(kOffsets, sizeof(kOffsets) / sizeof(kOffsets[0]), out, count);
     }

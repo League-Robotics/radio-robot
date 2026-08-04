@@ -341,30 +341,6 @@
         "decel_plan_fraction": {
           "type": "number",
           "minimum": 0.0
-        },
-        "shaper_a_max": {
-          "type": "number",
-          "minimum": 0.0
-        },
-        "shaper_a_decel": {
-          "type": "number",
-          "minimum": 0.0
-        },
-        "shaper_alpha_max": {
-          "type": "number",
-          "minimum": 0.0
-        },
-        "shaper_alpha_decel": {
-          "type": "number",
-          "minimum": 0.0
-        },
-        "shaper_j_max": {
-          "type": "number",
-          "minimum": 0.0
-        },
-        "shaper_yaw_jerk_max": {
-          "type": "number",
-          "minimum": 0.0
         }
       }
     },

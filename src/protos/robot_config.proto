@@ -109,23 +109,18 @@ import "options.proto";
 //     `// [ms]` tag) -- mirrored, not config.proto's EstimatorConfigPatch
 //     spelling (`staleness_ms`), for the same C++-identifier reason
 //     `reversal_dwell` above drops its JSON key's own "_ms" suffix.
-//   shaper_config_for_config()     -> Planner.shaper_a_max/shaper_a_decel/
-//                                      shaper_alpha_max/shaper_alpha_decel/
-//                                      shaper_j_max/shaper_yaw_jerk_max
-//     control.a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max -- 6
-//     REQUIRED fields, still baked today into Config::ShaperBootConfig
-//     (boot_config.h) -- but that struct's own doc comment says it is
-//     "currently unread by any live consumer" (Motion::Planner uses its own
-//     hand-baked PlannerLimits, sourced from the LIVE planner.* fields
-//     below, not this struct) and sprint.md's own Scope list schedules
-//     "dead ShaperBootConfig deletion" as ticket 015 cleanup work. Given a
-//     home here (not excluded outright, unlike ColorConfig/LineConfig
-//     below) because this ticket's own acceptance criterion requires every
-//     `_require()` call site to have a schema field, TODAY -- but placed
-//     under a `shaper_`-prefixed name, at the high (2-byte-tag) end of the
-//     Planner group's field-number range, and flagged for deletion FROM
-//     THIS SCHEMA in the same ticket-015 pass that deletes the C++ struct
-//     and generator function feeding it.
+//   shaper_config_for_config()     -> DELETED, 132-015. Formerly
+//     Planner.shaper_a_max/shaper_a_decel/shaper_alpha_max/
+//     shaper_alpha_decel/shaper_j_max/shaper_yaw_jerk_max (control.a_max/
+//     a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max, 6 fields), mirroring
+//     Config::ShaperBootConfig (boot_config.h) -- that struct's own doc
+//     comment confirmed "currently unread by any live consumer"
+//     (Motion::Planner uses its own hand-baked PlannerLimits, sourced from
+//     the LIVE planner.* fields below, not this struct). 132-015's own
+//     fresh grep re-confirmed zero live consumers and deleted the C++
+//     struct, gen_boot_config.py's shaper_config_for_config(), and these 6
+//     schema fields together (field numbers 17-22, now `reserved` below --
+//     see the Planner message's own trailing comment).
 //   wheel_correction_for_config()  -> Drive.wheel_gain_left_accel/
 //                                      wheel_intercept_left_accel/
 //                                      wheel_gain_left_decel/
@@ -393,15 +388,20 @@ message Planner {
   float  heading_hold_gain       = 15 [(min) = 0.0];  // [1/s] rad/s of correction per rad of error
   float  decel_plan_fraction     = 16 [(min) = 0.0];  // [1] fraction of decel ceiling to plan brake-start against
 
-  // DEAD -- Config::ShaperBootConfig's own fields (see this file's own
-  // header checklist entry for shaper_config_for_config()). Delete
-  // alongside the C++ struct/generator function, ticket 015.
-  float shaper_a_max            = 17 [(min) = 0.0];  // [mm/s^2]
-  float shaper_a_decel          = 18 [(min) = 0.0];  // [mm/s^2]
-  float shaper_alpha_max        = 19 [(min) = 0.0];  // [rad/s^2]
-  float shaper_alpha_decel      = 20 [(min) = 0.0];  // [rad/s^2]
-  float shaper_j_max            = 21 [(min) = 0.0];  // [mm/s^3]
-  float shaper_yaw_jerk_max     = 22 [(min) = 0.0];  // [rad/s^3]
+  // shaper_a_max/shaper_a_decel/shaper_alpha_max/shaper_alpha_decel/
+  // shaper_j_max/shaper_yaw_jerk_max -- DELETED, 132-015: these mirrored
+  // Config::ShaperBootConfig (boot_config.h), itself confirmed to have
+  // ZERO live consumers (Motion::Planner uses its own hand-baked
+  // PlannerLimits, sourced from the LIVE planner.* fields above, not
+  // this struct) and deleted the same ticket, alongside
+  // gen_boot_config.py's shaper_config_for_config(). Reserved, not
+  // reused (this file's own "split the group, don't grow this cap"
+  // wire-stability discipline applies to field NUMBERS too, matching
+  // envelope.proto/telemetry.proto's established "reserved, not
+  // reused" convention elsewhere in this schema).
+  reserved 17 to 22;
+  reserved "shaper_a_max", "shaper_a_decel", "shaper_alpha_max",
+      "shaper_alpha_decel", "shaper_j_max", "shaper_yaw_jerk_max";
 }
 
 // Otos -- SparkFun OTOS mounting lever-arm offset and chip scale
@@ -465,25 +465,40 @@ message Estimator {
 // gen_messages.py's own `_worst_case_message_size()`, 2026-08-03: Planner
 // is the worst case at 117 B of encoded content, against Motors=72,
 // Drive=55, WheelControl=55, Geometry=30, Otos=25, Estimator=16). Sizing
-// `(max_count)` at 220 ties `body`'s own capacity directly to
-// `kEncodeScratchCap` (wire.cpp:684) -- the SAME ceiling every nested-
-// message encode in this codebase is already implicitly bounded by --
-// rather than to today's specific worst-field-count group, so a future
-// field added to any one group cannot silently outgrow `body` without
-// also tripping the scratch-buffer ceiling everything else already
-// shares. (132-011 wires GetConfig/ConfigSnapshot below into
+// `(max_count)` at 220 tied `body`'s own capacity directly to
+// `kEncodeScratchCap` (wire.cpp:684) -- a DIFFERENT ceiling (the generic
+// nested-message-encode scratch buffer), not any requirement about how
+// large a config group actually is -- and left `kFramedMaxBytes`'s own
+// static_assert margin down to 1 byte (132-015, wire-budget emergency).
+//
+// UPDATE, 132-015 -- re-sized to 140, NOT 220: the stakeholder explicitly
+// unblocked shrinking this (2026-08-04): "I don't think readback really
+// has to be all one object. I don't think there is any big deal with
+// there being multiple configuration messages per subsystem or per some
+// other logical group." `(max_count)` is now sized to the real largest
+// group PLUS modest headroom (Planner's 117 B measured above + ~23 B at
+// the time this cap was picked; the SAME ticket's own dead-code sweep
+// then deleted Planner's 6 dead `shaper_*` fields, below, dropping its
+// real worst case further to 81 B -- Motors, at 72 B, is now the largest
+// group -- so this cap's actual headroom is wider still, ~59 B, than the
+// figure it was originally picked against), not to `kEncodeScratchCap`.
+// THE RULE, going forward: if any group ever
+// outgrows 140 B, the sanctioned move is to SPLIT THE GROUP into two
+// smaller `ConfigGroupTarget` values, not to grow this cap back up --
+// growing it back toward 220/240 reopens the exact margin emergency this
+// ticket closed. (132-011 wires GetConfig/ConfigSnapshot below into
 // CommandEnvelope.cmd/ReplyEnvelope.body -- envelope.proto's own
-// `get_config`/`cfg` arms -- proving `(max_count)=220` fits the 240 B
+// `get_config`/`cfg` arms -- proving `(max_count)` fits the 240 B
 // `_ENVELOPE_BUDGET_BYTES` static_assert with the reply's own non-oneof
-// bytes still inside it, tightly: see wire.h's generated size-report
-// comment for the exact measured total. SetConfigGroup/SetConfigField
-// remain UNWIRED as of 132-011 -- that is ticket 012/013's job, not this
-// one; GET is not gated behind SET landing first. UPDATE, 132-012:
-// SetConfigField is now wired -- envelope.proto's own `set_field` arm
-// (CommandEnvelope.cmd, field 25; see that arm's own doc comment for why
-// the wire verb is the deliberately-shorter `SET_FIELD`, not a literal
-// `SET_CONFIG_FIELD` mirror of this message's own name). SetConfigGroup
-// remains ticket 013's job.)
+// bytes still inside it: see wire.h's generated size-report comment for
+// the exact measured total. SetConfigGroup/SetConfigField remain UNWIRED
+// as of 132-011 -- that is ticket 012/013's job, not this one; GET is not
+// gated behind SET landing first. UPDATE, 132-012: SetConfigField is now
+// wired -- envelope.proto's own `set_field` arm (CommandEnvelope.cmd,
+// field 25; see that arm's own doc comment for why the wire verb is the
+// deliberately-shorter `SET_FIELD`, not a literal `SET_CONFIG_FIELD`
+// mirror of this message's own name). SetConfigGroup remains ticket 013's
+// job.)
 // ===========================================================================
 
 // SetConfigGroup -- push a whole group's worth of values in one frame.
@@ -493,7 +508,7 @@ message Estimator {
 // ERR_NOT_LIVE for a boot-only target rather than silently no-op'ing.
 message SetConfigGroup {
   ConfigGroupTarget target = 1;
-  bytes             body   = 2 [(max_count) = 220];  // encoded `target`'s own generated group message
+  bytes             body   = 2 [(max_count) = 140];  // encoded `target`'s own generated group message; see this file's header comment above -- split the group, don't grow this cap
 }
 
 // GetConfig -- request a read-back of one group. Wired into
@@ -518,7 +533,7 @@ message GetConfig {
 // ReplyEnvelope.body.cfg (envelope.proto, field 12) by 132-011.
 message ConfigSnapshot {
   ConfigGroupTarget target = 1;
-  bytes             body   = 2 [(max_count) = 220];
+  bytes             body   = 2 [(max_count) = 140];  // see SetConfigGroup.body above -- split the group, don't grow this cap
 }
 
 // SetConfigField -- set exactly one field inside one group, addressed by

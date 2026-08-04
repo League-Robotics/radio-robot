@@ -127,7 +127,11 @@ def test_generate_emits_default_planner_limits_byte_identical_to_pre_ticket_lite
     # Additive: pre-existing generated functions are still emitted.
     assert "void defaultMotorConfigs(msg::MotorConfig* out)" in content
     assert "msg::DrivetrainConfig defaultDrivetrainConfig()" in content
-    assert "DriveBootConfig defaultDriveConfig()" in content
+    # "DriveBootConfig defaultDriveConfig()" -- DELETED, 132-015 (dead-code
+    # sweep): Config::defaultDriveConfig() had zero remaining callers
+    # (superseded by Config::defaultDriveGroup(), msg::Drive) and is no
+    # longer emitted at all -- see config/boot_config.h's own note at that
+    # struct's former declaration site.
 
     # New (129-009): the planner boot-config generator function, carrying
     # tovez.json's real (pre-ticket-identical) values through as C++

@@ -58,20 +58,34 @@ def _tovez_cfg() -> dict:
 def test_generate_emits_all_seven_group_functions_additively():
     """generate()'s output gains all seven Config::Robot group-default
     functions without disturbing any pre-existing default*Config()/
-    default*BootConfig() function (still called by boot_wiring.cpp/
-    boot_calibration.cpp/main.cpp today -- deleting them would break
-    HOST_BUILD, out of this ticket's scope)."""
+    default*BootConfig() function that STILL has a live caller (still
+    called by boot_wiring.cpp/boot_calibration.cpp/main.cpp today --
+    deleting one of those would break HOST_BUILD, out of this ticket's
+    scope). ShaperBootConfig/defaultShaperConfig(), DriveBootConfig/
+    defaultDriveConfig(), and WheelControllerBootConfig/
+    defaultWheelControllerConfig() are DELIBERATELY absent below -- 132-015
+    (dead-code sweep) confirmed zero remaining callers for all three and
+    deleted them; see config/boot_config.h's own note at each struct's
+    former declaration site."""
     content = gbc.generate(_tovez_cfg(), "data/robots/tovez.json")
 
-    # Additive: every pre-existing generated function is still emitted.
+    # Additive: every pre-existing, still-LIVE generated function is still
+    # emitted.
     assert "void defaultMotorConfigs(msg::MotorConfig* out)" in content
     assert "msg::DrivetrainConfig defaultDrivetrainConfig()" in content
     assert "OtosBootConfig defaultOtosBootConfig()" in content
     assert "EstimatorBootConfig defaultEstimatorConfig()" in content
-    assert "ShaperBootConfig defaultShaperConfig()" in content
-    assert "DriveBootConfig defaultDriveConfig()" in content
-    assert "WheelControllerBootConfig defaultWheelControllerConfig()" in content
     assert "PlannerBootConfig defaultPlannerLimits()" in content
+
+    # DELETED, 132-015 -- confirm the FUNCTIONS stay gone, not merely
+    # absent by accident (a regression the other direction -- re-adding
+    # dead code -- would also be wrong). Checks the function signature,
+    # not the bare struct name: the generated banner comment legitimately
+    # still mentions these names in past tense (explaining the deletion),
+    # so a bare substring check would false-positive on that prose.
+    assert "ShaperBootConfig defaultShaperConfig()" not in content
+    assert "DriveBootConfig defaultDriveConfig()" not in content
+    assert "WheelControllerBootConfig defaultWheelControllerConfig()" not in content
 
     # New (132-005): one function per msg::ConfigGroupTarget.
     assert "msg::Geometry defaultGeometryGroup()" in content
@@ -152,10 +166,13 @@ def test_default_wheel_control_group_matches_tovez_json():
     assert "cfg.pid_max = 0.0f;" in content
 
 
-def test_default_planner_group_matches_tovez_json_including_dead_shaper_fields():
-    """Planner: the live planner.* surface plus the DEAD shaper_* fields
-    (see robot_config.proto's own header checklist -- ticket-015 deletes
-    them from the schema, not this ticket)."""
+def test_default_planner_group_matches_tovez_json():
+    """Planner: the live planner.* surface only -- the formerly-DEAD
+    shaper_* fields (robot_config.proto's own header checklist) are
+    DELETED, 132-015 (schema fields now `reserved`, C++ struct/generator
+    function gone -- see that message's own trailing comment and
+    config/boot_config.h's note at ShaperBootConfig's former declaration
+    site)."""
     content = gbc.generate(_tovez_cfg(), "data/robots/tovez.json")
 
     assert "cfg.v_max = 400.0f;" in content
@@ -167,14 +184,9 @@ def test_default_planner_group_matches_tovez_json_including_dead_shaper_fields()
     # test_gen_boot_config_planner.py failures still expect.
     assert "cfg.heading_hold_gain = 0.0f;" in content
     assert "cfg.decel_plan_fraction = 0.4f;" in content
-    # Dead shaper_* fields -- same source values as defaultShaperConfig()'s
-    # own control.a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max.
-    assert "cfg.shaper_a_max = 800.0f;" in content
-    assert "cfg.shaper_a_decel = 800.0f;" in content
-    assert "cfg.shaper_alpha_max = 7.0f;" in content
-    assert "cfg.shaper_alpha_decel = 7.0f;" in content
-    assert "cfg.shaper_j_max = 5000.0f;" in content
-    assert "cfg.shaper_yaw_jerk_max = 100.0f;" in content
+    # DELETED, 132-015 -- confirm they stay gone.
+    assert "shaper_a_max" not in content
+    assert "shaper_yaw_jerk_max" not in content
 
 
 def test_default_otos_group_matches_tovez_json():

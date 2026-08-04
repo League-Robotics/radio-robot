@@ -2654,11 +2654,20 @@ Result decodeInto(void* base, const MessageTable& table, const uint8_t* buf, siz
 }
 
 // Scratch cap for a nested message's own encoded payload -- sized against
-// the largest NESTED message this schema declares (DeviceId, ~171B, never
-// itself nested inside another message -- it IS the top-level reply body),
-// not against the outer envelope budget (123-002: recomputed to 240B for
+// the largest NESTED message this schema declares (a message reached via
+// a kMessage/kOneofMessage field from CommandEnvelope/ReplyEnvelope, i.e.
+// anything in struct_order other than those two roots themselves), not
+// against the outer envelope budget (123-002: recomputed to 240B for
 // COBS+CRC overhead, was 186B pre-123) -- unaffected by that recompute
-// since no nested message here approaches either ceiling.
+// since no nested message here approaches either ceiling. This literal is
+// fixed engine text (identical on every regeneration, unlike the
+// schema-derived kWorstCaseNestedMessageSize + static_assert immediately
+// below it in the generated output, which recompute every run) -- raise
+// it by hand if that assert ever fires; see this constant's own name for
+// what the failure means (`encodeInto()` into an undersized scratch
+// buffer fails, `encodeNestedMessage()` returns false, and the caller
+// silently drops the whole frame at RUNTIME with a clean compile -- 132-002
+// deferred this ticket's own assert to 132-015).
 constexpr size_t kEncodeScratchCap = 220;
 
 bool encodeInto(const void* base, const MessageTable& table, uint8_t* buf, size_t cap, size_t* pos);
@@ -2877,6 +2886,54 @@ def _render_arm_report(report: dict) -> str:
     return (f"//   {report['struct']}: {arm_text} "
             f"(worst={report['worst_arm_name']}={report['worst_arm']}B) + "
             f"non-oneof={report['non_oneof']}B => total={report['total']}B")
+
+
+def _worst_case_nested_message(struct_order: list[str], msg_map: dict, memo: dict) -> tuple[str, int]:
+    """(name, size) of the largest message actually reached via a
+    kMessage/kOneofMessage field somewhere below CommandEnvelope/
+    ReplyEnvelope -- i.e. every entry in `struct_order` EXCEPT the two
+    roots themselves (`_LAYOUT_CHECK_ROOTS`), which are the top-level
+    envelope bodies, never themselves nested inside another message and
+    so never routed through wire.cpp's `encodeNestedMessage()`/its
+    `kEncodeScratchCap`-sized scratch buffer. 132-015 (ticket 002 deferred
+    this): this is the exact worst case `kEncodeScratchCap` must cover."""
+    worst_name = ""
+    worst_size = 0
+    for name in struct_order:
+        if name in _LAYOUT_CHECK_ROOTS:
+            continue
+        size = _worst_case_message_size(name, msg_map, memo)
+        if size > worst_size:
+            worst_name, worst_size = name, size
+    return worst_name, worst_size
+
+
+def _render_encode_scratch_cap_assert(struct_order: list[str], msg_map: dict, memo: dict) -> str:
+    """Schema-derived companion to `_WIRE_CPP_PART2`'s fixed-text
+    `kEncodeScratchCap` declaration (132-015) -- recomputed every
+    regeneration, unlike that literal, so a future schema change that
+    pushes the largest nested message past `kEncodeScratchCap` fails to
+    COMPILE (this assert) instead of failing SILENTLY at runtime
+    (`encodeInto()` returns false into an undersized scratch buffer,
+    `encodeNestedMessage()` returns false, the caller drops the whole
+    frame -- clean compile, no error until the wire). Placed textually
+    after `_WIRE_CPP_PART2` (`kEncodeScratchCap`'s own declaration), which
+    is all this ordering requires -- both are ordinary namespace-scope
+    `constexpr` declarations, not a template parameter of PART2's fixed
+    text, so PART2 itself stays byte-identical across regenerations."""
+    worst_name, worst_size = _worst_case_nested_message(struct_order, msg_map, memo)
+    return (
+        f"// kEncodeScratchCap must cover the largest NESTED message this\n"
+        f"// schema currently declares -- computed by gen_messages.py's own\n"
+        f"// _worst_case_message_size() (the same routine that computes\n"
+        f"// kCommandEnvelopeMaxEncodedSize/kReplyEnvelopeMaxEncodedSize,\n"
+        f"// wire.h), not hand-verified prose. Currently: {worst_name}={worst_size}B.\n"
+        f"constexpr size_t kWorstCaseNestedMessageSize = {worst_size};\n"
+        f"static_assert(kEncodeScratchCap >= kWorstCaseNestedMessageSize,\n"
+        f'              "kEncodeScratchCap too small for the largest nested "\n'
+        f'              "message this schema declares -- see '
+        f'kWorstCaseNestedMessageSize");\n'
+    )
 
 
 # 132-008: robot_config.proto's 7 robot-config groups (Geometry/Motors/Drive/
@@ -3112,6 +3169,7 @@ def _emit_wire_files(fds):
         cpp_parts.extend(_render_message_table(name, field_tables[name]))
     cpp_parts.extend(_render_message_tables_array(struct_order))
     cpp_parts.append(_WIRE_CPP_PART2)
+    cpp_parts.append(_render_encode_scratch_cap_assert(struct_order, msg_map, memo))
     cpp_parts.append(_render_config_group_decode_defs(group_struct_order))
     cpp_parts.append(_render_config_group_encode_defs(group_struct_order))
     cpp_parts.append(_render_config_group_setfield_defs(group_struct_order))

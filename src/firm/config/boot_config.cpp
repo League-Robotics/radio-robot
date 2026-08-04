@@ -121,10 +121,7 @@ EstimatorBootConfig defaultEstimatorConfig() {
     // this sprint -- see that JSON's own inline comment for the
     // staleness_ms reasoning. NOT a live SET/wire surface itself -- see
     // EstimatorBootConfig's own doc comment (src/firm/config/boot_config.h)
-    // for the separate, volatile ESTIMATOR group live-tuning path
-    // (robot_config.proto's `Estimator`, decodes correctly but reaches no
-    // consumer -- Configurator::install(ESTIMATOR) permanently returns
-    // ERR_UNIMPLEMENTED, 132-010/132-013).
+    // for the separate, volatile EstimatorConfigPatch live-tuning path.
     EstimatorBootConfig cfg;
     cfg.headingOtos = 0.0f;
     cfg.omegaOtos = 0.0f;
@@ -132,82 +129,18 @@ EstimatorBootConfig defaultEstimatorConfig() {
     return cfg;
 }
 
-ShaperBootConfig defaultShaperConfig() {
-    // Decel-into-the-goal campaign -- fail-closed baked from the robot
-    // JSON's control.a_max/a_decel/alpha_max/alpha_decel/j_max/
-    // yaw_jerk_max (data/robots/robot_config.schema.json). a_max/a_decel/
-    // j_max/yaw_jerk_max are the deleted msg::PlannerConfig's own former
-    // fields, orphaned by 115-003 and read again here into a velocity-
-    // shaping consumer that has SINCE ALSO been deleted, as dead code, in
-    // sprint 128 ticket 014 (zero callers, superseded by Motion::Planner's
-    // own hand-baked PlannerLimits) -- this whole struct is currently
-    // unread by anything; alpha_max/alpha_decel are new (a_max/a_decel's
-    // own angular sibling -- yaw_jerk_max already covered the angular
-    // jerk slot). NOT a live SET/wire surface itself -- see the ESTIMATOR
-    // group's own a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max
-    // fields (robot_config.proto's `Estimator`) for the separate, volatile
-    // live-tuning path (mirrors OtosBootConfig/EstimatorBootConfig's own
-    // "boot bake vs. live wire push" split -- same permanently-unconsumed
-    // status as the comment above).
-    ShaperBootConfig cfg;
-    cfg.aMax = 800.0f;                  // [mm/s^2]
-    cfg.aDecel = 800.0f;               // [mm/s^2]
-    cfg.alphaMax = 7.0f;           // [rad/s^2]
-    cfg.alphaDecel = 7.0f;       // [rad/s^2]
-    cfg.jMax = 5000.0f;                   // [mm/s^3]
-    cfg.yawJerkMax = 100.0f;      // [rad/s^3]
-    return cfg;
-}
-
-DriveBootConfig defaultDriveConfig() {
-    // command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
-    // §6 -- fail-closed baked from the robot JSON's
-    // control.duty_per_speed_left/duty_per_speed_right/crawl_pulse
-    // (data/robots/robot_config.schema.json). These were hard-coded in C++
-    // before that change (the duty pair as App::Drive member initializers,
-    // the crawl amplitude as a bare main.cpp setCrawlPulse() call); see
-    // gen_boot_config.py's drive_config_for_config() for why that was
-    // wrong. NOT a live SET/wire surface itself -- the `kff` CONFIG key
-    // still retargets the duty scale at runtime, but it sets BOTH wheels
-    // to one value, which is exactly why the per-wheel split has to be
-    // baked here rather than left to it.
-    DriveBootConfig cfg;
-    cfg.dutyPerSpeedLeft = 0.001182f;    // [duty/(mm/s)]
-    cfg.dutyPerSpeedRight = 0.001182f;  // [duty/(mm/s)]
-    cfg.crawlPulse = 0.0f;                  // [-1,1]; 0 = off
-    cfg.gainLeftAccel = 1.0f;
-    cfg.interceptLeftAccel = 0.0f;   // [mm/s]
-    cfg.gainLeftDecel = 1.0f;
-    cfg.interceptLeftDecel = 0.0f;   // [mm/s]
-    cfg.gainRightAccel = 1.0f;
-    cfg.interceptRightAccel = 0.0f;   // [mm/s]
-    cfg.gainRightDecel = 1.0f;
-    cfg.interceptRightDecel = 0.0f;   // [mm/s]
-    return cfg;
-}
-
-WheelControllerBootConfig defaultWheelControllerConfig() {
-    // 130-004 (wheel-speed-controller-moves-into-drive.md Phase 2) --
-    // fail-closed baked from the robot JSON's control.wheel_*/
-    // control.wheel_pid_*/control.wheel_deficit_* keys
-    // (data/robots/robot_config.schema.json). See
-    // WheelControllerBootConfig's own doc comment (config/boot_config.h)
-    // for the full field-for-field mapping and why 0 is a safe,
-    // meaningful "this stage is disabled" value here.
-    WheelControllerBootConfig cfg;
-    cfg.vMin = 99.7f;                        // [mm/s]
-    cfg.biasMax = 23.8f;                  // [mm/s]
-    cfg.tauAdapt = 30.0f;                // [s]
-    cfg.aSteady = 30.0f;                  // [mm/s^2]
-    cfg.deficitThreshold = 0.0f;  // [mm/s]
-    cfg.deficitWindow = 0.0f;      // [ms]
-    cfg.kp = 0.0f;        // [1]
-    cfg.ki = 0.0f;        // [1/s]
-    cfg.iMax = 0.0f;    // [mm/s]
-    cfg.kaff = 0.0f;    // [s]
-    cfg.pidMax = 0.0f;  // [mm/s]
-    return cfg;
-}
+// ShaperBootConfig/defaultShaperConfig(), DriveBootConfig/
+// defaultDriveConfig(), WheelControllerBootConfig/
+// defaultWheelControllerConfig() -- DELETED, 132-015 (dead-code sweep).
+// See config/boot_config.h's own note at each struct's former declaration
+// site for the full rationale (all three confirmed zero live consumers by
+// a fresh grep; superseded by Config::defaultDriveGroup()/
+// defaultWheelControlGroup(), Config::Robot's own generated groups,
+// below). shaper_config_for_config() (this module) is deleted alongside
+// its one-and-only two consumers (defaultShaperConfig() here and
+// defaultPlannerGroup()'s own shaper_* fields below, robot_config.proto's
+// Planner message now `reserved`s field numbers 17-22 instead of
+// declaring them).
 
 PlannerBootConfig defaultPlannerLimits() {
     // 129-009 (config consolidation), field set reduced 130-009 -- fail-
@@ -332,11 +265,11 @@ msg::WheelControl defaultWheelControlGroup() {
 }
 
 msg::Planner defaultPlannerGroup() {
-    // planner.* (planner_config_for_config() above) plus the DEAD
+    // planner.* (planner_config_for_config() above). The formerly-DEAD
     // shaper_* fields (control.a_max/a_decel/alpha_max/alpha_decel/j_max/
-    // yaw_jerk_max, shaper_config_for_config() above) -- see
-    // robot_config.proto's own header checklist for why the dead fields
-    // are declared here at all (ticket-015 deletion, not this ticket's).
+    // yaw_jerk_max) are DELETED, 132-015 -- see robot_config.proto's own
+    // Planner message (now `reserved 17 to 22`) and this module's own
+    // note at defaultShaperConfig()'s former spot above.
     msg::Planner cfg;
     cfg.v_max = 400.0f;                          // [mm/s]
     cfg.a_max = 300.0f;                          // [mm/s^2]
@@ -354,12 +287,6 @@ msg::Planner defaultPlannerGroup() {
     cfg.settle_epsilon_angular = 0.035f;  // [rad]
     cfg.heading_hold_gain = 0.0f;   // [1/s]
     cfg.decel_plan_fraction = 0.4f;  // [1]
-    cfg.shaper_a_max = 800.0f;                       // [mm/s^2]
-    cfg.shaper_a_decel = 800.0f;                   // [mm/s^2]
-    cfg.shaper_alpha_max = 7.0f;               // [rad/s^2]
-    cfg.shaper_alpha_decel = 7.0f;           // [rad/s^2]
-    cfg.shaper_j_max = 5000.0f;                       // [mm/s^3]
-    cfg.shaper_yaw_jerk_max = 100.0f;         // [rad/s^3]
     return cfg;
 }
 

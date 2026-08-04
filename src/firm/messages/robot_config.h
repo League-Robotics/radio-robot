@@ -101,12 +101,6 @@ struct Planner {
     float settle_epsilon_angular = 0.0f;
     float heading_hold_gain = 0.0f;
     float decel_plan_fraction = 0.0f;
-    float shaper_a_max = 0.0f;
-    float shaper_a_decel = 0.0f;
-    float shaper_alpha_max = 0.0f;
-    float shaper_alpha_decel = 0.0f;
-    float shaper_j_max = 0.0f;
-    float shaper_yaw_jerk_max = 0.0f;
 
     // --- array / optional-string accessors ---
 };
@@ -134,7 +128,7 @@ struct Estimator {
 // SetConfigGroup
 struct SetConfigGroup {
     ConfigGroupTarget target = static_cast<ConfigGroupTarget>(0);
-    uint8_t body_[220] = {};
+    uint8_t body_[140] = {};
     uint8_t body_count = 0;
 
     // --- array / optional-string accessors ---
@@ -152,7 +146,7 @@ struct GetConfig {
 // ConfigSnapshot
 struct ConfigSnapshot {
     ConfigGroupTarget target = static_cast<ConfigGroupTarget>(0);
-    uint8_t body_[220] = {};
+    uint8_t body_[140] = {};
     uint8_t body_count = 0;
 
     // --- array / optional-string accessors ---

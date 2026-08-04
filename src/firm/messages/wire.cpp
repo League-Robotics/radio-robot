@@ -456,7 +456,7 @@ constexpr MessageTable kTable_ReplyEnvelope = { kFields_ReplyEnvelope, 5 };
 
 constexpr FieldDesc kFields_SetConfigGroup[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kEnum, .offset = offsetof(SetConfigGroup, target), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // target
-    { .number = 2, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kBytes, .scalarType = ScalarType::kNone, .offset = offsetof(SetConfigGroup, body_), .offset2 = offsetof(SetConfigGroup, body_count), .oneofKindValue = 0, .cap = 220, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // body
+    { .number = 2, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kBytes, .scalarType = ScalarType::kNone, .offset = offsetof(SetConfigGroup, body_), .offset2 = offsetof(SetConfigGroup, body_count), .oneofKindValue = 0, .cap = 140, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // body
 };
 constexpr MessageTable kTable_SetConfigGroup = { kFields_SetConfigGroup, 2 };
 
@@ -538,7 +538,7 @@ constexpr MessageTable kTable_Telemetry = { kFields_Telemetry, 20 };
 
 constexpr FieldDesc kFields_ConfigSnapshot[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kEnum, .offset = offsetof(ConfigSnapshot, target), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // target
-    { .number = 2, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kBytes, .scalarType = ScalarType::kNone, .offset = offsetof(ConfigSnapshot, body_), .offset2 = offsetof(ConfigSnapshot, body_count), .oneofKindValue = 0, .cap = 220, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // body
+    { .number = 2, .wireType = WireRuntime::WireType::kLengthDelimited, .kind = FieldKind::kBytes, .scalarType = ScalarType::kNone, .offset = offsetof(ConfigSnapshot, body_), .offset2 = offsetof(ConfigSnapshot, body_count), .oneofKindValue = 0, .cap = 140, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // body
 };
 constexpr MessageTable kTable_ConfigSnapshot = { kFields_ConfigSnapshot, 2 };
 
@@ -661,14 +661,8 @@ constexpr FieldDesc kFields_Planner[] = {
     { .number = 14, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, settle_epsilon_angular), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // settle_epsilon_angular
     { .number = 15, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, heading_hold_gain), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // heading_hold_gain
     { .number = 16, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, decel_plan_fraction), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // decel_plan_fraction
-    { .number = 17, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, shaper_a_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // shaper_a_max
-    { .number = 18, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, shaper_a_decel), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // shaper_a_decel
-    { .number = 19, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, shaper_alpha_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // shaper_alpha_max
-    { .number = 20, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, shaper_alpha_decel), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // shaper_alpha_decel
-    { .number = 21, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, shaper_j_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // shaper_j_max
-    { .number = 22, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Planner, shaper_yaw_jerk_max), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // shaper_yaw_jerk_max
 };
-constexpr MessageTable kTable_Planner = { kFields_Planner, 22 };
+constexpr MessageTable kTable_Planner = { kFields_Planner, 16 };
 
 constexpr FieldDesc kFields_Otos[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Otos, offset_x), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = 0, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // offset_x
@@ -846,11 +840,20 @@ Result decodeInto(void* base, const MessageTable& table, const uint8_t* buf, siz
 }
 
 // Scratch cap for a nested message's own encoded payload -- sized against
-// the largest NESTED message this schema declares (DeviceId, ~171B, never
-// itself nested inside another message -- it IS the top-level reply body),
-// not against the outer envelope budget (123-002: recomputed to 240B for
+// the largest NESTED message this schema declares (a message reached via
+// a kMessage/kOneofMessage field from CommandEnvelope/ReplyEnvelope, i.e.
+// anything in struct_order other than those two roots themselves), not
+// against the outer envelope budget (123-002: recomputed to 240B for
 // COBS+CRC overhead, was 186B pre-123) -- unaffected by that recompute
-// since no nested message here approaches either ceiling.
+// since no nested message here approaches either ceiling. This literal is
+// fixed engine text (identical on every regeneration, unlike the
+// schema-derived kWorstCaseNestedMessageSize + static_assert immediately
+// below it in the generated output, which recompute every run) -- raise
+// it by hand if that assert ever fires; see this constant's own name for
+// what the failure means (`encodeInto()` into an undersized scratch
+// buffer fails, `encodeNestedMessage()` returns false, and the caller
+// silently drops the whole frame at RUNTIME with a clean compile -- 132-002
+// deferred this ticket's own assert to 132-015).
 constexpr size_t kEncodeScratchCap = 220;
 
 bool encodeInto(const void* base, const MessageTable& table, uint8_t* buf, size_t cap, size_t* pos);
@@ -1037,6 +1040,16 @@ Result decode(Telemetry& out, const uint8_t* buf, uint16_t len) {
   if (buf == nullptr && len != 0) return Result{false, 0, ErrCode::ERR_DECODE};
   return decodeInto(&out, kTable_Telemetry, buf, static_cast<size_t>(len), 0);
 }
+
+// kEncodeScratchCap must cover the largest NESTED message this
+// schema currently declares -- computed by gen_messages.py's own
+// _worst_case_message_size() (the same routine that computes
+// kCommandEnvelopeMaxEncodedSize/kReplyEnvelopeMaxEncodedSize,
+// wire.h), not hand-verified prose. Currently: Telemetry=185B.
+constexpr size_t kWorstCaseNestedMessageSize = 185;
+static_assert(kEncodeScratchCap >= kWorstCaseNestedMessageSize,
+              "kEncodeScratchCap too small for the largest nested "
+              "message this schema declares -- see kWorstCaseNestedMessageSize");
 
 // decode(<Group>&, ...) -- 132-008 addition; see wire.h's own
 // declaration comment. Same full-object memset + null-check +

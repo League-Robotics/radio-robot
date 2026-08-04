@@ -108,129 +108,41 @@ struct EstimatorBootConfig {
 // gen_boot_config.py's estimator_config_for_config().
 EstimatorBootConfig defaultEstimatorConfig();
 
-// ShaperBootConfig — accel/decel/jerk magnitude ceilings, baked from the
-// robot JSON's `control.a_max`/`control.a_decel`/`control.alpha_max`/
-// `control.alpha_decel` (data/robots/robot_config.schema.json). Currently
-// unread by any live consumer — main.cpp constructs Motion::PlannerLimits
-// from its own plant-validated constants, not from this struct; kept
-// declared because removing it is a boot-config schema change, not a
-// src/firm/src/motion code-boundary one.
+// ShaperBootConfig/defaultShaperConfig() -- DELETED, 132-015 (dead-code
+// sweep, the-configuration-object.md). Formerly accel/decel/jerk magnitude
+// ceilings baked from the robot JSON's `control.a_max`/`control.a_decel`/
+// `control.alpha_max`/`control.alpha_decel`/`control.j_max`/
+// `control.yaw_jerk_max` -- confirmed by a fresh grep to have ZERO live
+// consumers (main.cpp constructs Motion::PlannerLimits from
+// PlannerBootConfig/defaultPlannerLimits() below, never from this struct;
+// its one intended consumer, a velocity-shaping stage, was itself deleted
+// as dead code in sprint 128 ticket 014). The mirroring
+// `msg::Planner.shaper_*` schema fields (robot_config.proto) are deleted
+// (`reserved`) the same ticket; see that message's own trailing comment.
 //
-// jMax/yawJerkMax bound how fast the commanded ACCELERATION itself may
-// change (the S-curve's own "corners").
+// DriveBootConfig/defaultDriveConfig() -- DELETED, 132-015. Formerly
+// App::Drive's per-robot wheel calibration
+// (dutyPerSpeedLeft/Right/crawlPulse/gain*/intercept* -- control.
+// duty_per_speed_left/right/crawl_pulse and the 8 wheel_gain_*/
+// wheel_intercept_* keys). Confirmed by a fresh grep to have ZERO live
+// consumers: ticket 006 ("Configurator owns Config::Robot") retargeted
+// RobotGraph's composition root onto Configurator::loadBaked() +
+// Config::defaultDriveGroup() (msg::Drive, below the "Config::Robot group
+// defaults" banner in boot_config.cpp) -- the last caller of this
+// function -- leaving it exactly the "no callers left" state this file's
+// own module docstring (gen_boot_config.py) predicted a "later cleanup
+// ticket" (this one) would find and delete.
 //
-// REQUIRED, same fail-closed posture as every other struct here: a robot
-// JSON missing any of the six `control.a_max`/`a_decel`/`alpha_max`/
-// `alpha_decel`/`j_max`/`yaw_jerk_max` keys fails codegen loudly (same
-// MissingRobotConfigKeyError gen_boot_config.py's own `_require()` already
-// raises for every other REQUIRED field) rather than silently shipping an
-// unshaped boot image.
-struct ShaperBootConfig {
-  float aMax = 0.0f;         // [mm/s^2] linear accel-ramp ceiling
-  float aDecel = 0.0f;       // [mm/s^2] linear decel-taper ceiling
-  float alphaMax = 0.0f;     // [rad/s^2] angular accel-ramp ceiling
-  float alphaDecel = 0.0f;   // [rad/s^2] angular decel-taper ceiling
-  float jMax = 0.0f;         // [mm/s^3] linear jerk ceiling
-  float yawJerkMax = 0.0f;   // [rad/s^3] angular jerk ceiling
-};
-
-// The boot ShaperBootConfig default — fail-closed baked accel/decel
-// ceilings, see ShaperBootConfig's own doc comment above and
-// gen_boot_config.py's shaper_config_for_config().
-ShaperBootConfig defaultShaperConfig();
-
-// DriveBootConfig -- App::Drive's per-robot wheel calibration, baked from
-// the robot JSON's `control.duty_per_speed_left`/`duty_per_speed_right`/
-// `crawl_pulse` (data/robots/robot_config.schema.json). The `kff` CONFIG
-// key is not an escape hatch for this: it sets both wheels to a single
-// value, flattening the measured ~10% L/R asymmetry with no way to
-// restore it short of a rebuild.
+// WheelControllerBootConfig/defaultWheelControllerConfig() -- DELETED,
+// 132-015, same reason and same ticket-006 retarget as DriveBootConfig
+// immediately above (superseded by Config::defaultWheelControlGroup(),
+// msg::WheelControl). App::installShaperLimits()/installDriveCalibration()/
+// installWheelController() (app/boot_calibration.{h,cpp}), the three free
+// functions that used to install these two structs' values onto
+// Motion::Planner/App::Drive, are deleted alongside them -- Configurator::
+// install() (app/configurator.cpp) now does that fan-out instead, reading
+// Config::Robot directly.
 //
-// dutyPerSpeed* is the INVERSE of the measured plant gain: duty =
-// speed * dutyPerSpeed. Per-wheel because the two gearboxes genuinely
-// differ (measured ~560 mm/s per duty left vs ~510 right).
-//
-// crawlPulse ships at 0 (OFF). True breakaway is 1-6% duty and
-// state-dependent; a naively larger value (e.g. 0.20, sized against an
-// apparent 0.10-0.19 "dead zone") pulses across a wide speed band for a
-// stiction problem that largely is not there (see the standalone duty_min
-// prober, src/tests/firmware/duty_min/RESULTS.md). Re-enable only if slow
-// speeds genuinely stall, sized from prober data (~0.05).
-//
-// REQUIRED, same fail-closed posture as every other struct here: a robot
-// JSON missing any of the three keys fails codegen loudly. App::Drive
-// itself carries NO calibration defaults (drive.h) -- an unconfigured
-// Drive refuses to drive rather than quietly using another robot's
-// numbers.
-struct DriveBootConfig {
-  float dutyPerSpeedLeft = 0.0f;   // [duty/(mm/s)] 1 / measured plant gain, left
-  float dutyPerSpeedRight = 0.0f;  // [duty/(mm/s)] 1 / measured plant gain, right
-  float crawlPulse = 0.0f;         // [-1, 1] sub-breakaway pulse amplitude; 0 = off
-
-  // Commanded->actual correction, per wheel per direction of approach:
-  // measured = gain*commanded + intercept (docs/design/
-  // wheel-speed-command-mapping.md). Drive inverts it for the feedforward.
-  // gain 1 / intercept 0 == no correction (an uncalibrated robot).
-  float gainLeftAccel = 1.0f;        // measured/commanded slope, left wheel, accel
-  float interceptLeftAccel = 0.0f;   // [mm/s] its intercept
-  float gainLeftDecel = 1.0f;        // measured/commanded slope, left wheel, decel
-  float interceptLeftDecel = 0.0f;   // [mm/s] its intercept
-  float gainRightAccel = 1.0f;        // measured/commanded slope, right wheel, accel
-  float interceptRightAccel = 0.0f;   // [mm/s] its intercept
-  float gainRightDecel = 1.0f;        // measured/commanded slope, right wheel, decel
-  float interceptRightDecel = 0.0f;   // [mm/s] its intercept
-};
-
-// The boot DriveBootConfig default -- see DriveBootConfig's own doc comment
-// above and gen_boot_config.py's drive_config_for_config().
-DriveBootConfig defaultDriveConfig();
-
-// WheelControllerBootConfig -- App::Drive's unified three-timescale
-// wheel-speed controller (130-004, wheel-speed-controller-moves-into-
-// drive.md Phase 2): Stage B's wire-tunable fast-PID gains (kp/ki/iMax/
-// kaff/pidMax) and Stage C/deficit-flag's generated-constant bounds
-// (vMin/biasMax/tauAdapt/aSteady/deficitThreshold/deficitWindow), baked
-// from the robot JSON's `control.wheel_*`/`control.wheel_pid_*`/
-// `control.wheel_deficit_*` keys (data/robots/robot_config.schema.json).
-//
-// Field-for-field mirror of App::Drive::ControlGains/AdaptationBounds
-// (src/firm/app/drive.h) -- NOT reused directly, same reasoning as every
-// other BootConfig struct here (config/ may depend only on messages/,
-// never on app/, docs/design/design.md §5's dependency diagram).
-// App::installWheelController() (boot_calibration.{h,cpp}) converts this
-// into the two App::Drive setter calls.
-//
-// REQUIRED, same fail-closed posture as every other struct here: a robot
-// JSON missing any of the 11 keys fails codegen loudly. Every field's
-// "0 = off" meaning is App::Drive's OWN documented convention (see
-// ControlGains/AdaptationBounds' own doc comments, drive.h), not
-// something this struct enforces itself -- a robot JSON is free to ship
-// every one of these at 0 (both stages inert, Stage A's existing
-// conversion map keeps working unmodified), which is exactly what
-// togov.json/tovez_nocal.json do today (no population characterization /
-// the no-calibration profile, respectively).
-struct WheelControllerBootConfig {
-  // Stage C / deficit-flag policy (generated constants).
-  float vMin = 0.0f;              // [mm/s] speed floor
-  float biasMax = 0.0f;           // [mm/s] Stage C trim authority clamp
-  float tauAdapt = 0.0f;          // [s] Stage C adaptation time constant; <=0 disables
-  float aSteady = 0.0f;           // [mm/s^2] steady-state gate
-  float deficitThreshold = 0.0f;  // [mm/s] deficit-flag error threshold
-  float deficitWindow = 0.0f;     // [ms] deficit-flag sustain window
-
-  // Stage B (wire-tunable gains).
-  float kp = 0.0f;      // [1] dimensionless proportional gain
-  float ki = 0.0f;      // [1/s] integral gain
-  float iMax = 0.0f;    // [mm/s] integrator clamp
-  float kaff = 0.0f;    // [s] accel feedforward
-  float pidMax = 0.0f;  // [mm/s] total fast-loop authority clamp
-};
-
-// The boot WheelControllerBootConfig default -- see that struct's own
-// doc comment above and gen_boot_config.py's
-// wheel_controller_config_for_config().
-WheelControllerBootConfig defaultWheelControllerConfig();
-
 // PlannerBootConfig -- Motion::Planner's tuning surface (profile ceilings,
 // loop timing, settle/rest, heading hold), baked from the active robot
 // JSON's `planner` block (data/robots/robot_config.schema.json).

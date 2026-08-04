@@ -112,12 +112,6 @@ class Planner(BaseModel):
     settle_epsilon_angular: float = 0.0
     heading_hold_gain: float = 0.0
     decel_plan_fraction: float = 0.0
-    shaper_a_max: float = 0.0
-    shaper_a_decel: float = 0.0
-    shaper_alpha_max: float = 0.0
-    shaper_alpha_decel: float = 0.0
-    shaper_j_max: float = 0.0
-    shaper_yaw_jerk_max: float = 0.0
 
 class Otos(BaseModel):
     offset_x: float = 0.0
