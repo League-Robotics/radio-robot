@@ -33,31 +33,107 @@ Confirmed by measuring in the SAME connection as the push, where the gap did
 close (trapezoid 11.0 → 1.6 points, square 12.4 → 0.6 points) and
 `get_config(DRIVE)` read back the exact pushed values.
 
-## Proposed fix
+## Measured facts (2026-08-04, `tovez`, direct USB)
 
-Options, roughly in order of preference:
+Both halves of the diagnosis were tested rather than assumed.
 
-1. **Make the loss loud.** If a live-pushed group is not persistable, say so at
-   push time (a distinct ack code, or a warning in the reply) so a caller knows
-   the value dies at reset. Smallest change, and it matches the sprint's own
-   "no silent no-ops" principle.
-2. **Stop pulsing DTR on connect** for direct USB, or make it opt-in. A host
-   opening a port should not reboot the robot as a side effect. Note the
-   existing project knowledge that the board does *not* reset on port open in
-   general — this DTR pulse is `SerialConnection`'s own doing.
-3. **Add `DRIVE` to the persistence table.** Careful: the persisted blob has a
-   hard 128 B ceiling (4 CODAL keys × 32 B) whose `static_assert` lives inside
-   `#ifndef HOST_BUILD`, so an overflow is invisible to host tests and only
-   breaks at ARM build time. Sprint 132 shrank the blob to 51 B / 2 chunks, so
-   there is room — but measure, do not assume.
+**Connecting resets the MCU.** Robot clock across three consecutive
+`SerialConnection` opens:
 
-Also worth deciding: whether bench tooling should read back after every push as
-a matter of course. 132-019 only caught this because it read back.
+```
+connect #1  PONG:t=817843 ms
+connect #2  PONG:t=3085 ms      <- clock went BACKWARDS by 814.8 s
+connect #3  PONG:t=3085 ms      <- deterministic; same boot-point read
+```
+
+**The reset is not needed.** `serial_conn.py`'s sprint-036 comment claims the
+DTR pulse is required because the `DEVICE:` banner is boot-only. That is stale.
+Opening with `dtr = False` and sending `HELLO`:
+
+```
+DEVICE:NEZHA2:robot:tovez:2314287040     <- classification works
+PONG:t=40416                             <- and the clock did NOT reset
+```
+
+`HELLO` elicits the banner. The reset buys nothing and costs the config.
+
+## Agreed fix (stakeholder, 2026-08-04)
+
+### 1. Stop asserting DTR on connect
+
+Open with `dtr = False`. `_banner_classify()` already sends `HELLO` and reads
+the response, which is what actually produces the `DEVICE:` line today, so
+classification is unaffected. Update the stale comment.
+
+Beyond the config bug this fixes something larger: **today you cannot observe a
+robot without rebooting it.** Every host connection disturbs the thing it is
+measuring.
+
+Two things to check rather than assume:
+
+- **The relay path.** `_relay_handshake()` may genuinely need the reset to put
+  the dongle in a known state. Only direct USB was tested. If the relay needs
+  it, keep DTR asserted for `RADIOBRIDGE` only — a per-role decision, not a
+  global one.
+- **Tooling that quietly assumes a fresh boot on connect.** The bench scripts
+  are believed to get their cold boot from reflashing rather than connecting,
+  but that assumption tends to live in a script's timing, not its comments.
+
+### 2. Per-group config provenance, reported on the reply
+
+Each config group reports whether its current values came from the baked
+`boot_config.cpp` or from a live wire push. Not one global flag: config is
+seven groups, and `DRIVE` may be live while `PLANNER` is baked — a single flag
+would have to lie about one of them.
+
+Three constraints on the implementation:
+
+- **Stamp it in exactly one place.** `applyGroup()` and `applyField()` are the
+  only two paths that mutate `config_`. Stamping there makes it structurally
+  impossible to forget; stamping at call sites is a convention that rots.
+- **It must NOT be a field of the config struct.** A `source` field inside a
+  group would land in the robot JSON too, breaking the read-back-equals-file
+  property that is sprint 132's headline test — the file can never carry a
+  runtime-assigned value. Provenance is a property of the *answer*, so it
+  belongs on the `ConfigSnapshot` reply message.
+- **Reset behaviour falls out for free.** `loadBaked()` stamps every group
+  `BAKED`; a reset re-runs `loadBaked()`.
+
+Scope note: with the DTR fix and no persistence, `LIVE` survives only while the
+robot stays powered. After any power cycle everything reads `BAKED` by
+definition. That is the correct answer to "is the robot running what I pushed"
+during a tuning session; it is not, and cannot be, a claim about surviving a
+power cycle.
+
+### 3. Verified push
+
+`get_config()` already exists, so make the read-back automatic rather than
+optional: a `verify=True` path on the field/group setters that reads back and
+raises on mismatch, used by default in bench tooling. 132-019 caught this
+defect only because it happened to read back; that should not be luck.
+
+### Explicitly NOT doing: persisting `DRIVE` to flash
+
+There is room (the blob is 51 B against a 128 B ceiling after sprint 132), but
+persistence reintroduces exactly the ambiguity sprint 132 removed — a robot
+booting tuned values nobody in the room knows about. `.claude/rules/configuration-discipline.md`
+says production boot comes from the file. Good tuned values get promoted into
+the robot JSON, which is the sanctioned path and which sprint 132 showed works.
+
+Note for anyone who revisits this: the persisted blob's `static_assert` on the
+128 B ceiling lives inside `#ifndef HOST_BUILD`, so an overflow is invisible to
+host tests and only breaks at ARM build time.
 
 ## Verification
 
 - Push a `DRIVE` value, disconnect, reconnect, `get_config(DRIVE)` — the value
-  must either still be there, or the push must have warned it would not be.
+  is still there, and its reported source reads `LIVE`.
+- Power-cycle the robot, reconnect — the value is gone and its source reads
+  `BAKED`. The loss is visible, not silent.
+- `DEVICE:` classification still works on direct USB with DTR deasserted, and
+  the relay path still handshakes (whatever DTR policy it ends up with).
+- A `verify=True` push against a deliberately-rejected value raises rather than
+  returning success.
 - The 132-019 workaround (measure in the same connection as the push) must
   remain valid.
 
