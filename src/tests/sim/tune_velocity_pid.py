@@ -2,9 +2,13 @@
 square-wave step (no overshoot on the rise, no reversal on the stop).
 
 Drives a raw twist step in the zero-error sim, sets candidate gains via a
-MotorConfigPatch, and scores the per-wheel step response: overshoot above the
-commanded speed, and reverse spin after the deadman stops the motors. The
-commanded speed is read live from the firmware (Path B ctypes hook, frame.cmd_vel).
+SetConfigGroup{WHEEL_CONTROL} push (132-014: retargeted off the retired
+MotorConfigPatch/ConfigDelta, config.proto deleted 132-013 -- App::Drive's
+unified wheel-speed controller's Stage B fast-PID gains, not the old parked
+Motion::Planner M4 duty stage), and scores the per-wheel step response:
+overshoot above the commanded speed, and reverse spin after the deadman
+stops the motors. The commanded speed is read live from the firmware (Path B
+ctypes hook, frame.cmd_vel).
 """
 from __future__ import annotations
 
@@ -16,10 +20,22 @@ TRACK = 128.0
 TARGET = 150.0  # [mm/s] commanded step
 
 
-def _config_line(**gains) -> bytes:
-    from robot_radio.robot.pb2 import config_pb2, envelope_pb2
-    delta = envelope_pb2.ConfigDelta(motor=config_pb2.MotorConfigPatch(**gains))
-    env = envelope_pb2.CommandEnvelope(corr_id=7, config=delta)
+def _config_line(*, kp: float, ki: float, kff: float, i_max: float, kaw: float) -> bytes:
+    """Push a WHOLE WheelControl group -- kp/ki/kff/i_max/kaw map onto
+    Stage B's pid_kp/pid_ki/pid_kaff/pid_i_max/pid_max; every OTHER
+    WheelControl field (Stage C's v_min/bias_max/tau_adapt/a_steady/
+    deficit_threshold/deficit_window) is zeroed by this push -- acceptable
+    here (this tool isolates Stage B's own step response), but NOT a
+    pattern to copy for a caller that wants to change only SOME fields of
+    an already-live group (use set_config_field() -- see
+    .claude/rules/configuration-discipline.md)."""
+    from robot_radio.robot.pb2 import envelope_pb2, robot_config_pb2
+
+    group = robot_config_pb2.WheelControl(
+        pid_kp=kp, pid_ki=ki, pid_kaff=kff, pid_i_max=i_max, pid_max=kaw)
+    request = robot_config_pb2.SetConfigGroup(
+        target=robot_config_pb2.WHEEL_CONTROL, body=group.SerializeToString())
+    env = envelope_pb2.CommandEnvelope(corr_id=7, config=request)
     return encode_frame(env.SerializeToString())
 
 

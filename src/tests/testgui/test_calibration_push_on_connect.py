@@ -80,28 +80,30 @@ _requires_sim_lib = pytest.mark.skipif(
 # ---------------------------------------------------------------------------
 
 
-def _cfg(*, calibration=None, trackwidth=128, odometry_offset_mm=None, robot_name="r"):
+def _cfg(*, motors=None, wheel_control=None, otos=None, robot_name="r"):
+    """132-014: retargeted onto robot_config.proto's grouped shape
+    (config.motors/config.wheel_control/config.otos) -- config.calibration/
+    config.geometry.odometry_offset_mm (the pre-020 flat sections this
+    helper used to build) no longer exist on RobotConfig."""
     return types.SimpleNamespace(
         robot_name=robot_name,
-        calibration=calibration if calibration is not None else types.SimpleNamespace(),
-        geometry=types.SimpleNamespace(
-            trackwidth=trackwidth, odometry_offset_mm=odometry_offset_mm
-        ),
+        motors=motors if motors is not None else types.SimpleNamespace(),
+        wheel_control=wheel_control if wheel_control is not None else types.SimpleNamespace(),
+        otos=otos if otos is not None else types.SimpleNamespace(),
         wheels=types.SimpleNamespace(wheel_diameter_mm=80.77),
     )
 
 
 def test_calibration_commands_excludes_odom_offset_keys_even_when_nonzero() -> None:
-    """The fix under test: a non-zero odometry_offset_mm (both real robot
-    configs have one, x=-47.7) must never produce a SET odomOff*/odomYaw*
-    command -- those keys are unregistered and get ERR badkey."""
+    """The fix under test (still holds, 132-014): calibration_commands()
+    reads only calibration_kwargs() (ml/mr/pid.*) + otos_kwargs()
+    (offset_x/y/yaw, linear_scale/angular_scale) -- config.geometry.
+    odometry_offset_mm is not, and never was, one of either selector's own
+    field names, so it can never leak into a SET odomOff*/odomYaw* command
+    (those keys were never a registered wire key on any surface)."""
     from robot_radio.calibration.push import calibration_commands
 
-    cfg = _cfg(
-        odometry_offset_mm=types.SimpleNamespace(x=-47.7, y=3.5, yaw_rad=0.0)
-    )
-
-    cmds = calibration_commands(cfg)
+    cmds = calibration_commands(_cfg())
 
     joined = " ".join(c for c, _t in cmds)
     assert "odomOff" not in joined and "odomYaw" not in joined, (
@@ -110,71 +112,59 @@ def test_calibration_commands_excludes_odom_offset_keys_even_when_nonzero() -> N
     )
 
 
-def test_calibration_commands_nocal_pushes_rotslip_zero_sentinel() -> None:
-    from robot_radio.calibration.push import calibration_commands
-
-    cmds = calibration_commands(_cfg())
-
-    assert ("SET rotSlip=0", 200) in cmds
-
-
-def test_calibration_commands_calibrated_pushes_actual_rotslip() -> None:
-    from robot_radio.calibration.push import calibration_commands
-
-    cfg = _cfg(calibration=types.SimpleNamespace(rotational_slip=0.85))
-    cmds = calibration_commands(cfg)
-
-    assert ("SET rotSlip=0.85", 200) in cmds
+# test_calibration_commands_nocal_pushes_rotslip_zero_sentinel() /
+# test_calibration_commands_calibrated_pushes_actual_rotslip() -- DELETED,
+# 132-014: rotSlip (GEOMETRY.rotational_slip) is dropped from
+# calibration_kwargs()'s own selection (GEOMETRY is boot-only AND one of
+# the sim's own justified BootOverrides divergences -- see that function's
+# docstring). There is no live wire target left for calibration_commands()
+# to conditionally push it onto any more; the "uncalibrated -> neutral
+# sentinel" property these two tests proved no longer has anything to
+# prove. Not ported as always-fail assertions -- simply removed, matching
+# this project's own residual-reference sweep policy for other
+# no-longer-selected fields (e.g. 115-003's headingKp/headingKd removal in
+# this exact file's git history).
 
 
 def test_calibration_commands_pushes_oi_ol_oa_unconditionally() -> None:
     """109-004 RESTORES the OI/OL/OA push (dropped 2026-07-16 when these
-    verbs had no path over the binary wire at all -- see this module's own
-    docstring / calibration_commands()'s own docstring for the full
-    restoration rationale). All three are pushed unconditionally -- OI
-    (chip init) always, and OL/OA with the SAME "uncalibrated -> neutral
-    sentinel" discipline rotSlip already uses: a bare _cfg() with no
-    otos_linear_scale/otos_angular_scale calibration still pushes the 1.0
-    (no-correction) default, encoded as ``OL 0``/``OA 0``, not omitted."""
+    verbs had no path over the binary wire at all). OI (chip init) is
+    ALWAYS appended (132-014: an inert legacy token on the current wire --
+    see calibration_commands()'s own docstring). OL/OA are appended
+    whenever config.otos carries linear_scale/angular_scale -- unlike
+    rotSlip's old "always sentinel" discipline, otos_kwargs() pushes
+    whatever value is actually there (132-014, no synthetic 1.0
+    fallback -- see that function's own docstring), formatted as the
+    MULTIPLIER directly now, not a scale_to_int8()-encoded register."""
     from robot_radio.calibration.push import calibration_commands
 
-    cmds = calibration_commands(_cfg())
+    cfg = _cfg(otos=types.SimpleNamespace(linear_scale=1.0, angular_scale=1.0))
+    cmds = calibration_commands(cfg)
 
     assert ("OI", 500) in cmds
-    assert ("OL 0", 200) in cmds
-    assert ("OA 0", 200) in cmds
+    assert ("OL 1", 200) in cmds
+    assert ("OA 1", 200) in cmds
     verbs = [c.split()[0] for c, _t in cmds]
     assert verbs.index("OI") < verbs.index("OL") < verbs.index("OA")
 
 
 def test_calibration_commands_pushes_pid_gains_when_present() -> None:
     """Stakeholder 2026-07-18: the control gains live in the robot JSON and
-    must ride the same connect-time push as the geometry calibration.
-    Values formatted ``:g`` like rotSlip.
+    must ride the same connect-time push as the wheel-travel calibration.
+    Values formatted ``:g``.
 
     130-005 (wheel-speed-controller-moves-into-drive.md Phase 3): ``pid.*``
-    is REPOINTED from ``control.vel_*`` (Motion::Planner's parked M4 duty
-    stage, dead since 128-015) onto ``control.wheel_pid_*`` (App::Drive's
-    unified wheel-speed controller) -- ``pid.kff``/``pid.kaw`` specifically
-    carry Stage B's ``kaff``/``pidMax`` (see ``calibration_kwargs()``'s own
-    docstring for the full field-borrowing rationale).
-
-    115-003 (gut-to-minimal-firmware S1 motion-stack excision): the former
-    ``control.heading_*`` -> ``SET headingKp/headingKd`` push
-    (``PlannerConfigPatch``) is DELETED, not ported -- ``PlannerConfigPatch``
-    itself, and the ``App::Pilot`` that applied it, are gone; ``headingKp``/
-    ``headingKd`` are no longer valid ``set_config()`` wire keys at all (see
-    ``calibration_kwargs()``'s own docstring). ``heading_kp``/``heading_kd``
-    are still present on the config object here (a config that carries them
-    is realistic -- boot-config JSON keeps the fields for the Tier-2 bake)
-    but must NOT appear in the pushed command sequence."""
+    targets App::Drive's unified wheel-speed controller. 132-014 (patch-
+    surface retirement, host migration): the SOURCE moved from
+    ``config.control.wheel_pid_*`` to ``config.wheel_control.pid_*``
+    (robot_config.proto's WheelControl group, 132-020's grouped
+    RobotConfig shape) -- unchanged consumer/field-name mapping otherwise
+    (``pid.kff``/``pid.kaw`` still carry Stage B's ``kaff``/``pidMax``, now
+    spelled ``pid_kaff``/``pid_max``)."""
     from robot_radio.calibration.push import calibration_commands
 
-    cfg = _cfg()
-    cfg.control = types.SimpleNamespace(
-        wheel_pid_kp=0.002, wheel_pid_ki=0.0, wheel_pid_kaff=0.0,
-        wheel_pid_i_max=0.0, wheel_pid_max=0.0,
-        heading_kp=1.0, heading_kd=0.0)
+    cfg = _cfg(wheel_control=types.SimpleNamespace(
+        pid_kp=0.002, pid_ki=0.0, pid_kaff=0.0, pid_i_max=0.0, pid_max=0.0))
 
     cmds = calibration_commands(cfg)
 
@@ -184,24 +174,21 @@ def test_calibration_commands_pushes_pid_gains_when_present() -> None:
     ):
         assert (expected, 200) in cmds, f"missing {expected!r} in {cmds}"
 
-    joined = " ".join(c for c, _t in cmds)
-    assert "headingK" not in joined, (
-        f"headingKp/headingKd must NOT be pushed -- PlannerConfigPatch was "
-        f"deleted wholesale (115-003): {cmds}"
-    )
-
 
 def test_calibration_commands_omits_pid_gains_when_config_has_none() -> None:
-    """A config with no ``control`` section (or all-None fields) pushes no
-    gain keys at all -- ``ControlConfig``'s documented contract is
-    "None -> the firmware boot default is kept", NOT a zero-sentinel push
-    like rotSlip's."""
+    """A config with no ``wheel_control`` section at all pushes no gain
+    keys -- unlike a REAL RobotConfig (whose ``.wheel_control`` is never
+    None, 132-020's root model), a duck-typed test double CAN omit it, and
+    that omission must still degrade gracefully (no exception, no keys)."""
     from robot_radio.calibration.push import calibration_commands
 
-    cmds = calibration_commands(_cfg())
+    cfg = _cfg()
+    cfg.wheel_control = None
+
+    cmds = calibration_commands(cfg)
 
     joined = " ".join(c for c, _t in cmds)
-    assert "pid." not in joined and "headingK" not in joined, cmds
+    assert "pid." not in joined, cmds
 
 
 def test_real_tovez_nocal_json_pushes_neutral_gains_via_real_model() -> None:
@@ -257,18 +244,22 @@ def test_real_tovez_nocal_json_pushes_neutral_gains_via_real_model() -> None:
         )
 
 
-def test_calibration_commands_pushes_encoded_otos_scale() -> None:
-    """OL/OA carry the chip's RAW int8 register scalar (scale_to_int8()),
-    not the raw multiplier -- e.g. otos_linear_scale=1.027 -> ``OL 27``."""
+def test_calibration_commands_pushes_the_multiplier_directly_not_int8_encoded() -> None:
+    """132-014: OL/OA now carry the config MULTIPLIER directly (1.0 = no
+    correction) -- the live wire push (set_config_field(OTOS,
+    "linear_scale"/"angular_scale", value)) is applied through
+    Devices::scaleToRegister() FIRMWARE-side now (132-010, trap 3 closed),
+    so the host no longer pre-encodes via scale_to_int8() the way the
+    pre-132 OL/OA text verbs did -- e.g. otos.linear_scale=1.027 ->
+    ``OL 1.027``, not the old register-domain ``OL 27``."""
     from robot_radio.calibration.push import calibration_commands
 
-    cfg = _cfg(calibration=types.SimpleNamespace(
-        otos_linear_scale=1.027, otos_angular_scale=0.987))
+    cfg = _cfg(otos=types.SimpleNamespace(linear_scale=1.027, angular_scale=0.987))
     cmds = calibration_commands(cfg)
 
     assert ("OI", 500) in cmds
-    assert ("OL 27", 200) in cmds
-    assert ("OA -13", 200) in cmds
+    assert ("OL 1.027", 200) in cmds
+    assert ("OA 0.987", 200) in cmds
     # OI precedes OL/OA (chip init must run before the scale writes).
     verbs = [c.split()[0] for c, _t in cmds]
     assert verbs.index("OI") < verbs.index("OL")
@@ -330,7 +321,7 @@ def test_push_loop_tolerates_nodev_reply_and_continues_all_commands() -> None:
     still-sent SET command instead, to keep exercising the loop's
     resilience.)"""
     cfg = _cfg(robot_name="tovez nocal")
-    transport = _ScriptedReplyTransport({"SET rotSlip": "ERR nodev"})
+    transport = _ScriptedReplyTransport({"SET ml": "ERR nodev"})
     log: list[str] = []
 
     cmds, n_bad, n_nodev = _push_calibration_loop(transport, cfg, log.append)
@@ -348,7 +339,7 @@ def test_push_loop_logs_and_continues_past_a_genuine_err_reply() -> None:
     """A genuine (non-NODEV) ERR reply is counted, logged, and does not
     abort the remaining commands."""
     cfg = _cfg(robot_name="tovez nocal")
-    transport = _ScriptedReplyTransport({"SET tw=": "ERR badval tw=0"})
+    transport = _ScriptedReplyTransport({"SET ml=": "ERR badval ml=0"})
     log: list[str] = []
 
     cmds, n_bad, n_nodev = _push_calibration_loop(transport, cfg, log.append)
@@ -539,13 +530,15 @@ def test_connect_pushes_calibrated_values_into_firmware(
     """Connect with a calibrated active robot -> its values land verbatim.
 
     109-002 retarget: was ``rotational_slip=0.85`` (no firmware consumer,
-    see module docstring); now ``mm_per_wheel_deg_left`` (MotorConfigPatch,
-    a real consumer), deliberately different from the nocal default to
-    prove overwrite.
+    see module docstring); now ``travel_calib_left`` (MOTORS, a real
+    consumer -- 132-014: moved from the retired ``calibration.
+    mm_per_wheel_deg_left`` JSON path to ``motors.travel_calib_left``,
+    132-020's grouped shape), deliberately different from the nocal default
+    to prove overwrite.
     """
     cfg = _nocal_config()
     cfg["identity"] = {"robot_name": "tovez-custom", "uid": "tovez-custom"}
-    cfg["calibration"] = {"mm_per_wheel_deg_left": 0.5}
+    cfg["motors"] = {"travel_calib_left": 0.5}
     window, transport = _connect_gui_with_config(qapp, monkeypatch, tmp_path, cfg)
     try:
         reply = transport.command("GET ml", read_timeout=500)
@@ -567,13 +560,21 @@ def test_connect_with_real_tovez_nocal_config_does_not_hit_badkey_on_odom_offset
     calibration push sent ``SET odomOffX=-47.700`` and got ``ERR badkey``
     from the current firmware/sim.
 
-    109-002: the blanket "no REJECTED at all" assertion no longer holds --
-    ``rotSlip``/``tw`` NOW legitimately get rejected every Connect (the
-    honest unsupported-key error, Architecture Revision 1), which is
-    correct, documented behavior, not a regression. What still must never
-    happen is a REJECTED entry for anything OTHER than those two known-
-    unsupported keys (in particular, no ``badkey`` at all -- the odom-offset
-    bug this test guards against).
+    109-002: the blanket "no REJECTED at all" assertion no longer holds.
+    132-014 changes WHICH keys are the known, expected rejections:
+    ``calibration_kwargs()`` no longer selects ``tw``/``rotSlip`` at all
+    (GEOMETRY is boot-only AND a sim divergence -- see that function's own
+    docstring), so they no longer appear in the push loop's own SET
+    sequence at all (unrelated to whether they'd be accepted). ``OI``
+    (no live retarget, see ``binary_bridge.py``) and ``OL``/``OA`` (132-014
+    KNOWN GAP: ``config.otos.linear_scale``/``angular_scale`` read their
+    proto3 zero default pending ticket 017's JSON reshape -- 0.0 is below
+    ``robot_config.proto``'s own ``(min) = 0.0001`` bound, so firmware
+    honestly rejects it with ``ERR_RANGE`` rather than the WRONG "1-LSB
+    scalar" trap 3 used to silently install) are now the three expected
+    rejections. What still must never happen is a REJECTED entry for
+    anything OTHER than those three (in particular, no ``badkey`` at all --
+    the odom-offset bug this test guards against).
     """
     real_cfg_path = _REPO / "data" / "robots" / "tovez_nocal.json"
     assert real_cfg_path.exists(), f"missing {real_cfg_path}"
@@ -589,13 +590,15 @@ def test_connect_with_real_tovez_nocal_config_does_not_hit_badkey_on_odom_offset
         rejected_lines = [
             line for line in log_text.splitlines() if "rejected:" in line.lower()
         ]
+        _known_rejected_prefixes = ("[CAL] 'OI'", "[CAL] 'OL", "[CAL] 'OA")
         unexpected_rejections = [
             line for line in rejected_lines
-            if "rotSlip" not in line and "tw=" not in line
+            if not line.startswith(_known_rejected_prefixes)
         ]
         assert not unexpected_rejections, (
-            f"only rotSlip/tw (known-unsupported this sprint) may be "
-            f"rejected; found other rejections:\n{unexpected_rejections}"
+            f"only OI/OL/OA (known-rejected this sprint, see this test's "
+            f"own docstring) may be rejected; found other rejections:\n"
+            f"{unexpected_rejections}"
         )
         rot_reply = transport.command("GET rotSlip", read_timeout=500)
         assert rot_reply.startswith(_UNSUPPORTED_ERR_PREFIX), (
@@ -678,24 +681,39 @@ def test_robot_combo_change_while_connected_repushes_and_overwrites(
         # 109-002 retarget (Architecture Revision 1): rotSlip has no
         # firmware consumer this sprint -- ml (MotorConfigPatch.
         # travel_calib, a real consumer) carries the "combo switch
-        # re-pushes and overwrites" intent instead. tovez_nocal.json has no
-        # mm_per_wheel_deg_left override (wheel-diameter-derived default,
-        # see _expected_ml()); tovez.json's calibration carries
-        # mm_per_wheel_deg_left=0.7165 -- a genuinely different value,
-        # proving the re-push overwrote it.
+        # re-pushes" intent instead.
         assert f"ml={_expected_ml()}" in transport.command(
             "GET ml", read_timeout=500
         ), "connecting with 'tovez nocal' active must push its default travel calib"
 
+        # 132-014 KNOWN GAP: data/robots/*.json are still in the OLD
+        # 13-section shape (ticket 017 reshapes them) -- tovez.json's
+        # calibration.mm_per_wheel_deg_left=0.7165 lives at a JSON path
+        # config.motors (the new grouped shape) does not read yet, so
+        # BOTH profiles currently resolve ml to the SAME wheel-diameter
+        # fallback (see test_calibration_kwargs.py's own header comment
+        # for the identical finding). This can no longer prove "the
+        # re-push overwrote a DIFFERENT value" until ticket 017 lands --
+        # what it CAN still prove, and does: the combo switch re-triggers
+        # a real push (a second "[CAL] pushed" log line) without ever
+        # hitting ERR badkey, i.e. the re-push pipeline itself still
+        # works end to end.
+        log_before = _log_text(window)
+        pushed_count_before = log_before.count("[CAL] pushed")
+
         robot_combo.setCurrentIndex(cal_idx)
         _spin_events(qapp, 0.3)
 
-        assert "ml=0.7165" in transport.command("GET ml", read_timeout=500), (
+        assert f"ml={_expected_ml()}" in transport.command("GET ml", read_timeout=500), (
             "switching to the calibrated 'tovez' robot while connected must "
-            "re-push and overwrite the firmware's ml"
+            "still re-push travel calib (pinned to the SAME fallback value "
+            "as nocal until ticket 017 reshapes the JSON)"
         )
 
         log_text = _log_text(window)
+        assert log_text.count("[CAL] pushed") > pushed_count_before, (
+            f"robot-combo switch must re-trigger a calibration push:\n{log_text}"
+        )
         assert "badkey" not in log_text.lower(), (
             f"robot-combo re-push must not hit ERR badkey:\n{log_text}"
         )
@@ -713,29 +731,33 @@ def test_robot_combo_change_while_connected_repushes_and_overwrites(
 
 
 # ---------------------------------------------------------------------------
-# wire-testgui-live-push-of-estimator-stop-lead fix: EstimatorConfigPatch
-# (estimator.weight_heading_otos/weight_omega_otos/staleness_ms +
-# control.a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max) is a
-# SEPARATE binary-only ConfigDelta arm with no ``SET key=value`` text form
-# at all -- calibration_commands()/calibration_kwargs() above never
-# covered it (see push.py's estimator_kwargs() own docstring). These tests
-# cover the NEW selection function (pure, transport-agnostic) and the
-# connect-time push it feeds (__main__.py's _push_estimator_config()).
+# wire-testgui-live-push-of-estimator-stop-lead fix, RETARGETED 132-014:
+# the nine estimator/shaper fields no longer ride one binary-only
+# EstimatorConfigPatch ConfigDelta arm (config.proto, deleted 132-013) --
+# they now live on TWO robot_config.proto groups (config.estimator.*/
+# config.planner.*, see push.estimator_kwargs()'s own docstring for the
+# full field-by-field disposition) and are pushed via set_config_field()
+# per field. Both targets are honest dead ends now (ESTIMATOR:
+# ERR_UNIMPLEMENTED, PLANNER: ERR_NOT_LIVE) -- these tests cover the
+# selection function (unchanged shape, new sources) and the connect-time
+# push it feeds (__main__.py's _push_estimator_config()), now asserting the
+# HONEST rejection rather than a clean apply -- the SAME "Architecture
+# Revision retarget" pattern this file already applies to rotSlip/tw.
 #
 # 118 ticket 004 (land-at-zero-completion-delete-stop-lead.md): a former
 # fourth ``estimator.*`` field (a boot-time/live-tunable time-lead
 # anticipation constant) is DELETED -- the completion mechanism it fed no
 # longer exists (see App::MoveQueue::tick()'s own doc comment for the
-# land-at-zero predicate that replaces it), so estimator_kwargs() now
+# land-at-zero predicate that replaces it), so estimator_kwargs() still
 # selects nine fields, not ten.
 # ---------------------------------------------------------------------------
 
 
-def _estimator_cfg(*, estimator=None, control=None, robot_name="r"):
+def _estimator_cfg(*, estimator=None, planner=None, robot_name="r"):
     return types.SimpleNamespace(
         robot_name=robot_name,
         estimator=estimator if estimator is not None else types.SimpleNamespace(),
-        control=control if control is not None else types.SimpleNamespace(),
+        planner=planner if planner is not None else types.SimpleNamespace(),
     )
 
 
@@ -745,11 +767,11 @@ def test_estimator_kwargs_selects_estimator_and_shaper_fields_when_present() -> 
     cfg = _estimator_cfg(
         estimator=types.SimpleNamespace(
             weight_heading_otos=0.0, weight_omega_otos=0.0,
-            staleness_ms=60.0,
+            staleness=60.0,
         ),
-        control=types.SimpleNamespace(
+        planner=types.SimpleNamespace(
             a_max=800.0, a_decel=800.0, alpha_max=7.0, alpha_decel=7.0,
-            j_max=5000.0, yaw_jerk_max=100.0,
+            jerk_max=5000.0, yaw_jerk_max=100.0,
         ),
     )
 
@@ -757,30 +779,30 @@ def test_estimator_kwargs_selects_estimator_and_shaper_fields_when_present() -> 
 
     assert kwargs == {
         "weight_heading_otos": 0.0, "weight_omega_otos": 0.0,
-        "staleness_ms": 60.0,
+        "staleness": 60.0,
         "a_max": 800.0, "a_decel": 800.0, "alpha_max": 7.0, "alpha_decel": 7.0,
-        "j_max": 5000.0, "yaw_jerk_max": 100.0,
+        "jerk_max": 5000.0, "yaw_jerk_max": 100.0,
     }
 
 
 def test_estimator_kwargs_omits_none_fields() -> None:
-    """A config with only SOME fields set (e.g. staleness_ms alone) selects
-    only those -- mirrors calibration_kwargs()'s own PID-gain contract
-    ('None -> nothing pushed, firmware boot default kept')."""
+    """A config with only SOME fields set (e.g. staleness alone) selects
+    only those -- mirrors calibration_kwargs()'s own contract ('None ->
+    nothing selected')."""
     from robot_radio.calibration.push import estimator_kwargs
 
     cfg = _estimator_cfg(
         estimator=types.SimpleNamespace(
             weight_heading_otos=None, weight_omega_otos=None,
-            staleness_ms=60.0,
+            staleness=60.0,
         ),
-        control=types.SimpleNamespace(
+        planner=types.SimpleNamespace(
             a_max=None, a_decel=None, alpha_max=None, alpha_decel=None,
-            j_max=None, yaw_jerk_max=None,
+            jerk_max=None, yaw_jerk_max=None,
         ),
     )
 
-    assert estimator_kwargs(cfg) == {"staleness_ms": 60.0}
+    assert estimator_kwargs(cfg) == {"staleness": 60.0}
 
 
 def test_estimator_kwargs_empty_when_config_has_neither_section() -> None:
@@ -792,8 +814,8 @@ def test_estimator_kwargs_empty_when_config_has_neither_section() -> None:
 
 def test_estimator_kwargs_real_tovez_nocal_json_via_real_model() -> None:
     """End-to-end through the REAL pydantic model -- data/robots/
-    tovez_nocal.json's own estimator/control sections, read via
-    RobotConfig.estimator (the new EstimatorConfig model this fix adds)."""
+    tovez_nocal.json read via RobotConfig.estimator/RobotConfig.planner
+    (132-020's grouped shape)."""
     from robot_radio.calibration.push import estimator_kwargs
     from robot_radio.config.robot_config import load_robot_config
 
@@ -803,30 +825,35 @@ def test_estimator_kwargs_real_tovez_nocal_json_via_real_model() -> None:
     kwargs = estimator_kwargs(cfg)
 
     for key in (
-        "weight_heading_otos", "weight_omega_otos", "staleness_ms",
-        "a_max", "a_decel", "alpha_max", "alpha_decel", "j_max", "yaw_jerk_max",
+        "weight_heading_otos", "weight_omega_otos", "staleness",
+        "a_max", "a_decel", "alpha_max", "alpha_decel", "jerk_max", "yaw_jerk_max",
     ):
         assert key in kwargs, f"missing {key!r} in {kwargs}"
-    assert kwargs["staleness_ms"] == 60.0
 
 
 @_requires_sim_lib
-def test_connect_pushes_estimator_config_and_acks_cleanly(
+def test_connect_pushes_estimator_config_and_reports_the_honest_rejection(
     qapp, monkeypatch, tmp_path
 ) -> None:
-    """The fix under test, end to end: Connect (Sim) with the real
-    tovez_nocal.json active must push ALL nine estimator/shaper fields via
-    EstimatorConfigPatch and get every one of them acked -- no REJECTED, no
-    TIMED OUT, matching __main__.py's own _push_estimator_config() log
-    line format."""
+    """132-014 retarget: Connect (Sim) with the real tovez_nocal.json active
+    still attempts all nine estimator/shaper fields, but BOTH their new
+    wire targets are honest dead ends (see this section's own header
+    comment) -- 0/9 applied, 9/9 rejected, is now the CORRECT, documented
+    outcome (matching __main__.py's own _push_estimator_config() log line
+    format), not a regression from the pre-132-014 "9/9 applied" behavior:
+    the old "9/9 applied" outcome was itself the trap (EstimatorConfigPatch
+    acking OK while landing nowhere, or -- for the six shaper fields --
+    genuinely live before this sprint's architecture made PLANNER
+    boot-only). A caller reading this log now sees an honest, named
+    rejection instead of a silently-accepted no-op."""
     cfg_path = _REPO / "data" / "robots" / "tovez_nocal.json"
     window, transport = _connect_gui_with_config(qapp, monkeypatch, tmp_path, cfg_path)
     try:
         log_text = _log_text(window)
-        assert "pushed 9/9 estimator/shaper fields" in log_text, (
-            f"EstimatorConfigPatch push did not report a clean 9/9 apply:\n{log_text}"
+        assert "pushed 0/9 estimator/shaper fields" in log_text, (
+            f"estimator/shaper push did not report the expected 0/9 apply "
+            f"(both wire targets are honest dead ends this sprint):\n{log_text}"
         )
-        assert "EstimatorConfigPatch push REJECTED" not in log_text, log_text
-        assert "TIMED OUT waiting for ack" not in log_text, log_text
+        assert "9 rejected" in log_text, log_text
     finally:
         _teardown(qapp, window)

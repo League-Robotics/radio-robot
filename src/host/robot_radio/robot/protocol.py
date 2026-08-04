@@ -45,8 +45,7 @@ get_ver/get_help/get_config/get_config_binary/pose_fix/drive/timed/distance/
 arc/vw/turn/go_to/grip/zero_*/otos_*/port_*/stream/stream_fields/snap/
 stream_drive/wait_for_evt_done/cancel and the ``Stop`` stop-clause-token
 builder) — see this ticket's completion notes for the full disposition
-table. ``set_config()``/``set_config_binary()`` survive (target the still-
-live ``config`` arm).
+table.
 
 132-011 (GetConfig/ConfigSnapshot wire read-back) reopens the read-back gap
 104-002's note above described as "permanent": ``get_config()`` (below) is
@@ -59,6 +58,36 @@ ack ring, §7.1 ``docs/protocol-v5.md``), ``get_config()`` sends via the
 BLOCKING ``send_envelope()``/``_send_envelope()`` and reads a genuinely
 synchronous ``ReplyEnvelope{cfg: ConfigSnapshot}`` back -- the one CONFIG
 binary-arm outcome that needs a real reply body, not just an ack.
+
+132-014 (migrate host NezhaProtocol onto the new config surface): 132-013
+deleted ``config.proto`` wholesale (the ``*ConfigPatch`` messages,
+``PatchKind``, ``ConfigDelta`` itself) and retargeted ``envelope.proto``'s
+``config`` arm (field 6) from ``ConfigDelta`` onto ``robot_config.proto``'s
+``SetConfigGroup``. This ticket retargets every host method that used to
+build a ``*ConfigPatch`` onto the surviving/new group-and-field primitives:
+``set_config_group()``/``set_config_field()``/``get_config()``.
+``config()``/``otos_config()``/``estimator_config()`` -- each a "build
+exactly ONE envelope carrying exactly ONE ``*ConfigPatch``" builder for a
+message type that no longer exists -- are DELETED outright, not
+retargeted: their job (single-envelope, single-target pushes) is now
+``set_config_field()``'s job, and ``otos_config(init=True)``/``OI``'s
+underlying ``OtosConfigPatch.init`` trigger has NO successor field in
+``robot_config.proto``'s ``Otos`` message (offset/scale values only -- see
+``configurator.h``'s own OTOS re-appliability row: "its 6th field, init,
+was a fire-and-forget trigger with no ``Config::Robot``-shaped successor
+and was never persisted either") -- a real, flagged capability gap, not an
+oversight (see ``binary_bridge.py``'s ``_handle_otos_patch()`` for where
+this lands on the wire-verb surface). ``set_config()``/``set_config_binary()``
+also referenced the deleted ``ConfigDelta``/``*ConfigPatch`` shapes;
+``set_config_binary()`` (a raw-``ConfigDelta``-in, ``AckEntry``-out sender
+with no successor shape to wrap) is DELETED, while ``set_config()`` -- kept
+as the flat ``SET key=value`` text-verb vocabulary's host entry point,
+still used by ``binary_bridge.py``'s/``SimTransport``'s ``SET`` verb and by
+``robot_radio.robot.nezha.Nezha`` -- is REWRITTEN as a thin fan-out over
+``set_config_field()``, one round trip per key, via the new
+``_SET_KEY_TARGETS`` table (below) mapping each flat key to a
+``(ConfigGroupTarget, field_name)`` pair instead of the old
+``_DRIVETRAIN_KEYS``/``_MOTOR_PID_KEYS`` Patch-field tables.
 """
 
 from __future__ import annotations
@@ -86,12 +115,10 @@ from robot_radio.robot.pb2 import envelope_pb2, robot_config_pb2, telemetry_pb2
 # __init__-time import chain (robot_radio.robot/__init__.py imports this
 # module eagerly) means an ImportError here would poison every caller of
 # `robot_radio.robot`, including firmware-side tests with nothing to do
-# with config -- see .clasi/issues or ticket 014 for the REAL migration
-# this module still needs (config()/otos_config()/estimator_config()/
-# set_config()/the `_DRIVETRAIN_KEYS`/`_MOTOR_PID_KEYS` tables below all
-# still reference the deleted config_pb2/ConfigDelta shapes and will raise
-# NameError/AttributeError if called -- that is accepted, expected
-# breakage per this sprint's own stakeholder direction, NOT fixed here).
+# with config. 132-014 migrates every method that used it
+# (config()/otos_config()/estimator_config()/set_config()/set_config_binary())
+# onto robot_config_pb2's group/field messages -- see this module's own
+# header comment for the full disposition.
 
 # robot_config_generated -- the GENERATED pydantic group model (132-002),
 # NOT robot_radio.config.robot_config's hand-written loader/validator
@@ -866,40 +893,60 @@ def tlm_drop_rate(frames: "list[TLMFrame]") -> float:
 
 
 # ---------------------------------------------------------------------------
-# Config key <-> binary target/field mapping (097-002, M2 NezhaProtocol Core
-# Conversion). NezhaProtocol.set_config()/.config() keep a flat "wire key"
-# vocabulary -- a flat "wire key" vocabulary -- but the binary plane's
-# ConfigDelta (config.proto, 096-001) is typed, per-SLICE Patch messages,
-# not a generic key/value map. This table is the translation between the
-# two: it curates the SAME 15 keys config_commands.cpp's kAllKeys used to
-# register on the (now-retired) text plane, transcribed here, PLUS
-# headingKp/headingKd (098-005). There is no live config READ-back path
-# (the binary `get` arm was pruned by 103-001) -- this table now serves
-# `set_config()`/`config()` only.
-# ---------------------------------------------------------------------------
-
-# tw/rotSlip/ekfQxy/ekfQtheta/ekfROtosXy/ekfROtosTheta -> DrivetrainConfigPatch
-# field, config_pb2.CONFIG_DRIVETRAIN.
-_DRIVETRAIN_KEYS = {
-    "tw": "trackwidth",
-    "rotSlip": "rotational_slip",
-    "ekfQxy": "ekf_q_xy",
-    "ekfQtheta": "ekf_q_theta",
-    "ekfROtosXy": "ekf_r_otos_xy",
-    "ekfROtosTheta": "ekf_r_otos_theta",
-}
-
-# pid.kp/ki/kff/iMax/kaw -> MotorConfigPatch Gains field. Applied to BOTH
-# bound motors from a SINGLE patch server-side (handleConfigMotor(),
-# binary_channel.cpp -- "any present Gains field applies to BOTH bound
-# motors unconditionally... never a per-side Gains split"), so a set_config()
-# call needs only ONE motor envelope carrying these, never two.
-_MOTOR_PID_KEYS = {
-    "pid.kp": "kp",
-    "pid.ki": "ki",
-    "pid.kff": "kff",
-    "pid.iMax": "i_max",
-    "pid.kaw": "kaw",
+# Config key <-> (ConfigGroupTarget, field name) mapping (132-014, replacing
+# 097-002's _DRIVETRAIN_KEYS/_MOTOR_PID_KEYS Patch-field tables). NezhaProtocol.
+# set_config() keeps the same flat "wire key" vocabulary the retired text
+# plane and the retired ConfigDelta/*ConfigPatch surface both used -- but the
+# binary plane now addresses a value by (ConfigGroupTarget, protobuf field
+# number) via SetConfigField (robot_config.proto, 132-012), not a per-SLICE
+# Patch message. This table is the translation: flat key -> the
+# (ConfigGroupTarget, field_name) pair set_config_field() resolves to a wire
+# field number.
+#
+# ekfQxy/ekfQtheta/ekfROtosXy/ekfROtosTheta -- DROPPED, not migrated: the old
+# DrivetrainConfigPatch's EKF process/measurement-noise fields have NO
+# successor field anywhere in robot_config.proto (confirmed by reading the
+# whole schema -- Geometry carries trackwidth/rotational_slip/rotation
+# calibration only, Estimator carries the fusion weights only). They were
+# already permanently non-functional before this ticket (DrivetrainConfigPatch
+# had no Configurator::apply() branch at all -- sprint.md's own Problem
+# section, "trackwidth/rotational_slip/the EKF noise pair have had no working
+# wire path for some unknown span of sprints") -- this migration cannot invent
+# a field the schema does not declare, so these four keys simply stop being
+# recognized (the same "unknown key -> no wire traffic" outcome any other
+# bogus key already produced, not a behavior regression).
+#
+# tw/rotSlip -- KEPT, now targeting GEOMETRY (boot-only per configurator.h's
+# own re-appliability table: "trackWidth has no post-construction setter
+# anywhere"). A push still round-trips and gets the honest ERR_NOT_LIVE this
+# sprint's whole point is to surface, rather than silently dropping the key
+# host-side -- the SAME non-functional outcome the old DrivetrainConfigPatch
+# arm always had (ERR_UNIMPLEMENTED, per the Problem section above), now
+# reported by name instead of by omission. GEOMETRY is also one of the sim's
+# own justified BootOverrides divergences (trackWidth) -- see sim_loop.py's
+# configure_from_robot(), which deliberately does NOT select "tw"/"rotSlip"
+# into its own live-push field set for exactly this reason, even though
+# set_config()/the SET verb still recognize them for a human/hardware caller.
+#
+# pid.kp/ki/kff/iMax/kaw -- REPOINTED (130-005, unchanged by this ticket) onto
+# App::Drive's unified wheel-speed controller's Stage B fast-PID gains
+# (WheelControl.pid_kp/pid_ki/pid_kaff/pid_i_max/pid_max), a LIVE,
+# PERSISTED target (configurator.h's own re-appliability table) -- these are
+# genuinely wired, unlike tw/rotSlip above.
+#
+# ml/mr -- MOTORS.travel_calib_left/travel_calib_right. Disambiguated by
+# FIELD now, not by a `side` sub-message field the way the old
+# MotorConfigPatch was -- each is its own independent SetConfigField push.
+_SET_KEY_TARGETS: dict[str, "tuple[int, str]"] = {
+    "tw": (robot_config_pb2.GEOMETRY, "trackwidth"),
+    "rotSlip": (robot_config_pb2.GEOMETRY, "rotational_slip"),
+    "ml": (robot_config_pb2.MOTORS, "travel_calib_left"),
+    "mr": (robot_config_pb2.MOTORS, "travel_calib_right"),
+    "pid.kp": (robot_config_pb2.WHEEL_CONTROL, "pid_kp"),
+    "pid.ki": (robot_config_pb2.WHEEL_CONTROL, "pid_ki"),
+    "pid.kff": (robot_config_pb2.WHEEL_CONTROL, "pid_kaff"),
+    "pid.iMax": (robot_config_pb2.WHEEL_CONTROL, "pid_i_max"),
+    "pid.kaw": (robot_config_pb2.WHEEL_CONTROL, "pid_max"),
 }
 
 # PlannerConfigPatch/CONFIG_PLANNER -- DELETED (115-003, gut-to-minimal-
@@ -907,24 +954,18 @@ _MOTOR_PID_KEYS = {
 # distanceKp/arriveDwell all patched PlannerConfigPatch (config.proto),
 # deleted wholesale alongside Motion::Executor/App::Pilot, the subsystems
 # that read them. There is no live config target left for any of the five
-# -- they are simply no longer valid set_config()/config() keys (both
-# raise/return the same "unknown key" outcome as any other bogus key).
-
-# ml/mr are handled specially, not via a plain field-name map: both patch
-# MotorConfigPatch.travel_calib, disambiguated by `side` (Decision 5,
-# config.proto) -- ml=LEFT, mr=RIGHT.
+# -- they are simply no longer valid set_config() keys (returns the same
+# "unknown key" outcome as any other bogus key).
 #
 # sTimeout -- DELETED (116-001, MOVE protocol cutover): patched ConfigDelta's
 # bare `watchdog` oneof arm (uint32 sTimeout, the pre-116 StreamingDrive
 # Watchdog window), which is itself deleted -- every Move is now
 # self-bounding (its own stop condition or required `timeout`), so the
 # separate deadman/watchdog window this key configured is gone along with
-# `App::Deadman` (see envelope.proto's own `ConfigDelta.watchdog` doc
-# comment). `sTimeout` is simply no longer a valid set_config()/config() key
-# -- both now raise/return the same "unknown key" outcome any other bogus
-# key already produced.
-_ALL_SET_KEYS = frozenset(
-    set(_DRIVETRAIN_KEYS) | set(_MOTOR_PID_KEYS) | {"ml", "mr"})
+# `App::Deadman`. `sTimeout` is simply no longer a valid set_config() key --
+# returns the same "unknown key" outcome any other bogus key already
+# produced.
+_ALL_SET_KEYS = frozenset(_SET_KEY_TARGETS)
 
 
 # _CONFIG_GROUP_NAMES (132-011) -- ConfigGroupTarget wire value -> the
@@ -1082,136 +1123,113 @@ class NezhaProtocol:
         return parse_response(line)
 
     # ------------------------------------------------------------------
-    # Config: SET (096-007/097-002, M2/M6). No live READ-back path -- the
-    # binary `get` arm was pruned by 103-001 (envelope.proto reserves it);
-    # get_config()/get_config_binary() were deleted by 104-002 alongside it.
+    # Config: SET one flat key (132-014, rewritten off the retired
+    # ConfigDelta/*ConfigPatch surface). No longer a thin wrapper over a
+    # deleted set_config_binary() -- fans directly over set_config_field()
+    # below, one round trip per key, via the _SET_KEY_TARGETS table.
     # ------------------------------------------------------------------
 
     def set_config(self, **kwargs: Any) -> dict[str, str] | None:
-        """Send SET key=value ..., parse OK set response.
+        """Send each ``key=value`` in *kwargs* as its own ``SetConfigField``
+        push (``set_config_field()`` below), resolved through the flat
+        ``_SET_KEY_TARGETS`` vocabulary (module level) -- the SAME ``SET
+        key=value`` text-verb surface this method has always presented
+        (``binary_bridge.py``'s ``SET`` verb, ``SimTransport``'s SET path,
+        ``robot_radio.robot.nezha.Nezha.set_config()``), rebuilt on the new
+        per-field wire primitive now that the ``ConfigDelta``/``*ConfigPatch``
+        surface it used to build (``set_config_binary()``, 096-007) is
+        deleted (132-013).
 
-        Returns dict of applied keys (from OK set response) or None.
-        Floats are formatted with up to 6 significant digits.
-
-        Binary implementation (097-002): thin wrapper over set_config_binary()
-        (096-007). Unlike the (retired) text plane's single atomic SET line, a
-        ConfigDelta's oneof carries only ONE Patch at a time (config.proto),
-        so kwargs spanning multiple targets (e.g. tw= + pid.kp=) become
-        MULTIPLE set_config_binary() round trips, one per touched target --
-        NOT atomic across targets (flagged, not silently reconciled, per this
+        Any kwarg key outside ``_ALL_SET_KEYS`` fails the WHOLE call
+        (returns ``None``, no wire traffic at all) -- unchanged contract.
+        Each recognized key becomes its OWN ``set_config_field()`` round trip
+        (never batched into a single envelope -- there is no whole-group
+        shape here to batch into: a caller wanting an atomic whole-group push
+        from a complete source wants ``set_config_group()`` instead, not this
+        method). If EVERY touched key's round trip Acks, the returned dict
+        echoes the kwargs actually sent (formatted the same way the retired
+        text plane formatted them) -- the binary Ack carries no per-key echo
+        of its own, so this is the closest same-shape substitute, not a wire
+        round trip of the applied value. Returns ``None`` the moment any one
+        key's push fails (NAK or timeout) -- the keys already pushed before
+        the failure are NOT rolled back (this was already true of the old
+        multi-target ConfigDelta fan-out; unchanged posture, see this
         project's "transcribe, never re-derive; flag genuine gaps"
-        discipline: a true cross-target atomic SET is not achievable without
-        new binary wire capability). Any kwarg key outside the module-level
-        _ALL_SET_KEYS vocabulary fails the WHOLE call (returns None, no wire
-        traffic at all). If every touched target's round trip Acks, the
-        returned dict echoes the kwargs actually sent (formatted the same
-        way the pre-097-002 text implementation formatted them) -- the
-        binary Ack carries no per-key echo the way the text "OK set ..."
-        reply did, so this is the closest same-shape substitute, not a wire
-        round trip of the applied value.
-
-        See also ``config()`` (104-001): a stricter, single-envelope-per-
-        call builder for the same ``ConfigDelta`` arm — raises ``ValueError``
-        instead of silently no-op'ing on a multi-target or unknown-key
-        call. Both survive; neither supersedes the other (see 104-002
-        completion notes).
+        discipline for why no new atomicity is invented here).
         """
         if not kwargs:
             return None
-        if any(k not in _ALL_SET_KEYS for k in kwargs):
+        if any(k not in _SET_KEY_TARGETS for k in kwargs):
             return None
-
-        drivetrain_patch: dict[str, float] = {}
-        motor_left_patch: dict[str, float] = {}
-        motor_right_patch: dict[str, float] = {}
 
         for key, value in kwargs.items():
-            if key in _DRIVETRAIN_KEYS:
-                drivetrain_patch[_DRIVETRAIN_KEYS[key]] = float(value)
-            elif key == "ml":
-                motor_left_patch["travel_calib"] = float(value)
-            elif key == "mr":
-                motor_right_patch["travel_calib"] = float(value)
-            elif key in _MOTOR_PID_KEYS:
-                # Applied to BOTH bound motors server-side from ONE patch
-                # (handleConfigMotor(), binary_channel.cpp) -- carried on the
-                # LEFT envelope only; see _MOTOR_PID_KEYS' own comment.
-                motor_left_patch[_MOTOR_PID_KEYS[key]] = float(value)
+            target, field_name = _SET_KEY_TARGETS[key]
+            if self.set_config_field(target, field_name, float(value)) is None:
+                return None
 
-        ok = True
-        if drivetrain_patch:
-            delta = envelope_pb2.ConfigDelta(
-                drivetrain=config_pb2.DrivetrainConfigPatch(**drivetrain_patch))
-            if self.set_config_binary(delta) is None:
-                ok = False
-        if motor_left_patch:
-            delta = envelope_pb2.ConfigDelta(motor=config_pb2.MotorConfigPatch(
-                side=config_pb2.LEFT, **motor_left_patch))
-            if self.set_config_binary(delta) is None:
-                ok = False
-        if motor_right_patch:
-            delta = envelope_pb2.ConfigDelta(motor=config_pb2.MotorConfigPatch(
-                side=config_pb2.RIGHT, **motor_right_patch))
-            if self.set_config_binary(delta) is None:
-                ok = False
-
-        if not ok:
-            return None
         return {key: _format_config_value(value) for key, value in kwargs.items()}
 
     # ------------------------------------------------------------------
-    # Config: binary SET (096-007, M6 Host Config/Telemetry Client)
+    # Config: SET a whole group (132-014, Configurator::applyGroup()'s host
+    # arm -- landed firmware-side by 132-008/009/013, never wired to a host
+    # method until this ticket). The whole-group counterpart of
+    # set_config_field() below: ONE envelope carries an entire group's worth
+    # of values, decoded straight into Config::Robot with NO patch, no
+    # presence flags, no merge (Configurator::applyGroup()'s own doc
+    # comment) -- so a caller must supply EVERY field of *target*'s own
+    # generated message, sourced from a COMPLETE object (the robot JSON,
+    # via robot_config_generated.<Group>, or a prior get_config() read-back),
+    # never a curated subset: an omitted field decodes to that field's
+    # proto3 zero value and OVERWRITES whatever the group held before,
+    # exactly the "development-mode ad-hoc single push" case
+    # .claude/rules/configuration-discipline.md reserves for
+    # set_config_field() instead. This is why set_config() (above), whose
+    # whole job is a curated flat-key SUBSET, is built on set_config_field(),
+    # never on this method.
     # ------------------------------------------------------------------
 
-    def set_config_binary(self, delta: "envelope_pb2.ConfigDelta",
-                          read_timeout: int = 500) -> "AckEntry | None":  # [ms]
-        """Send CommandEnvelope{config: delta}; return the matched AckEntry,
-        or None (timeout, not connected, or a NAK reply).
+    def set_config_group(self, target: int, *,
+                         read_timeout: int = 500,  # [ms]
+                         **fields: Any) -> "AckEntry | None":
+        """Send ``SetConfigGroup{target, body}`` -- push *target*'s ENTIRE
+        group in one frame, ``**fields`` supplying every field of that
+        group's own generated message (``robot_config_pb2.<Group>``, e.g.
+        ``proto.set_config_group(robot_config_pb2.OTOS, offset_x=-47.7,
+        offset_y=0.0, offset_yaw=0.0, linear_scale=1.0275,
+        angular_scale=0.987)``).
 
-        ``delta`` is a fully-built ``pb2.ConfigDelta`` — its own oneof
-        (``drivetrain``/``motor``/``watchdog``/``otos``) selects which
-        config slice is being patched, mirroring BinaryChannel's CONFIG arm
-        1:1. Building ``delta`` is the caller's job (e.g.
-        ``envelope_pb2.ConfigDelta(drivetrain=config_pb2.
-        DrivetrainConfigPatch(trackwidth=128.0))``) — this method's only
-        job is the envelope round trip.
+        ``target`` is a ``robot_config_pb2.ConfigGroupTarget`` value, the
+        SAME vocabulary ``get_config()``/``set_config_field()`` use.
+        ``body`` is built by constructing the target group's real compiled
+        protobuf message from ``**fields`` and serializing it
+        (``pb_cls(**fields).SerializeToString()``) -- the SAME wire
+        encoding ``get_config()`` decodes on the read-back side, so a
+        caller can round-trip a ``get_config()`` result's own field values
+        straight back through this method.
 
-        Bench fix (2026-07-22, stakeholder finding): this method used to
-        send via the BLOCKING ``_send_envelope()``/``send_envelope()`` (a
-        synchronous request/reply, matched by ``envelope.corr_id`` in
-        ``SerialConnection._reply_queues``) and look for a synchronous
-        ``ReplyEnvelope{ok: ...}``. The current single-loop firmware never
-        sends one for ANY command — ``config``'s outcome, like
-        ``move``/``stop``, rides the single ack slot inside the NEXT
-        ``Telemetry`` push instead (``docs/protocol-v4.md`` sec 7.1: "a
-        wire sniffer will never observe a ``ReplyEnvelope{ok:...}``... only
-        ``ReplyEnvelope{tlm: Telemetry}``"), so this method's old
-        implementation timed out on EVERY call against real hardware —
-        confirmed on the bench: a robot-select calibration push logged 9/12
-        ``SET`` keys "ERR badarg set failed" (all 9 routed through this
-        method; the other 3, ``OI``/``OL``/``OA``, use the ALREADY fire-
-        and-poll ``otos_config()`` and worked). This predates the 103-009
-        fire-and-poll migration ``move_twist()``/``move_wheels()``/
-        ``stop()`` went through, and was never carried forward when
-        ``config()`` (104-001, written AFTER 103-009) got it from day one
-        — see that method's own docstring. Fixed the same way: send via
-        ``send_envelope_fast()``, then poll for the completion via the ack
-        ring.
-
-        Duck-typed ack lookup, not a hardcoded ``self.wait_for_ack()``
-        call: ``self._conn`` may be a ``_SimConfigConn`` (``io/
-        sim_config.py``, backing ``SimLoop.configure_from_robot()``'s own
-        Tier-1 push), which deliberately has NO ``wait_for_ack()`` of its
-        own (its own docstring: ``NezhaProtocol.wait_for_ack()`` expects a
-        RAW ``telemetry_pb2.Telemetry`` off ``self._conn.wait_for_ack()``,
-        but ``SimLoop`` only ever hands back already-adapted ``TLMFrame``/
-        ``AckEntry`` dataclasses) — it exposes the SAME ack-ring lookup as
-        its own ``poll_ack(corr_id, timeout)``, already returning an
-        ``AckEntry``. A connection exposing ``poll_ack`` (Sim) is polled
-        that way; anything else (a real ``SerialConnection``) goes through
-        ``self.wait_for_ack()`` as usual.
+        Rides the ack ring like every other CONFIG-arm SET (fires via
+        ``send_envelope_fast()``, then polls for completion the SAME
+        duck-typed way ``set_config_field()`` does). Returns the matched
+        ``AckEntry`` on success, or ``None`` on an unknown ``target``, a
+        field name ``pb_cls(**fields)`` does not recognize (``TypeError``
+        from the compiled protobuf constructor), a timeout, or a NAK reply
+        -- check ``ERR_NOT_LIVE`` (``target`` is a boot-only group --
+        GEOMETRY/PLANNER) or ``ERR_BUSY`` (MOTORS, guarded while that side
+        is in motion) by polling the ack directly instead, if the
+        distinction matters to the caller.
         """
-        envelope = envelope_pb2.CommandEnvelope(config=delta)
+        group_name = _CONFIG_GROUP_NAMES.get(target)
+        if group_name is None:
+            return None
+        pb_cls = getattr(robot_config_pb2, group_name)
+        try:
+            group_msg = pb_cls(**fields)
+        except (TypeError, ValueError):
+            return None
+
+        request = robot_config_pb2.SetConfigGroup(
+            target=target, body=group_msg.SerializeToString())
+        envelope = envelope_pb2.CommandEnvelope(config=request)
         corr_id = self._conn.send_envelope_fast(envelope)
         poll_ack = getattr(self._conn, "poll_ack", None)
         ack = poll_ack(corr_id, timeout=read_timeout) if poll_ack is not None \
@@ -1600,259 +1618,50 @@ class NezhaProtocol:
             stop=envelope_pb2.Stop(id=move_id))
         return self._conn.send_envelope_fast(envelope)
 
-    def config(self, **deltas: Any) -> int:
-        """Build and send a ``ConfigDelta`` envelope (``CommandEnvelope{
-        config: delta}``, ``envelope.proto`` field 6) — one of the P4 wire's
-        three ``cmd`` oneof arms, alongside ``move_twist()``/``move_wheels()``/
-        ``stop()`` (``envelope.proto``'s own oneof comment: "config/stop keep
-        their pre-102 field numbers... move is genuinely new"). 104-001 is
-        what gives ``config`` a host-side builder — before it, every OTHER
-        oneof arm had one but ``config`` did not, despite being schema-defined
-        since 103-001.
-
-        Fire-and-poll, the SAME shape as ``move_twist()``/``move_wheels()``/
-        ``stop()`` (103-009, Decision 2's "telemetry-only return path"): a
-        ``config`` command's outcome rides the ack ring inside a subsequent
-        ``Telemetry`` push, never a synchronous ``ReplyEnvelope`` — see
-        ``wait_for_ack()``. This method writes the bytes and returns
-        immediately.
-
-        ``deltas`` reuses the SAME flat wire-key vocabulary ``set_config()``
-        curates (module-level ``_DRIVETRAIN_KEYS``/``_MOTOR_PID_KEYS``/
-        ``ml``/``mr`` — together ``_ALL_SET_KEYS``), so a key added to one map
-        is automatically available to the other; nothing here re-derives that
-        vocabulary. UNLIKE ``set_config()``, which fans a multi-target kwargs
-        dict out into MULTIPLE round trips (one per touched
-        ``ConfigDelta.patch`` oneof arm, since a single ``ConfigDelta``
-        carries only one patch at a time), ``config()`` builds and sends
-        exactly ONE ``CommandEnvelope`` carrying exactly ONE ``ConfigDelta``
-        — matching ``move_twist()``/``move_wheels()``/``stop()``'s own "one
-        call, one envelope, one corr_id" shape. Passing kwargs that span more
-        than one ``ConfigDelta.patch`` target (e.g. ``tw=`` and ``pid.kp=``
-        together — drivetrain vs. motor) is a caller error: raises
-        ``ValueError``, since no single ``ConfigDelta`` could carry both.
-        Same for empty ``deltas`` or a key outside the known vocabulary.
-        ``pid.*`` keys and ``ml``/``mr`` may be mixed freely in one call —
-        both target the SAME ``MotorConfigPatch`` oneof arm (mirroring
-        ``set_config()``'s own ``motor_left_patch``/``motor_right_patch``
-        grouping); ``side`` selects ``travel_calib``'s target only and is
-        meaningless for the ``pid.*`` fields (``config.proto``'s own
-        ``MotorConfigPatch.side`` comment), so a pure-``pid.*`` call (no
-        ``ml``/``mr``) still needs SOME side value on the wire — it defaults
-        to ``LEFT``, the same default ``set_config()``'s own
-        ``motor_left_patch`` branch always used.
-
-        Historically (sprint 103, resolving 103's Step 7 Open Question 3):
-        the firmware's dispatch switch decoded ``CONFIG`` successfully but
-        did NOT apply it — acked ``ack_err=ERR_UNIMPLEMENTED`` unconditionally
-        ("ConfigDelta runtime application deferred this sprint"). This
-        method still builds and sends the envelope regardless — ``config()``
-        is a wire builder, not a promise the firmware applies the delta;
-        pass the returned corr_id to ``wait_for_ack()`` to observe the
-        current apply outcome (``AckEntry.ok``/``err_code``).
-
-        Returns the corr_id assigned to this command. Raises
-        ``ConnectionError`` if not connected (``send_envelope_fast()``'s own
-        not-open contract); raises ``ValueError`` for empty, unknown-key, or
-        multi-target ``deltas``.
-        """
-        if not deltas:
-            raise ValueError("config() requires at least one key=value delta")
-        unknown = sorted(k for k in deltas if k not in _ALL_SET_KEYS)
-        if unknown:
-            raise ValueError(f"config(): unknown key(s) {unknown!r}")
-
-        drivetrain_patch: dict[str, float] = {}
-        motor_patch: dict[str, float] = {}
-        motor_side = config_pb2.LEFT
-
-        for key, value in deltas.items():
-            if key in _DRIVETRAIN_KEYS:
-                drivetrain_patch[_DRIVETRAIN_KEYS[key]] = float(value)
-            elif key == "ml":
-                motor_patch["travel_calib"] = float(value)
-                motor_side = config_pb2.LEFT
-            elif key == "mr":
-                motor_patch["travel_calib"] = float(value)
-                motor_side = config_pb2.RIGHT
-            elif key in _MOTOR_PID_KEYS:
-                motor_patch[_MOTOR_PID_KEYS[key]] = float(value)
-
-        targets_touched = sum([bool(drivetrain_patch), bool(motor_patch)])
-        if targets_touched > 1:
-            raise ValueError(
-                "config(): kwargs span more than one ConfigDelta.patch "
-                f"target (got {sorted(deltas)}) — a single ConfigDelta "
-                "carries only one patch; call config() once per target")
-
-        if drivetrain_patch:
-            delta = envelope_pb2.ConfigDelta(
-                drivetrain=config_pb2.DrivetrainConfigPatch(**drivetrain_patch))
-        else:
-            delta = envelope_pb2.ConfigDelta(motor=config_pb2.MotorConfigPatch(
-                side=motor_side, **motor_patch))
-
-        envelope = envelope_pb2.CommandEnvelope(config=delta)
-        return self._conn.send_envelope_fast(envelope)
-
-    def otos_config(self, *, linear_scale: float | None = None,
-                    angular_scale: float | None = None,
-                    offset_x: float | None = None,
-                    offset_y: float | None = None,
-                    offset_yaw: float | None = None,
-                    init: bool = False) -> int:
-        """Build and send an ``OtosConfigPatch`` ``ConfigDelta`` envelope
-        (``CommandEnvelope{config: ConfigDelta{otos: ...}}``, 109-004) — the
-        ``OL``/``OA``/``OI`` wire-verb family's direct-patch-send mechanism
-        (sprint 109's Architecture Revision 1: "OL/OA/OI construct and send
-        an OtosConfigPatch directly", never through the dead
-        ``binary_bridge.translate_command()`` legacy-verb layer).
-
-        A SEPARATE method from ``config()`` rather than folding OTOS keys
-        into ``_ALL_SET_KEYS``: OL/OA/OI were never flat ``SET key=value``
-        text verbs (unlike ``tw``/``pid.kp``/... — they are their own
-        one-or-zero-positional-argument verbs), so there is no existing flat
-        wire-key vocabulary to extend; this mirrors ``config()``'s own
-        "build exactly ONE envelope carrying exactly ONE patch" shape
-        instead of that method's kwargs-to-flat-key mapping.
-
-        ``linear_scale``/``angular_scale`` map 1:1 to
-        ``Otos::setLinearScalar()``/``setAngularScalar()`` (OL/OA);
-        ``offset_x``/``offset_y``/``offset_yaw`` map to ``Otos::
-        setOffset()`` (no wire verb sends these yet this ticket — schema
-        capacity for a future OV-equivalent); ``init=True`` maps to
-        ``Otos::init()`` (OI) — a plain trigger flag, not a value, so it has
-        no corresponding keyword default other than ``False``.
-
-        Fire-and-poll, the SAME shape as ``move_twist()``/``move_wheels()``/
-        ``stop()``/``config()`` (103-009's "telemetry-only return path"):
-        this call writes the bytes and returns immediately; its outcome
-        rides the ack ring (``wait_for_ack()``).
-
-        Returns the corr_id assigned to this command. Raises
-        ``ConnectionError`` if not connected; raises ``ValueError`` if no
-        field is set at all (every kwarg ``None`` and ``init`` falsy — an
-        empty patch is a caller error, mirroring ``config()``'s own empty-
-        ``deltas`` rejection).
-        """
-        fields: dict[str, Any] = {}
-        if linear_scale is not None:
-            fields["linear_scale"] = float(linear_scale)
-        if angular_scale is not None:
-            fields["angular_scale"] = float(angular_scale)
-        if offset_x is not None:
-            fields["offset_x"] = float(offset_x)
-        if offset_y is not None:
-            fields["offset_y"] = float(offset_y)
-        if offset_yaw is not None:
-            fields["offset_yaw"] = float(offset_yaw)
-        if init:
-            fields["init"] = True
-
-        if not fields:
-            raise ValueError(
-                "otos_config() requires at least one field (linear_scale/"
-                "angular_scale/offset_x/offset_y/offset_yaw/init)")
-
-        delta = envelope_pb2.ConfigDelta(
-            otos=config_pb2.OtosConfigPatch(**fields))
-        envelope = envelope_pb2.CommandEnvelope(config=delta)
-        return self._conn.send_envelope_fast(envelope)
-
-    def estimator_config(self, *, weight_heading_otos: float | None = None,
-                          weight_omega_otos: float | None = None,
-                          staleness_ms: float | None = None,
-                          a_max: float | None = None,
-                          a_decel: float | None = None,
-                          alpha_max: float | None = None,
-                          alpha_decel: float | None = None,
-                          j_max: float | None = None,
-                          yaw_jerk_max: float | None = None) -> int:
-        """Build and send an ``EstimatorConfigPatch`` ``ConfigDelta`` envelope
-        (``CommandEnvelope{config: ConfigDelta{estimator: ...}}``, 117 ticket
-        003) — the live-tuning surface for ``App::StateEstimator``'s v1
-        complementary-blend fusion weights, mirroring ``otos_config()``'s own
-        "build exactly ONE envelope carrying exactly ONE patch" shape
-        exactly.
-
-        ``weight_heading_otos``/``weight_omega_otos`` map 1:1 to
-        ``App::StateEstimator::FusionWeights::headingOtos``/``omegaOtos``
-        (dimensionless ``[0..1]`` complementary-blend weights, baked
-        fail-closed to ``0.0`` by ``Config::defaultEstimatorConfig()`` this
-        sprint — encoder-only v1, per stakeholder decision);
-        ``staleness_ms`` maps to ``FusionWeights::staleness`` (the max age,
-        ms, a fresh OTOS reading may carry and still be eligible to blend).
-
-        ``a_max``/``a_decel``/``alpha_max``/``alpha_decel``/``j_max``/
-        ``yaw_jerk_max`` (decel-into-the-goal campaign, jerk-limited
-        S-curve stage) map to ``App::MoveQueue::shaperLimits_``
-        (``App::MoveQueue::setShaperLimits()``, ``App::ShaperLimits``) —
-        riding the SAME ``CONFIG_ESTIMATOR`` wire arm as the three fields
-        above, the "smallest coherent path" ``EstimatorConfigPatch``'s own
-        doc comment (``config.proto``) gives; ``a_max``/``a_decel`` are
-        ``[mm/s^2]`` linear accel-ramp/decel-taper ceilings, ``alpha_max``/
-        ``alpha_decel`` are ``[rad/s^2]`` angular ones, ``j_max``/
-        ``yaw_jerk_max`` are ``[mm/s^3]``/``[rad/s^3]`` jerk ceilings —
-        how fast the commanded ACCELERATION itself may change
-        (``Motion::VelocityShaper``'s own limits). Any subset may be set
-        alone.
-
-        A former field targeting ``App::MoveQueue``'s own time-lead
-        anticipation constant was DELETED (118 ticket 004,
-        land-at-zero-completion-delete-stop-lead.md) — the completion
-        mechanism it drove no longer exists (see
-        ``App::MoveQueue::tick()``'s own doc comment for the land-at-zero
-        predicate that replaces it); the wire field is ``reserved`` in
-        ``config.proto``, not reused.
-
-        UNLIKE ``otos_config()``, a patch sent through this method is NEVER
-        persisted on the robot side — ``RobotLoop::handleConfig()``'s
-        ``ESTIMATOR`` branch applies it live but never writes it into
-        ``persistedTuning_``/flash (Design Rationale Decision 4, sprint
-        117's overlay ``design/design.md``): a reboot always reverts to the
-        baked JSON default, never this method's last-sent value.
-
-        Fire-and-poll, the SAME shape as ``move_twist()``/``move_wheels()``/
-        ``stop()``/``config()``/``otos_config()`` (103-009's "telemetry-only
-        return path"): this call writes the bytes and returns immediately;
-        its outcome rides the ack slot (``wait_for_ack()``).
-
-        Returns the corr_id assigned to this command. Raises
-        ``ConnectionError`` if not connected; raises ``ValueError`` if no
-        field is set at all (every kwarg ``None`` — an empty patch is a
-        caller error, mirroring ``otos_config()``'s own empty-patch
-        rejection).
-        """
-        fields: dict[str, Any] = {}
-        if weight_heading_otos is not None:
-            fields["weight_heading_otos"] = float(weight_heading_otos)
-        if weight_omega_otos is not None:
-            fields["weight_omega_otos"] = float(weight_omega_otos)
-        if staleness_ms is not None:
-            fields["staleness_ms"] = float(staleness_ms)
-        if a_max is not None:
-            fields["a_max"] = float(a_max)
-        if a_decel is not None:
-            fields["a_decel"] = float(a_decel)
-        if alpha_max is not None:
-            fields["alpha_max"] = float(alpha_max)
-        if alpha_decel is not None:
-            fields["alpha_decel"] = float(alpha_decel)
-        if j_max is not None:
-            fields["j_max"] = float(j_max)
-        if yaw_jerk_max is not None:
-            fields["yaw_jerk_max"] = float(yaw_jerk_max)
-
-        if not fields:
-            raise ValueError(
-                "estimator_config() requires at least one field "
-                "(weight_heading_otos/weight_omega_otos/staleness_ms/"
-                "a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max)")
-
-        delta = envelope_pb2.ConfigDelta(
-            estimator=config_pb2.EstimatorConfigPatch(**fields))
-        envelope = envelope_pb2.CommandEnvelope(config=delta)
-        return self._conn.send_envelope_fast(envelope)
+    # ------------------------------------------------------------------
+    # Config: config()/otos_config()/estimator_config() -- DELETED, 132-014
+    # (patch-surface retirement, host migration). Each built and sent
+    # exactly ONE ConfigDelta{*ConfigPatch} envelope -- config.proto's
+    # entire message family was deleted wholesale by 132-013. Every caller
+    # is retargeted onto set_config_group()/set_config_field()/get_config()
+    # above:
+    #   - config()'s flat drivetrain/motor keys -> set_config()/
+    #     set_config_field() via _SET_KEY_TARGETS.
+    #   - otos_config(linear_scale=...)/otos_config(angular_scale=...) ->
+    #     set_config_field(robot_config_pb2.OTOS, "linear_scale"/
+    #     "angular_scale", value) -- see binary_bridge.py's
+    #     _handle_otos_patch() for the OL/OA retarget.
+    #   - otos_config(init=True)/OI -- NO successor: robot_config.proto's
+    #     Otos message carries offset_x/offset_y/offset_yaw/linear_scale/
+    #     angular_scale only, no fire-and-forget "reinitialize the chip"
+    #     trigger field (configurator.h's own OTOS re-appliability-table
+    #     row: "its 6th field, init, was a fire-and-forget trigger with no
+    #     Config::Robot-shaped successor and was never persisted either").
+    #     A genuine, flagged capability gap this ticket does not invent a
+    #     firmware fix for -- see binary_bridge.py's own _handle_otos_patch()
+    #     doc comment for where OI lands on the wire-verb surface now.
+    #   - estimator_config()'s weight_heading_otos/weight_omega_otos/
+    #     staleness_ms -> set_config_field(robot_config_pb2.ESTIMATOR, ...)
+    #     -- ESTIMATOR decodes but install() permanently returns
+    #     ERR_UNIMPLEMENTED (no live consumer, configurator.h), so a push
+    #     here is honestly rejected rather than landing nowhere silently
+    #     (the old EstimatorConfigPatch's own "acks 0, lands nowhere" trap,
+    #     closed).
+    #   - estimator_config()'s a_max/a_decel/alpha_max/alpha_decel/j_max/
+    #     yaw_jerk_max -> folded into robot_config.proto's Planner message
+    #     (fields 2/3/5/6/7/8) instead of keeping their own dedicated live
+    #     wire arm -- PLANNER as a WHOLE is boot-only (ERR_NOT_LIVE,
+    #     configurator.h's own re-appliability table: "only the
+    #     (already-live) shaper ceilings are re-appliable, and those ride
+    #     the boot-time no-arg install(), not a per-target push"). Unlike
+    #     ESTIMATOR's weights, these six fields WERE genuinely live-tunable
+    #     before this sprint (a real, working EstimatorConfigPatch arm) --
+    #     folding them into a now-boot-only group is a real capability this
+    #     sprint's firmware architecture removed, not merely re-labeled;
+    #     flagged here rather than silently absorbed (see sim_loop.py's
+    #     configure_from_robot() Tier 3 for the host-side consequence and
+    #     ticket 014's own completion report for the full note).
+    # ------------------------------------------------------------------
 
     def wait_for_ack(self, corr_id: int, timeout: int = 500) -> "AckEntry | None":  # [ms]
         """Poll incoming ``Telemetry`` pushes' bounded ack ring for an entry

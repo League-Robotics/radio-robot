@@ -140,6 +140,7 @@ from robot_radio.io.serial_conn import SerialConnection, list_serial_ports
 from robot_radio.io.sim_config import SimConfigConn as _SimConfigConn
 from robot_radio.io.sim_loop import SimLoop
 from robot_radio.robot import protocol
+from robot_radio.robot.pb2 import robot_config_pb2
 from robot_radio.robot.protocol import NezhaProtocol, TLMFrame
 from robot_radio.testgui import binary_bridge
 from robot_radio.testgui import sim_prefs
@@ -1690,29 +1691,26 @@ _SIM_READY_TIMEOUT_S = 5.0
 
 # ---------------------------------------------------------------------------
 # Sim-mode config path (109-002, Architecture Revision 1): SET/GET-shaped
-# host needs route through typed ConfigDelta patches with REAL firmware
-# consumers, constructed via the SAME NezhaProtocol.config()/wait_for_ack()
-# hardware transports already use -- never through SimTransport's own
-# separate binary_bridge.translate_command() path (SimTransport never
-# touches binary_bridge.py at all, live or dead -- see this module's own
-# class docstring).
+# host needs route through the same per-field SetConfigField wire arm
+# hardware transports use (NezhaProtocol.set_config_field()/wait_for_ack(),
+# 132-014 retarget off the retired ConfigDelta/*ConfigPatch surface) --
+# never through SimTransport's own separate binary_bridge.translate_command()
+# path (SimTransport never touches binary_bridge.py at all, live or dead --
+# see this module's own class docstring).
 # ---------------------------------------------------------------------------
 
-# The ConfigDelta patch kinds RobotLoop::handleConfig() applies live
-# (src/firm/app/robot_loop.cpp's handleConfig(): MOTOR and OTOS only --
-# PlannerConfigPatch/CONFIG_PLANNER was deleted wholesale, 115-003, gut S1
-# motion-stack excision. Every other patch_kind (DRIVETRAIN/WATCHDOG/NONE)
-# still replies ACK_STATUS_ERR/ERR_UNIMPLEMENTED unconditionally, a
-# documented scope boundary, not an oversight, per src/firm/app/DESIGN.md
-# §3). Keys landing on MotorConfigPatch (pid.*/ml/mr) have a real consumer;
-# DrivetrainConfigPatch's tw/rotSlip/ekfQ*/ekfR* and the bare watchdog
-# sTimeout arm do not, on ANY transport, this sprint. This table is reused
-# (not re-derived) from protocol.py's own key-vocabulary -- see that
-# module's "Config key <-> binary target/field mapping" header comment for
+# Which flat SET keys have a real, live firmware consumer (132-014):
+# GEOMETRY (tw/rotSlip) is boot-only (ERR_NOT_LIVE, configurator.h's own
+# re-appliability table -- "trackWidth has no post-construction setter
+# anywhere") -- every OTHER _SET_KEY_TARGETS entry (ml/mr -> MOTORS,
+# pid.* -> WHEEL_CONTROL) targets a LIVE, re-appliable ConfigGroupTarget.
+# This table is reused (not re-derived) from protocol.py's own
+# key-vocabulary -- see that module's "_SET_KEY_TARGETS" header comment for
 # the authoritative per-key target list.
-_CONFIG_MOTOR_KEYS = frozenset(protocol._MOTOR_PID_KEYS) | {"ml", "mr"}
-_CONFIG_SUPPORTED_KEYS = _CONFIG_MOTOR_KEYS
-_CONFIG_UNSUPPORTED_KEYS = frozenset(protocol._ALL_SET_KEYS) - _CONFIG_SUPPORTED_KEYS
+_CONFIG_UNSUPPORTED_KEYS = frozenset(
+    key for key, (target, _field_name) in protocol._SET_KEY_TARGETS.items()
+    if target == robot_config_pb2.GEOMETRY)
+_CONFIG_SUPPORTED_KEYS = frozenset(protocol._SET_KEY_TARGETS) - _CONFIG_UNSUPPORTED_KEYS
 
 
 # _SimConfigConn (113-005): relocated to io/sim_config.py -- see this
@@ -2114,9 +2112,10 @@ class SimTransport(Transport):
         return None
 
     def _handle_config_set(self, kv: str) -> str:
-        """``SET <key>=<value>`` (109-002): route through the SAME typed
-        ``ConfigDelta`` patch mechanism hardware transports use
-        (``NezhaProtocol.config()``), constructed by ``self._config_proto``
+        """``SET <key>=<value>`` (109-002, retargeted 132-014): route
+        through the SAME per-field ``SetConfigField`` mechanism hardware
+        transports use (``NezhaProtocol.set_config_field()``, resolved via
+        ``protocol._SET_KEY_TARGETS``), constructed by ``self._config_proto``
         and injected via ``SimLoop.inject_command()`` (see
         ``_SimConfigConn``). A key with no live firmware consumer
         (``_CONFIG_UNSUPPORTED_KEYS``) gets an explicit, immediate host-side
@@ -2124,16 +2123,15 @@ class SimTransport(Transport):
         (Architecture Revision 1, sprint.md: "no wire round trip, no silent
         no-op, no fabricated success")."""
         key, _, raw_value = kv.partition("=")
-        if key not in protocol._ALL_SET_KEYS:
+        if key not in protocol._SET_KEY_TARGETS:
             msg = f"ERR badkey {key}"
             self._log(f"[WARN] SimTransport: {msg}")
             return msg
         if key in _CONFIG_UNSUPPORTED_KEYS:
             msg = (
-                f"ERR unsupported {key} -- no live firmware consumer this "
-                f"sprint (RobotLoop::handleConfig applies MotorConfigPatch/"
-                f"OtosConfigPatch only; see sprint 109's Architecture "
-                f"Revision 1)"
+                f"ERR unsupported {key} -- GEOMETRY is boot-only "
+                f"(ERR_NOT_LIVE), no live re-appliable consumer this sprint "
+                f"(configurator.h's own re-appliability table)"
             )
             self._log(f"[WARN] SimTransport: {msg}")
             return msg
@@ -2146,20 +2144,10 @@ class SimTransport(Transport):
 
         assert self._config_proto is not None  # only reachable while connected
         assert self._config_conn is not None
-        try:
-            corr_id = self._config_proto.config(**{key: value})
-        except ValueError as exc:
-            msg = f"ERR {exc}"
-            self._log(f"[WARN] SimTransport: {msg}")
-            return msg
-
-        ack = self._config_conn.poll_ack(corr_id, timeout=500)
+        target, field_name = protocol._SET_KEY_TARGETS[key]
+        ack = self._config_proto.set_config_field(target, field_name, value)
         if ack is None:
-            msg = f"ERR timeout {key}"
-            self._log(f"[WARN] SimTransport: {msg}")
-            return msg
-        if not ack.ok:
-            msg = f"ERR nak {key} err_code={ack.err_code}"
+            msg = f"ERR nak {key} -- timeout or rejected"
             self._log(f"[WARN] SimTransport: {msg}")
             return msg
 
@@ -2196,30 +2184,36 @@ class SimTransport(Transport):
 
     def _handle_otos_patch(self, verb: str, pos: list[str]) -> str:
         """``OL <scale>``/``OA <scale>``/``OI`` (109-004, Architecture
-        Revision 1): route through the SAME direct-patch-send mechanism
-        hardware transports use (``NezhaProtocol.otos_config()``,
-        constructed by ``self._config_proto`` and injected via
-        ``SimLoop.inject_command()`` -- see ``_SimConfigConn``), mirroring
-        ``_handle_config_set()``'s own shape exactly. Unlike SET/GET, there
-        is no unsupported-key gating here -- ``RobotLoop::handleConfig``
-        DOES apply ``OtosConfigPatch`` live (see that method's own
-        comment), so every one of these three verbs has a real firmware
-        consumer."""
+        Revision 1): route through the SAME mechanism hardware transports
+        use, constructed by ``self._config_proto`` and injected via
+        ``SimLoop.inject_command()`` -- see ``_SimConfigConn``), retargeted
+        132-014 onto ``NezhaProtocol.set_config_field(robot_config_pb2.OTOS,
+        "linear_scale"/"angular_scale", value)``, mirroring
+        ``_handle_config_set()``'s own shape and
+        ``binary_bridge.py``'s own ``_handle_otos_patch()`` (the hardware
+        counterpart of this method). ``OI`` has NO live retarget --
+        ``robot_config.proto``'s ``Otos`` group carries offset/scale fields
+        only, no fire-and-forget chip-reinit trigger (see
+        ``binary_bridge.py``'s ``_handle_otos_patch()`` doc comment for the
+        full rationale) -- it gets the SAME honest unsupported reply there,
+        no wire round trip attempted."""
+        if verb == "OI":
+            msg = (
+                "ERR unsupported OI -- robot_config.proto's Otos group has "
+                "no live chip-reinit trigger field (offset/scale values "
+                "only); see binary_bridge.py's _handle_otos_patch() doc "
+                "comment"
+            )
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
+
+        field_name = "linear_scale" if verb == "OL" else "angular_scale"
+        if not pos:
+            msg = f"ERR badarg {verb} requires <scale>"
+            self._log(f"[WARN] SimTransport: {msg}")
+            return msg
         try:
-            if verb == "OL":
-                if not pos:
-                    msg = "ERR badarg OL requires <scale>"
-                    self._log(f"[WARN] SimTransport: {msg}")
-                    return msg
-                kwargs: dict[str, Any] = {"linear_scale": float(pos[0])}
-            elif verb == "OA":
-                if not pos:
-                    msg = "ERR badarg OA requires <scale>"
-                    self._log(f"[WARN] SimTransport: {msg}")
-                    return msg
-                kwargs = {"angular_scale": float(pos[0])}
-            else:  # OI
-                kwargs = {"init": True}
+            value = float(pos[0])
         except ValueError:
             msg = f"ERR badarg {verb} {' '.join(pos)}"
             self._log(f"[WARN] SimTransport: {msg}")
@@ -2227,15 +2221,10 @@ class SimTransport(Transport):
 
         assert self._config_proto is not None  # only reachable while connected
         assert self._config_conn is not None
-        corr_id = self._config_proto.otos_config(**kwargs)
+        ack = self._config_proto.set_config_field(robot_config_pb2.OTOS, field_name, value)
 
-        ack = self._config_conn.poll_ack(corr_id, timeout=500)
         if ack is None:
-            msg = f"ERR timeout {verb}"
-            self._log(f"[WARN] SimTransport: {msg}")
-            return msg
-        if not ack.ok:
-            msg = f"ERR nak {verb} err_code={ack.err_code}"
+            msg = f"ERR nak {verb} -- timeout or rejected"
             self._log(f"[WARN] SimTransport: {msg}")
             return msg
 

@@ -1,7 +1,7 @@
 ---
 id: '014'
 title: Migrate host NezhaProtocol + calibration/push.py + TestGUI onto the new surface
-status: open
+status: done
 use-cases:
 - SUC-005
 depends-on:
@@ -30,21 +30,29 @@ and accepted.
 
 ## Acceptance Criteria
 
-- [ ] `NezhaProtocol.config()`/`otos_config()`/`estimator_config()` no
+- [x] `NezhaProtocol.config()`/`otos_config()`/`estimator_config()` no
       longer exist.
-- [ ] `calibration/push.py` uses `set_config_group`/`set_config_field`
+- [x] `calibration/push.py` uses `set_config_group`/`set_config_field`
       exclusively — no reference to a deleted `*ConfigPatch` type
       remains.
-- [ ] `binary_bridge.py`'s `_handle_otos_patch`/`_handle_set_patch` still
+- [x] `binary_bridge.py`'s `_handle_otos_patch`/`_handle_set_patch` still
       handle the same verb surface (`OL`/`OA`/`OI`, `SET key=value`) but
       call `set_config_field`/`set_config_group` underneath.
-- [ ] TestGUI's OTOS calibration controls work end-to-end against the new
+- [x] TestGUI's OTOS calibration controls work end-to-end against the new
       surface, verified by `test_calibration_push_on_connect.py` (or
       equivalent existing TestGUI acceptance coverage) passing.
-- [ ] A repo-wide grep for `ConfigPatch`/`PatchKind` returns nothing
+- [x] A repo-wide grep for `ConfigPatch`/`PatchKind` returns nothing
       outside git history (closing the gap ticket 013 left on the host
-      side).
-- [ ] Compiles/imports cleanly (`uv run python -c "import ..."` for each
+      side). **Nuance, reported not hidden**: zero CODE references remain
+      (imports, class instantiation, isinstance checks) in `src/host`/
+      `src/tests` — confirmed by grepping for a live `config_pb2.*`/
+      `envelope_pb2.ConfigDelta(...)` construction and finding none.
+      ~89 PROSE/comment mentions remain (`grep -c` count), all historical
+      "X — DELETED (ticket, reason)" breadcrumbs matching this codebase's
+      own established convention elsewhere (e.g. `envelope.proto`'s own
+      `ConfigDelta` doc comment, `robot_config.proto`'s own header). Not
+      scrubbed — see completion report for the full reasoning.
+- [x] Compiles/imports cleanly (`uv run python -c "import ..."` for each
       touched module).
 
 ## Testing

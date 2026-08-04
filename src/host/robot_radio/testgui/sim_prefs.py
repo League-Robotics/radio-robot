@@ -227,12 +227,17 @@ def resolve_calibration_defaults(
     Ticket 073-003: factored out of ``__main__.py``'s "From Calibration"
     button handler (``_on_sim_errors_from_cal()``, ticket 070-004), which
     this function now backs, mirroring its lookup EXACTLY:
-    ``get_robot_config()`` -> ``cfg.calibration.rotational_slip`` /
-    ``cfg.geometry.trackwidth``, each field independently falling back to
+    ``get_robot_config()`` -> ``cfg.geometry.rotational_slip`` /
+    ``cfg.geometry.trackwidth`` (132-014: ``rotational_slip`` moved off the
+    retired ``CalibrationConfig``'s own ``calibration.rotational_slip``
+    path onto ``Geometry.rotational_slip``, 132-020's grouped shape --
+    still falls back on the SAME "0 = uncalibrated sentinel" domain,
+    truthy-checked rather than ``is not None`` now that the field is a
+    plain, never-``None`` float), each field independently falling back to
     its neutral value (``1.0`` for body_rot_scrub;
     ``DEFAULT_PROFILE["trackwidth"]`` for trackwidth) with a logged
-    ``[WARN]`` when the config, or a specific field on it, is missing.
-    Never raises.
+    ``[WARN]`` when the config, or a specific field on it, is missing (or
+    uncalibrated). Never raises.
 
     This is the SHARED resolver behind both the manual "From Calibration"
     button and ``load_sim_error_profile()``'s factory-default fallback for
@@ -273,22 +278,33 @@ def resolve_calibration_defaults(
         )
         return rot_slip, tw
 
-    if cfg.calibration.rotational_slip is not None:
-        rot_slip = cfg.calibration.rotational_slip
+    # 132-014 (patch-surface retirement, host migration): rotational_slip
+    # moved from the retired CalibrationConfig.rotational_slip
+    # (Optional[float], None = uncalibrated) to Geometry.rotational_slip
+    # (robot_config.proto's grouped shape, 132-020) -- a plain float that
+    # is NEVER None, using 0.0 as its own documented uncalibrated sentinel
+    # instead (GeometryConfig's own field_validator: domain {0} u
+    # [0.5, 1.0]). Truthy check (0.0 is falsy), not "is not None", to keep
+    # detecting the SAME uncalibrated case the old None check did.
+    if cfg.geometry.rotational_slip:
+        rot_slip = cfg.geometry.rotational_slip
     else:
         rot_slip = 1.0
         _warn(
-            "From Calibration: active robot config has no "
-            f"calibration.rotational_slip — falling back to neutral "
-            f"body_rot_scrub={rot_slip}"
+            "From Calibration: active robot config has no (or an "
+            f"uncalibrated 0) geometry.rotational_slip — falling back to "
+            f"neutral body_rot_scrub={rot_slip}"
         )
 
-    if cfg.geometry.trackwidth is not None:
+    # 132-014: Geometry.trackwidth is ALSO a plain, never-None float now
+    # (robot_config.proto's own (min) = 1.0 bound -- 0.0 is never a valid
+    # trackwidth) -- same truthy-check retarget as rotational_slip above.
+    if cfg.geometry.trackwidth:
         tw = cfg.geometry.trackwidth
     else:
         tw = DEFAULT_PROFILE["trackwidth"]
         _warn(
-            "From Calibration: active robot config has no "
+            "From Calibration: active robot config has no (or a zero) "
             f"geometry.trackwidth — falling back to neutral "
             f"trackwidth={tw}"
         )

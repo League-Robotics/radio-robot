@@ -20,17 +20,21 @@ ML_MR = 0.704861  # [mm/deg] geometry-derived wheel-travel calib the GUI pushes 
 
 def push_calibration(loop):
     """Reproduce the GUI's connect-time calibration push (SET ml/mr -> the
-    per-wheel wheel-travel calib on MotorConfigPatch), so the scoreboard sees
+    per-wheel wheel-travel calib, 132-014: MOTORS.travel_calib_left/right
+    via SetConfigField, retargeted off the retired MotorConfigPatch/
+    ConfigDelta, config.proto deleted 132-013), so the scoreboard sees
     exactly what TestGUI sees, not a bare no-push baseline."""
-    from robot_radio.robot.pb2 import config_pb2, envelope_pb2
+    from robot_radio.robot.pb2 import envelope_pb2, robot_config_pb2
 
-    def send(patch):
-        env = envelope_pb2.CommandEnvelope(
-            corr_id=1, config=envelope_pb2.ConfigDelta(motor=patch))
+    def send(field_name: str, value: float):
+        field_number = robot_config_pb2.Motors.DESCRIPTOR.fields_by_name[field_name].number
+        request = robot_config_pb2.SetConfigField(
+            target=robot_config_pb2.MOTORS, field=field_number, value=value)
+        env = envelope_pb2.CommandEnvelope(corr_id=1, set_field=request)
         loop.inject_command(encode_frame(env.SerializeToString()))
 
-    send(config_pb2.MotorConfigPatch(side=config_pb2.LEFT, travel_calib=ML_MR))
-    send(config_pb2.MotorConfigPatch(side=config_pb2.RIGHT, travel_calib=ML_MR))
+    send("travel_calib_left", ML_MR)
+    send("travel_calib_right", ML_MR)
     loop.step(1); loop._drain_tlm_into_queue(); loop.read_pending_binary_tlm_frames()  # noqa: SLF001
 
 

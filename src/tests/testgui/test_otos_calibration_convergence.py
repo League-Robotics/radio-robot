@@ -13,11 +13,12 @@ drives.
    ``Devices::Otos::pose()`` read back over the real wire) diverges from
    truth by the injected fraction -- SimPlant's OTOS burst-read response is
    `truth * rawError`, exactly as sim_plant.h documents.
-4. Push the COMPENSATING ``OtosConfigPatch`` via ``_SimConfigConn``/
-   ``NezhaProtocol.otos_config()`` -- the exact mechanism
-   ``SimTransport._handle_otos_patch()`` (transport.py) uses for the
-   TestGUI's ``OL``/``OA`` verbs and ticket 004's own live calibration path
-   -- and confirm the NEXT decoded OTOS reading converges back to truth.
+4. Push the COMPENSATING scale via a ``SetConfigField{OTOS, linear_scale}``
+   envelope (132-014: retargeted off the retired ``OtosConfigPatch``/
+   ``NezhaProtocol.otos_config()``, config.proto deleted 132-013) -- the
+   exact mechanism ``SimTransport._handle_otos_patch()`` (transport.py)
+   uses for the TestGUI's ``OL``/``OA`` verbs -- and confirm the NEXT
+   decoded OTOS reading converges back to truth.
 
 This is a lower-level (no Qt, no GUI) but MORE literal exercise of "applies
 OtosConfigPatch (ticket 004)" than sim_fidelity_harness.cpp's C++-level
@@ -58,12 +59,16 @@ _ACTIVE_ROBOT_JSON = Path(__file__).resolve().parents[3] / "data" / "robots" / "
 _SETTLE_CYCLES = 3
 
 
-def _compensating_register(raw_error: float) -> float:
-    """The SAME conversion ``push.py``'s ``scale_to_int8()``/
-    ``Devices::Otos::scaleToRegister()`` perform: a scale multiplier ->
-    the chip's raw int8 register value (0.1%-per-LSB)."""
-    scale = 1.0 / (1.0 + raw_error)
-    return round((scale - 1.0) / 0.001)
+def _compensating_scale(raw_error: float) -> float:
+    """The MULTIPLIER (config domain, 1.0 = no correction) that cancels
+    *raw_error*. 132-014: unlike the pre-132-010 live wire path (trap 3 --
+    passed the config value straight through to a setter expecting the
+    chip's raw int8 register, installing a 1-LSB scalar instead of the
+    intended multiplier), ``App::configureOtos()`` now converts this
+    multiplier through ``Devices::scaleToRegister()`` FIRMWARE-side before
+    calling ``setLinearScalar()`` -- so the host pushes the multiplier
+    directly, no int8 pre-encoding."""
+    return 1.0 / (1.0 + raw_error)
 
 
 @pytest.fixture
@@ -118,9 +123,21 @@ def _find_ack(frames: list, corr_id: int):
 
 def test_otos_calibration_push_converges_pose_via_the_real_config_path(sim_loop) -> None:
     """Uncalibrated raw scale error diverges the firmware's decoded OTOS
-    pose from truth; pushing the compensating OtosConfigPatch (the SAME
-    mechanism SimTransport's OL/OA verbs use) converges it back."""
-    from robot_radio.robot.protocol import NezhaProtocol
+    pose from truth; pushing the compensating SetConfigField{OTOS,
+    linear_scale} (the SAME mechanism SimTransport's OL/OA verbs use)
+    converges it back.
+
+    132-014: builds and sends the envelope directly via
+    ``conn.send_envelope_fast()`` rather than
+    ``NezhaProtocol.set_config_field()`` -- that method polls for the ack
+    INTERNALLY (blocking), which would spin for its own timeout with
+    NOTHING advancing the sim in this fixture's manual-step session
+    (``connect(start_tick_thread=False)``, no background tick thread to
+    process the queued command). This test's own ``_step_and_drain()`` +
+    ``_find_ack()`` pattern is the correct fire-then-caller-steps shape for
+    a manual-step session, mirroring the pre-132-014 ``otos_config()``'s
+    own non-blocking ``send_envelope_fast()``-only contract exactly."""
+    from robot_radio.robot.pb2 import envelope_pb2, robot_config_pb2
 
     sim_loop.set_true_pose(_TRUE_X, 0.0, 0.0)
     sim_loop.set_otos_raw_scale_err(_RAW_ERROR_LINEAR, 0.0)
@@ -138,17 +155,23 @@ def test_otos_calibration_push_converges_pose_via_the_real_config_path(sim_loop)
         "(the test would be vacuous otherwise)"
     )
 
-    # Push the compensating OtosConfigPatch -- the exact direct-patch-send
-    # mechanism SimTransport._handle_otos_patch()/ticket 002 established,
-    # reused verbatim here.
+    # Push the compensating SetConfigField{OTOS, linear_scale} -- the exact
+    # direct-send mechanism SimTransport._handle_otos_patch()/132-014
+    # established, reused verbatim here (built by hand, not via
+    # NezhaProtocol.set_config_field(), for the manual-step-session reason
+    # this test's own docstring gives).
     conn = _SimConfigConn(sim_loop)
-    proto = NezhaProtocol(conn)  # type: ignore[arg-type]
-    corr_id = proto.otos_config(linear_scale=_compensating_register(_RAW_ERROR_LINEAR))
+    field_number = robot_config_pb2.Otos.DESCRIPTOR.fields_by_name["linear_scale"].number
+    request = robot_config_pb2.SetConfigField(
+        target=robot_config_pb2.OTOS, field=field_number,
+        value=_compensating_scale(_RAW_ERROR_LINEAR))
+    envelope = envelope_pb2.CommandEnvelope(set_field=request)
+    corr_id = conn.send_envelope_fast(envelope)
 
     frames = _step_and_drain(sim_loop)
     ack = _find_ack(frames, corr_id)
-    assert ack is not None, "OtosConfigPatch ack never arrived"
-    assert ack.ok, f"OtosConfigPatch was NAK'd: err_code={ack.err_code}"
+    assert ack is not None, "SetConfigField ack never arrived"
+    assert ack.ok, f"SetConfigField was NAK'd: err_code={ack.err_code}"
 
     # 128-003 baseline fix: TlmMode defaults to kAuto (telemetry.h) --
     # unsolicited frames only flow during "activity" (kFlagActive, or

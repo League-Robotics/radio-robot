@@ -253,17 +253,35 @@ def verb_turn(session: RogoSession, tokens: list[str]) -> None:
 
 
 def verb_config(session: RogoSession, tokens: list[str]) -> None:
-    """config key=val ... — one ConfigDelta (flat wire keys: tw, pid.kp, ml/mr,
-    sTimeout, ...). NOTE: current firmware acks ERR_UNIMPLEMENTED for config —
-    the envelope is built and sent, but the delta is not applied yet."""
+    """config key=val ... — one set_config_field() round trip per key
+    (flat wire keys: tw, rotSlip, pid.kp/ki/kff/iMax/kaw, ml/mr -- see
+    protocol.py's own ``_SET_KEY_TARGETS`` for the authoritative list).
+    132-014: retargeted off the retired ``config()``/``ConfigDelta``
+    envelope builder (config.proto deleted, 132-013) -- ``tw``/``rotSlip``
+    still round-trip and get the honest ``ERR_NOT_LIVE`` (GEOMETRY is
+    boot-only); every other key targets a live, re-appliable group."""
+    from robot_radio.robot import protocol as protocol_mod
+
     kv = _kv(tokens)
     if not kv:
         raise CommandError("usage: config <key>=<value> [<key>=<value> ...]")
-    try:
-        cid = session.proto.config(**kv)
-    except ValueError as exc:
-        raise CommandError(str(exc))
-    print(f"  config {' '.join(tokens)}  {_ack_str(session, cid)}")
+    bad = [k for k in kv if k not in protocol_mod._SET_KEY_TARGETS]
+    if bad:
+        raise CommandError(f"unknown config key(s): {bad!r}")
+
+    for key, raw_value in kv.items():
+        target, field_name = protocol_mod._SET_KEY_TARGETS[key]
+        ack = session.proto.set_config_field(target, field_name, float(raw_value))
+        if ack is None:
+            print(f"  config {key}={raw_value}  NO ACK (timeout or rejected)")
+        elif ack.ok:
+            print(f"  config {key}={raw_value}  OK")
+        else:
+            try:
+                name = envelope_pb2.ErrCode.Name(ack.err_code)
+            except Exception:
+                name = str(ack.err_code)
+            print(f"  config {key}={raw_value}  ERR {name}")
 
 
 def _read_and_print(session: RogoSession, field: str, label: str) -> None:
