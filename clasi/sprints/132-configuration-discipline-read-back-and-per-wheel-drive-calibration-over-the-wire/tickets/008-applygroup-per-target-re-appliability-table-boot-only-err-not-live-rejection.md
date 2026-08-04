@@ -1,7 +1,7 @@
 ---
 id: 008
 title: applyGroup() + per-target re-appliability table + boot-only ERR_NOT_LIVE rejection
-status: in-progress
+status: done
 use-cases:
 - SUC-003
 depends-on:
