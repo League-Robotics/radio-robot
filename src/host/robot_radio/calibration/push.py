@@ -358,27 +358,46 @@ def _push_via_proto(proto: Any, config: Any) -> "dict[str, Any]":
     Returns ``{"status": "ok"|"partial", "applied": [...], "rejected": [...]}``
     -- ``applied``/``rejected`` name each pushed field (``"ml"``,
     ``"otos.linear_scale"``, ...), never silently swallowing a rejection.
+
+    133-006: every push here is VERIFIED (``verify=True``) -- read back and
+    compared against what was sent. Before this, a field whose ack said OK but
+    whose value landed nowhere was counted as ``applied``, which is the exact
+    "config that acks OK and does nothing" failure sprint 132 set out to close.
+    The exception is caught rather than propagated so this function keeps its
+    report-don't-raise contract; an unverified field is ``rejected``, with the
+    reason carried in ``rejected_detail``.
     """
     from robot_radio.robot import protocol as protocol_mod
     from robot_radio.robot.pb2 import robot_config_pb2
 
     applied: "list[str]" = []
     rejected: "list[str]" = []
+    rejected_detail: "list[str]" = []
+
+    def _push(target, field_name: str, value: float, label: str) -> None:
+        try:
+            ack = proto.set_config_field(target, field_name, value, verify=True)
+        except protocol_mod.ConfigNotVerified as exc:
+            rejected.append(label)
+            rejected_detail.append(str(exc))
+            return
+        (applied if ack is not None else rejected).append(label)
 
     for key, value in calibration_kwargs(config).items():
         target, field_name = protocol_mod._SET_KEY_TARGETS[key]
-        ack = proto.set_config_field(target, field_name, value)
-        (applied if ack is not None else rejected).append(key)
+        _push(target, field_name, value, key)
 
     for field_name, value in otos_kwargs(config).items():
-        ack = proto.set_config_field(robot_config_pb2.OTOS, field_name, value)
-        (applied if ack is not None else rejected).append(f"otos.{field_name}")
+        _push(robot_config_pb2.OTOS, field_name, value, f"otos.{field_name}")
 
-    return {
+    result: "dict[str, Any]" = {
         "status": "ok" if not rejected else "partial",
         "applied": applied,
         "rejected": rejected,
     }
+    if rejected_detail:
+        result["rejected_detail"] = rejected_detail
+    return result
 
 
 def _push_via_conn(conn: Any, config: Any) -> "dict[str, Any]":

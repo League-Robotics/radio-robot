@@ -62,6 +62,29 @@ that raises must not be swallowed — a silent failure is indistinguishable from
 a halt that worked, which is how a fence spent a day detecting correctly and
 stopping nothing.
 
+### One `estop()` was never verified — repeat it (2026-08-03)
+
+Read the 2.9 cm / 0.10 s row above for what it is: **one measurement, of a
+halt that happened to land.** Nobody had checked what a halt path calling
+`estop()` exactly ONCE does when the write is lost — and the answer, measured
+on `vevov` 2026-08-03 across 16/16 reproductions, is that it does nothing:
+
+- a stop issued **once** by a host that then went quiet produced **936 mm of
+  continued travel with no decay**, still going when the capture ended;
+- `estop()` **failed 5 of 6 attempts**. Only repetition stopped the wheels.
+
+The Nezha brick physically latches its last commanded speed and does not reset
+on an nRF52 reset, so a lost zero write is permanent, not a glitch that clears
+itself. Sprint 133 ticket 001 fixed both halves of the firmware gap (a
+derived-idle safety arbitration step in `App::RobotLoop`, and arming the stop
+re-assertion window on the commanded nonzero→zero transition instead of on an
+encoder reading). That fix is verified in sim and by construction; **hardware
+re-verification on `tovez` is sprint 133 ticket 004 and has not happened yet.**
+
+Until it has, a halt path that calls `estop()` once and returns is unverified.
+Call it, confirm the robot actually stopped (telemetry `flags` bit 2 dropping,
+encoders holding), and call it again if it did not.
+
 ## Untethered = the RADIOBRIDGE port
 
 On battery the robot is reached through the relay dongle, NOT its own USB port.

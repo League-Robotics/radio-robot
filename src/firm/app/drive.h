@@ -25,21 +25,55 @@
 //                                v_corrected = map(v_cmd) + bias;
 //                                dutyFF = dutyPerSpeed * v_corrected. The
 //                                map's SLOPE is never adapted online.
-//        Stage B (fast)      -- a small-authority PID (p + i + kaff*a_cmd,
-//                                clamped ±pidMax) on wheel-speed error.
+//        Stage B (fast)      -- a small-authority controller
+//                                (p + i + kaff*a_cmd, clamped ±pidMax)
+//                                whose P and feedforward terms read
+//                                wheel-speed error and whose I term reads
+//                                POSITION (133-002 -- see the "THE I TERM
+//                                IS A POSITION TERM" note below, and
+//                                fastPid()/positionError() in drive.cpp).
 //                                Because Stage A+C already carry all DC
-//                                content, its integrator idles near zero
+//                                content, the I term idles near zero
 //                                -- the condition under which a loop near
 //                                stiction does not stick-slip (the
 //                                documented 2-3 Hz duty-domain limit
 //                                cycle this design avoids by construction,
-//                                not by tuning). Reset on estop(). Skipped
-//                                OUTRIGHT (output forced 0, integrator
-//                                untouched) at commanded-zero, and its
-//                                integrator only accumulates on a fresh/
-//                                connected/non-frozen measurement -- same
-//                                shape as the steady gate below (131-002,
-//                                see tick()'s own doc comment, drive.cpp).
+//                                not by tuning). Its position reference is
+//                                re-anchored on estop(). Skipped OUTRIGHT
+//                                (output forced 0) at commanded-zero.
+//
+// THE I TERM IS A POSITION TERM (133-002; measured on vevov 2026-08-03,
+// clasi/issues/B-wheel-controller-position-loop-and-tuning.md §3). Stage B
+// used to accumulate `integral += ki * err * dt` -- and `err` is a
+// VELOCITY, so `err * dt` is MILLIMETRES. The accumulator was already
+// (commanded position - measured position); it just built its measured
+// half by summing a DERIVED, QUANTIZED velocity (sd 8.0 mm/s, one whole
+// duty count) instead of reading the encoder's own position register,
+// with a freshness gate that FROZE the sum on exactly the samples where
+// real distance was being travelled unobserved. `positionError()` reads
+// the register instead. Same control law, same units (ki stays [1/s]),
+// same output -- the loop still commands velocity, which is all the motor
+// takes. What it DELETES is the accumulator: no windup, no `steady` gate
+// to freeze, no reset to lose. A position error that appears while the
+// loop is not looking is simply still there when it looks again. Measured
+// effect: L/R distance imbalance 1.05-1.07 -> 1.000-1.006, and note the
+// direction -- MORE position gain gave BETTER balance, the opposite of
+// how every velocity-side knob behaved.
+//
+// posErrMax AND iMax ARE BOTH LOAD-BEARING, IN DIFFERENT DOMAINS. Do not
+// collapse them; confusing the two IS the original defect:
+//   AdaptationBounds::posErrMax  [mm]    bounds the INPUT  (position
+//                                        error, BEFORE ki)
+//   ControlGains::iMax           [mm/s]  bounds the OUTPUT (ki*posError,
+//                                        AFTER it)
+// Before 133-002 only iMax existed, and because the accumulated quantity
+// was already millimetres it acted as a DISGUISED position limit of
+// iMax/ki mm -- at ki=6/iMax=20 that is 3.3 mm, smaller than every
+// residual being chased, so RAISING ki SHRANK the loop's position memory
+// (which is why the ki sweep plateaued between 2 and 6). Clamping the
+// input in millimetres is what lets iMax finally be the velocity-
+// authority bound it was always named for. Delete iMax and nothing bounds
+// how much speed the I term may demand.
 //        Stage C (slow)      -- bounded adaptation of ONE parameter, the
 //                                map's additive `bias` -- NEVER the
 //                                slope. Runs only when steady
@@ -104,11 +138,23 @@
 // is merely sent once. Do not fold this back into a single unconditional
 // write.
 //
+// LOAD-BEARING (the 2026-08-03 runaway, 133-001): that window is now armed
+// by tick() as well, on the nonzero->zero transition of the commanded duty
+// pair -- not only by estop(). Both of the pre-133 defences (this window's
+// `wheelsMoving` half, and NezhaMotor::writeRawDuty()'s own re-issue) gate
+// on the ENCODER, so both are disarmed by the same condition: a wheel that
+// reports at rest. Measured on vevov, 16/16: a stop issued once by a host
+// that then went quiet produced 936mm of continued travel with no decay,
+// and estop() failed 5 of 6 attempts. Arming on what was COMMANDED, with
+// no measured velocity in the condition, is what makes the re-assertion
+// independent of an encoder that may be wedged, stale, or manufacturing a
+// zero. Do not re-gate this arm on velocity.
+//
 // takeover() vs estop() (131-001, sprint 131 Design Rationale Decisions 1/2
 // -- closes the sprint-130 midpoint review's finding #1 / post-130 review
 // F5): before this ticket, RobotLoop::handleMove() called estop() to make
 // the planner take over motion, and estop() (130-004) ALSO zeroed Stage
-// B's integrators, Stage C's bias, and the deficit latch -- so every
+// B's I-term state, Stage C's bias, and the deficit latch -- so every
 // accepted MOVE cold-started adaptation, and Stage C (tauAdapt tens of
 // seconds) could never converge on the path it exists to serve. takeover()
 // is the ownership-handover verb: zero targets, disarm WHEELS -- KEEP
@@ -156,6 +202,26 @@
 // at routing (App::RobotLoop::routeCommand -- a WHEELS command clears the
 // planner, a MOVE clears Drive's armed command), and `owns()` below is how
 // the loop reads which one it currently is.
+//
+// THE cmdVelocity OWNERSHIP INVARIANT (133-001 -- stated in full, with its
+// history, at App::RobotLoop::publishWheels(), robot_loop.cpp):
+//
+//   cmdVelocity has exactly one DECIDER per cycle -- Motion::Planner::
+//   update() or App::Drive::update() -- and exactly one SAFETY ARBITER,
+//   App::RobotLoop, whose writes are restricted to zero, which runs after
+//   every decider and before actuation, and which supersedes all deciders.
+//   No other writer exists.
+//
+// What this means for Drive specifically: update() publishes ONLY while
+// Drive owns motion, and stops publishing entirely the cycle after its
+// command expires (`if (!owned) return;`). That silence is correct and
+// stays correct -- it is not Drive's job to keep asserting zero forever.
+// Covering the gap it leaves is the arbiter's job
+// (App::RobotLoop::zeroUnownedMotion(), which derives idleness from
+// owns() below rather than being handed ownership). Do NOT "fix" this by
+// making update() publish unconditionally: that would make Drive a
+// permanent decider and re-open the two-decider conflict routing exists to
+// prevent.
 #pragma once
 
 #include <cstdint>
@@ -272,19 +338,30 @@ class Drive {
   // tuning is ticket 006's job, on hardware -- not a judgment call this
   // ticket can make with tovez hard-silent.
   //
-  // 131-002: two further gates apply to this stage regardless of the
-  // gain values configured here -- a commanded-zero wheel skips
-  // fastPid() OUTRIGHT (no P/feedforward/clamp math runs, integrator
-  // untouched), and the integrator only ACCUMULATES on a fresh/
-  // connected/non-frozen measurement (the same conjunct Stage C's
-  // adaptBias() already required) -- a stale/disconnected/frozen
-  // reading freezes it exactly like the existing steady gate, rather
-  // than winding against a manufactured zero-velocity reading. See
-  // tick()'s own doc comment (drive.cpp) for the full rationale.
+  // 131-002: a commanded-zero wheel skips fastPid() OUTRIGHT (no
+  // P/feedforward/clamp math runs) -- "stop is stop" through Stage B
+  // too. 133-002 removed the OTHER gate this comment used to describe
+  // (the fresh/connected/non-frozen conjunct that froze the
+  // accumulator): there is no accumulator left to freeze, and the
+  // hazard it guarded -- winding against a MANUFACTURED ZERO VELOCITY
+  // on a failed encoder collect -- cannot reach the I term any more,
+  // because the I term no longer reads velocity. The equivalent guards
+  // for the position domain live in positionError() itself (drive.cpp)
+  // and are about a manufactured zero POSITION instead. See tick()'s own
+  // doc comment for the full rationale.
   struct ControlGains {
     float kp = 0.0f;      // [1] dimensionless: mm/s of PID output per mm/s of error
     float ki = 0.0f;      // [1/s]
-    float iMax = 0.0f;    // [mm/s] integrator clamp; 0 disables integration
+    // iMax bounds the I term's OUTPUT, in mm/s -- how much wheel speed
+    // the position error is allowed to demand. Its INPUT-side sibling is
+    // AdaptationBounds::posErrMax [mm]; the two clamp different domains
+    // and both are load-bearing (this file's own header). 0 = the I term
+    // is OFF ENTIRELY, unchanged from the accumulator era's "0 disables
+    // integration" -- deliberately NOT re-read as "unclamped", which
+    // would silently hand every already-shipped robot JSON (all of which
+    // carry iMax = 0) unbounded I authority the first time a nonzero ki
+    // is pushed.
+    float iMax = 0.0f;    // [mm/s] I-term output clamp; 0 disables the I term
     float kaff = 0.0f;    // [s] accel feedforward ~= the plant time constant
     // Total fast-loop authority; 0 disables the clamp. Also gates the
     // deficit-flag policy below (updateDeficit()'s own doc comment,
@@ -310,6 +387,15 @@ class Drive {
     float biasMax = 0.0f;           // [mm/s] Stage C trim authority clamp
     float tauAdapt = 0.0f;          // [s] Stage C adaptation time constant; <=0 disables
     float aSteady = 0.0f;           // [mm/s^2] |a_cmd| below this counts as steady
+    // posErrMax bounds Stage B's I term INPUT -- how far behind its own
+    // reference a wheel may be counted as being, so a blocked or
+    // slipping wheel cannot bank unbounded catch-up debt and then sprint
+    // to repay it the moment it comes free. Its OUTPUT-side sibling is
+    // ControlGains::iMax [mm/s]; both are load-bearing and neither
+    // replaces the other (this file's own header). 0 = unclamped, the
+    // same "0 = off" convention every sibling here uses -- the I term's
+    // authority is still bounded by iMax and pidMax in that case.
+    float posErrMax = 0.0f;         // [mm] Stage B position-error clamp; 0 = unclamped
     float deficitThreshold = 0.0f;  // [mm/s] sustained error magnitude that flags a deficit
     float deficitWindow = 0.0f;     // [ms] how long the deficit condition must sustain
   };
@@ -366,7 +452,7 @@ class Drive {
   // (RobotLoop::handleMove(), the moment a MOVE is accepted -- 131-001).
   // Zero the targets and disarm the WHEELS command, exactly like estop()'s
   // own "zero targets, disarm" half -- but deliberately leave Stage B's
-  // integrators (pidIntegralLeft_/Right_), Stage C's bias (biasLeft_/
+  // position references (posRefLeft_/Right_), Stage C's bias (biasLeft_/
   // Right_), the deficit latch (deficitSinceLeft_/Right_, deficitLeft_/
   // Right_), and the stop re-assertion countdown (stopEnforceCountdown_)
   // completely untouched: the plant did not change, only the writer did,
@@ -380,8 +466,9 @@ class Drive {
   // Halt now: zero the targets, disarm, and emit NO completion ack for the
   // discarded command (the ESTOP path -- the host asked for a stop, not for
   // a report that the thing it cancelled finished) -- PLUS a full reset of
-  // every learned/latched control-loop value (Stage B's integrators, Stage
-  // C's bias, the deficit latch) and the stop re-assertion window (this
+  // every learned/latched control-loop value (Stage B's position
+  // references, Stage C's bias, the deficit latch) and the stop
+  // re-assertion window (this
   // file's own LOAD-BEARING comment above). Reserved for the ESTOP wire
   // verb (RobotLoop::handleEstop()) and genuine panic paths -- NOT the
   // ownership-handover path (a MOVE taking over from WHEELS, or vice
@@ -410,6 +497,38 @@ class Drive {
   // regardless of who decided the motion. See this file's own header
   // for the full per-stage algorithm.
   void tick(const Types::RobotState& state);
+
+  // Live override for Stage B's position-error clamp -- the DEVELOPMENT
+  // tuning path (133-003's `DBG:pos <mm>` verb is the one caller;
+  // .claude/rules/configuration-discipline.md binds PRODUCTION BOOT, not
+  // bench tuning, precisely because a value pushed ad hoc can be read
+  // back). RAM-only: a reboot restores the robot JSON's own
+  // wheel_control.pos_err_max through the generated boot config, which is
+  // also what the live WHEEL_CONTROL wire push writes -- one file, both
+  // paths. Clamped non-negative; 0 = unclamped.
+  void setPositionErrorMax(float posErrMax) {  // [mm]
+    bounds_.posErrMax = (posErrMax > 0.0f) ? posErrMax : 0.0f;
+  }
+
+  // Live override for the speed floor -- same DEVELOPMENT-tuning contract
+  // as setPositionErrorMax() above (133-003's `DBG:vmin <mm/s>` verb is the
+  // one caller; RAM-only, boot restores wheel_control.v_min from the robot
+  // JSON). Clamped non-negative; 0 disables the floor entirely, the same
+  // "0 = off" convention every sibling in AdaptationBounds uses.
+  void setSpeedFloor(float vMin) {  // [mm/s]
+    bounds_.vMin = (vMin > 0.0f) ? vMin : 0.0f;
+  }
+
+  // Live override for the steady gate -- same contract again (133-003's
+  // `DBG:asteady <mm/s^2>` verb; RAM-only, boot restores
+  // wheel_control.a_steady). This gates Stage C's bias adaptation
+  // (`|a_cmd| < aSteady`); as of 133-002 it no longer gates Stage B, whose
+  // I term reads position and therefore has no accumulator left to freeze.
+  // Clamped non-negative; <= 0 still disables Stage C's adaptation
+  // outright, unchanged from the boot path.
+  void setASteady(float aSteady) {  // [mm/s^2]
+    bounds_.aSteady = (aSteady > 0.0f) ? aSteady : 0.0f;
+  }
 
   // Expire an armed command whose deadline has passed (latching the
   // completion event), then publish this subsystem's targets into
@@ -447,24 +566,62 @@ class Drive {
   float lastSpeedLeft_ = 0.0f;   // [mm/s]
   float lastSpeedRight_ = 0.0f;  // [mm/s]
 
+  // Commanded-accel estimate for the WHEELS path (update(), drive.cpp) --
+  // 133-002, UNVALIDATED, see update()'s own comment at the write site.
+  // Motion::Planner publishes its own cmdAccel; Drive never did, which
+  // left Stage B's feedforward multiplying an identically-zero field and
+  // `steady` pinned true for every WHEELS ramp -- so both the kff and the
+  // aSteady sweeps measured nothing, twice. Smoothed with a first-order
+  // filter because the host re-arms WHEELS on a slower tick than kCycle,
+  // making the raw command a STAIRCASE whose bare finite difference
+  // alternates a double-size spike with a zero.
+  static constexpr float kAccelSmoothing = 0.35f;  // [1] first-order weight, per cycle
+  float previousTargetLeft_ = 0.0f;   // [mm/s] last cycle's published target
+  float previousTargetRight_ = 0.0f;  // [mm/s]
+  float cmdAccelLeft_ = 0.0f;         // [mm/s^2] smoothed
+  float cmdAccelRight_ = 0.0f;        // [mm/s^2]
+
   // Crawl shaper (drive.cpp).
   float crawlDuty(float duty, float& carry) const;
 
   // --- Stage B/C: the wheel-speed controller (130-004; see this file's
   // own header for the full algorithm) ---
 
-  // Stage B's per-wheel PID computation. `integral` is the caller's own
-  // persistent state (pidIntegralLeft_/Right_ below), mutated in place.
-  // `steady` gates the integrator exactly like Motion::WheelTrim's own
-  // Hold-phase gate (wheel_trim.cpp) -- see drive.cpp's own doc comment.
-  // 131-002: the caller folds this wheel's freshness into `steady` too
-  // (steady && fresh), so a stale/disconnected/frozen reading freezes the
-  // integrator through this SAME parameter -- fastPid() itself knows
-  // nothing about freshness, only "may I integrate right now." tick()'s
-  // own commanded-zero guard skips calling this function entirely rather
-  // than passing a flag through it -- see tick()'s own doc comment.
-  float fastPid(float& integral, float err, float aCmd, float dt,
-               bool steady) const;
+  // Stage B's per-wheel position reference (133-002). `reference` is the
+  // integral of the COMMANDED speed since `origin` was anchored -- our
+  // own signal, noise-free -- and the error the I term consumes is
+  // `reference - (Wheel::position - origin)`. `armed` stays false until a
+  // live, same-epoch reading has anchored it, so the very first cycle
+  // after an anchor reports exactly zero error rather than a step.
+  //
+  // A struct rather than four loose members per wheel because all four
+  // fields are re-anchored together, atomically, or not at all --
+  // `PositionRef{}` is the whole reset (estop(), drive.cpp).
+  struct PositionRef {
+    float reference = 0.0f;  // [mm] integral of commanded speed since the anchor
+    float origin = 0.0f;     // [mm] Wheel::position when anchored
+    uint8_t epoch = 0;       // Wheel::positionEpoch when anchored
+    bool armed = false;
+  };
+
+  // Stage B's per-wheel controller output. `posError` is millimetres of
+  // position error (positionError(), below); `err` is mm/s of velocity
+  // error, which only the P term reads; `aCmd` is mm/s^2 of commanded
+  // accel for the feedforward. No `dt` and no `steady` parameter: the I
+  // term is a direct function of the current position error, not an
+  // accumulation, so there is nothing per-cycle to scale and nothing to
+  // gate off (133-002 -- this file's own header). tick()'s own
+  // commanded-zero guard skips calling this function entirely rather than
+  // passing a flag through it -- see tick()'s own doc comment.
+  float fastPid(float posError, float err, float aCmd) const;  // [mm] [mm/s] [mm/s^2]
+
+  // Advance `ref` by this cycle's commanded travel and return the
+  // resulting position error, clamped to ±bounds_.posErrMax. Re-anchors
+  // (returning EXACTLY zero, correcting nothing) whenever the reference
+  // cannot be trusted -- see drive.cpp's own doc comment for the three
+  // conditions and why each one earns its place.
+  float positionError(float speed, const Types::RobotState::Wheel& wheel,
+                      PositionRef& ref, float dt) const;  // [mm/s] [s] -> [mm]
 
   // Stage C's bounded bias adaptation -- mutates `bias` in place.
   // `vCmdMagnitude` is the (already speed-floored) |commanded speed|,
@@ -497,8 +654,15 @@ class Drive {
   ControlGains gains_;
   AdaptationBounds bounds_;
 
-  float pidIntegralLeft_ = 0.0f;   // [mm/s] Stage B integrator state
-  float pidIntegralRight_ = 0.0f;  // [mm/s]
+  // Stage B's I-term state (133-002): a position REFERENCE, not an
+  // accumulated correction. Replaces the old pidIntegralLeft_/Right_
+  // accumulators outright -- see this file's own header for why the
+  // accumulator was always a position term computed the worst possible
+  // way. `mutable` because tick() is const-correct with respect to the
+  // blackboard it reads, not with respect to this reference, which it
+  // must advance once per cycle.
+  mutable PositionRef posRefLeft_;
+  mutable PositionRef posRefRight_;
   float lastPidLeft_ = 0.0f;       // [mm/s] observability: last-computed Stage B output
   float lastPidRight_ = 0.0f;      // [mm/s]
 
@@ -551,10 +715,15 @@ class Drive {
   float writtenRight_ = 0.0f;  // [-1, 1]
 
   // Stop re-assertion (see this file's own header) -- counts down once per
-  // tick() call from kStopEnforceTicks after estop() arms it; tick()
-  // bypasses the quiet-at-zero shortcut while this is nonzero OR either
-  // wheel still measures above kRestVelocity, so a commanded stop keeps
-  // being handed to the leaves instead of being trusted after one write.
+  // tick() call from kStopEnforceTicks; tick() bypasses the quiet-at-zero
+  // shortcut while this is nonzero OR either wheel still measures above
+  // kRestVelocity, so a commanded stop keeps being handed to the leaves
+  // instead of being trusted after one write.
+  //
+  // TWO arming sites (133-001 added the second): estop(), and tick() itself
+  // on the nonzero->zero transition of the commanded duty pair. The second
+  // is the one that survives a wheel reporting at rest -- see tick()'s own
+  // comment at that site for why an encoder-gated arm is not enough.
   uint8_t stopEnforceCountdown_ = 0;
 
   // 30 cycles at RobotLoop::kCycle(50ms, 130-007: was 40ms) == 1.5s --

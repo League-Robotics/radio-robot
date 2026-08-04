@@ -89,7 +89,7 @@ uint32_t configParityFieldOffsets(uint32_t group, uint32_t* out, uint32_t count)
           offsetof(T, deficit_threshold), offsetof(T, deficit_window),
           offsetof(T, pid_kp),            offsetof(T, pid_ki),
           offsetof(T, pid_i_max),         offsetof(T, pid_kaff),
-          offsetof(T, pid_max),
+          offsetof(T, pid_max),            offsetof(T, pos_err_max),  // 133-002
       };
       return writeCapped(kOffsets, sizeof(kOffsets) / sizeof(kOffsets[0]), out, count);
     }

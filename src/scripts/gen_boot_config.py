@@ -624,11 +624,17 @@ def wheel_controller_config_for_config(cfg: dict) -> dict:
     message field names exactly).
 
     App::Drive's unified three-timescale wheel-speed controller: Stage
-    B's wire-tunable fast-PID gains (pid_kp/ki/i_max/kaff/max) and
-    Stage C/deficit-flag's generated-constant bounds (v_min/bias_max/
-    tau_adapt/a_steady/deficit_threshold/deficit_window).
+    B's wire-tunable fast-PID gains (pid_kp/ki/i_max/kaff/max, plus
+    133-002's pos_err_max) and Stage C/deficit-flag's generated-constant
+    bounds (v_min/bias_max/tau_adapt/a_steady/deficit_threshold/
+    deficit_window).
 
-    All 11 REQUIRED, same fail-closed posture as every other field this
+    pos_err_max (133-002) is the BAKE half of the same field's runtime
+    wire path (Configurator's existing WHEEL_CONTROL machinery reaches it
+    through the generated codec, no new arm needed) -- both halves read
+    THIS file, per .claude/rules/configuration-discipline.md invariant 2.
+
+    All 12 REQUIRED, same fail-closed posture as every other field this
     generator bakes: a robot JSON missing any one of them fails codegen
     loudly. A robot JSON is free to set every one of these to 0 (both
     stages inert) -- see WheelControllerBootConfig's own doc comment
@@ -647,6 +653,7 @@ def wheel_controller_config_for_config(cfg: dict) -> dict:
         "iMax": float(_require(cfg, "wheel_control", "pid_i_max")),
         "kaff": float(_require(cfg, "wheel_control", "pid_kaff")),
         "pidMax": float(_require(cfg, "wheel_control", "pid_max")),
+        "posErrMax": float(_require(cfg, "wheel_control", "pos_err_max")),
     }
 
 
@@ -1059,9 +1066,10 @@ msg::Drive defaultDriveGroup() {{
 
 msg::WheelControl defaultWheelControlGroup() {{
     // wheel_control.v_min/bias_max/tau_adapt/a_steady/deficit_threshold/
-    // deficit_window/pid_* (132-017 JSON reshape retarget -- was
-    // control.wheel_*/wheel_pid_*/wheel_deficit_* before the grouped-shape
-    // migration) -- wheel_controller_config_for_config() above.
+    // deficit_window/pid_*/pos_err_max (132-017 JSON reshape retarget --
+    // was control.wheel_*/wheel_pid_*/wheel_deficit_* before the
+    // grouped-shape migration; pos_err_max added 133-002) --
+    // wheel_controller_config_for_config() above.
     msg::WheelControl cfg;
     cfg.v_min = {_f(wheel_controller["vMin"])};                       // [mm/s]
     cfg.bias_max = {_f(wheel_controller["biasMax"])};                 // [mm/s]
@@ -1074,6 +1082,7 @@ msg::WheelControl defaultWheelControlGroup() {{
     cfg.pid_i_max = {_f(wheel_controller["iMax"])};    // [mm/s]
     cfg.pid_kaff = {_f(wheel_controller["kaff"])};    // [s]
     cfg.pid_max = {_f(wheel_controller["pidMax"])};    // [mm/s]
+    cfg.pos_err_max = {_f(wheel_controller["posErrMax"])};  // [mm]
     return cfg;
 }}
 

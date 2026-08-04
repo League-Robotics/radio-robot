@@ -108,11 +108,20 @@ class SimHarness {
         //     unconditionally put a 2s/150mm/s straight run's otos reading
         //     55.8mm off true ground truth in a test that explicitly zeroes
         //     every OTHER simulated OTOS fault knob).
+        //   - wheelCorrection (kIdentityWheelCorrection, below): App::
+        //     Drive's Stage A commanded->actual correction linearizes a
+        //     REAL gearbox; TestSim::WheelPlant is already linear, so
+        //     identity is the only correct value here. This used to rely
+        //     on the bake happening to hold identity and it stopped being
+        //     true -- see BootOverrides::wheelCorrection's own doc comment
+        //     (app/boot_wiring.h) for the measured regression that made it
+        //     an explicit override (133-005).
         graph_(App::composeRobot(plant_, clock_, sleeper_, serialLink_, radioLink_,
                                  tuningStore, "DEVICE:NEZHA2:sim:sim_harness:1",
                                  "ID:unknown",
                                  App::BootOverrides{&trackWidth, &kSimControlPeriod,
-                                                    &kSimControlPeriod, &kIdentityOtosConfig})) {
+                                                    &kSimControlPeriod, &kIdentityOtosConfig,
+                                                    &kIdentityWheelCorrection})) {
     // SIM OVERRIDE: composeRobot() already installed App::Drive's
     // calibration via Configurator::loadBaked()+install() (boot through
     // the SAME path main.cpp uses), baking config_.drive.duty_per_speed_
@@ -131,13 +140,18 @@ class SimHarness {
     // sim_configure_drive(), the same values main.cpp installs on
     // hardware.
     //
-    // setWheelCorrection() is deliberately left at composeRobot()'s own
-    // installed value (identity: gain 1, intercept 0, from the baked
-    // DriveBootConfig defaults) rather than overridden again here: it
-    // linearizes a real gearbox (measured = gain*commanded + intercept)
-    // and this plant is already linear, so identity is the correct value
-    // for the sim too -- see sim_boot_config.py's drive_boot_config_for()
-    // docstring.
+    // The wheel correction -- Drive's OTHER hardware-measured Stage A
+    // input -- needs the same treatment for the same reason, and gets it
+    // one layer earlier: via BootOverrides::wheelCorrection in the
+    // composeRobot() call above, not a post-construction setter here.
+    // (It USED to be handled by a comment in this very spot asserting
+    // that composeRobot() installs identity "from the baked
+    // DriveBootConfig defaults." That was true when written and false
+    // from 132-019 onward, and nothing failed when it stopped being true
+    // -- see BootOverrides::wheelCorrection's own doc comment for the
+    // measured cost. An override applied at bake time cannot go stale the
+    // same way: it does not describe what the bake happens to contain, it
+    // decides it.)
     graph_.drive().setDutyPerSpeed(1.0f / kDefaultDutyVelMax, 1.0f / kDefaultDutyVelMax);
 
     // No further self-configuration -- motorL_/motorR_ stay at their default
@@ -418,6 +432,15 @@ class SimHarness {
   // offset, 1.0 scale), so a plain default-constructed instance is exactly
   // the value this override needs.
   static constexpr Devices::OtosConfig kIdentityOtosConfig{};
+
+  // See this constructor's own composeRobot() call comment above -- the
+  // sim's genuinely-justified wheelCorrection override (133-005).
+  // Config::WheelCorrection's own default member initializers
+  // (config/boot_config.h) ARE identity (gain 1, intercept 0), so a plain
+  // default-constructed instance is exactly the value this override needs
+  // -- and, unlike the pre-133-005 arrangement, it stays identity no
+  // matter what any robot JSON's wheel_gain_* is re-fitted to next.
+  static constexpr Config::WheelCorrection kIdentityWheelCorrection{};
 
   // Drives App::Preamble to done() via preamble_.step() calls issued
   // OURSELVES, advancing the fake Clock between each one -- a single

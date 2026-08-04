@@ -20,6 +20,13 @@ enum class ConfigGroupTarget : uint8_t {
     PLANNER_SHAPER = 8,
 };
 
+enum class ConfigSource : uint8_t {
+    CONFIG_SOURCE_UNSPECIFIED = 0,
+    CONFIG_SOURCE_BAKED = 1,
+    CONFIG_SOURCE_LIVE = 2,
+    CONFIG_SOURCE_PERSISTED = 3,
+};
+
 // Geometry
 struct Geometry {
     float trackwidth = 0.0f;
@@ -80,6 +87,7 @@ struct WheelControl {
     float pid_i_max = 0.0f;
     float pid_kaff = 0.0f;
     float pid_max = 0.0f;
+    float pos_err_max = 0.0f;
 
     // --- array / optional-string accessors ---
 };
@@ -155,6 +163,7 @@ struct ConfigSnapshot {
     ConfigGroupTarget target = static_cast<ConfigGroupTarget>(0);
     uint8_t body_[140] = {};
     uint8_t body_count = 0;
+    ConfigSource source = static_cast<ConfigSource>(0);
 
     // --- array / optional-string accessors ---
     const uint8_t* body() const { return body_; }

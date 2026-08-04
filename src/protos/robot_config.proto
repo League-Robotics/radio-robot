@@ -284,6 +284,63 @@ enum ConfigGroupTarget {
   PLANNER_SHAPER = 8;
 }
 
+// ConfigSource -- 133-006 (A-live-config-push-is-wiped-by-the-next-reconnect.md,
+// "per-group config provenance, reported on the reply"): where the values a
+// group is CURRENTLY running came from. Reported per group on the
+// `ConfigSnapshot` reply below -- deliberately NOT a field of any group
+// message above.
+//
+// WHY NOT A GROUP FIELD: every group message here also generates the host
+// pydantic model AND `data/robots/robot_config.schema.json` (gen_messages.py's
+// `_robot_config_groups()`), so a `source` field inside a group would land in
+// the robot JSON -- and a FILE can never carry a runtime-assigned value, which
+// breaks sprint 132's headline read-back-equals-file property. Provenance is a
+// property of the ANSWER, not of the configuration, so it rides the reply
+// envelope. `_CONFIG_ENVELOPE_MESSAGE_NAMES` already excludes ConfigSnapshot
+// from both group-emission modes, so this placement is enforced structurally
+// rather than by convention.
+//
+// WHY PER-GROUP AND NOT ONE GLOBAL FLAG: config is seven groups and DRIVE may
+// be LIVE while PLANNER is still BAKED -- a single flag would have to lie about
+// one of them.
+//
+// Value names are prefixed because protoc scopes every enum VALUE name to the
+// whole `robot` package (see ConfigGroupTarget's own NAMING NOTE above); a bare
+// `LIVE`/`BAKED` would be a package-wide claim on those words.
+enum ConfigSource {
+  // Never reported by a real reply: proto3's required zero value, which
+  // doubles as the "this build predates provenance" reading for a host talking
+  // to older firmware (proto3 implicit presence omits a zero-valued field from
+  // the wire entirely).
+  CONFIG_SOURCE_UNSPECIFIED = 0;
+
+  // The generated, robot-JSON-baked `Config::default*Group()` values --
+  // `Configurator::loadBaked()`. Every group starts here at boot.
+  CONFIG_SOURCE_BAKED = 1;
+
+  // A live wire push landed on this group in the CURRENT power cycle --
+  // `Configurator::applyGroup()`/`applyField()`.
+  //
+  // SCOPE, and it is a narrow one: DRIVE and PLANNER_SHAPER are not persisted
+  // to flash (see configurator.h's PERSISTENCE SCOPE note), so for those groups
+  // LIVE survives only while the robot stays powered. After a power cycle they
+  // read BAKED by definition. This answers "is the robot running what I pushed"
+  // during a tuning session; it is not, and cannot be, a claim about surviving
+  // a power cycle.
+  CONFIG_SOURCE_LIVE = 2;
+
+  // Restored at boot from the flash-persisted tuning snapshot --
+  // `Configurator::reapplyPersistedTuning()`, reachable only for the three
+  // persisted groups (WHEEL_CONTROL / MOTORS.travel_calib / OTOS).
+  //
+  // This value exists because a flash-restored group came from NEITHER the
+  // baked file NOR a push in this session, and reporting it as BAKED would be a
+  // fresh instance of exactly the dishonesty this enum was added to remove --
+  // a robot running tuned values while the read-back claims it is running the
+  // file's. A later live push on the same group overwrites this with LIVE.
+  CONFIG_SOURCE_PERSISTED = 3;
+}
+
 // ===========================================================================
 // Robot-config groups -- each generates a C++ Config::Robot member AND a
 // wire codec (ticket 002); each carries the ConfigGroupTarget value of the
@@ -371,9 +428,31 @@ message WheelControl {
   float deficit_window     = 6  [(min) = 0.0];  // [ms] deficit-flag sustain window
   float pid_kp             = 7  [(min) = 0.0];  // [1] dimensionless proportional gain
   float pid_ki             = 8  [(min) = 0.0];  // [1/s] integral gain
-  float pid_i_max          = 9  [(min) = 0.0];  // [mm/s] integrator clamp
+  float pid_i_max          = 9  [(min) = 0.0];  // [mm/s] I-term OUTPUT clamp (see pos_err_max)
   float pid_kaff           = 10 [(min) = 0.0];  // [s] accel feedforward
   float pid_max            = 11 [(min) = 0.0];  // [mm/s] total fast-loop authority clamp
+  // pos_err_max -- 133-002. Stage B's I term is a POSITION term (App::Drive::
+  // fastPid()/positionError(), drive.cpp): `integral = pid_ki * posError`,
+  // with posError in MILLIMETRES read from the encoder's position register.
+  //
+  // pos_err_max and pid_i_max clamp DIFFERENT DOMAINS and BOTH are
+  // load-bearing -- this pair is the whole point of the change, so do not
+  // "simplify" one away:
+  //   pos_err_max  [mm]    bounds the INPUT  -- position error, BEFORE pid_ki
+  //   pid_i_max    [mm/s]  bounds the OUTPUT -- pid_ki * posError, AFTER it
+  // Before 133-002 there was only pid_i_max, which -- because the accumulated
+  // quantity was already millimetres -- acted as a DISGUISED position limit of
+  // pid_i_max/pid_ki mm (at ki=6/iMax=20: 3.3 mm, smaller than every residual
+  // being chased, so RAISING ki SHRANK the loop's position memory). Clamping
+  // the input in millimetres is what lets pid_i_max be the honest velocity-
+  // authority bound it was always named for.
+  //
+  // 0 = unclamped position error, matching this message's own "0 = disabled"
+  // convention. Note pid_i_max's own 0 still means "the I term is off
+  // entirely" (App::Drive::fastPid()'s fail-closed posture, unchanged from the
+  // accumulator era) -- so a robot JSON shipping pid_i_max = 0 has no I term
+  // regardless of what this field says.
+  float pos_err_max        = 12 [(min) = 0.0];  // [mm] Stage B position-error clamp; 0 = unclamped
 }
 
 // Planner -- Motion::Planner's BOOT-ONLY tuning surface: profile velocity/
@@ -588,6 +667,12 @@ message GetConfig {
 message ConfigSnapshot {
   ConfigGroupTarget target = 1;
   bytes             body   = 2 [(max_count) = 140];  // see SetConfigGroup.body above -- split the group, don't grow this cap
+  // source -- 133-006: where `body`'s values came from (see ConfigSource
+  // above). Stamped by `Configurator::encodeSnapshot()` from the provenance
+  // the two config_ mutation paths recorded; costs 2 B of the reply envelope
+  // (1 B tag + 1 B varint) and the reply's worst case is `tlm`, not `cfg`, so
+  // this does not move kReplyEnvelopeMaxEncodedSize at all.
+  ConfigSource      source = 3;
 }
 
 // SetConfigField -- set exactly one field inside one group, addressed by

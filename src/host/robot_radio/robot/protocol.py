@@ -94,7 +94,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NamedTuple
 
 from robot_radio.io.serial_conn import SerialConnection
 
@@ -947,6 +947,12 @@ _SET_KEY_TARGETS: dict[str, "tuple[int, str]"] = {
     "pid.kff": (robot_config_pb2.WHEEL_CONTROL, "pid_kaff"),
     "pid.iMax": (robot_config_pb2.WHEEL_CONTROL, "pid_i_max"),
     "pid.kaw": (robot_config_pb2.WHEEL_CONTROL, "pid_max"),
+    # pid.posErrMax -- 133-002. Stage B's I term is a POSITION term, and
+    # this is the clamp on its INPUT, in millimetres. It is a SEPARATE
+    # domain from pid.iMax above (which clamps the same term's OUTPUT, in
+    # mm/s) -- both are live and both matter; setting one is not setting
+    # the other. See robot_config.proto's WheelControl.pos_err_max.
+    "pid.posErrMax": (robot_config_pb2.WHEEL_CONTROL, "pos_err_max"),
 }
 
 # PlannerConfigPatch/CONFIG_PLANNER -- DELETED (115-003, gut-to-minimal-
@@ -989,6 +995,69 @@ _CONFIG_GROUP_NAMES: dict[int, str] = {
     robot_config_pb2.OTOS: "Otos",
     robot_config_pb2.ESTIMATOR: "Estimator",
 }
+
+
+# ---------------------------------------------------------------------------
+# Config provenance and verified push (133-006,
+# A-live-config-push-is-wiped-by-the-next-reconnect.md).
+# ---------------------------------------------------------------------------
+
+
+class ConfigNotVerified(RuntimeError):
+    """A ``verify=True`` config push did not land as sent.
+
+    Raised by ``set_config_field()``/``set_config_group()`` when the push was
+    rejected outright (no ack / NAK) *or* when the ack said OK but the
+    read-back disagrees with what was sent. Both are the same failure from a
+    caller's point of view -- the robot is not running what the caller thinks
+    it is running -- and both used to be reported by returning ``None``, which
+    is easy to not check.
+
+    132-019 caught exactly this class of defect (a whole bench measurement
+    computed against config the robot had silently discarded) and only because
+    that script happened to read back by hand. Raising is what stops the next
+    one depending on the same luck. ``wheel_control_tuning.TuningNotConfirmed``
+    is the same idea, hand-rolled for one group before this existed.
+    """
+
+
+# Provenance (133-006): the ConfigSource enum lives on the ConfigSnapshot
+# REPLY, never inside a config group -- a group field would be emitted into
+# the pydantic model and data/robots/robot_config.schema.json too, and a file
+# can never carry a runtime-assigned value. See robot_config.proto's own
+# ConfigSource comment for the full reasoning.
+CONFIG_SOURCE_NAMES: dict[int, str] = {
+    robot_config_pb2.CONFIG_SOURCE_UNSPECIFIED: "UNSPECIFIED",
+    robot_config_pb2.CONFIG_SOURCE_BAKED: "BAKED",
+    robot_config_pb2.CONFIG_SOURCE_LIVE: "LIVE",
+    robot_config_pb2.CONFIG_SOURCE_PERSISTED: "PERSISTED",
+}
+
+
+class ConfigReadback(NamedTuple):
+    """One ``GetConfig`` answer: a group's current values AND where they came
+    from (``get_config_snapshot()``).
+
+    ``source`` is a ``robot_config_pb2.ConfigSource`` value -- ``BAKED`` (the
+    robot-JSON values compiled in at boot), ``LIVE`` (a wire push landed on
+    this group in the current power cycle), or ``PERSISTED`` (restored at boot
+    from the flash tuning snapshot). ``UNSPECIFIED`` means the firmware
+    predates provenance: proto3 omits a zero-valued field from the wire, so an
+    older robot's reply simply carries no source at all rather than lying.
+
+    Provenance is per GROUP, not per robot: ``DRIVE`` can be ``LIVE`` while
+    ``PLANNER`` is still ``BAKED``, which is why a single global flag was
+    rejected -- it would have to lie about one of them.
+    """
+
+    target: int
+    values: Any
+    source: int
+
+    @property
+    def source_name(self) -> str:
+        """``source`` as a human-readable string, for logs and gate output."""
+        return CONFIG_SOURCE_NAMES.get(self.source, f"UNKNOWN({self.source})")
 
 
 def _format_config_value(value: Any) -> str:
@@ -1193,6 +1262,7 @@ class NezhaProtocol:
 
     def set_config_group(self, target: int, *,
                          read_timeout: int = 500,  # [ms]
+                         verify: bool = False,
                          **fields: Any) -> "AckEntry | None":
         """Send ``SetConfigGroup{target, body}`` -- push *target*'s ENTIRE
         group in one frame, ``**fields`` supplying every field of that
@@ -1220,14 +1290,27 @@ class NezhaProtocol:
         GEOMETRY/PLANNER) or ``ERR_BUSY`` (MOTORS, guarded while that side
         is in motion) by polling the ack directly instead, if the
         distinction matters to the caller.
+
+        ``verify=True`` (133-006) makes the push SELF-CHECKING: after the ack,
+        the group is read back and every field in ``**fields`` compared against
+        what the robot reports. Anything short of "the robot is running exactly
+        what was sent" raises ``ConfigNotVerified`` -- including the no-ack and
+        NAK cases, which otherwise return ``None`` and are easy to not check.
+        Bench tooling should pass it; see ``set_config_field()``'s own note.
         """
         group_name = _CONFIG_GROUP_NAMES.get(target)
         if group_name is None:
+            if verify:
+                raise ConfigNotVerified(
+                    f"set_config_group({target}): unknown target, nothing sent")
             return None
         pb_cls = getattr(robot_config_pb2, group_name)
         try:
             group_msg = pb_cls(**fields)
-        except (TypeError, ValueError):
+        except (TypeError, ValueError) as exc:
+            if verify:
+                raise ConfigNotVerified(
+                    f"set_config_group({group_name}): {exc}, nothing sent") from exc
             return None
 
         request = robot_config_pb2.SetConfigGroup(
@@ -1238,7 +1321,18 @@ class NezhaProtocol:
         ack = poll_ack(corr_id, timeout=read_timeout) if poll_ack is not None \
             else self.wait_for_ack(corr_id, timeout=read_timeout)
         if ack is None or not ack.ok:
+            if verify:
+                raise ConfigNotVerified(
+                    f"set_config_group({group_name}) was REJECTED "
+                    f"(ack={ack!r}) -- the robot is not running these values")
             return None
+        if verify:
+            # Only the fields actually supplied are checked. A whole-group push
+            # replaces the group, so an omitted field lands at its proto3 zero
+            # default -- real, but not something this caller asserted.
+            self._verify_pushed(
+                target, {name: float(value) for name, value in fields.items()},
+                read_timeout=read_timeout, what=f"set_config_group({group_name})")
         return ack
 
     # ------------------------------------------------------------------
@@ -1285,6 +1379,34 @@ class NezhaProtocol:
         message are generated from the exact same robot_config.proto
         field list and therefore always agree field-for-field.
         """
+        snapshot = self.get_config_snapshot(target, read_timeout=read_timeout)
+        return None if snapshot is None else snapshot.values
+
+    def get_config_snapshot(self, target: int, *,
+                            read_timeout: int = 500,  # [ms]
+                            ) -> "ConfigReadback | None":
+        """``get_config()`` plus PROVENANCE (133-006): returns a
+        ``ConfigReadback(target, values, source)``, or ``None`` on exactly the
+        same failure set ``get_config()`` documents.
+
+        ``get_config()`` is implemented on top of this and returns only
+        ``.values``, so every existing caller is unaffected -- there is one
+        wire round trip and one implementation, not two.
+
+        ``source`` answers "is the robot running what I pushed":
+        ``CONFIG_SOURCE_LIVE`` for a group a wire push landed on during this
+        power cycle, ``CONFIG_SOURCE_BAKED`` for the compiled-in robot-JSON
+        values, ``CONFIG_SOURCE_PERSISTED`` for one restored at boot out of
+        the flash tuning snapshot. ``CONFIG_SOURCE_UNSPECIFIED`` means the
+        firmware predates provenance rather than that the answer is unknown.
+
+        Scope, and it is deliberately narrow: for the groups that are not
+        flash-persisted (``DRIVE``, ``PLANNER_SHAPER``), ``LIVE`` survives
+        only while the robot stays powered. After a power cycle they read
+        ``BAKED`` by definition -- which is the honest report of a value that
+        is genuinely gone, and the point is that the loss is now VISIBLE
+        instead of silent.
+        """
         group_name = _CONFIG_GROUP_NAMES.get(target)
         if group_name is None:
             return None
@@ -1298,9 +1420,52 @@ class NezhaProtocol:
         pb_cls = getattr(robot_config_pb2, group_name)
         pydantic_cls = getattr(robot_config_generated, group_name)
         pb_obj = pb_cls.FromString(reply.cfg.body)
-        return pydantic_cls(**{
+        values = pydantic_cls(**{
             field.name: getattr(pb_obj, field.name) for field in pb_obj.DESCRIPTOR.fields
         })
+        return ConfigReadback(target=reply.cfg.target, values=values,
+                              source=reply.cfg.source)
+
+    # ------------------------------------------------------------------
+    # Verified push (133-006, part 3) -- shared by set_config_field() and
+    # set_config_group() below.
+    # ------------------------------------------------------------------
+
+    def _verify_pushed(self, target: int, expected: "dict[str, float]", *,
+                       read_timeout: int,  # [ms]
+                       what: str) -> None:
+        """Read `target` back and raise ``ConfigNotVerified`` unless every
+        name in `expected` matches what the robot reports.
+
+        Compared with ``math.isclose`` at a tolerance sized for the wire, not
+        for the arithmetic: every config value crosses as a 32-bit float, so a
+        host ``float`` (a double) that round-trips through the wire is not
+        bit-identical to what was sent and an ``==`` comparison would fail
+        every push. ``rel_tol=1e-6`` is comfortably inside float32's ~1e-7
+        resolution while still catching a value that landed nowhere (the
+        actual failure being guarded against -- a discarded push reads back as
+        the BAKED value, which is not a rounding distance away).
+        """
+        import math
+
+        snapshot = self.get_config_snapshot(target, read_timeout=read_timeout)
+        if snapshot is None:
+            raise ConfigNotVerified(
+                f"{what}: push acked but the read-back failed -- get_config"
+                f"({_CONFIG_GROUP_NAMES.get(target, target)}) returned nothing, "
+                f"so what the robot is running is UNKNOWN")
+
+        mismatches: list[str] = []
+        for name, sent in expected.items():
+            got = getattr(snapshot.values, name, None)
+            if got is None or not math.isclose(float(got), float(sent),
+                                               rel_tol=1e-6, abs_tol=1e-9):
+                mismatches.append(f"{name}: sent {sent!r}, robot reports {got!r}")
+        if mismatches:
+            raise ConfigNotVerified(
+                f"{what}: push acked OK but did NOT land -- "
+                + "; ".join(mismatches)
+                + f" (group source: {snapshot.source_name})")
 
     # ------------------------------------------------------------------
     # Config: SET one field (132-012, SetConfigField / Configurator::
@@ -1317,6 +1482,7 @@ class NezhaProtocol:
 
     def set_config_field(self, target: int, field_name: str, value: float, *,
                          read_timeout: int = 500,  # [ms]
+                         verify: bool = False,
                          ) -> "AckEntry | None":
         """Send ``SetConfigField{target, field, value}`` -- write exactly
         ONE field inside ONE already-live robot-config group.
@@ -1347,13 +1513,36 @@ class NezhaProtocol:
         ``ERR_BUSY`` (MOTORS, guarded while that side is in motion) by
         calling ``wait_for_ack()``/``poll_ack()`` directly instead, if the
         distinction matters to the caller.
+
+        ``verify=True`` (133-006) reads the value back via ``get_config()``
+        and raises ``ConfigNotVerified`` unless the robot reports exactly what
+        was sent -- a rejection, a timeout, and an ack-OK-but-landed-nowhere
+        all raise, rather than returning a ``None`` the caller may not check.
+
+        This is what ``.claude/rules/configuration-discipline.md`` is relying
+        on when it permits ad-hoc single-value pushes for bench tuning: the
+        relaxation is safe *because* you can interrogate the robot and see
+        what you pushed. Bench tooling should therefore pass ``verify=True``
+        -- ``calibration.push._push_via_proto()`` and
+        ``wheel_control_tuning.push_gains()`` do. The default stays False so
+        that library/sim/REPL callers keep their existing return-code
+        contract, and so a push costs one round trip unless a caller asks for
+        two.
         """
         group_name = _CONFIG_GROUP_NAMES.get(target)
         if group_name is None:
+            if verify:
+                raise ConfigNotVerified(
+                    f"set_config_field({target}, {field_name}): unknown target, "
+                    f"nothing sent")
             return None
         pb_cls = getattr(robot_config_pb2, group_name)
         field_desc = pb_cls.DESCRIPTOR.fields_by_name.get(field_name)
         if field_desc is None:
+            if verify:
+                raise ConfigNotVerified(
+                    f"set_config_field({group_name}, {field_name}): no such field, "
+                    f"nothing sent")
             return None
 
         request = robot_config_pb2.SetConfigField(
@@ -1364,7 +1553,15 @@ class NezhaProtocol:
         ack = poll_ack(corr_id, timeout=read_timeout) if poll_ack is not None \
             else self.wait_for_ack(corr_id, timeout=read_timeout)
         if ack is None or not ack.ok:
+            if verify:
+                raise ConfigNotVerified(
+                    f"set_config_field({group_name}, {field_name}={value!r}) was "
+                    f"REJECTED (ack={ack!r}) -- the robot is not running this value")
             return None
+        if verify:
+            self._verify_pushed(
+                target, {field_name: float(value)}, read_timeout=read_timeout,
+                what=f"set_config_field({group_name}, {field_name})")
         return ack
 
     # ------------------------------------------------------------------
@@ -1552,9 +1749,29 @@ class NezhaProtocol:
 
         ``duration`` is REQUIRED and must be positive (validated host-side
         to save a wire round trip for a command the firmware would reject
-        with ``ERR_BADARG``): a wheel command is always time-bounded, so a
-        dead host can never mean a runaway. There is no separate
-        ``timeout`` — the duration IS the backstop.
+        with ``ERR_BADARG``): a wheel command is always time-bounded. There
+        is no separate ``timeout`` — the duration IS the backstop.
+
+        **What that bound does and does not buy you (corrected 133-001).**
+        This docstring used to add "so a dead host can never mean a
+        runaway." That was false as shipped, and it was the reassurance
+        that kept anyone from checking. MEASURED on ``vevov`` 2026-08-03,
+        16/16 reproductions: a host that issued a stop ONCE and then went
+        quiet got **936 mm of continued travel with no decay** — still
+        going when the capture ended — and ``estop()`` failed 5 of 6
+        attempts. The duration expires correctly inside ``App::Drive``;
+        what failed was the expiry reaching the MOTOR. The Nezha brick
+        physically latches its last commanded speed and does not reset on
+        an nRF52 reset, so a single zero write that is lost on the bus is
+        permanent, not transient.
+
+        Sprint 133 ticket 001 closed both halves of that gap (a derived-idle
+        safety arbitration step in ``App::RobotLoop``, and arming the stop
+        re-assertion window on the commanded nonzero→zero transition rather
+        than on an encoder reading). Verified in sim and by construction as
+        of that ticket; hardware re-verification on ``tovez`` is ticket 004.
+        Until that lands, treat the time bound as a bound on what is
+        COMMANDED, not as a guarantee about the wheels.
 
         ``move_id`` is echoed in this command's COMPLETION ack, which lands
         when the duration expires; the ENQUEUE ack echoes the returned

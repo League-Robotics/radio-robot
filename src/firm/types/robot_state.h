@@ -117,18 +117,29 @@ struct RobotState {
     // cycle's commanded wheel speed here; RobotLoop::cycle() reads it back
     // and hands it to the hardware -- no interface required, just this
     // field.
-    //   - Writer: sole-or-arbitrated. Motion::Planner::update()
-    //     (planner.cpp) writes it when a Move owns motion; App::Drive::
-    //     update() (drive.cpp) writes it for WHEELS teleop, but ONLY while
-    //     Drive owns motion (owns() true) -- when the planner owns motion,
-    //     Drive::update() is a no-op on this field, leaving the planner's
-    //     write as the cycle's only one. RobotLoop::publishWheels() never
-    //     touches it (see that function's own doc comment) -- exclusivity
-    //     is enforced by ORDERING (exactly one of the two update() calls
-    //     actually writes, per cycle), not by a shared/locked resource.
-    //     RobotLoop::handleEstop() also zeroes it directly, belt-and-
-    //     suspenders, so an emergency stop does not depend on the rest of
-    //     the cycle's schedule running to completion to take effect.
+    //   - Writer: ONE DECIDER PLUS A ZERO-ONLY SAFETY ARBITER (133-001 --
+    //     the invariant is stated in full, with its history, at
+    //     App::RobotLoop::publishWheels(), robot_loop.cpp).
+    //     DECIDERS: Motion::Planner::update() (planner.cpp) writes it when
+    //     a Move owns motion; App::Drive::update() (drive.cpp) writes it
+    //     for WHEELS teleop, but ONLY while Drive owns motion (owns()
+    //     true) -- when the planner owns motion, Drive::update() is a
+    //     no-op on this field, leaving the planner's write as the cycle's
+    //     only decider write. Exclusivity between the two is enforced by
+    //     ORDERING (exactly one of the two update() calls actually
+    //     writes, per cycle), not by a shared/locked resource.
+    //     ARBITER: App::RobotLoop, whose writes here are restricted to
+    //     0.0f and supersede every decider -- two sites, both zero-only.
+    //     RobotLoop::zeroUnownedMotion() runs every cycle immediately
+    //     ahead of actuation and zeroes this field whenever NEITHER
+    //     decider owns motion, so the wheels cannot inherit a stale target
+    //     from a decider that has stopped publishing; and
+    //     RobotLoop::handleEstop() zeroes it directly so an emergency stop
+    //     does not depend on the rest of the cycle's schedule running to
+    //     completion to take effect. A nonzero written from the loop would
+    //     make App::RobotLoop a third decider and void this contract.
+    //     RobotLoop::publishWheels() never touches it (see that function's
+    //     own doc comment) -- it is neither decider nor arbiter.
     //   - Consumer: RobotLoop::cycle() (robot_loop.cpp), which hands both
     //     wheels' cmdVelocity straight to drive_.tick() for actuation.
     //     See docs/design/design.md §5 and src/motion/DESIGN.md for the

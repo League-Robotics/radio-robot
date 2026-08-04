@@ -1201,6 +1201,165 @@ void scenarioUpdateStatusReadyFalseBeforeBoot() {
   }
 }
 
+// --- 133-003: the four live-tuning DBG arms ------------------------------
+//
+// These exercise classifyDbgArg() through the REAL wire path (an inbound
+// `DBG:` line fed to pump()), not by calling the file-local classifier
+// directly -- the classifier is in an anonymous namespace in comms.cpp and,
+// more to the point, "the operator typed this and the robot staged that" is
+// the property worth proving. What the STAGED action then DOES lives in
+// RobotLoop::applyDbgAction() and is out of this harness's scope.
+//
+// Note that this harness compiles with -DHOST_BUILD, which implies
+// ROBOT_DEBUG (app/debug.h's own header), so the whole DBG surface is live
+// here. That is also exactly why a shipped-image proof cannot live in this
+// file -- see test_app_comms.py's own non-debug-build test.
+
+// takeOneDbg -- feed one cleartext line and return the single DbgAction it
+// staged (kNone when it staged nothing).
+App::Comms::DbgAction takeOneDbg(const char* line) {
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  App::Comms comms(serialFake, radioFake, banner);
+  serialFake.enqueueInbound(line);
+  comms.pump(/*now=*/0);
+  return comms.takeDbgAction();
+}
+
+// nearlyEqual -- the operands are decimal text parsed to float, so an exact
+// compare would be testing strtof(), not the parser arm. 1e-4 is far tighter
+// than any value a tuning session pushes and far looser than float noise.
+bool nearlyEqual(float actual, float expected) {
+  const float difference = actual - expected;
+  return (difference < 1e-4f) && (difference > -1e-4f);
+}
+
+void scenarioDbgTuningVerbsStageTheirOwnArmWithTheParsedValue() {
+  beginScenario("pump(): DBG:vmin/asteady/pos each stage their own arm carrying the parsed value");
+
+  struct Row {
+    const char* line;
+    App::Comms::DbgActionKind expected;
+    float value;
+  };
+  const Row rows[] = {
+      {"DBG:vmin 60", App::Comms::DbgActionKind::kVmin, 60.0f},
+      {"DBG:vmin 0", App::Comms::DbgActionKind::kVmin, 0.0f},
+      {"DBG:vmin 99.7", App::Comms::DbgActionKind::kVmin, 99.7f},
+      {"DBG:asteady 250", App::Comms::DbgActionKind::kASteady, 250.0f},
+      {"DBG:asteady 1200.5", App::Comms::DbgActionKind::kASteady, 1200.5f},
+      {"DBG:pos 5", App::Comms::DbgActionKind::kPos, 5.0f},
+      {"DBG:pos 0", App::Comms::DbgActionKind::kPos, 0.0f},
+  };
+
+  for (const Row& row : rows) {
+    const App::Comms::DbgAction action = takeOneDbg(row.line);
+    checkTrue(action.kind == row.expected,
+              std::string(row.line) + " stages the expected arm");
+    checkTrue(nearlyEqual(action.value, row.value),
+              std::string(row.line) + " carries the parsed operand in `value`");
+  }
+}
+
+void scenarioDbgGainStagesBothMultipliersIndependently() {
+  beginScenario("pump(): DBG:gain <L> <R> stages kGain with the two multipliers in value/value2");
+
+  const App::Comms::DbgAction action = takeOneDbg("DBG:gain 1.02 0.98");
+  checkTrue(action.kind == App::Comms::DbgActionKind::kGain, "DBG:gain -> kGain");
+  checkTrue(nearlyEqual(action.value, 1.02f), "left multiplier lands in value");
+  checkTrue(nearlyEqual(action.value2, 0.98f), "right multiplier lands in value2");
+
+  // The two operands must not be transposed or shared -- an L/R imbalance
+  // trim applied to the wrong wheel doubles the imbalance instead of
+  // cancelling it, and reads as a much worse robot rather than as a bug.
+  const App::Comms::DbgAction identity = takeOneDbg("DBG:gain 1 1");
+  checkTrue(identity.kind == App::Comms::DbgActionKind::kGain, "DBG:gain 1 1 -> kGain");
+  checkTrue(nearlyEqual(identity.value, 1.0f) && nearlyEqual(identity.value2, 1.0f),
+            "DBG:gain 1 1 is the identity push");
+}
+
+void scenarioDbgTuningVerbsRejectMalformedOperands() {
+  beginScenario("pump(): a tuning verb with a missing, non-numeric, or out-of-domain "
+                "operand stages kUnrecognized -- never a silently-zero apply");
+
+  const char* rejected[] = {
+      // Missing operand entirely.
+      "DBG:vmin", "DBG:asteady", "DBG:pos", "DBG:gain",
+      // Non-numeric: strtof() would return 0.0 here, which must NOT be
+      // mistaken for a deliberate "0" push -- 0 is a meaningful value for
+      // vmin (floor off) and pos (unclamped), so the difference between
+      // "operator asked for zero" and "operator typo'd" is real.
+      "DBG:vmin oops", "DBG:pos nan", "DBG:asteady --",
+      // Trailing junk after a valid number: "60mm" is a unit an operator
+      // might reasonably type, and it must be refused rather than
+      // truncated to 60.
+      "DBG:vmin 60mm", "DBG:pos 5.0.0",
+      // Out of domain: negative for the scalars.
+      "DBG:vmin -1", "DBG:asteady -0.5", "DBG:pos -10",
+      // gain needs BOTH operands, and neither may be <= 0 (a zero or
+      // negative dutyPerSpeed is an uncalibrated or backwards robot).
+      "DBG:gain 1.02", "DBG:gain 0 1", "DBG:gain 1 0", "DBG:gain -1 -1",
+      "DBG:gain 1.02 nope",
+  };
+
+  for (const char* line : rejected) {
+    const App::Comms::DbgAction action = takeOneDbg(line);
+    checkTrue(action.kind == App::Comms::DbgActionKind::kUnrecognized,
+              std::string(line) + " -> kUnrecognized");
+  }
+}
+
+void scenarioDbgTuningVerbsAreNotCountedMalformed() {
+  beginScenario("pump(): a DBG tuning line is a recognized verb -- neither a good one "
+                "nor a rejected one bumps malformedCount()");
+
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  App::Comms comms(serialFake, radioFake, banner);
+
+  serialFake.enqueueInbound("DBG:vmin 60");
+  serialFake.enqueueInbound("DBG:gain 1.02 0.98");
+  serialFake.enqueueInbound("DBG:vmin garbage");
+  comms.pump(/*now=*/0);
+
+  // kFaultCommsMalformed is a LINK-quality fault bit. A mistyped tuning
+  // value is an operator error, not a corrupted wire, and raising the fault
+  // for it would make the bench gate's own "malformed stays clear" check
+  // fail for a reason that has nothing to do with the link.
+  checkU64Eq(comms.malformedCount(), 0,
+             "three DBG tuning lines, one of them rejected, leave malformedCount() at 0");
+  checkTrue(comms.takeDbgAction().kind == App::Comms::DbgActionKind::kVmin,
+            "the ring preserves order: first line out first");
+  checkTrue(comms.takeDbgAction().kind == App::Comms::DbgActionKind::kGain,
+            "second line out second");
+  checkTrue(comms.takeDbgAction().kind == App::Comms::DbgActionKind::kUnrecognized,
+            "the rejected line is still STAGED (so it can be echoed back), just not applied");
+}
+
+void scenarioDbgFaultInjectionArmsStillParseUnchanged() {
+  beginScenario("pump(): 129-era mark/ping/wedge/clear arms are unchanged by the "
+                "tuning arms sharing their parser");
+
+  checkTrue(takeOneDbg("DBG:mark leg1a").kind == App::Comms::DbgActionKind::kMark,
+            "DBG:mark still -> kMark");
+  checkTrue(takeOneDbg("DBG:ping").kind == App::Comms::DbgActionKind::kPing,
+            "DBG:ping still -> kPing");
+  checkTrue(takeOneDbg("DBG:clear").kind == App::Comms::DbgActionKind::kClear,
+            "DBG:clear still -> kClear");
+
+  const App::Comms::DbgAction wedge = takeOneDbg("DBG:wedge left 500");
+  checkTrue(wedge.kind == App::Comms::DbgActionKind::kWedge, "DBG:wedge still -> kWedge");
+  checkU64Eq(wedge.port, 1, "wedge port survives");
+  checkU64Eq(wedge.duration, 500, "wedge duration survives");
+
+  // kMark's verbatim-echo contract: `text` must still hold the WHOLE
+  // original payload, not just the tokens the classifier consumed.
+  checkTrue(std::string(takeOneDbg("DBG:mark leg1a").text) == "mark leg1a",
+            "kMark still preserves the full original payload verbatim");
+}
+
 }  // namespace
 
 int main() {
@@ -1234,6 +1393,11 @@ int main() {
   scenarioHelpLineListsTlmArgumentGrammar();
   scenarioUpdateStatusProjectsAllEightFieldsFromSynthesizedState();
   scenarioUpdateStatusReadyFalseBeforeBoot();
+  scenarioDbgTuningVerbsStageTheirOwnArmWithTheParsedValue();
+  scenarioDbgGainStagesBothMultipliersIndependently();
+  scenarioDbgTuningVerbsRejectMalformedOperands();
+  scenarioDbgTuningVerbsAreNotCountedMalformed();
+  scenarioDbgFaultInjectionArmsStillParseUnchanged();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Comms scenarios passed\n");

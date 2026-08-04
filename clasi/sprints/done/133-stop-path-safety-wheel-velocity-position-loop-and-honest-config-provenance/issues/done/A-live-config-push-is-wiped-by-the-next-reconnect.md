@@ -1,6 +1,9 @@
 ---
-status: pending
+status: done
 priority: high
+sprint: '133'
+tickets:
+- 133-006
 ---
 
 # A live config push is silently wiped by the next reconnect

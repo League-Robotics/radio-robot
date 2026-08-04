@@ -78,6 +78,8 @@
     "pid_i_max": 0.0,
     "pid_kaff": 0.0,
     "pid_max": 0.0,
+    "pos_err_max": 0.0,
+    "_pos_err_max_note": "133-002: Stage B's position-error clamp [mm] -- the INPUT-side bound on the I term, distinct from pid_i_max's OUTPUT-side [mm/s] bound; both retained. 0 = unclamped, matching every other key in this no-calibration profile: Stage B and Stage C are held inert here on purpose, so there is nothing for this bound to bound.",
     "_wheel_controller_note": "130-004: App::Drive's unified three-timescale controller. This is the NO-CALIBRATION profile (see this file's own _wheel_correction_note above: wheel_gain/intercept held at IDENTITY on purpose) -- both Stage B fast-PID and Stage C bias-trim adaptation held at 0/disabled to match, so this profile stays a pure open-loop-map baseline with no additional correction layered on top."
   },
   "planner": {

@@ -54,6 +54,35 @@ playfield run ONE profile per placement (`--profiles trapezoid`) under the
 standard camera-supervised procedure (`.claude/rules/playfield-testing.md`)
 -- this script has no geofence of its own.
 
+LIVE TUNING (133-003) -- the flags a wheel-controller session turns:
+
+    --vmin --asteady --poserr --gain-left --gain-right     DBG verbs, RAM only
+    --pid-kp --pid-ki --pid-kff --pid-imax --pid-kaw       WHEEL_CONTROL group
+
+Everything is asserted **after connect**, because a value set by any other
+process is already gone -- that process CLOSED the port, and closing is what
+resets this board (133-004 measured it; see `_assert_tuning()` for the
+numbers). Nothing is taken on trust: a DBG verb must produce the firmware's
+own `... applied` echo, and the WHEEL_CONTROL group is read back and compared
+field by field (an ack is not evidence). Any unconfirmed push aborts the run
+rather than reporting a distance against gains that were never set.
+
+The two channels do NOT behave the same way afterwards, and the gate says
+so on every run: the five `pid_*` fields are persisted to flash and survive
+a reboot, while `v_min`/`a_steady`/`pos_err_max`/the duty gains are RAM-only
+and revert on the next reset. Promote a keeper into
+`data/robots/<robot>.json`.
+
+The DBG channel exists only in a `ROBOT_DEBUG` image. If `--vmin` reports
+"was not confirmed", the overwhelmingly likely cause is a plain `just
+build`; rebuild with `uv run python build.py --clean --robot-debug`.
+
+`--wheel {both,left,right}` drives a single-motor rig (the idle channel is
+still commanded a hard zero and still reported, which is how cross-talk
+would show up). `--attempts N` discards a truncated capture and reconnects:
+a short capture reads as a short DISTANCE (77 mm of 450 mm, once) and is
+otherwise indistinguishable from real under-travel.
+
 Motion is issued as bare WHEELS commands (`NezhaProtocol.wheels()`) --
 straight to `App::Drive`, bypassing the planner, no shaping and no
 odometry stop condition -- because the profile IS the test. Letting the
@@ -70,9 +99,10 @@ import pathlib
 import sys
 import time
 from dataclasses import dataclass, field
-from statistics import median
+from statistics import median, stdev
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
+_BENCH_DIR = pathlib.Path(__file__).resolve().parent
 
 # Categorical slots 1 and 2 of the validated default palette; `commanded`
 # is a reference line in muted ink, never a third categorical hue.
@@ -217,12 +247,54 @@ class Run:
         shortfall is just its integral) versus one that tracks fine and
         then mismanages the ends (this number is ~1.0 but the ratio is
         not)."""
-        plateau = [s for s in self.samples
-                   if abs(s.commanded - self.profile.peak) < 1e-6]
+        plateau = self._plateau_samples()
         if not plateau or self.profile.peak <= 0:
             return (float("nan"), float("nan"))
         return (median(s.velocity_left for s in plateau) / self.profile.peak,
                 median(s.velocity_right for s in plateau) / self.profile.peak)
+
+    def _plateau_samples(self) -> "list[Sample]":
+        return [s for s in self.samples
+                if abs(s.commanded - self.profile.peak) < 1e-6]
+
+    def plateau_ripple(self) -> "tuple[float, float]":
+        """Sample standard deviation [mm/s] of measured speed per wheel over
+        the commanded plateau -- the plateau's own roughness, independent of
+        where its mean sits.
+
+        Reported, never gated. It is here because 133-002's sigma-delta duty
+        quantizer CHANGES this number by construction: the brick takes an
+        integer percent, one count is ~8.5 mm/s at the shipped
+        duty_per_speed, and carrying the rounding residual trades a
+        stair-stepped plateau for a dithered one. Any historical distance
+        figure -- specifically the issue's unexplained "square runs 3-4%
+        long" -- was measured against the OLD ripple and cannot be
+        re-attributed to a control cause until it has been re-measured
+        against this one. Printing ripple beside the ratio is what makes
+        that comparison possible instead of a matter of recollection.
+
+        NaN when the plateau holds fewer than two samples (a square profile
+        sampled sparsely, or a truncated capture).
+        """
+        plateau = self._plateau_samples()
+        if len(plateau) < 2:
+            return (float("nan"), float("nan"))
+        return (stdev(s.velocity_left for s in plateau),
+                stdev(s.velocity_right for s in plateau))
+
+    def plateau_span(self) -> "tuple[float, float]":
+        """Peak-to-peak measured speed [mm/s] per wheel over the plateau.
+        Reported beside plateau_ripple() because the two answer different
+        questions about the same window: a dithered plateau and a
+        stair-stepped one can share a standard deviation while differing
+        sharply in worst-case excursion, and it is the excursion an operator
+        sees as audible/visible roughness on the stand."""
+        plateau = self._plateau_samples()
+        if not plateau:
+            return (float("nan"), float("nan"))
+        left = [s.velocity_left for s in plateau]
+        right = [s.velocity_right for s in plateau]
+        return (max(left) - min(left), max(right) - min(right))
 
 
 def ratios(run: Run) -> "list[tuple[str, float]]":
@@ -282,17 +354,80 @@ _INFORMATIONAL_FAULTS = (
     ("wedge_latch", "fault_wedge_latch"),
 )
 
+# Surfaced but NOT gated, and read INVERTED -- these flags are positive
+# ("this wheel is connected"), so their ABSENCE is the condition worth
+# reporting. 133-002 hazard, surfaced here because nothing else will
+# surface it: `Drive::positionError()` no longer gates on encoder
+# FRESHNESS. That was deliberate (the old accumulator's freshness gate
+# silently and permanently dropped real distance out of the sum), but it
+# means a wheel whose encoder has stopped reporting now reads as falling
+# further and further behind, and can draw correction up to
+# ki * pos_err_max -- bounded after that only by pid_i_max/pid_max, where
+# it previously drew exactly nothing. It is inert on every robot as
+# shipped (all of them carry pid_i_max = 0, so the I term is off
+# entirely); ticket 004 is the session that makes it live, which is
+# exactly why a disconnect must be VISIBLE the moment the gains stop being
+# zero. See i_term_hazard() below for the combined reading.
+_INFORMATIONAL_ABSENCES = (
+    ("wheel_disconnected_left", "conn_left"),
+    ("wheel_disconnected_right", "conn_right"),
+)
+
+# The subset of note labels that mean "this wheel's position reading may be
+# stale or manufactured". i_term_hazard() keys on these.
+_STALE_ENCODER_NOTES = ("wedge_latch", "wheel_disconnected_left",
+                        "wheel_disconnected_right")
+
 
 def _fault_names(frame) -> "list[str]":
     return [label for label, attr in _GATING_FAULTS if getattr(frame, attr, False)]
 
 
 def _note_names(frame) -> "list[str]":
-    return [label for label, attr in _INFORMATIONAL_FAULTS if getattr(frame, attr, False)]
+    present = [label for label, attr in _INFORMATIONAL_FAULTS
+               if getattr(frame, attr, False)]
+    # `getattr(..., True)` on the absence side: a frame shape that does not
+    # carry the flag at all must read as "connected", never as a spurious
+    # disconnect warning on every single frame.
+    absent = [label for label, attr in _INFORMATIONAL_ABSENCES
+              if not getattr(frame, attr, True)]
+    return present + absent
+
+
+def i_term_hazard(notes: "list[str]", tuning: "dict[str, float]") -> "str | None":
+    """The one cross-cutting reading this gate can make that no single frame
+    can: an encoder that stopped reporting AT THE SAME TIME as a live
+    position-domain I term.
+
+    Either alone is ordinary -- a parked wheel latches `wedge_latch` on
+    every clean run, and a nonzero `pid_ki` is the whole point of ticket
+    004. Together they are the 133-002 hazard above, and the resulting
+    distance number is not a control measurement at all. Returns a warning
+    string, or None when the combination did not occur.
+
+    `tuning` is the WHEEL_CONTROL read-back (`_assert_tuning`'s own return
+    value), so this reads what the robot CONFIRMED, never what the host
+    asked for.
+    """
+    stale = [n for n in notes if n in _STALE_ENCODER_NOTES]
+    if not stale:
+        return None
+    ki = float(tuning.get("pid_ki", 0.0) or 0.0)
+    i_max = float(tuning.get("pid_i_max", 0.0) or 0.0)
+    if ki == 0.0 or i_max == 0.0:
+        return None  # I term is off entirely; a stale encoder draws nothing
+    pos_err_max = float(tuning.get("pos_err_max", 0.0) or 0.0)
+    ceiling = min(ki * pos_err_max, i_max) if pos_err_max > 0 else i_max
+    return (f"{', '.join(stale)} observed WITH a live position I term "
+            f"(pid_ki={ki:g}, pid_i_max={i_max:g}, pos_err_max={pos_err_max:g}) "
+            f"-- a wheel that stops reporting can now draw up to "
+            f"{ceiling:.1f} mm/s of correction it has not earned; treat this "
+            f"run's distance as unmeasured, not as a control result")
 
 
 def stream_profile(transport, profile: Profile, *, tick: float, lease: float,
-                   tail: float, settle: float, verbose: bool = True) -> Run:
+                   tail: float, settle: float, wheel: str = "both",
+                   verbose: bool = True) -> Run:
     """Stream one profile as re-armed WHEELS commands and capture telemetry.
 
     The command is refreshed every `tick` seconds with a `lease` several
@@ -362,7 +497,14 @@ def stream_profile(transport, profile: Profile, *, tick: float, lease: float,
         # a real cross-check on `profile.distance` rather than a
         # systematically low left-edge Riemann sum.
         commanded = profile.velocity(now + tick / 2.0)
-        transport.wheels(commanded, commanded, lease * 1000.0)
+        # `wheel` selects which channel(s) carry the profile. A single-motor
+        # rig (e.g. a loaded wheel stack on one channel) is driven alone,
+        # with the other commanded a hard zero rather than left unwritten --
+        # applySpeedFloor()'s dominant-wheel scale reads the PAIR, so an
+        # unwritten sibling would still take part in the floor decision.
+        left = commanded if wheel in ("both", "left") else 0.0
+        right = commanded if wheel in ("both", "right") else 0.0
+        transport.wheels(left, right, lease * 1000.0)
         # Account the command that just ENDED, over the interval it was
         # really held -- never the nominal tick. The two differ by however
         # much the host loop drifted, and charging the drift to the profile
@@ -498,34 +640,61 @@ def render_chart(runs: "list[Run]", path: pathlib.Path, *, subtitle: str,
 
 
 SUMMARY_COLUMNS = ("board", "run", "profile", "wheel", "commanded", "delivered",
-                   "ratio", "plateau_tracking", "delivered_at_command_end",
-                   "issued_distance", "faults", "notes")
+                   "ratio", "plateau_tracking", "plateau_ripple",
+                   "plateau_span", "delivered_at_command_end",
+                   "issued_distance", "faults", "notes", "tuning")
+
+
+def _tuning_tag(tuning: "dict[str, float] | None") -> str:
+    """The live tuning rendered as one compact, sortable cell.
+
+    `.claude/rules/configuration-discipline.md`: "record the pushed values
+    with the results, so a captured dataset is self-describing instead of
+    depending on session memory." A survey CSV whose rows do not say which
+    gains produced them is exactly the artifact that rule exists to
+    prevent -- and this gate's whole purpose in sprint 133 is to feed a
+    tuning session that will produce dozens of such rows.
+    """
+    if not tuning:
+        return ""
+    return " ".join(f"{name}={value:g}"
+                    for name, value in sorted(tuning.items()) if value)
 
 
 def append_summary(runs: "list[Run]", path: pathlib.Path, *, board: str,
-                   run_tag: str) -> None:
+                   run_tag: str, tuning: "dict[str, float] | None" = None) -> None:
     """APPEND one row per profile per wheel to a shared summary CSV -- the
     machine-readable spine of a multi-board survey, where each gate
     invocation contributes rows to one growing table rather than leaving 30
     separate per-run CSVs to be reconciled by hand. Header is written only
-    when the file is new, so concurrent survey legs can append safely."""
+    when the file is new, so concurrent survey legs can append safely.
+
+    `tuning` is the WHEEL_CONTROL read-back, recorded verbatim on every row
+    -- see _tuning_tag()."""
     path.parent.mkdir(parents=True, exist_ok=True)
     fresh = not path.exists() or path.stat().st_size == 0
+    tuning_tag = _tuning_tag(tuning)
     with open(path, "a", newline="") as handle:
         writer = csv.writer(handle)
         if fresh:
             writer.writerow(SUMMARY_COLUMNS)
         for run in runs:
             track_left, track_right = run.plateau_tracking()
+            ripple_left, ripple_right = run.plateau_ripple()
+            span_left, span_right = run.plateau_span()
             at_end_left, at_end_right = run.delivered_at_command_end()
-            per_wheel = (("left", run.delivered_left, run.ratio_left, track_left, at_end_left),
-                         ("right", run.delivered_right, run.ratio_right, track_right, at_end_right))
-            for wheel, delivered, ratio, tracking, at_end in per_wheel:
+            per_wheel = (
+                ("left", run.delivered_left, run.ratio_left, track_left,
+                 ripple_left, span_left, at_end_left),
+                ("right", run.delivered_right, run.ratio_right, track_right,
+                 ripple_right, span_right, at_end_right))
+            for wheel, delivered, ratio, tracking, ripple, span, at_end in per_wheel:
                 writer.writerow([
                     board, run_tag, run.profile.name, wheel,
                     f"{run.profile.distance:.2f}", f"{delivered:.2f}", f"{ratio:.5f}",
-                    f"{tracking:.5f}", f"{at_end:.2f}", f"{run.issued_distance:.2f}",
-                    "|".join(run.faults), "|".join(run.notes)])
+                    f"{tracking:.5f}", f"{ripple:.3f}", f"{span:.3f}",
+                    f"{at_end:.2f}", f"{run.issued_distance:.2f}",
+                    "|".join(run.faults), "|".join(run.notes), tuning_tag])
 
 
 def write_csv(runs: "list[Run]", path: pathlib.Path) -> None:
@@ -568,6 +737,54 @@ def _args() -> argparse.Namespace:
                    help="[s] commanded window, same for both profiles (default 3.0)")
     p.add_argument("--ramp", type=float, default=0.75,
                    help="[s] trapezoid rise == fall time (default 0.75)")
+    # Live tuning, asserted after connect (see _assert_tuning). Omitted
+    # flags leave the firmware's own boot-baked value alone.
+    p.add_argument("--vmin", type=float, default=None,
+                   help="[mm/s] App::Drive speed floor via DBG:vmin "
+                        "(ROBOT_DEBUG builds only)")
+    p.add_argument("--wheel", choices=("both", "left", "right"), default="both",
+                   help="which channel(s) carry the profile. Use left/right "
+                        "for a single-motor rig; the idle channel is still "
+                        "commanded a hard zero and still reported, which is "
+                        "how cross-talk would show up.")
+    p.add_argument("--poserr", type=float, default=None,
+                   help="[mm] Stage B position-error clamp -- how far behind "
+                        "its reference a wheel may fall before the loop stops "
+                        "asking for catch-up. 0 = unclamped")
+    p.add_argument("--asteady", type=float, default=None,
+                   help="[mm/s^2] Stage B integrator / Stage C bias steady "
+                        "gate; baked at 30, which freezes both through every "
+                        "ramp this rig drives")
+    p.add_argument("--gain-left", type=float, default=None,
+                   help="multiplier on the BOOT-INSTALLED duty_per_speed, LEFT "
+                        "wheel (>1 = faster). The L/R imbalance trim. "
+                        "Idempotent: the firmware multiplies the value boot "
+                        "installed, not the current one, so re-pushing the "
+                        "same number does not compound and 1.0 restores boot.")
+    p.add_argument("--gain-right", type=float, default=None,
+                   help="multiplier on the BOOT-INSTALLED duty_per_speed, "
+                        "RIGHT wheel")
+    p.add_argument("--pid-kp", type=float, default=None,
+                   help="WHEEL_CONTROL pid_kp -- Stage B proportional gain "
+                        "(ships at 0 == inert)")
+    p.add_argument("--pid-ki", type=float, default=None,
+                   help="WHEEL_CONTROL pid_ki [1/s] -- Stage B's POSITION-term "
+                        "gain since 133-002 (mm of error -> mm/s of "
+                        "correction), not a velocity integrator")
+    p.add_argument("--pid-kff", type=float, default=None,
+                   help="WHEEL_CONTROL pid_kaff [s] -- Stage B accel "
+                        "feedforward, ~the plant time constant; seeds at "
+                        "plant_tau 0.23")
+    p.add_argument("--pid-imax", type=float, default=None,
+                   help="WHEEL_CONTROL pid_i_max [mm/s] -- the I term's OUTPUT "
+                        "clamp. 0 disables the I term ENTIRELY, so --pid-ki "
+                        "does nothing until this is nonzero too")
+    p.add_argument("--pid-kaw", type=float, default=None,
+                   help="WHEEL_CONTROL pid_max [mm/s] -- Stage B total "
+                        "fast-loop authority cap (NOT an anti-windup gain; "
+                        "there is no accumulator to unwind since 133-002)")
+    p.add_argument("--attempts", type=int, default=6,
+                   help="retries per profile when telemetry truncates mid-run")
     p.add_argument("--tick", type=float, default=0.05,
                    help="[s] command refresh interval (default 0.05 == 20 Hz)")
     p.add_argument("--lease", type=float, default=0.25,
@@ -610,15 +827,192 @@ def _open_sim(args):
     # motion command and produces a silent all-zero trace.
     sim.configure_from_robot(config)
     print(f"  sim connected: firmware={sim.firmware_version()} track_width={track_width}")
-    return sim, sim.disconnect, "sim"
+    tuning_flags = [flag for flag, _ in _PID_FLAG_TO_KEY] + list(_DBG_FLAGS)
+    if any(getattr(args, flag, None) is not None for flag in tuning_flags):
+        # Say so rather than silently ignoring them. A sim run that
+        # SEEMS to honour --pid-ki and does not is precisely the "measured
+        # the boot defaults every time" failure this gate's own tuning path
+        # exists to end.
+        print("  WARNING: the tuning flags are a HARDWARE path (DBG verbs + "
+              "the WHEEL_CONTROL wire group). --sim ignores every one of "
+              "them; this run measures the sim's own configured values.")
+    # Sim reports no WHEEL_CONTROL group, so downstream readings that key on
+    # the live gains (i_term_hazard()) correctly find nothing live.
+    return sim, sim.disconnect, "sim", {}
+
+
+_DEBUG_LINES: "list[str]" = []
+
+# The five `--pid-*` flag names, mapped to the historical flat gain keys
+# `wheel_control_tuning.FLAT_KEY_TO_FIELD` translates to real WheelControl
+# protobuf field names. The flag spellings are the ones the tuning session
+# already uses and are deliberately NOT renamed; the one translation that
+# matters (`pid.kff -> pid_kaff`, `pid.kaw -> pid_max`) lives in that shared
+# module, tested, rather than being re-derived in each script that needs it.
+_PID_FLAG_TO_KEY = (
+    ("pid_kp", "pid.kp"),
+    ("pid_ki", "pid.ki"),
+    ("pid_kff", "pid.kff"),
+    ("pid_imax", "pid.iMax"),
+    ("pid_kaw", "pid.kaw"),
+)
+
+# The four RAM-only DBG flags, kept beside the wire flags above so the two
+# channels' membership is stated once (the sim warning and the "which
+# survives a reboot" note both read it).
+_DBG_FLAGS = ("vmin", "asteady", "poserr", "gain_left", "gain_right")
+
+
+def _assert_tuning(conn, proto, args) -> "dict[str, float]":
+    """Push tuning AFTER connecting -- which is the only moment it can be
+    pushed at all -- confirm every value LANDED, and return the
+    WHEEL_CONTROL group as the robot reports it.
+
+    Asserting tuning HERE, inside the process that then streams the
+    profile, is what makes a tuned measurement possible at all -- an
+    earlier sweep set values externally and unknowingly measured the boot
+    defaults every time. That remains the right structure regardless of
+    whether connecting resets the board, and it is why this gate was NOT
+    re-ordered when the DTR policy changed.
+
+    RESOLVED 2026-08-04 (133-004), on `tovez` over direct USB. Both of the
+    earlier claims were half right, and the disagreement was never about
+    DTR at all -- it was about WHICH END of the connection resets the board:
+
+        opening the port does NOT reset it.  Held open, the robot clock
+        advanced 71755 -> 77555 ms across a 5.8 s wait: +5800 ms of real
+        uptime, no discontinuity.  `SerialConnection`'s 133-006 claim is
+        correct on this point.
+
+        CLOSING the port DOES reset it, every time, with `reset=False`.
+        Three consecutive close/reopen cycles each read the clock at
+        EXACTLY 5210 ms -- identical, which is the tell: the clock is being
+        restarted and read a fixed interval later.  Discriminated from
+        reset-on-open by varying the gap between close and reopen: with an
+        8 s gap the clock read 18960 ms against 18996 predicted, and with
+        15 s it read 25962 against 26005 -- i.e. `t ~= gap + connect_cost`,
+        which only holds if the reset fired at the CLOSE.  Reset-on-open
+        predicts a constant ~connect_cost regardless of the gap; it was not
+        constant.
+
+    So `_disable_hupcl()` (serial_conn.py) does NOT in fact suppress the
+    close-time reset on macOS -- it is called on the default `reset=False`
+    path and the board reboots anyway.  That is a HOST DEFECT, reported by
+    133-004 and deliberately not fixed inside a measurement ticket.
+
+    The practical rule is UNCHANGED, and that is why this gate was not
+    re-ordered: a live-pushed value is gone the moment any process closes
+    the port, so push and measure in the SAME connection.  Only the
+    mechanism was wrong, not the discipline.  What was never in doubt: this
+    function's own confirm-by-read-back below, which does not depend on the
+    answer either way.
+
+    Two confirmation mechanisms, one per channel, and NEITHER is an ack:
+
+      * DBG verbs are confirmed by the firmware's own ``... applied`` echo,
+        which carries the value that actually landed.
+      * WHEEL_CONTROL fields are confirmed by READING THE GROUP BACK and
+        comparing. `.claude/rules/configuration-discipline.md`: "an ack is
+        not evidence: config that acks OK and lands nowhere is a live
+        failure mode in this codebase, not a hypothetical."
+
+    Raises RuntimeError on any unconfirmed push. Refusing to run is the
+    point -- a gate that reported a distance against gains it never set
+    would produce a confident wrong answer, which is worse than no answer.
+    """
+    # Imported here, not at module scope, for the same reason
+    # _open_hardware()/_open_sim() import their own dependencies locally:
+    # `--sim` and the pure-profile unit tests must not need the robot_radio
+    # wire stack (or protobuf) present at all. The sys.path insert makes the
+    # sibling import work when this file is loaded BY PATH (the
+    # src/tests/unit/ importlib idiom) as well as when it is run as a
+    # script, where its own directory is already sys.path[0].
+    if str(_BENCH_DIR) not in sys.path:
+        sys.path.insert(0, str(_BENCH_DIR))
+    from wheel_control_tuning import (TuningNotConfirmed, describe_persistence,
+                                      push_gains)
+
+    def send_dbg(text: str) -> "str | None":
+        """Send one DBG verb; return the robot's own echo line, or None if
+        no confirmation arrived. The ECHO is returned rather than a bool so
+        the caller can print what the robot said it applied, not what the
+        host asked for -- the two differing is exactly the bug class this
+        whole mechanism exists to catch."""
+        proto.tlmOff()          # binary TLM would bury the cleartext echo
+        time.sleep(0.4)
+        conn.read_pending_lines()
+        _DEBUG_LINES.clear()
+        conn.send_fast(f"DBG:{text}")
+        echo, deadline = None, time.monotonic() + 3.0
+        while echo is None and time.monotonic() < deadline:
+            for line in list(_DEBUG_LINES):
+                if "applied" in line:
+                    echo = line.strip()
+                    break
+            if echo is None:
+                time.sleep(0.05)
+        proto.tlmOn()
+        time.sleep(1.0)
+        proto.read_pending_binary_tlm_frames()
+        return echo
+
+    def assert_dbg(verb: str, description: str) -> None:
+        echo = send_dbg(verb)
+        if echo is None:
+            raise RuntimeError(
+                f"DBG:{verb} was not confirmed -- refusing to report a run "
+                f"whose {description} is unknown. If the echo never arrives "
+                f"at all, the most likely cause is a firmware image built "
+                f"WITHOUT the DBG channel: rebuild with "
+                f"`uv run python build.py --clean --robot-debug`.")
+        print(f"  asserted: {verb:<24} robot echo: {echo}")
+
+    if args.vmin is not None:
+        assert_dbg(f"vmin {args.vmin}", "speed floor")
+    if args.asteady is not None:
+        assert_dbg(f"asteady {args.asteady}", "steady gate")
+    if args.poserr is not None:
+        assert_dbg(f"pos {args.poserr}", "position-error clamp")
+    if args.gain_left is not None or args.gain_right is not None:
+        # Both operands are always sent: the verb takes a PAIR and rewrites
+        # both wheels, and the firmware rejects a one-operand form outright
+        # rather than defaulting the other to 1.0 -- so omitting one here
+        # would produce no push at all, not a half push.
+        gain_left = args.gain_left if args.gain_left is not None else 1.0
+        gain_right = args.gain_right if args.gain_right is not None else 1.0
+        assert_dbg(f"gain {gain_left} {gain_right}", "wheel duty gains")
+
+    gains = {key: float(getattr(args, flag))
+             for flag, key in _PID_FLAG_TO_KEY
+             if getattr(args, flag, None) is not None}
+
+    # push_gains() reads the group back UNCONDITIONALLY, even when this run
+    # pushed nothing. The five pid_* fields persist in flash, so a value some
+    # EARLIER session pushed is still in force here; a run that printed only
+    # what it pushed itself would describe a robot that does not exist.
+    try:
+        live_fields = push_gains(proto, gains)
+    except TuningNotConfirmed as exc:
+        raise RuntimeError(
+            f"{exc} -- refusing to report a run whose gains are unknown") from exc
+
+    print("\n  === live WHEEL_CONTROL (read back from the robot) ===")
+    for line in describe_persistence(live_fields):
+        print(line)
+    return live_fields
 
 
 def _open_hardware(args):
+    """Connect, assert tuning, and return
+    ``(transport, close, device_name, tuning)`` -- `tuning` being the
+    WHEEL_CONTROL group as the ROBOT reports it after the push, which is
+    what every downstream reading is attributed against."""
     from robot_radio.io.serial_conn import SerialConnection
     from robot_radio.robot.protocol import NezhaProtocol
 
     port = args.port or DEFAULT_PORT
-    conn = SerialConnection(port=port, mode="relay" if args.relay else None)
+    conn = SerialConnection(port=port, mode="relay" if args.relay else None,
+                            on_debug=lambda line: _DEBUG_LINES.append(str(line)))
     info = conn.connect()
     if info.get("status") not in ("connected", "already_connected"):
         raise RuntimeError(f"connect failed: {info}")
@@ -632,6 +1026,7 @@ def _open_hardware(args):
     proto.tlmOn()
     time.sleep(1.5)
     proto.read_pending_binary_tlm_frames()
+    tuning = _assert_tuning(conn, proto, args)
 
     def close():
         try:
@@ -640,7 +1035,7 @@ def _open_hardware(args):
             print(f"  WARN: tlmOff() failed during cleanup: {exc}")
         conn.disconnect()
 
-    return proto, close, device_name
+    return proto, close, device_name, tuning
 
 
 def main() -> int:
@@ -665,7 +1060,8 @@ def main() -> int:
               f"{profile.peak:.1f} mm/s  ramp {profile.ramp:.2f} s  "
               f"area {profile.distance:.1f} mm")
 
-    transport, close, device_name = (_open_sim(args) if args.sim else _open_hardware(args))
+    transport, close, device_name, tuning = (
+        _open_sim(args) if args.sim else _open_hardware(args))
     board = args.board or device_name
     runs: "list[Run]" = []
     try:
@@ -673,13 +1069,62 @@ def main() -> int:
             print(f"\n  --- {profile.name} ---")
             if index:
                 time.sleep(args.rest)
-            run = stream_profile(transport, profile, tick=args.tick, lease=args.lease,
-                                 tail=args.tail, settle=args.settle)
+            # A truncated capture is not a bad result, it is a MISSING one:
+            # this rig drops telemetry mid-run roughly half the time, and a
+            # short capture reads as a short distance (77mm of 450mm on the
+            # first attempt here) that is indistinguishable from real
+            # under-travel. Require a nearly-complete capture, and retry.
+            want = max(1, int(0.80 * (profile.duration + args.tail) / 0.05))
+            run = None
+            for attempt in range(1, args.attempts + 1):
+                try:
+                    candidate = stream_profile(transport, profile, tick=args.tick,
+                                               lease=args.lease, tail=args.tail,
+                                               settle=args.settle,
+                                               wheel=args.wheel)
+                except Exception as exc:
+                    print(f"    attempt {attempt}: stream failed ({exc})")
+                    candidate = None
+                n = len(candidate.samples) if candidate else 0
+                if candidate is not None and n >= want:
+                    run = candidate
+                    break
+                print(f"    attempt {attempt}: {n} of ~{want} samples -- "
+                      f"telemetry truncated, discarding")
+                if candidate is not None and (run is None
+                                              or n > len(run.samples)):
+                    run = candidate           # keep the best, in case all fail
+                if args.sim or attempt == args.attempts:
+                    continue
+                # The board does not merely drop frames when it truncates --
+                # it goes silent, and the next DBG gets no echo either. A
+                # close/reopen resets it (the same port-open reset that makes
+                # RAM tuning so fragile), which is the one reliable recovery.
+                print("    reconnecting to clear the wedge...")
+                try:
+                    close()
+                except Exception:
+                    pass
+                time.sleep(2.0)
+                # Re-asserting the tuning is the WHOLE point of reconnecting
+                # through _open_hardware() rather than just reopening the
+                # port: the reconnect resets the board, which wipes every
+                # RAM-only DBG value. A retry that skipped this would
+                # silently finish the run against boot defaults.
+                transport, close, device_name, tuning = _open_hardware(args)
+                board = args.board or device_name
+            if run is None:
+                print(f"    ERROR: {profile.name} never produced a usable "
+                      f"capture in {args.attempts} attempts")
+                return 1
             runs.append(run)
             if run.faults:
                 print(f"    FAULTS OBSERVED: {', '.join(run.faults)}")
             if run.notes:
                 print(f"    (informational, not gated: {', '.join(run.notes)})")
+            hazard = i_term_hazard(run.notes, tuning)
+            if hazard:
+                print(f"    !! {hazard}")
             at_end_left, at_end_right = run.delivered_at_command_end()
             track_left, track_right = run.plateau_tracking()
             print(f"    samples: {len(run.samples)}")
@@ -722,6 +1167,19 @@ def main() -> int:
         print(f"  {run.profile.name:>10}  {'track':>6}  plateau speed reached: "
               f"L {track_left * 100:.1f}%  R {track_right * 100:.1f}% of commanded "
               f"[reported, not gated]")
+        # Ripple travels WITH the ratio, in the same table, on purpose: the
+        # ratio alone cannot be compared against a historical figure taken
+        # under a different duty quantizer (133-002's sigma-delta), and
+        # without this column that incomparability is invisible.
+        ripple_left, ripple_right = run.plateau_ripple()
+        span_left, span_right = run.plateau_span()
+        print(f"  {run.profile.name:>10}  {'ripple':>6}  plateau sd: "
+              f"L {ripple_left:.2f}  R {ripple_right:.2f} mm/s   "
+              f"peak-to-peak: L {span_left:.1f}  R {span_right:.1f} mm/s "
+              f"[reported, not gated]")
+        hazard = i_term_hazard(run.notes, tuning)
+        if hazard:
+            print(f"  {run.profile.name:>10}  {'!!':>6}  {hazard}")
 
     if runs and not args.no_chart:
         target = "sim" if args.sim else (args.port or DEFAULT_PORT)
@@ -738,7 +1196,8 @@ def main() -> int:
         print(f"  csv:   {csv_path}")
         if args.summary_csv:
             summary_path = pathlib.Path(args.summary_csv)
-            append_summary(runs, summary_path, board=board, run_tag=args.run_tag)
+            append_summary(runs, summary_path, board=board, run_tag=args.run_tag,
+                           tuning=tuning)
             print(f"  summary appended ({board}/{args.run_tag}): {summary_path}")
 
     print(f"\n  {'PASS' if ok else 'FAIL'}")

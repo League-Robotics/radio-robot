@@ -310,14 +310,24 @@ def scenario_banner_on_connect(port: str, result: Result) -> "SerialConnection |
 
     `_banner_classify()` unconditionally sends its OWN `HELLO` at t=0
     regardless (that is how it works -- see its own docstring); the
-    distinction this check makes is TIMING: a banner already in flight at
-    boot (DTR-assert reset) is captured within a small fraction of the
-    budget, while the fallback path (no banner ever arrives) consumes the
-    ENTIRE `_HELLO_CLASSIFY_TIMEOUT_S` window before giving up. This
+    distinction this check makes is TIMING: a device that answers is
+    captured within a small fraction of the budget, while the fallback path
+    (no banner ever arrives) consumes the ENTIRE
+    `_HELLO_CLASSIFY_TIMEOUT_S` window before giving up. This
     script wraps the bound method with a timing shim for the duration of
     ONE `connect()` call -- the same class of "reach into
     SerialConnection's own internals for a bench diagnostic" already
     established by `wire_truth.py` (`conn._stop_reader()`/`conn._ser`).
+
+    133-006 note: this check used to be described as observing a
+    banner-already-in-flight from the DTR-assert reset that `connect()`
+    performed on every open. `connect()` no longer asserts DTR (see
+    `SerialConnection.connect()`'s "DTR policy"), so the banner is now
+    always the answer to `_banner_classify()`'s own `HELLO` rather than a
+    boot announcement. The check is unaffected -- measured against the
+    `getez` relay on 2026-08-04 under the new policy, `_banner_classify()`
+    returned in 0.007 s against a 2.5 s budget -- but it is now a liveness
+    check, not a boot check, and must not be re-described as the latter.
 
     Returns the (possibly still-open) `SerialConnection` so the caller can
     run the SUC-008 zero-commands check on the SAME fresh connection

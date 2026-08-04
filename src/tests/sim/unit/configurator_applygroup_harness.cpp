@@ -384,12 +384,20 @@ int main() {
     checkTrue(encodeFloatField(9, 0.33f, buf, sizeof(buf), &pos), "encode pid_i_max");
     checkTrue(encodeFloatField(10, 0.44f, buf, sizeof(buf), &pos), "encode pid_kaff");
     checkTrue(encodeFloatField(11, 0.55f, buf, sizeof(buf), &pos), "encode pid_max");
+    // 133-002: field 12. The RUNTIME half of pos_err_max's config surface
+    // (.claude/rules/configuration-discipline.md invariant 2) -- pushed
+    // over the SAME existing WHEEL_CONTROL machinery as its siblings, with
+    // no new arm anywhere. This assertion is the "verify, do not assume"
+    // the ticket asked for.
+    checkTrue(encodeFloatField(12, 12.0f, buf, sizeof(buf), &pos), "encode pos_err_max");
 
     const msg::ErrCode result =
         configurator.applyGroup(msg::ConfigGroupTarget::WHEEL_CONTROL, buf, pos);
     checkEq(result, msg::ErrCode::ERR_NONE, "applyGroup(WHEEL_CONTROL) result");
     checkFloatEq(configurator.config().wheelControl.pid_kp, 0.11f,
                 "config().wheelControl.pid_kp reflects the push");
+    checkFloatEq(configurator.config().wheelControl.pos_err_max, 12.0f,
+                "config().wheelControl.pos_err_max reflects the push");
 
     const App::Drive::ControlGains& gains = drive.controlGains();
     checkFloatEq(gains.kp, 0.11f, "controlGains().kp");
@@ -401,6 +409,13 @@ int main() {
     const App::Drive::AdaptationBounds& bounds = drive.adaptationBounds();
     checkFloatEq(bounds.vMin, 66.0f, "adaptationBounds().vMin");
     checkFloatEq(bounds.biasMax, 77.0f, "adaptationBounds().biasMax");
+    // The two clamps arrive over the wire INDEPENDENTLY and land in
+    // different places: pos_err_max [mm] on AdaptationBounds (Stage B's
+    // input), pid_i_max [mm/s] on ControlGains (its output). A reading of
+    // "posErrMax replaces iMax" would break exactly this pair.
+    checkFloatEq(bounds.posErrMax, 12.0f,
+                "adaptationBounds().posErrMax -- the live wire path reaches Stage B's mm-domain "
+                "clamp, distinct from controlGains().iMax's mm/s-domain clamp above");
   }
 
   // --- MOTORS: guarded, per side -------------------------------------------

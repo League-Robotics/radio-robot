@@ -334,7 +334,40 @@ void NezhaMotor::writeShapedDuty(float duty, uint32_t now)
 void NezhaMotor::writeRawDuty(float duty)
 {
     duty = clampf(duty, -1.0f, 1.0f);
-    int8_t pct = static_cast<int8_t>(lroundf(duty * 100.0f));
+
+    // SIGMA-DELTA on the rounding residual (133-002; measured on vevov
+    // 2026-08-03). The brick takes an INTEGER PERCENT, and at
+    // App::Drive::kDutyPerSpeed = 0.001182 one count is 8.46 mm/s -- 5.6%
+    // of a 150 mm/s command. Measured: plateau velocity clusters at
+    // exactly -1/0/+1 counts (sd 8.0 mm/s against an 8.46 mm/s step), and
+    // the residual left/right distance imbalance being chased was 0.43 of
+    // ONE COUNT. That is below the actuator's resolution, which is why
+    // sweeping ki, kff and aSteady all failed to move it: no gain can
+    // command a value the output cannot represent.
+    //
+    // Carrying the rounding residual into the next tick makes the
+    // TIME-AVERAGED percent equal the fractional duty actually wanted, so
+    // the loop gets sub-count resolution out of the same integer wire
+    // field. Same idea as App::Drive::crawlDuty()'s Bresenham
+    // accumulator, applied to EVERY duty rather than only sub-deadband
+    // ones.
+    //
+    // The carry is DISCARDED on a commanded zero: a residual left over
+    // from the last nonzero duty would otherwise round to +-1 and creep a
+    // stopped wheel -- re-creating exactly the runaway class this file's
+    // own header and 133-001 exist to prevent. Losing sub-count fidelity
+    // across a stop is the correct trade. Stop stays stop.
+    int8_t pct;
+    if (duty == 0.0f) {
+        dutyCarry_ = 0.0f;
+        pct = 0;
+    } else {
+        const float wanted = clampf(duty * 100.0f + dutyCarry_, -100.0f, 100.0f);
+        pct = static_cast<int8_t>(lroundf(wanted));
+        // Bounded so a saturated command cannot accumulate an unbounded
+        // debt that later dumps into the output as a lurch.
+        dutyCarry_ = clampf(wanted - static_cast<float>(pct), -1.0f, 1.0f);
+    }
     if (pct > 100) pct = 100;
     if (pct < -100) pct = -100;
 

@@ -201,6 +201,26 @@ class RobotLoop {
 
   // --- cycle() steps, in schedule order ---
 
+  // SAFETY ARBITRATION (133-001), first in the schedule -- runs immediately
+  // ahead of drive_.tick(), the single actuation path.
+  //
+  // MONOTONE CONTRACT: this method may write ONLY 0.0f to cmdVelocity, and
+  // never a nonzero value. That restriction is what makes a loop-level
+  // write to a decider-owned field legitimate: a zero-only writer cannot
+  // originate motion, cannot fight a decider for control, and cannot
+  // produce a speed no decider asked for. Do not relax it -- the moment
+  // this method can emit a nonzero, App::RobotLoop becomes a third
+  // decider, and the cmdVelocity ownership invariant (stated in full at
+  // RobotLoop::publishWheels(), robot_loop.cpp) is void.
+  //
+  // Idleness is DERIVED (!planner_.active() && !drive_.owns()), never
+  // announced or acquired. There is deliberately no idle-owner subsystem:
+  // an owner must be told to take over, and the failure this guards is a
+  // decider that has silently STOPPED publishing -- which is exactly the
+  // case that would never tell anyone anything. See the .cpp's own comment
+  // at the call site for the measured defect (vevov, 2026-08-03).
+  void zeroUnownedMotion();
+
   // Publish one wheel's state section (rebaseline/clamp/read), after its
   // collect. `clamped` reports the defensive wire-bound clamp.
   void publishWheel(Devices::Motor& motor, Types::RobotState::Wheel& wheel,
@@ -216,10 +236,34 @@ class RobotLoop {
   void publishMoveResult(const Motion::TickResult& moveResult);
 
 #ifdef ROBOT_DEBUG
-  // DBG fault injection (system test): apply one staged Comms::DbgAction
-  // and expire any duration-bounded injected wedge. Compiled out of
-  // shipped images with the whole inbound-DBG surface.
+  // DBG fault injection (system test) + 133-003's live tuning arms: apply
+  // one staged Comms::DbgAction and expire any duration-bounded injected
+  // wedge. Compiled out of shipped images with the whole inbound-DBG
+  // surface.
   void applyDbgAction(uint32_t now);  // [ms]
+
+  // captureTuningBaseline -- snapshot what BOOT installed, once, the first
+  // time a tuning verb (kVmin/kGain/kASteady/kPos) arrives. Two jobs, both
+  // load-bearing:
+  //
+  //   1. `DBG:gain` is a MULTIPLIER on the boot-installed dutyPerSpeed
+  //      pair, and setDutyPerSpeed() overwrites rather than accumulates.
+  //      Without a fixed baseline, `gain 1.02 0.98` sent twice would
+  //      compound to 1.0404/0.9604 -- an operator re-asserting the same
+  //      value would silently get a different robot each time, which is
+  //      the exact failure the echo contract exists to prevent one layer
+  //      up. With it, the verb is idempotent and `gain 1 1` is a true
+  //      identity.
+  //   2. `DBG:clear` can then restore every tuning knob to boot, so a
+  //      sweep is undoable without a reflash or a power cycle.
+  //
+  // The baseline is the value Configurator::install() landed, NOT
+  // Drive::kDutyPerSpeed. Since 132-009 that constant is reference-only
+  // and boot reads config.drive.duty_per_speed_left/right instead
+  // (drive.h's own kDutyPerSpeed doc comment); multiplying the constant
+  // would hand every robot tovez's gearboxes again -- the precise
+  // anti-pattern that comment warns about.
+  void captureTuningBaseline();
 #endif
 
 #ifdef ROBOT_DEBUG
@@ -227,6 +271,15 @@ class RobotLoop {
   // armed, UINT32_MAX = latched until DBG:clear.
   uint32_t dbgWedgeUntilL_ = 0;  // [ms]
   uint32_t dbgWedgeUntilR_ = 0;  // [ms]
+
+  // Boot-installed tuning snapshot -- see captureTuningBaseline() above.
+  // `dbgTuningBaselined_` false means no tuning verb has landed yet, so
+  // the other three fields are meaningless and DBG:clear has nothing to
+  // restore.
+  bool dbgTuningBaselined_ = false;
+  Drive::AdaptationBounds dbgBoundsBaseline_{};
+  float dbgDutyPerSpeedBaseLeft_ = 0.0f;   // [duty/(mm/s)]
+  float dbgDutyPerSpeedBaseRight_ = 0.0f;  // [duty/(mm/s)]
 #endif
 
   Devices::I2CBus& bus_;

@@ -7,6 +7,14 @@ logic, no hardware required.
 CLAUDE.md`), so this test loads the bench script directly by file path via
 `importlib`, mirroring `test_duty_sweep_population.py`'s established
 precedent for testing a bench script's pure logic in isolation.
+
+133-003 Part D added the tests below `score_plus500`'s own tests: this
+script used to call the curated flat-key `NezhaProtocol.config(**{"pid.kp":
+...})` API sprint 132 deleted, at its Stage B trial-gain push and both its
+revert-to-zero sites. It now pushes through
+`wheel_control_tuning.push_gains()`, exercised here with a fake
+`NezhaProtocol` double (`_fake_wheel_control_proto.FakeWheelControlProto`)
+-- no hardware, no `SerialConnection`.
 """
 from __future__ import annotations
 
@@ -15,6 +23,8 @@ import pathlib
 import sys
 
 import pytest
+
+from _fake_wheel_control_proto import FakeWheelControlProto
 
 _BENCH_SCRIPT = pathlib.Path(__file__).resolve().parents[1] / "bench" / "wheel_controller_ab_bench.py"
 
@@ -214,3 +224,93 @@ def test_score_plus500_fails_rise_when_the_ramp_is_slow(bench):
     score = bench.score_plus500(samples)
     assert score["rise_ok"] is False
     assert score["rise_time_s"] > 0.3
+
+
+# ---------------------------------------------------------------------------
+# 133-003 Part D: the repaired config path (push_gains() replacing the
+# deleted NezhaProtocol.config(**...) at the Stage B trial push and both
+# revert-to-zero sites).
+# ---------------------------------------------------------------------------
+
+def test_module_still_imports_and_wires_the_shared_tuning_helper_without_hardware(bench):
+    # Merely loading the module (the `bench` fixture above) already
+    # exercises its own sys.path shim + `from wheel_control_tuning import
+    # ...` -- if that wiring were broken the fixture would have raised
+    # before any test ran.
+    assert hasattr(bench, "push_gains")
+    assert hasattr(bench, "TuningNotConfirmed")
+    assert hasattr(bench, "format_gains")
+    assert hasattr(bench, "describe_persistence")
+    assert hasattr(bench, "_revert_stage_b")
+
+
+def test_push_gains_resolves_stage_b_trial_gains_to_wheel_control_fields(bench):
+    proto = FakeWheelControlProto()
+
+    readback = bench.push_gains(proto, bench.STAGE_B_TRIAL_GAINS)
+
+    pushed = dict(proto.calls)
+    assert pushed["pid_kp"] == pytest.approx(0.3)
+    assert pushed["pid_ki"] == pytest.approx(0.02)
+    assert pushed["pid_i_max"] == pytest.approx(20.0)
+    # The two non-obvious mappings this ticket exists to get right.
+    assert pushed["pid_kaff"] == pytest.approx(0.23)   # pid.kff -> pid_kaff, NOT pid_kff
+    assert pushed["pid_max"] == pytest.approx(30.0)    # pid.kaw -> pid_max, NOT an anti-windup field
+    assert readback["pid_kaff"] == pytest.approx(0.23)
+    assert readback["pid_max"] == pytest.approx(30.0)
+
+
+def test_push_gains_resolves_stage_b_zero_gains_to_the_same_fields(bench):
+    proto = FakeWheelControlProto()
+
+    readback = bench.push_gains(proto, bench.STAGE_B_ZERO_GAINS)
+
+    pushed = dict(proto.calls)
+    assert set(pushed) == {"pid_kp", "pid_ki", "pid_i_max", "pid_kaff", "pid_max"}
+    assert all(value == pytest.approx(0.0) for value in pushed.values())
+    assert readback["pid_kaff"] == pytest.approx(0.0)
+    assert readback["pid_max"] == pytest.approx(0.0)
+
+
+def test_push_gains_raises_on_stage_b_trial_readback_mismatch(bench):
+    # An ack that lands on the wrong value must abort the trial rather than
+    # let the A/B comparison run against gains the robot isn't actually
+    # holding -- "an ack is not evidence"
+    # (`.claude/rules/configuration-discipline.md`).
+    proto = FakeWheelControlProto(mismatch_field="pid_kaff")
+
+    with pytest.raises(bench.TuningNotConfirmed):
+        bench.push_gains(proto, bench.STAGE_B_TRIAL_GAINS)
+
+
+def test_revert_stage_b_confirms_the_all_zero_readback_and_returns_true(bench):
+    proto = FakeWheelControlProto(initial={"pid_kp": 0.3, "pid_kaff": 0.23, "pid_max": 30.0})
+
+    confirmed = bench._revert_stage_b(proto, "test")
+
+    assert confirmed is True
+    assert proto.live["pid_kp"] == pytest.approx(0.0)
+    assert proto.live["pid_kaff"] == pytest.approx(0.0)
+    assert proto.live["pid_max"] == pytest.approx(0.0)
+
+
+def test_revert_stage_b_reports_a_failed_revert_without_raising(bench):
+    # The revert-to-zero path is safety-ish: a raised TuningNotConfirmed
+    # must never escape `_revert_stage_b()` and skip the caller's own
+    # estop()/tlmOff()/disconnect cleanup -- it must be reported loudly
+    # (captured below) and return False instead.
+    proto = FakeWheelControlProto(nak_field="pid_max")
+
+    confirmed = bench._revert_stage_b(proto, "test")
+
+    assert confirmed is False
+
+
+def test_revert_stage_b_prints_the_failure_loudly(bench, capsys):
+    proto = FakeWheelControlProto(nak_field="pid_max")
+
+    bench._revert_stage_b(proto, "test-label")
+
+    captured = capsys.readouterr()
+    assert "ERROR" in captured.out
+    assert "test-label" in captured.out

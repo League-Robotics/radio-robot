@@ -66,7 +66,7 @@ struct Result {
 // migration (194B largest, up from 185B pre-migration -- the whole reason
 // this budget needed recomputing in the first place).
 //   CommandEnvelope: config=148B, stop=8B, move=38B, wheels=24B, estop=3B, get_config=5B, set_field=16B (worst=config=148B) + non-oneof=6B => total=154B
-//   ReplyEnvelope: ok=19B, err=10B, tlm=188B, cfg=148B (worst=tlm=188B) + non-oneof=4B => total=192B
+//   ReplyEnvelope: ok=19B, err=10B, tlm=188B, cfg=150B (worst=tlm=188B) + non-oneof=4B => total=192B
 constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 154;
 constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 192;
 static_assert(kCommandEnvelopeMaxEncodedSize <= 240,

@@ -159,7 +159,25 @@ def test_default_drive_group_matches_tovez_json():
 
 def test_default_wheel_control_group_matches_tovez_json():
     """WheelControl: Stage C's live population-measured figures (vMin/
-    biasMax) plus Stage B/deficit-flag's inert-today (0) fields."""
+    biasMax) plus Stage B, which is LIVE as of 133-004.
+
+    Stage B was inert (every ``pid_*`` at 0) from 130-004 until 133-004,
+    and this test asserted those zeros. 133-004 is the bench session that
+    tuned it on `tovez` and promoted the measured values, so the zeros are
+    no longer the expectation -- see `data/robots/tovez.json`'s own
+    `_stage_b_tuning_note` for the run behind each figure.
+
+    TWO fields are still zero, and BOTH are asserted rather than dropped,
+    because in this group a zero is a real setting and not an absence:
+
+      * ``pid_kp`` is zero as a MEASURED RESULT (133-004 answered 130-004's
+        Open Question 4 with a no -- the velocity-domain P term bought no
+        distance fidelity and cost straight-line heading; the position I
+        term does the work). Asserting it guards against someone "fixing"
+        an apparently-untuned gain.
+      * ``pid_kaff`` is zero because the ``cmdAccel`` path is still
+        unvalidated.
+    """
     content = gbc.generate(_tovez_cfg(), "data/robots/tovez.json")
 
     assert "cfg.v_min = 99.7f;" in content
@@ -167,7 +185,11 @@ def test_default_wheel_control_group_matches_tovez_json():
     assert "cfg.tau_adapt = 30.0f;" in content
     assert "cfg.a_steady = 30.0f;" in content
     assert "cfg.pid_kp = 0.0f;" in content
-    assert "cfg.pid_max = 0.0f;" in content
+    assert "cfg.pid_ki = 6.0f;" in content
+    assert "cfg.pid_i_max = 60.0f;" in content
+    assert "cfg.pos_err_max = 10.0f;" in content
+    assert "cfg.pid_max = 100.0f;" in content
+    assert "cfg.pid_kaff = 0.0f;" in content
 
 
 def test_default_planner_group_matches_tovez_json():
