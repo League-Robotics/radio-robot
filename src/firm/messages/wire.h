@@ -65,9 +65,9 @@ struct Result {
 // computes, including ticket 004's cycle_busy/cycle_period primary-frame
 // migration (194B largest, up from 185B pre-migration -- the whole reason
 // this budget needed recomputing in the first place).
-//   CommandEnvelope: config=49B, stop=8B, move=38B, wheels=24B, estop=3B, get_config=5B, set_field=16B (worst=config=49B) + non-oneof=6B => total=55B
+//   CommandEnvelope: config=228B, stop=8B, move=38B, wheels=24B, estop=3B, get_config=5B, set_field=16B (worst=config=228B) + non-oneof=6B => total=234B
 //   ReplyEnvelope: ok=19B, err=10B, tlm=188B, cfg=228B (worst=cfg=228B) + non-oneof=4B => total=232B
-constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 55;
+constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 234;
 constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 232;
 static_assert(kCommandEnvelopeMaxEncodedSize <= 240,
               "CommandEnvelope worst-case encoded size exceeds the 240-byte envelope budget");

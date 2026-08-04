@@ -1,15 +1,18 @@
-"""Off-hardware acceptance proof for ticket 114-004 (SUC-003),
-Config::PersistedTuning's PURE logic (``src/firm/config/
-persisted_tuning.{h,cpp}``).
+"""Off-hardware acceptance proof for Config::PersistedTuning's PURE logic
+(``src/firm/config/persisted_tuning.{h,cpp}``), originally ticket 114-004
+(SUC-003), reshaped by 132-013 (patch-surface retirement) onto
+``Config::Robot``'s own grouped shape -- see persisted_tuning_harness.cpp's
+own header for the reshape rationale.
 
 Compiles ``persisted_tuning_harness.cpp`` together with the real
-``src/firm/config/persisted_tuning.cpp`` against the same
-``src/firm/messages/config.h`` every ARM build compiles, with
-``-DHOST_BUILD`` -- under that define, persisted_tuning.cpp's own ARM-only
+``src/firm/config/persisted_tuning.cpp``, with ``-DHOST_BUILD`` -- under
+that define, persisted_tuning.cpp's own ARM-only
 ``Config::MicroBitTuningStore`` adapter (guarded ``#ifndef HOST_BUILD``)
 compiles out entirely; this test exercises ONLY serializeSnapshot()/
 deserializeSnapshot()/shouldWipe(), which have zero MicroBitStorage/
-hardware dependency (persisted_tuning.h's own file header). Mirrors
+hardware dependency (persisted_tuning.h's own file header) -- as of
+132-013, persisted_tuning.h no longer even includes a ``messages/``
+header (TuningSnapshot is now plain data). Mirrors
 ``test_measurement_ring.py``'s exact shape: compile with the system C++
 compiler, run the resulting binary, assert it exits 0.
 

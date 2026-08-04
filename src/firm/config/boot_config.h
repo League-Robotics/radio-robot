@@ -61,11 +61,13 @@ extern const char kDrivetrainType[];
 // Devices::RealOtos construction; the scale multipliers are converted to the
 // OTOS chip's raw register scalar once at Devices::RealOtos::begin(), not
 // re-derived per wire call (docs/protocol-v2.md §11). A SEPARATE, live
-// runtime override exists on top of this boot bake — `OtosConfigPatch`
-// (config.proto), applied by RobotLoop::handleConfig directly against
-// Devices::Otos's setLinearScalar()/setAngularScalar()/setOffset()/init()
-// — this struct itself is never touched at runtime; only the chip's own
-// registers are re-written.
+// runtime override exists on top of this boot bake — the OTOS group's own
+// live wire arm (robot_config.proto's `Otos`, 132-008), applied by
+// App::Configurator::install(OTOS) directly against Devices::Otos's
+// setLinearScalar()/setAngularScalar()/setOffset() (`init()` has no
+// Config::Robot-shaped wire path any more, 132-013) — this struct itself
+// is never touched at runtime; only the chip's own registers are
+// re-written.
 struct OtosBootConfig {
   float offsetX = 0.0f;      // [mm] mounting offset from chassis centre to sensor
   float offsetY = 0.0f;      // [mm]

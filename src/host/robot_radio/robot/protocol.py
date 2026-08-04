@@ -77,7 +77,21 @@ from robot_radio.io.serial_conn import SerialConnection
 # robot_radio.robot's own __init__.py is still mid-execution (which is
 # always the case when this module is first loaded -- __init__.py imports
 # this module itself) never re-enters a partially-initialized module.
-from robot_radio.robot.pb2 import config_pb2, envelope_pb2, robot_config_pb2, telemetry_pb2
+from robot_radio.robot.pb2 import envelope_pb2, robot_config_pb2, telemetry_pb2
+# config_pb2 -- DELETED, 132-013 (patch-surface retirement, sprint 132
+# "configuration discipline"): config.proto (DrivetrainConfigPatch/
+# MotorConfigPatch/OtosConfigPatch/EstimatorConfigPatch's only source) no
+# longer exists, replaced by robot_config.proto's group/field wire arms.
+# Dropped from this import (not merely left broken) because this module's
+# __init__-time import chain (robot_radio.robot/__init__.py imports this
+# module eagerly) means an ImportError here would poison every caller of
+# `robot_radio.robot`, including firmware-side tests with nothing to do
+# with config -- see .clasi/issues or ticket 014 for the REAL migration
+# this module still needs (config()/otos_config()/estimator_config()/
+# set_config()/the `_DRIVETRAIN_KEYS`/`_MOTOR_PID_KEYS` tables below all
+# still reference the deleted config_pb2/ConfigDelta shapes and will raise
+# NameError/AttributeError if called -- that is accepted, expected
+# breakage per this sprint's own stakeholder direction, NOT fixed here).
 
 # robot_config_generated -- the GENERATED pydantic group model (132-002),
 # NOT robot_radio.config.robot_config's hand-written loader/validator

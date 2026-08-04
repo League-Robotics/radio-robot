@@ -4,7 +4,6 @@
 #pragma once
 
 #include "messages/common.h"
-#include "messages/config.h"
 #include "messages/robot_config.h"
 #include "messages/telemetry.h"
 
@@ -115,27 +114,6 @@ struct Move {
     // --- array / optional-string accessors ---
 };
 
-// ConfigDelta
-struct ConfigDelta {
-    enum class PatchKind : uint8_t {
-        NONE = 0,
-        DRIVETRAIN = 1,
-        MOTOR = 2,
-        OTOS = 3,
-        ESTIMATOR = 4,
-    };
-    PatchKind patch_kind = PatchKind::NONE;
-    union {
-        DrivetrainConfigPatch drivetrain;
-        MotorConfigPatch motor;
-        OtosConfigPatch otos;
-        EstimatorConfigPatch estimator;
-    } patch = {};
-
-
-    // --- array / optional-string accessors ---
-};
-
 // CommandEnvelope
 struct CommandEnvelope {
     enum class CmdKind : uint8_t {
@@ -150,7 +128,7 @@ struct CommandEnvelope {
     };
     CmdKind cmd_kind = CmdKind::NONE;
     union {
-        ConfigDelta config;
+        SetConfigGroup config;
         Stop stop;
         Move move;
         Wheels wheels;

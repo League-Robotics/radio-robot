@@ -35,8 +35,8 @@ static_assert(std::is_standard_layout<CommandEnvelope>::value,
               "msg::CommandEnvelope must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<ReplyEnvelope>::value,
               "msg::ReplyEnvelope must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<ConfigDelta>::value,
-              "msg::ConfigDelta must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<SetConfigGroup>::value,
+              "msg::SetConfigGroup must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Stop>::value,
               "msg::Stop must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Move>::value,
@@ -57,14 +57,6 @@ static_assert(std::is_standard_layout<Telemetry>::value,
               "msg::Telemetry must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<ConfigSnapshot>::value,
               "msg::ConfigSnapshot must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<DrivetrainConfigPatch>::value,
-              "msg::DrivetrainConfigPatch must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<MotorConfigPatch>::value,
-              "msg::MotorConfigPatch must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<OtosConfigPatch>::value,
-              "msg::OtosConfigPatch must be standard-layout for offsetof-based field tables");
-static_assert(std::is_standard_layout<EstimatorConfigPatch>::value,
-              "msg::EstimatorConfigPatch must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<MoveTwist>::value,
               "msg::MoveTwist must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<MoveWheels>::value,

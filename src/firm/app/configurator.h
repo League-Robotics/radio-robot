@@ -40,40 +40,64 @@
 //   |---------------|-------|--------------------------------------------------|-------|
 //   | GEOMETRY      | NO    | -- (ERR_NOT_LIVE)                                 | trackWidth has no post-construction setter anywhere (Drive/Odometry/Planner all bake it in at construction); rotation calibration installs once, at boot, via RobotLoop::configure() called directly from boot_wiring.cpp, not through this class |
 //   | PLANNER       | NO    | -- (ERR_NOT_LIVE)                                 | vMax/omegaMax/controlPeriod/actuationDelay/landing.*/headingHoldGain have no post-construction setter; only the (already-live) shaper ceilings are re-appliable, and those ride the boot-time no-arg install(), not a per-target push |
-//   | DRIVE         | yes   | `Drive::configure(config_)` (132-007)             | Stage A per-wheel gain/intercept + crawl pulse, via the existing `setWheelCorrection()`/`setCrawlPulse()` |
-//   | WHEEL_CONTROL | yes   | `Drive::configure(config_)` (132-007)             | SAME call as DRIVE -- Drive::configure() pulls Stage B/C gains/bounds from `config_.wheelControl` in the same pass it reads `config_.drive` from; one re-appliable unit from Drive's own point of view, two ConfigGroupTargets on the wire |
-//   | MOTORS        | yes   | `App::configureMotor()` x2 (132-007), GUARDED     | refuses (returns false, applies nothing) while that side reports itself in motion -- surfaced as `ERR_BUSY`, never swallowed, so a caller can retry at rest |
-//   | OTOS          | yes   | `App::configureOtos()` (132-007/010)              | trap 3 CLOSED (132-010): `linear_scale`/`angular_scale` are converted through `Devices::scaleToRegister()` before reaching `setLinearScalar()`/`setAngularScalar()`, matching `RealOtos::begin()`'s own boot-time conversion -- a live push and a boot bake now agree on what a given multiplier means. `apply()`'s OLD `applyOtosPatch()` still has the pass-through bug -- that surface is retired outright by ticket 013, not patched here |
-//   | ESTIMATOR     | yes   | -- (`ERR_UNIMPLEMENTED`, PERMANENT)               | trap 2 CLOSED (132-010) by making the dead end EXPLICIT rather than inventing a consumer: `App::StateEstimator` was deleted outright as dead code (sprint 128 ticket 016), and its one candidate successor -- `Motion::PoseTracker::blendHeading()` (`src/motion/planner/estimation.h`) -- had its only call site AND its own config fields (`PlannerLimits::headingOtosWeight`/`otosStaleness`) deleted outright by 130-009, in favor of a from-scratch fusion redesign tracked at `clasi/issues/later/estimator-v2-otos-fusion-sim-first.md`. Building a real consumer today would mean either resurrecting logic 130-009 deliberately retired, or building estimator-v2 itself -- both out of this ticket's scope (and the latter explicitly deferred by its own tracked issue). `Configurator` therefore holds NO estimator-shaped reference; `config_.estimator` still decodes correctly for read-back (`applyGroup()` never skips the decode for a live-classified target), but `install(ESTIMATOR)` returns `ERR_UNIMPLEMENTED` permanently until estimator-v2 gives it something real to call |
+//   | DRIVE         | yes   | `Drive::configure(config_)` (132-007)             | Stage A per-wheel gain/intercept + crawl pulse, via the existing `setWheelCorrection()`/`setCrawlPulse()`. NOT persisted (132-013) -- no old curated live-tuning wire message ever existed for these fields, so the persistence precedent leaves them boot-only-persisted (i.e. reset to the baked JSON default every reboot until live-tuned again) |
+//   | WHEEL_CONTROL | yes   | `Drive::configure(config_)` (132-007)             | SAME call as DRIVE -- Drive::configure() pulls Stage B/C gains/bounds from `config_.wheelControl` in the same pass it reads `config_.drive` from; one re-appliable unit from Drive's own point of view, two ConfigGroupTargets on the wire. PERSISTED (132-013) -- these 5 fields (pid_kp/pid_ki/pid_i_max/pid_kaff/pid_max) are the direct successor of the old curated Motor live-tuning message's kp/ki/i_max/kff/kaw, which already persisted |
+//   | MOTORS        | yes   | `App::configureMotor()` x2 (132-007), GUARDED     | refuses (returns false, applies nothing) while that side reports itself in motion -- surfaced as `ERR_BUSY`, never swallowed, so a caller can retry at rest. PARTIALLY PERSISTED (132-013) -- only travel_calib_left/travel_calib_right (the one MotorConfig field App::configureMotor() still live-applies, boot_calibration.h's own doc comment), matching the old curated Motor live-tuning message's travel_calib precedent exactly; fwd_sign/output_deadband/reversal_dwell/vel_* never persisted before and still don't |
+//   | OTOS          | yes   | `App::configureOtos()` (132-007/010)              | trap 3 CLOSED (132-010): `linear_scale`/`angular_scale` are converted through `Devices::scaleToRegister()` before reaching `setLinearScalar()`/`setAngularScalar()`, matching `RealOtos::begin()`'s own boot-time conversion -- a live push and a boot bake now agree on what a given multiplier means. PERSISTED IN FULL (132-013) -- offset_x/offset_y/offset_yaw/linear_scale/angular_scale mirror the old curated Otos live-tuning message's own 5 scale/offset fields exactly (its 6th field, `init`, was a fire-and-forget trigger with no Config::Robot-shaped successor and was never persisted either) |
+//   | ESTIMATOR     | yes   | -- (`ERR_UNIMPLEMENTED`, PERMANENT)               | trap 2 CLOSED (132-010) by making the dead end EXPLICIT rather than inventing a consumer: `App::StateEstimator` was deleted outright as dead code (sprint 128 ticket 016), and its one candidate successor -- `Motion::PoseTracker::blendHeading()` (`src/motion/planner/estimation.h`) -- had its only call site AND its own config fields (`PlannerLimits::headingOtosWeight`/`otosStaleness`) deleted outright by 130-009, in favor of a from-scratch fusion redesign tracked at `clasi/issues/later/estimator-v2-otos-fusion-sim-first.md`. Building a real consumer today would mean either resurrecting logic 130-009 deliberately retired, or building estimator-v2 itself -- both out of this ticket's scope (and the latter explicitly deferred by its own tracked issue). `Configurator` therefore holds NO estimator-shaped reference; `config_.estimator` still decodes correctly for read-back (`applyGroup()` never skips the decode for a live-classified target), but `install(ESTIMATOR)` returns `ERR_UNIMPLEMENTED` permanently until estimator-v2 gives it something real to call. NEVER PERSISTED (132-013, following the old curated Estimator live-tuning message's own explicit precedent -- "a reboot always reverts to the baked JSON default") -- unaffected by ESTIMATOR's own permanent ERR_UNIMPLEMENTED above; the two are independent facts that happen to agree |
 //
-// Owns four things that used to be scattered across RobotLoop:
+// PERSISTENCE SCOPE (132-013, patch-surface retirement -- sprint.md Out of
+// Scope's own explicit ticket-013 acceptance criterion): the reshaped
+// `Config::TuningSnapshot` (config/persisted_tuning.h) persists exactly
+// WHEEL_CONTROL (in full) + MOTORS.travel_calib_left/right + OTOS (in
+// full) -- the SAME set the old curated-message merge accumulator already
+// persisted, renamed onto their new Config::Robot homes, neither expanded
+// nor contracted. DRIVE (Stage A per-wheel correction, this sprint's OWN
+// headline new live-wire capability) and ESTIMATOR are deliberately left
+// OUT, matching the precedent that only what a live push could already
+// change persisted -- Stage A never had a wire arm before this sprint, and
+// Estimator never persisted even when it did have one. GEOMETRY/PLANNER
+// are boot-only (never live-pushed at all) and were never candidates.
+//
+// Owns three things that used to be scattered across RobotLoop (132-013,
+// patch-surface retirement -- REVISED from the four-thing list this
+// comment used to carry: item 2 below, "present-field merges," is GONE,
+// not merely renumbered -- see the git history of this file for the
+// pre-132-013 four-thing version):
 //   1. The one Config::Robot instance -- loadBaked()/config()/install(),
 //      above.
-//   2. Present-field patch merges -- a ConfigDelta carries only the fields
-//      the host set, so applying one is a merge onto the cumulative
-//      snapshot, never an overwrite. (Unchanged by 132-006 -- this is the
-//      OLD *ConfigPatch wire surface, retired by ticket 013, not this
-//      ticket.)
-//   3. The persisted-tuning snapshot and its change-detection write policy
+//   2. The persisted-tuning snapshot and its change-detection write policy
 //      (flash is written only when the serialized blob actually differs).
-//   4. Pushing values into the subsystems that OWN them: motor gains and
+//      Reshaped (132-013, config/persisted_tuning.h) from a shape modeled
+//      on the old curated live-tuning wire messages, with per-FIELD
+//      Opt<T> presence, into a flat, Config::Robot-groups-shaped snapshot
+//      with per-GROUP (not per-field) presence -- see persisted_tuning.h's
+//      own doc comment for the full reshape and the re-appliability
+//      table's own PERSISTENCE SCOPE note above for WHICH groups.
+//   3. Pushing values into the subsystems that OWN them: motor gains and
 //      per-wheel calibration -> App::Drive and the two Devices::Motor
 //      leaves, shaper ceilings -> Motion::Planner, OTOS scalars and
-//      offsets -> the OTOS leaf. The OLD ESTIMATOR patch surface's own
-//      weight_heading_otos/weight_omega_otos/staleness_ms fields are still
-//      accepted on the wire (that surface is unchanged here -- retired
-//      outright by ticket 013) but land nowhere, same as
+//      offsets -> the OTOS leaf. The OLD curated Estimator live-tuning
+//      message's own weight_heading_otos/weight_omega_otos/staleness_ms
+//      fields still decode correctly for read-back (config_.estimator,
+//      via applyGroup()) but land nowhere on install(), same as
 //      `install(ESTIMATOR)`'s own permanent `ERR_UNIMPLEMENTED` above --
-//      see apply()'s own ESTIMATOR-branch comment and the re-appliability
-//      table's ESTIMATOR row for the full 132-010 reasoning.
+//      see the re-appliability table's ESTIMATOR row for the full 132-010
+//      reasoning. There is no separate "present-field merge" responsibility
+//      any more (the whole curated per-target live-tuning message family
+//      and its routing enum are deleted outright, 132-013) -- applyGroup()/
+//      applyField() write straight into config_, no patch, no presence
+//      flags, no merge, and item 2 above snapshots config_'s own current
+//      values rather than accumulating a separate merge state.
 //
 // Named `Configurator`, not `Config`, because `Config::` is already a
 // namespace in this tree (config/persisted_tuning.h) -- a class of that
 // name would collide with it.
 //
-// Boundary: inside -- what a decoded ConfigDelta MEANS and where its values
-// land; outside -- decoding it (App::Comms), routing it (RobotLoop), and
-// acking it (RobotLoop, from this class's returned error code).
+// Boundary: inside -- what a decoded SetConfigGroup/SetConfigField MEANS
+// and where its values land; outside -- decoding it (App::Comms), routing
+// it (RobotLoop), and acking it (RobotLoop, from this class's returned
+// error code).
 #pragma once
 
 #include <cstdint>
@@ -96,7 +120,7 @@
 // boot_config.h's generated Config::default*Group() functions, 132-005).
 // Decoding a wire push directly into this same object is
 // Configurator::applyGroup() (132-008, below); applyField() (single-field
-// push) is still ticket 012's job.
+// push) is 132-012.
 
 namespace App {
 
@@ -109,14 +133,16 @@ class Configurator {
                Devices::Otos& otos, Motion::Planner& planner,
                Config::TuningStore* tuningStore = nullptr);
 
-  // Apply one decoded CONFIG command. Returns the msg::ErrCode to ack with
-  // -- 0 on success, ERR_UNIMPLEMENTED for a declared-but-unwired patch
-  // arm. RobotLoop's whole CONFIG handler is this call plus the ack.
-  uint32_t apply(const msg::CommandEnvelope& env);
-
-  // Apply a loaded TuningSnapshot through the SAME per-kind appliers a live
-  // patch uses, and seed the write-policy baseline so the first live patch
-  // after boot is compared against what is actually in flash.
+  // reapplyPersistedTuning() -- main.cpp's own post-boot step
+  // (RobotGraph::loadPersistedTuning(), boot_wiring.cpp): writes a loaded
+  // TuningSnapshot's persisted fields into config_ (only for a group whose
+  // own per-group "tuned" flag is set -- an untouched group's config_
+  // value stays whatever loadBaked()/install() already put there, never
+  // stomped with a zero-initialized snapshot field), then fans each
+  // touched group out via the SAME install(target) a live wire push uses.
+  // Finally seeds persistedTuning_/lastPersistedBlob_ from the snapshot so
+  // the first live push after boot is change-detected against what is
+  // actually in flash, not an empty baseline.
   void reapplyPersistedTuning(const Config::TuningSnapshot& snapshot);
 
   // config() -- read-back: one call, whole truth (the-configuration-
@@ -175,6 +201,11 @@ class Configurator {
   // decode call) also leaves config_ untouched for that target: decodeInto()
   // validates inline and this function does not partially commit a
   // half-decoded group.
+  //
+  // On success (install(target) returns ERR_NONE), calls
+  // persistIfEligible(target) (132-013) -- a no-op for a target outside
+  // the persisted-tuning precedent set, a flash write (if the serialized
+  // snapshot actually changed) for WHEEL_CONTROL/MOTORS/OTOS.
   msg::ErrCode applyGroup(msg::ConfigGroupTarget target, const uint8_t* wire, size_t len);
 
   // applyField() -- 132-012 (SetConfigField / the-configuration-object.md's
@@ -206,7 +237,10 @@ class Configurator {
   // makes -- so a single-field push takes effect exactly the way a
   // whole-group push does (including MOTORS's ERR_BUSY-while-moving guard
   // and ESTIMATOR's permanent ERR_UNIMPLEMENTED, both install(target)'s
-  // own job, unaffected by which caller reached it).
+  // own job, unaffected by which caller reached it), and calls
+  // persistIfEligible(target) (132-013) exactly like applyGroup() does --
+  // a single-field push through a persisted group snapshots that group's
+  // now-current full state, same as a whole-group push would.
   msg::ErrCode applyField(msg::ConfigGroupTarget target, uint16_t fieldNumber, float value);
 
   // install(target) -- 132-008: fans ONE already-decoded group out to the
@@ -246,9 +280,14 @@ class Configurator {
   msg::ErrCode encodeSnapshot(msg::ConfigGroupTarget target, msg::ConfigSnapshot& out) const;
 
  private:
-  // Per-kind appliers, shared by apply() and reapplyPersistedTuning().
-  void applyMotorConfigPatch(const msg::MotorConfigPatch& patch);
-  void applyOtosPatch(const msg::OtosConfigPatch& patch);
+  // persistIfEligible() -- 132-013: called from applyGroup()/applyField()
+  // after install(target) succeeds. Snapshots config_'s CURRENT values for
+  // `target`'s persisted subset (the re-appliability table's PERSISTENCE
+  // SCOPE note above -- WHEEL_CONTROL in full, MOTORS.travel_calib only,
+  // OTOS in full) into persistedTuning_, marks that group's own "tuned"
+  // flag, and calls persistTuningIfChanged(). A no-op for any other target
+  // (DRIVE/ESTIMATOR/GEOMETRY/PLANNER never persist -- see the table).
+  void persistIfEligible(msg::ConfigGroupTarget target);
 
   // Flash write policy: save only when the serialized snapshot changed.
   void persistTuningIfChanged();
@@ -259,7 +298,8 @@ class Configurator {
   Devices::Otos& otos_;
   Motion::Planner& planner_;
 
-  // Persisted live-tuning: cumulative merge of every tuned field, plus the
+  // Persisted live-tuning: per-group snapshot of config_'s own current
+  // values for the persisted subset (config/persisted_tuning.h), plus the
   // last blob actually written (change-detection baseline).
   Config::TuningStore* tuningStore_ = nullptr;
   Config::TuningSnapshot persistedTuning_ = {};

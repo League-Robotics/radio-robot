@@ -121,7 +121,10 @@ EstimatorBootConfig defaultEstimatorConfig() {
     // this sprint -- see that JSON's own inline comment for the
     // staleness_ms reasoning. NOT a live SET/wire surface itself -- see
     // EstimatorBootConfig's own doc comment (src/firm/config/boot_config.h)
-    // for the separate, volatile EstimatorConfigPatch live-tuning path.
+    // for the separate, volatile ESTIMATOR group live-tuning path
+    // (robot_config.proto's `Estimator`, decodes correctly but reaches no
+    // consumer -- Configurator::install(ESTIMATOR) permanently returns
+    // ERR_UNIMPLEMENTED, 132-010/132-013).
     EstimatorBootConfig cfg;
     cfg.headingOtos = 0.0f;
     cfg.omegaOtos = 0.0f;
@@ -140,11 +143,12 @@ ShaperBootConfig defaultShaperConfig() {
     // own hand-baked PlannerLimits) -- this whole struct is currently
     // unread by anything; alpha_max/alpha_decel are new (a_max/a_decel's
     // own angular sibling -- yaw_jerk_max already covered the angular
-    // jerk slot). NOT a live SET/wire surface itself -- see
-    // EstimatorConfigPatch's a_max/a_decel/alpha_max/alpha_decel/j_max/
-    // yaw_jerk_max fields (config.proto) for the separate, volatile
+    // jerk slot). NOT a live SET/wire surface itself -- see the ESTIMATOR
+    // group's own a_max/a_decel/alpha_max/alpha_decel/j_max/yaw_jerk_max
+    // fields (robot_config.proto's `Estimator`) for the separate, volatile
     // live-tuning path (mirrors OtosBootConfig/EstimatorBootConfig's own
-    // "boot bake vs. live ConfigPatch" split).
+    // "boot bake vs. live wire push" split -- same permanently-unconsumed
+    // status as the comment above).
     ShaperBootConfig cfg;
     cfg.aMax = 800.0f;                  // [mm/s^2]
     cfg.aDecel = 800.0f;               // [mm/s^2]

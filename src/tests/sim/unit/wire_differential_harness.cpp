@@ -138,14 +138,21 @@ const char* cmdKindName(msg::CommandEnvelope::CmdKind k) {
   return "UNKNOWN";
 }
 
-// configDeltaPatchKindName -- prints ConfigDelta's own oneof discriminant
-// the same way cmdKindName() prints CommandEnvelope's.
-const char* configDeltaPatchKindName(msg::ConfigDelta::PatchKind k) {
-  switch (k) {
-    case msg::ConfigDelta::PatchKind::NONE: return "NONE";
-    case msg::ConfigDelta::PatchKind::DRIVETRAIN: return "DRIVETRAIN";
-    case msg::ConfigDelta::PatchKind::MOTOR: return "MOTOR";
-    case msg::ConfigDelta::PatchKind::OTOS: return "OTOS";
+// configGroupTargetName -- prints SetConfigGroup's own `target` enum the
+// same way cmdKindName() prints CommandEnvelope's discriminant. 132-013
+// (patch-surface retirement): replaces the deleted ConfigDelta's own
+// `PatchKind` oneof discriminant -- CommandEnvelope.config now carries
+// SetConfigGroup{target, body}, not ConfigDelta.
+const char* configGroupTargetName(msg::ConfigGroupTarget t) {
+  switch (t) {
+    case msg::ConfigGroupTarget::CONFIG_GROUP_UNSPECIFIED: return "CONFIG_GROUP_UNSPECIFIED";
+    case msg::ConfigGroupTarget::GEOMETRY: return "GEOMETRY";
+    case msg::ConfigGroupTarget::MOTORS: return "MOTORS";
+    case msg::ConfigGroupTarget::DRIVE: return "DRIVE";
+    case msg::ConfigGroupTarget::WHEEL_CONTROL: return "WHEEL_CONTROL";
+    case msg::ConfigGroupTarget::PLANNER: return "PLANNER";
+    case msg::ConfigGroupTarget::OTOS: return "OTOS";
+    case msg::ConfigGroupTarget::ESTIMATOR: return "ESTIMATOR";
   }
   return "UNKNOWN";
 }
@@ -170,13 +177,6 @@ const char* moveStopKindName(msg::Move::StopKind k) {
     case msg::Move::StopKind::ANGLE: return "ANGLE";
   }
   return "UNKNOWN";
-}
-
-// printOpt -- one `<name>_has=<0|1> <name>=<val>` pair for an `Opt<float>`
-// field (DrivetrainConfigPatch/MotorConfigPatch/PlannerConfigPatch's own
-// Opt<float> fields).
-void printOpt(const char* name, const msg::Opt<float>& o) {
-  std::printf(" %s_has=%d %s=%s", name, o.has ? 1 : 0, name, fmtFloat(o.val).c_str());
 }
 
 // --- decode -----------------------------------------------------------------
@@ -234,52 +234,30 @@ int cmdDecode(const std::string& b64) {
       break;
     }
     case msg::CommandEnvelope::CmdKind::CONFIG: {
-      const msg::ConfigDelta& cfg = out.cmd.config;
-      std::printf(" patch_kind=%s", configDeltaPatchKindName(cfg.patch_kind));
-      switch (cfg.patch_kind) {
-        case msg::ConfigDelta::PatchKind::DRIVETRAIN: {
-          const msg::DrivetrainConfigPatch& p = cfg.patch.drivetrain;
-          printOpt("trackwidth", p.trackwidth);
-          printOpt("rotational_slip", p.rotational_slip);
-          printOpt("ekf_q_xy", p.ekf_q_xy);
-          printOpt("ekf_q_theta", p.ekf_q_theta);
-          printOpt("ekf_r_otos_xy", p.ekf_r_otos_xy);
-          printOpt("ekf_r_otos_theta", p.ekf_r_otos_theta);
-          printOpt("ekf_r_fix_xy", p.ekf_r_fix_xy);
-          printOpt("ekf_r_fix_theta", p.ekf_r_fix_theta);
-          break;
-        }
-        case msg::ConfigDelta::PatchKind::MOTOR: {
-          const msg::MotorConfigPatch& p = cfg.patch.motor;
-          std::printf(" side=%s", p.side == msg::BoundMotorSide::RIGHT ? "RIGHT" : "LEFT");
-          printOpt("travel_calib", p.travel_calib);
-          printOpt("kp", p.kp);
-          printOpt("ki", p.ki);
-          printOpt("kff", p.kff);
-          printOpt("i_max", p.i_max);
-          printOpt("kaw", p.kaw);
-          break;
-        }
-        case msg::ConfigDelta::PatchKind::OTOS: {
-          const msg::OtosConfigPatch& p = cfg.patch.otos;
-          printOpt("linear_scale", p.linear_scale);
-          printOpt("angular_scale", p.angular_scale);
-          printOpt("offset_x", p.offset_x);
-          printOpt("offset_y", p.offset_y);
-          printOpt("offset_yaw", p.offset_yaw);
-          std::printf(" init=%d", p.init ? 1 : 0);
-          break;
-        }
-        case msg::ConfigDelta::PatchKind::NONE:
-        default:
-          break;
-      }
+      // 132-013 (patch-surface retirement): config now carries
+      // SetConfigGroup{target, body}, not the deleted ConfigDelta. `body`
+      // is an opaque encoded group (Configurator::applyGroup()'s own job
+      // to interpret, not this generic differential harness's) -- print
+      // the target and body length only, mirroring
+      // wire_codec_harness.cpp's own scenarioRoundTripConfigSetGroup().
+      const msg::SetConfigGroup& cfg = out.cmd.config;
+      std::printf(" target=%s body_count=%u", configGroupTargetName(cfg.target),
+                  static_cast<unsigned>(cfg.body_count));
       break;
     }
     case msg::CommandEnvelope::CmdKind::STOP:
     case msg::CommandEnvelope::CmdKind::NONE:
-      // No arm-specific fields to print: zero-field arm (stop, "cannot be
-      // malformed" shape).
+    case msg::CommandEnvelope::CmdKind::WHEELS:
+    case msg::CommandEnvelope::CmdKind::ESTOP:
+    case msg::CommandEnvelope::CmdKind::GET_CONFIG:
+    case msg::CommandEnvelope::CmdKind::SET_FIELD:
+      // No arm-specific fields printed by this harness for these arms --
+      // WHEELS/ESTOP/GET_CONFIG/SET_FIELD (132-011/132-012) were never
+      // wired into this differential harness's decode printer; only
+      // move/config/stop are (pre-existing gap, not introduced by
+      // 132-013 -- listed explicitly here so a future arm addition
+      // without a matching case fails to compile, -Wswitch/-Werror,
+      // rather than silently falling through).
       break;
   }
   std::printf("\n");

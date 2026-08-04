@@ -106,9 +106,13 @@ omega) — and blends a v1 complementary weight against OTOS heading/omega
 whose weights are fail-closed baked config (`Config::
 defaultEstimatorConfig()`), defaulting to 0.0 (encoder-only output this
 sprint, per stakeholder decision) and live-tunable via a new
-`ConfigDelta.estimator` (`EstimatorConfigPatch`) arm dispatched by
-`RobotLoop::handleConfig()`, mirroring `OtosConfigPatch`'s existing
-merge-then-apply pattern — see §3/§4 below for the full detail. Pure
+`ConfigDelta.estimator` arm (the curated estimator live-tuning message)
+dispatched by `RobotLoop::handleConfig()`, mirroring the otos live-tuning
+message's existing merge-then-apply pattern — see §3/§4 below for the full
+detail (HISTORICAL as of 132-013, patch-surface retirement: `ConfigDelta`
+and every curated per-target live-tuning message it carried are deleted;
+`App::StateEstimator` itself was already deleted as dead code, 128-016).
+Pure
 computation: never touches the I2C bus, never sleeps, no `Devices::
 Clock&` collaborator of its own (every query takes an explicit `now`/`t`
 argument, mirroring `Motion::StopCondition`'s "hand-fed readings, no
@@ -803,27 +807,34 @@ same block.
   alternating. There is still no full 3-way round-robin abstraction
   (otos|line|color) — each sensor is its own bounded step, not a unified
   scheduler class.
-- **Config patches cover `MotorConfigPatch`, `OtosConfigPatch`
-  (109-004), and `EstimatorConfigPatch` (117) only.** `RobotLoop::
-  handleConfig` replies `ERR_UNIMPLEMENTED` for `DRIVETRAIN`/`WATCHDOG`/
-  `NONE` (`DrivetrainConfigPatch` has no on-robot fusion consumer).
-  `PlannerConfigPatch` is GONE, not merely out of scope — 115-005 (gut
+- **HISTORICAL (pre-132-013) — config patches covered the curated Motor
+  (109-004) and Otos live-tuning messages, and the curated Estimator
+  live-tuning message (117), only.** `RobotLoop::handleConfig` replied
+  `ERR_UNIMPLEMENTED` for `DRIVETRAIN`/`WATCHDOG`/`NONE` (the drivetrain
+  live-tuning message had no on-robot fusion consumer). The planner
+  live-tuning message was GONE, not merely out of scope — 115-005 (gut
   S1) deleted the type and `ConfigDelta`'s own `PLANNER` oneof arm
   entirely, along with `Pilot`/`Motion::Executor`, the only things that
-  ever consumed it. `OtosConfigPatch` (issue
-  `otos-calibration-config-message.md`) restores a RUNTIME path to
+  ever consumed it. The curated Otos live-tuning message (issue
+  `otos-calibration-config-message.md`) restored a RUNTIME path to
   `Devices::Otos::setLinearScalar()`/`setAngularScalar()`/`setOffset()`/
   `init()` — previously only ever called once at boot from baked
   `boot_config` — applied immediately and synchronously inside
   `handleConfig()` (still "the loop's own cycle" per the single-loop bus
   ownership invariant above: a rare, command-triggered I2C/config
   transaction sandwiched into the existing schedule, not a new per-cycle
-  bus consumer). `EstimatorConfigPatch` (117) merges present
-  `weight_heading_otos`/`weight_omega_otos`/`staleness_ms` fields onto
-  `StateEstimator`'s own live weight state — a pure in-memory update, NOT
-  an I2C transaction (unlike the OTOS branch above), and NOT persisted
+  bus consumer). The curated Estimator live-tuning message (117) merged
+  present `weight_heading_otos`/`weight_omega_otos`/`staleness_ms` fields
+  onto `StateEstimator`'s own live weight state — a pure in-memory update,
+  NOT an I2C transaction (unlike the OTOS branch above), and NOT persisted
   into `persistedTuning_`/flash (Design Rationale Decision 4, overlay
   `design.md`'s sibling — a reboot reverts to the baked JSON default).
+  SUPERSEDED, 132-013 (patch-surface retirement): `ConfigDelta` and every
+  message this bullet names are deleted outright, replaced by
+  `robot_config.proto`'s group/field wire arms (`SetConfigGroup`/
+  `applyGroup()`, `SetConfigField`/`applyField()`); `App::StateEstimator`
+  itself was already deleted as dead code (128-016), so the ESTIMATOR
+  group now has no live consumer at all regardless of wire shape.
 
 ## 4. Design
 
@@ -1307,7 +1318,7 @@ called with real elapsed time between calls).
   residual — computed for diagnostic/validation purposes even while its
   fusion weight is 0, never fed back into the estimate itself at that
   weight. `setWeights()` is `RobotLoop::handleConfig()`'s own entry point
-  for a live `EstimatorConfigPatch` (§3 above) — a plain in-memory update,
+  for a live curated Estimator live-tuning message (§3 above, HISTORICAL/SUPERSEDED as of 132-013 — see that section's own note) — a plain in-memory update,
   not a bus transaction. All of the above are pure computation: no I2C
   access, no sleep, bounded per call.
 - **`App::debugf(fmt, ...)`/`DBG_EVERY(n, ...)`/`DBG_MILLI(x)`
@@ -1399,10 +1410,11 @@ called with real elapsed time between calls).
   `src/firm/types/`, a dependency-free header both `src/firm/app` and
   `src/motion` may include, not an `app/`-owned type). `StateEstimator`
   still does not hold its own leaf/bus references and does not read
-  `Devices::Motor`/`Devices::Otos` directly either way. Wire-plane
-  `msg::EstimatorConfigPatch` stops
-  at `RobotLoop::handleConfig()` exactly like `msg::MotorConfigPatch`/
-  `msg::OtosConfigPatch` already do (devices/app isolation invariant
+  `Devices::Motor`/`Devices::Otos` directly either way. The wire-plane
+  curated Estimator live-tuning message (HISTORICAL/SUPERSEDED as of
+  132-013, patch-surface retirement — see §3's own note) stopped
+  at `RobotLoop::handleConfig()` exactly like the curated Motor/Otos
+  live-tuning messages already did (devices/app isolation invariant
   above, extended by analogy) — `StateEstimator`'s own `setWeights()`
   takes a plain, Devices-local-style weights struct, never a `msg::*`
   type.
@@ -1414,13 +1426,16 @@ called with real elapsed time between calls).
 
 ## 6. Open Questions / Known Limitations
 
-- **`MotorConfigPatch` and `OtosConfigPatch` (109-004) are live-appliable.**
-  Only `DrivetrainConfigPatch`/`WatchdogConfigPatch` still reply
+- **HISTORICAL (pre-132-013) — the curated Motor and Otos live-tuning
+  messages (109-004) were live-appliable.** Only the curated
+  Drivetrain/Watchdog live-tuning messages still replied
   `ERR_UNIMPLEMENTED` (no on-robot fusion consumer for the former; the
-  latter routes to `bb.streamWatchdogWindowIn` directly, not
+  latter routed to `bb.streamWatchdogWindowIn` directly, not
   `handleConfig`, per config.proto's own `CONFIG_WATCHDOG` comment); see
-  §3. `PlannerConfigPatch` is not a third "still unimplemented" case — it
-  no longer exists as a type at all (115-005).
+  §3. The curated Planner live-tuning message was not a third "still
+  unimplemented" case — it no longer existed as a type at all (115-005).
+  SUPERSEDED, 132-013: `ConfigDelta` and every message this bullet names
+  are deleted outright — see §3's own note for the replacement surface.
 - **In-session pose reset has no wire verb yet.** `Odometry::reset()`
   exists and is exercised by the host simulator's teleport-to-origin, but
   no binary command arms it from the wire today.
@@ -1459,12 +1474,17 @@ called with real elapsed time between calls).
   (same process, same cycle), not over the wire, so this gap may never
   need closing; flagged as open only because it was an explicit sizing
   choice, not an oversight.
-- **`EstimatorConfigPatch`-set fusion weights are volatile, not
-  persisted.** Unlike `MotorConfigPatch`/`OtosConfigPatch` (114-004),
-  a live-tuned weight does not survive a reboot — it reverts to the
-  baked JSON default. Revisit once fake-OTOS/external-pose fusion
-  (future sprints) give these weights real, nonzero, bench-validated
-  values worth persisting.
+- **HISTORICAL (pre-132-013) — fusion weights set via the curated
+  Estimator live-tuning message were volatile, not persisted.** Unlike
+  the curated Motor/Otos live-tuning messages (114-004), a live-tuned
+  weight did not survive a reboot — it reverted to the baked JSON
+  default. This precedent (ESTIMATOR never persists) carries forward
+  unchanged into the 132-013 reshape (`config/persisted_tuning.h`'s own
+  doc comment) — still true today, now for the independent reason that
+  `install(ESTIMATOR)` has no live consumer at all (`App::StateEstimator`
+  deleted, 128-016). Revisit once fake-OTOS/external-pose fusion (future
+  sprints) give these weights real, nonzero, bench-validated values worth
+  persisting.
 - **`App::debugf()`'s installed sink is a single process-global pointer,
   not per-instance.** Fine on real hardware (one board, one `Comms`) and
   in every current Sim/host-test caller (one `TestSim::SimHarness` per

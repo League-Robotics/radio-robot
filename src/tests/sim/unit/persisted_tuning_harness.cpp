@@ -1,19 +1,27 @@
 // persisted_tuning_harness.cpp -- off-hardware acceptance harness for
-// ticket 114-004 (SUC-003), Config::PersistedTuning's PURE logic
-// (src/firm/config/persisted_tuning.{h,cpp}): serializeSnapshot()/
-// deserializeSnapshot() round-trip identity and shouldWipe()'s
-// version-compare-and-wipe decision. Both are plain functions with NO
-// MicroBitStorage/hardware dependency at all -- this harness proves
-// exactly that: it links ONLY persisted_tuning.cpp (plus messages/config.h,
-// header-only) and never touches TestSim::SimPlant, a RobotLoop graph, or
-// any bus/hardware fake, unlike every other src/tests/sim/unit harness.
+// Config::PersistedTuning's PURE logic (src/firm/config/
+// persisted_tuning.{h,cpp}): serializeSnapshot()/deserializeSnapshot()
+// round-trip identity and shouldWipe()'s version-compare-and-wipe
+// decision. Both are plain functions with NO MicroBitStorage/hardware
+// dependency at all -- this harness proves exactly that: it links ONLY
+// persisted_tuning.cpp (header-only otherwise) and never touches
+// TestSim::SimPlant, a RobotLoop graph, or any bus/hardware fake, unlike
+// every other src/tests/sim/unit harness.
+//
+// RESHAPED, 132-013 (patch-surface retirement): TuningSnapshot is now flat
+// plain data (raw floats + 3 per-GROUP "tuned" bools), not the pre-132-013
+// curated-live-tuning-message-shaped, per-FIELD Opt<T> presence snapshot
+// this harness used to exercise -- see persisted_tuning.h's own doc
+// comment for the full reshape rationale. This is a full rewrite of the
+// pre-132-013 harness, not an incremental patch: every scenario below
+// targets the new shape directly.
 //
 // The ARM-only Config::MicroBitTuningStore adapter this same .cpp also
 // defines (behind #ifndef HOST_BUILD) is explicitly NOT exercised here or
 // by any other agent-run test -- see persisted_tuning.h's own file header;
-// covered only by ticket 006's stakeholder bench checklist. This harness
-// compiles with -DHOST_BUILD, so that adapter's own code is compiled out
-// entirely (never even parsed).
+// covered only by a stakeholder bench checklist. This harness compiles
+// with -DHOST_BUILD, so that adapter's own code is compiled out entirely
+// (never even parsed).
 //
 // Hand-rolled assertions -- mirrors measurement_ring_harness.cpp's shape
 // exactly (this codebase's established per-harness-file style for a
@@ -68,146 +76,128 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
   }
 }
 
-// checkOptFloatEq -- compares an msg::Opt<float> field's (has, val) pair
-// as one unit; val is only checked when BOTH sides claim has==true (a
-// mismatched-has case already fails on its own via the has comparison,
-// and comparing an unset val would be comparing two don't-care defaults).
-void checkOptFloatEq(const msg::Opt<float>& actual, const msg::Opt<float>& expected,
+// checkSnapshotEq -- compares every TuningSnapshot field (3 group-presence
+// bools + 12 floats) as one unit, field by field, so a failure names
+// exactly which member diverged rather than a single opaque "not equal".
+void checkSnapshotEq(const Config::TuningSnapshot& actual, const Config::TuningSnapshot& expected,
                       const std::string& what) {
-  if (actual.has != expected.has) {
-    char buf[256];
-    std::snprintf(buf, sizeof(buf), "%s.has -- expected %d, got %d", what.c_str(),
-                  expected.has, actual.has);
-    fail(buf);
-    return;
-  }
-  if (expected.has) {
-    checkFloatEq(actual.val, expected.val, what + ".val");
-  }
-}
+  checkTrue(actual.wheelControlTuned == expected.wheelControlTuned, what + ".wheelControlTuned");
+  checkTrue(actual.motorsTravelCalibTuned == expected.motorsTravelCalibTuned,
+            what + ".motorsTravelCalibTuned");
+  checkTrue(actual.otosTuned == expected.otosTuned, what + ".otosTuned");
 
-void checkMotorPatchEq(const msg::MotorConfigPatch& actual, const msg::MotorConfigPatch& expected,
-                        const std::string& what) {
-  checkOptFloatEq(actual.travel_calib, expected.travel_calib, what + ".travel_calib");
-  checkOptFloatEq(actual.kp, expected.kp, what + ".kp");
-  checkOptFloatEq(actual.ki, expected.ki, what + ".ki");
-  checkOptFloatEq(actual.kff, expected.kff, what + ".kff");
-  checkOptFloatEq(actual.i_max, expected.i_max, what + ".i_max");
-  checkOptFloatEq(actual.kaw, expected.kaw, what + ".kaw");
-}
+  checkFloatEq(actual.wheelControlPidKp, expected.wheelControlPidKp, what + ".wheelControlPidKp");
+  checkFloatEq(actual.wheelControlPidKi, expected.wheelControlPidKi, what + ".wheelControlPidKi");
+  checkFloatEq(actual.wheelControlPidIMax, expected.wheelControlPidIMax,
+               what + ".wheelControlPidIMax");
+  checkFloatEq(actual.wheelControlPidKaff, expected.wheelControlPidKaff,
+               what + ".wheelControlPidKaff");
+  checkFloatEq(actual.wheelControlPidMax, expected.wheelControlPidMax, what + ".wheelControlPidMax");
 
-void checkOtosPatchEq(const msg::OtosConfigPatch& actual, const msg::OtosConfigPatch& expected,
-                       const std::string& what) {
-  checkOptFloatEq(actual.linear_scale, expected.linear_scale, what + ".linear_scale");
-  checkOptFloatEq(actual.angular_scale, expected.angular_scale, what + ".angular_scale");
-  checkOptFloatEq(actual.offset_x, expected.offset_x, what + ".offset_x");
-  checkOptFloatEq(actual.offset_y, expected.offset_y, what + ".offset_y");
-  checkOptFloatEq(actual.offset_yaw, expected.offset_yaw, what + ".offset_yaw");
-}
+  checkFloatEq(actual.motorsTravelCalibLeft, expected.motorsTravelCalibLeft,
+               what + ".motorsTravelCalibLeft");
+  checkFloatEq(actual.motorsTravelCalibRight, expected.motorsTravelCalibRight,
+               what + ".motorsTravelCalibRight");
 
-msg::Opt<float> opt(float v) {
-  msg::Opt<float> o;
-  o.has = true;
-  o.val = v;
-  return o;
+  checkFloatEq(actual.otosOffsetX, expected.otosOffsetX, what + ".otosOffsetX");
+  checkFloatEq(actual.otosOffsetY, expected.otosOffsetY, what + ".otosOffsetY");
+  checkFloatEq(actual.otosOffsetYaw, expected.otosOffsetYaw, what + ".otosOffsetYaw");
+  checkFloatEq(actual.otosLinearScale, expected.otosLinearScale, what + ".otosLinearScale");
+  checkFloatEq(actual.otosAngularScale, expected.otosAngularScale, what + ".otosAngularScale");
 }
 
 // ===========================================================================
-// serializeSnapshot()/deserializeSnapshot() round-trip identity -- SUC-003's
-// own "version-match round-trip: pushed patch value observed unchanged"
-// acceptance criterion, proved here at the pure-function level (no boot, no
+// serializeSnapshot()/deserializeSnapshot() round-trip identity -- the
+// reshaped surface's own "a live-pushed value survives a save/reload"
+// acceptance property, proved here at the pure-function level (no boot, no
 // flash).
 // ===========================================================================
 
 void scenarioRoundTripFullySetSnapshot() {
-  beginScenario("serializeSnapshot()/deserializeSnapshot(): a fully-populated snapshot round-trips exactly");
+  beginScenario("serializeSnapshot()/deserializeSnapshot(): a fully-tuned snapshot round-trips exactly");
 
   Config::TuningSnapshot original;
-  original.motorL.side = msg::BoundMotorSide::LEFT;
-  original.motorL.travel_calib = opt(1.25f);
-  original.motorL.kp = opt(0.02f);
-  original.motorL.ki = opt(0.01f);
-  original.motorL.kff = opt(0.5f);
-  original.motorL.i_max = opt(10.0f);
-  original.motorL.kaw = opt(0.1f);
+  original.wheelControlTuned = true;
+  original.wheelControlPidKp = 0.02f;
+  original.wheelControlPidKi = 0.01f;
+  original.wheelControlPidIMax = 10.0f;
+  original.wheelControlPidKaff = 0.5f;
+  original.wheelControlPidMax = 0.9f;
 
-  original.motorR.side = msg::BoundMotorSide::RIGHT;
-  original.motorR.travel_calib = opt(-1.30f);  // deliberately DIFFERENT from motorL's --
-                                                // proves the two sides don't alias
-  original.motorR.kp = opt(0.02f);   // gains mirror in practice (RobotLoop's own merge),
-  original.motorR.ki = opt(0.01f);   // but the pure serializer must not assume that --
-  original.motorR.kff = opt(0.5f);   // it persists whatever TuningSnapshot actually holds.
-  original.motorR.i_max = opt(10.0f);
-  original.motorR.kaw = opt(0.1f);
+  original.motorsTravelCalibTuned = true;
+  original.motorsTravelCalibLeft = 1.25f;
+  original.motorsTravelCalibRight = -1.30f;  // deliberately DIFFERENT from left --
+                                              // proves the two sides don't alias
 
-  original.otos.linear_scale = opt(1.067f);
-  original.otos.angular_scale = opt(0.987f);
-  original.otos.offset_x = opt(-51.5f);
-  original.otos.offset_y = opt(0.0f);
-  original.otos.offset_yaw = opt(3.14159f);
-  original.otos.init = true;  // deliberately set on the INPUT struct -- proves it is
-                               // dropped, not merely "usually false"
+  original.otosTuned = true;
+  original.otosOffsetX = -51.5f;
+  original.otosOffsetY = 0.0f;
+  original.otosOffsetYaw = 3.14159f;
+  original.otosLinearScale = 1.067f;
+  original.otosAngularScale = 0.987f;
 
   Config::Blob blob = Config::serializeSnapshot(original);
   Config::TuningSnapshot roundTripped = Config::deserializeSnapshot(blob);
 
-  checkMotorPatchEq(roundTripped.motorL, original.motorL, "motorL");
-  checkMotorPatchEq(roundTripped.motorR, original.motorR, "motorR");
-  checkOtosPatchEq(roundTripped.otos, original.otos, "otos");
-
-  checkTrue(roundTripped.motorL.side == msg::BoundMotorSide::LEFT, "deserializeSnapshot() stamps motorL.side == LEFT");
-  checkTrue(roundTripped.motorR.side == msg::BoundMotorSide::RIGHT, "deserializeSnapshot() stamps motorR.side == RIGHT");
-  checkFalse(roundTripped.otos.init,
-             "otos.init is NEVER round-tripped (a one-shot trigger, not a persisted value) "
-             "even though the INPUT snapshot had it set");
+  checkSnapshotEq(roundTripped, original, "fully-tuned snapshot");
 }
 
 void scenarioRoundTripFreshEmptySnapshot() {
-  beginScenario("serializeSnapshot()/deserializeSnapshot(): a fresh (all has=false) snapshot round-trips to itself");
+  beginScenario("serializeSnapshot()/deserializeSnapshot(): a fresh (all-default) snapshot round-trips to itself");
 
-  Config::TuningSnapshot original;  // every Opt<T>{has=false} default -- "nothing live-tuned yet"
+  Config::TuningSnapshot original;  // every field at its default -- "nothing live-tuned yet"
 
   Config::Blob blob = Config::serializeSnapshot(original);
   Config::TuningSnapshot roundTripped = Config::deserializeSnapshot(blob);
 
-  checkMotorPatchEq(roundTripped.motorL, original.motorL, "motorL");
-  checkMotorPatchEq(roundTripped.motorR, original.motorR, "motorR");
-  checkOtosPatchEq(roundTripped.otos, original.otos, "otos");
+  checkSnapshotEq(roundTripped, original, "fresh snapshot");
+  checkFalse(roundTripped.wheelControlTuned, "fresh snapshot: wheelControlTuned stays false");
+  checkFalse(roundTripped.motorsTravelCalibTuned, "fresh snapshot: motorsTravelCalibTuned stays false");
+  checkFalse(roundTripped.otosTuned, "fresh snapshot: otosTuned stays false");
 
   // A fresh snapshot's own blob is the all-zero baseline
-  // RobotLoop::lastPersistedBlob_ starts at (robot_loop.h's own doc
-  // comment) -- confirm that invariant holds here, at the pure-function
-  // level, rather than only asserting it implicitly via RobotLoop's own
-  // behavior.
+  // Configurator::lastPersistedBlob_ starts at (configurator.h's own
+  // doc comment) -- confirm that invariant holds here, at the
+  // pure-function level, rather than only asserting it implicitly via
+  // Configurator's own behavior.
   Config::Blob zeroBlob{};
   checkTrue(blob == zeroBlob, "a fresh TuningSnapshot serializes to the all-zero blob");
 }
 
-void scenarioRoundTripPartiallySetSnapshotPreservesAbsentFields() {
-  beginScenario("serializeSnapshot()/deserializeSnapshot(): only-some-fields-set stays has=false for the rest");
+void scenarioRoundTripOneGroupTunedLeavesOthersUntouched() {
+  beginScenario("serializeSnapshot()/deserializeSnapshot(): only-one-group-tuned leaves the other two false");
 
   Config::TuningSnapshot original;
-  original.motorL.kp = opt(0.02f);  // ONLY kp set on motorL; everything else stays has=false
-  original.otos.angular_scale = opt(0.987f);  // ONLY angular_scale set
+  original.otosTuned = true;  // ONLY OTOS is tuned; WHEEL_CONTROL/MOTORS stay untouched
+  original.otosLinearScale = 1.02f;
+  original.otosAngularScale = 0.99f;
 
   Config::Blob blob = Config::serializeSnapshot(original);
   Config::TuningSnapshot roundTripped = Config::deserializeSnapshot(blob);
 
-  checkTrue(roundTripped.motorL.kp.has, "motorL.kp.has survives the round trip");
-  checkFloatEq(roundTripped.motorL.kp.val, 0.02f, "motorL.kp.val survives the round trip");
-  checkFalse(roundTripped.motorL.ki.has, "motorL.ki (never set) stays has=false, not a stray true");
-  checkFalse(roundTripped.motorL.travel_calib.has, "motorL.travel_calib (never set) stays has=false");
-  checkFalse(roundTripped.motorR.kp.has, "motorR.kp (never touched by this snapshot) stays has=false");
+  checkTrue(roundTripped.otosTuned, "otosTuned survives the round trip");
+  checkFloatEq(roundTripped.otosLinearScale, 1.02f, "otosLinearScale survives the round trip");
+  checkFloatEq(roundTripped.otosAngularScale, 0.99f, "otosAngularScale survives the round trip");
 
-  checkTrue(roundTripped.otos.angular_scale.has, "otos.angular_scale.has survives the round trip");
-  checkFloatEq(roundTripped.otos.angular_scale.val, 0.987f, "otos.angular_scale.val survives the round trip");
-  checkFalse(roundTripped.otos.linear_scale.has, "otos.linear_scale (never set) stays has=false");
+  checkFalse(roundTripped.wheelControlTuned,
+             "wheelControlTuned (never touched by this snapshot) stays false, not a stray true");
+  checkFalse(roundTripped.motorsTravelCalibTuned,
+             "motorsTravelCalibTuned (never touched by this snapshot) stays false, not a stray true");
+  // The untouched groups' own floats stay at their zero default -- this is
+  // exactly why reapplyPersistedTuning() (configurator.cpp) gates each
+  // group's config_ write on its own "tuned" flag rather than trusting the
+  // float value alone: a zero here does NOT mean "live-tuned to zero," it
+  // means "never touched."
+  checkFloatEq(roundTripped.wheelControlPidKp, 0.0f, "untouched wheelControlPidKp stays at its zero default");
+  checkFloatEq(roundTripped.motorsTravelCalibLeft, 0.0f, "untouched motorsTravelCalibLeft stays at its zero default");
 }
 
 // ===========================================================================
-// shouldWipe() -- the version-compare-and-wipe DECISION (SUC-003's own
-// "version-mismatch: shouldWipe() returns true" acceptance criterion),
-// parametrized match/mismatch cases.
+// shouldWipe() -- the version-compare-and-wipe DECISION, parametrized
+// match/mismatch cases. Unchanged by the 132-013 reshape (the function
+// itself is a bare != comparison, no TuningSnapshot dependency) -- kept
+// here so this harness stays the one place kConfigSchemaVersion's own
+// wipe behavior is exercised.
 // ===========================================================================
 
 void scenarioShouldWipeMatchingVersionsReturnFalse() {
@@ -233,21 +223,23 @@ void scenarioShouldWipeMismatchedVersionsReturnTrue() {
 // kBlobSize sanity -- greppable, explicit budget check (not load-bearing
 // for correctness, but catches an accidental field-count/size drift
 // immediately rather than only via a byte-offset-shifted round-trip
-// failure elsewhere).
+// failure elsewhere). Also the concrete proof for ticket 013's own
+// "compute the new blob size" acceptance note: 51 bytes, down from the
+// pre-132-013 shape's 85 -- 3 group-presence bytes + 12 floats * 4 bytes,
+// no more per-field Opt<T> presence byte.
 // ===========================================================================
 
 void scenarioBlobSizeMatchesFieldBudget() {
   beginScenario("Config::kBlobSize matches the field-count budget persisted_tuning.h itself documents");
 
-  // 2 motor patches * 6 fields + 1 otos patch * 5 fields, each field 5
-  // bytes (1 has + 4 float) -- see persisted_tuning.h's own
-  // kOptFloatBytes/kMotorPatchFields/kOtosPatchFields constants, which
-  // this expression mirrors exactly (not a re-derived magic number). The
-  // planner term is GONE (115-004, gut S1) -- kBlobSize is 85, not 110.
-  constexpr size_t expected = (2 * Config::kMotorPatchFields * Config::kOptFloatBytes) +
-                               (Config::kOtosPatchFields * Config::kOptFloatBytes);
+  constexpr size_t expected =
+      Config::kGroupPresenceBytes +
+      (Config::kWheelControlFields + Config::kMotorsTravelCalibFields + Config::kOtosFields) *
+          Config::kFloatFieldBytes;
   checkUintEq(static_cast<uint32_t>(Config::kBlobSize), static_cast<uint32_t>(expected),
-              "kBlobSize == 2*motorFields*5 + otosFields*5");
+              "kBlobSize == kGroupPresenceBytes + (wheelControlFields+motorsTravelCalibFields+otosFields)*4");
+  checkUintEq(static_cast<uint32_t>(Config::kBlobSize), 51u,
+              "kBlobSize == 51 (3 presence bytes + 12 floats * 4 bytes) -- 132-013's own reshape figure");
 }
 
 }  // namespace
@@ -255,7 +247,7 @@ void scenarioBlobSizeMatchesFieldBudget() {
 int main() {
   scenarioRoundTripFullySetSnapshot();
   scenarioRoundTripFreshEmptySnapshot();
-  scenarioRoundTripPartiallySetSnapshotPreservesAbsentFields();
+  scenarioRoundTripOneGroupTunedLeavesOthersUntouched();
   scenarioShouldWipeMatchingVersionsReturnFalse();
   scenarioShouldWipeMismatchedVersionsReturnTrue();
   scenarioBlobSizeMatchesFieldBudget();

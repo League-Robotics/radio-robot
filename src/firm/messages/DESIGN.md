@@ -251,7 +251,7 @@ firmware runtime; the device itself never sees protobuf. It also emits
   arc-command `Move` sprint 109 added stays deleted, its field number `20`
   reserved, never reused, never the same shape as this `move`). Per-arm
   worst case: `config`=44B, `stop`=2B, `move`=38B — `config` (dominated by
-  `DrivetrainConfigPatch`) stays the largest arm even though `move` is a
+  the drivetrain live-tuning message) stays the largest arm even though `move` is a
   structurally bigger message (two nested oneofs + `id`) than the `twist`
   it replaced, so the envelope's own total is UNCHANGED at 50B despite the
   schema growing. `ReplyEnvelope` is 153B (dominated by the `tlm` arm's
@@ -261,14 +261,30 @@ firmware runtime; the device itself never sees protobuf. It also emits
   which only edits `CommandEnvelope`'s `cmd` oneof and `ConfigDelta`'s
   `patch` oneof — see `wire.h`'s own generated size-report comment), and
   `TelemetrySecondary` is 52B (also untouched). **117 ticket 003** added
-  `ConfigDelta.estimator` (`EstimatorConfigPatch estimator = 6`, the next
+  `ConfigDelta.estimator` (the estimator live-tuning message, `estimator = 6`, the next
   free number after `reserved 3, 4` and `otos = 5`) plus
-  `ConfigTarget.CONFIG_ESTIMATOR = 6` (`config.proto`) — `EstimatorConfigPatch`
+  `ConfigTarget.CONFIG_ESTIMATOR = 6` (`config.proto`) — that message
   carries 3 optional floats (`weight_heading_otos`/`weight_omega_otos`/
-  `staleness_ms`), smaller than `DrivetrainConfigPatch`'s 8, so `ConfigDelta`'s
+  `staleness_ms`), smaller than the drivetrain live-tuning message's 8, so `ConfigDelta`'s
   own worst-case arm (and therefore `CommandEnvelope`'s `config`=44B and its
   50B total) is **unchanged** — re-measured against the regenerated
   `wire.h`'s size-report comment, not assumed.
+
+  **SUPERSEDED, 132-013 (patch-surface retirement):** `ConfigDelta` and
+  every curated per-target live-tuning message described in this whole
+  passage (drivetrain/motor/otos/estimator, `config.proto`) are deleted
+  outright — `CommandEnvelope.config` now carries `SetConfigGroup`
+  (`robot_config.proto`, ~220B `body`), not `ConfigDelta`. This retires
+  the entire "config is the small arm" framing this passage's history
+  documents: `config` is now the LARGEST oneof arm in `CommandEnvelope` by
+  far. Current, regenerated ground truth as of 132-013: `CommandEnvelope`
+  total **234B** (`config`=228B, `move`=38B, `stop`=8B, `wheels`=24B,
+  `estop`=3B, `get_config`=5B, `set_field`=16B), `ReplyEnvelope` total
+  **232B** (`cfg`=228B is now the worst-case arm, just ahead of `tlm`) --
+  see `wire.h`'s own generated size-report comment (never hand-calculated
+  or assumed) and `app/comms.h`'s `kMaxEnvelopeBytes`/`kFramedMaxBytes`/
+  `kMaxLineBytes` doc comments for the cascading COBS-framing/line-buffer
+  consequences.
 
   **As of sprint 123 (current, regenerated ground truth — `wire.h`'s own
   header comment):** `CommandEnvelope`'s worst-case arm is `config`=49B
@@ -584,8 +600,11 @@ that conversion — it only defines the wire-side shape.
   reaches the loop's dispatch and how a `ReplyEnvelope` gets
   CRC-then-COBS framed and sent (the only outbound top-level message —
   `TelemetrySecondary` is deleted, 124-009).
-- **`config/`:** consumes generated `msg::*Config`/`msg::*ConfigPatch`
-  shapes declared here for baked boot configuration — see
+- **`config/`:** consumes generated `msg::*Config` shapes declared here for
+  baked boot configuration, and (132-013) the generated `robot_config.h`
+  group structs (`msg::Drive`/`WheelControl`/`Motors`/`Otos`/etc.) both as
+  `Config::Robot`'s own field storage and as the persisted-tuning source
+  of truth (`config/persisted_tuning.h`) — see
   [config/DESIGN.md](../config/DESIGN.md).
 
 ## 6. Open Questions / Known Limitations

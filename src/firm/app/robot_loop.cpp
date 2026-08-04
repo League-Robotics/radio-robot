@@ -130,9 +130,17 @@ void RobotLoop::routeCommand(const Cmd& cmd) {
       handleEstop(cmd.env);
       break;
     case msg::CommandEnvelope::CmdKind::CONFIG:
-      // The Configurator owns everything a CONFIG means (configurator.h);
+      // 132-013 (patch-surface retirement): CONFIG now carries a
+      // SetConfigGroup (robot_config.proto), not the deleted ConfigDelta --
+      // a whole-group push, decoded straight into Configurator's owned
+      // Config::Robot via applyGroup(), same "no per-command ReplyEnvelope,
+      // outcome rides the ack ring" shape as SET_FIELD below. The
+      // Configurator owns everything a CONFIG means (configurator.h);
       // RobotLoop's whole job here is the ack.
-      tlm_.ack(cmd.env.corr_id, configurator_.apply(cmd.env));
+      tlm_.ack(cmd.env.corr_id,
+               static_cast<uint32_t>(configurator_.applyGroup(
+                   cmd.env.cmd.config.target, cmd.env.cmd.config.body_,
+                   cmd.env.cmd.config.body_count)));
       break;
     case msg::CommandEnvelope::CmdKind::GET_CONFIG:
       handleGetConfig(cmd.env);

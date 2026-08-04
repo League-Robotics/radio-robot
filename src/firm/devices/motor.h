@@ -58,10 +58,10 @@ class Motor {
   virtual void setDuty(float duty) = 0;           // [-1, 1] raw duty
   virtual void setNeutral(Neutral mode) = 0;
 
-  // Live travel-calibration apply (RobotLoop's CONFIG merge path, side-
-  // selected — config.proto's MotorConfigPatch.side). The ONE MotorConfig
-  // field this interface still live-applies; gain routing moved out with
-  // the PID (this file's own header).
+  // Live travel-calibration apply (App::configureMotor(), side-selected --
+  // robot_config.proto's Motors.travel_calib_left/right). The ONE
+  // MotorConfig field this interface still live-applies; gain routing
+  // moved out with the PID (this file's own header).
   //
   // No Config::Robot-consuming configure() on THIS interface (132-007,
   // the-configuration-object.md): the devices isolation invariant (this

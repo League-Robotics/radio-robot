@@ -13,12 +13,13 @@ oneof + ``time|distance|angle`` stop oneof + ``timeout``/``replace``/``id``);
 carries a single ``flags`` bit-string (status+fault+event) and a bounded,
 packed ``acks`` ring (the single ``ack_corr``/``ack_err`` slot is deleted,
 124-008) plus per-source timestamped ``EncoderReading``/``OtosReading``
-objects; ``ConfigDelta.patch`` is DRIVETRAIN/MOTOR/OTOS (PLANNER deleted
-wholesale alongside ``Motion::Executor``/``App::Pilot``, 115-003; WATCHDOG
-deleted, 116-001 -- ``ConfigTarget.CONFIG_WATCHDOG`` stays declared-unused);
-``TelemetrySecondary`` is DELETED outright (124-009,
+objects; ``TelemetrySecondary`` is DELETED outright (124-009,
 robot-state-blackboard-...md) -- there is no second top-level wire message
-any more.
+any more. 132-013 (patch-surface retirement): ``ConfigDelta`` and its
+``patch`` oneof (DRIVETRAIN/MOTOR/OTOS) are deleted wholesale --
+``CommandEnvelope.config`` now carries ``SetConfigGroup{target, body}``
+(``robot_config.proto``); this driver's own config-message builders are
+deleted alongside it, see the "ConfigDelta builders" comment below.
 
 Compiles ``wire_differential_harness.cpp`` (src/firm/messages/wire.cpp +
 wire_runtime.cpp linked in) with the system C++ compiler and drives it
@@ -60,9 +61,16 @@ if str(_HOST_PB2_DIR) not in sys.path:
     sys.path.insert(0, str(_HOST_PB2_DIR))
 
 from robot_radio.robot.pb2 import common_pb2 as pb_common  # noqa: E402
-from robot_radio.robot.pb2 import config_pb2 as pb_config  # noqa: E402
 from robot_radio.robot.pb2 import envelope_pb2 as pb_envelope  # noqa: E402
+from robot_radio.robot.pb2 import robot_config_pb2 as pb_robot_config  # noqa: E402
 from robot_radio.robot.pb2 import telemetry_pb2 as pb_telemetry  # noqa: E402
+# config_pb2 -- DELETED, 132-013 (patch-surface retirement): config.proto
+# (its only source) no longer exists. The env_config_drivetrain/motor/otos
+# builders that used it are deleted below alongside it -- see this file's
+# own "ConfigDelta builders" comment for the historical record.
+# `SetConfigGroup`/`ConfigGroupTarget` (the replacement surface) live in
+# robot_config_pb2, not envelope_pb2 -- envelope.proto only REFERENCES the
+# type it declares, per robot_config.proto's own field-descriptor walk.
 
 
 def find_cxx_compiler() -> str:
@@ -353,44 +361,39 @@ def env_stop(corr_id: int) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# ConfigDelta builders -- unchanged shape from the pre-103 schema
-# (config.proto/ConfigDelta itself is untouched by this ticket's prune).
+# ConfigDelta builders (env_config_drivetrain/env_config_motor/
+# env_config_otos) -- DELETED, 132-013 (patch-surface retirement).
+# config.proto (DrivetrainConfigPatch/MotorConfigPatch/OtosConfigPatch's
+# only source) is deleted wholesale, replaced by robot_config.proto's
+# SetConfigGroup/GetConfig/ConfigSnapshot/SetConfigField. See
+# test_wire_differential.py's own "ConfigDelta ... DELETED" comment for
+# where this suite's config coverage moved (wire_codec_harness.cpp /
+# config_gate_harness.cpp's lighter-weight decode scenarios) -- a full
+# differential/boundary suite for the new group surface is not this
+# ticket's job. env_config_group() below is the one exception: the fuzz
+# suite (test_wire_fuzz.py) needs SOME valid CONFIG-arm seed message for
+# its truncated/oversized/salted byte-shape corpus, independent of any
+# particular group's own field semantics.
 # ---------------------------------------------------------------------------
 
 
-def env_config_drivetrain(corr_id: int, **fields) -> bytes:
-    """`fields` keys are DrivetrainConfigPatch's own proto field names --
-    only the ones passed are marked `has=true` on the wire (proto3
-    `optional` explicit presence), mirroring a real client that only sets
-    the keys it wants to change."""
-    patch = pb_config.DrivetrainConfigPatch(**fields)
-    return pb_envelope.CommandEnvelope(
-        corr_id=corr_id, config=pb_envelope.ConfigDelta(drivetrain=patch)).SerializeToString()
-
-
-def env_config_motor(corr_id: int, side: int = pb_config.LEFT, **fields) -> bytes:
-    """`fields` keys are MotorConfigPatch's own proto field names
-    (travel_calib/kp/ki/kff/i_max/kaw); `side` is always present (not
-    `optional` on the wire -- config.proto's own MotorConfigPatch.side is a
-    plain enum field, proto3 implicit presence)."""
-    patch = pb_config.MotorConfigPatch(side=side, **fields)
-    return pb_envelope.CommandEnvelope(
-        corr_id=corr_id, config=pb_envelope.ConfigDelta(motor=patch)).SerializeToString()
-
-
-def env_config_otos(corr_id: int, **fields) -> bytes:
-    """`fields` keys are OtosConfigPatch's own proto field names
-    (linear_scale/angular_scale/offset_x/offset_y/offset_yaw/init)."""
-    patch = pb_config.OtosConfigPatch(**fields)
-    return pb_envelope.CommandEnvelope(
-        corr_id=corr_id, config=pb_envelope.ConfigDelta(otos=patch)).SerializeToString()
+def env_config_group(corr_id: int, target: int, group_message) -> bytes:
+    """Builds ``CommandEnvelope{config: SetConfigGroup{target,
+    body=group_message.SerializeToString()}}`` -- 132-013's replacement for
+    the deleted env_config_drivetrain/motor/otos builders. `target` is a
+    ``robot_config_pb2.ConfigGroupTarget`` value (e.g.
+    ``pb_robot_config.WHEEL_CONTROL``); `group_message` is any
+    robot_config_pb2 group message instance (e.g.
+    ``pb_robot_config.WheelControl(pid_kp=0.02)``)."""
+    group = pb_robot_config.SetConfigGroup(target=target, body=group_message.SerializeToString())
+    return pb_envelope.CommandEnvelope(corr_id=corr_id, config=group).SerializeToString()
 
 
 __all__ = [
-    "pb_common", "pb_config", "pb_envelope", "pb_telemetry",
+    "pb_common", "pb_envelope", "pb_robot_config", "pb_telemetry",
     "compile_harness", "run_harness", "decode", "parse_decode_line",
     "encode_ok", "encode_err", "encode_telemetry", "pack_ack", "f32", "float_eq",
     "unknown_varint_field",
+    "env_config_group",
     "env_move_twist", "env_move_wheels", "env_stop",
-    "env_config_drivetrain", "env_config_motor", "env_config_otos",
 ]
