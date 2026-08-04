@@ -1,7 +1,7 @@
 ---
 id: '133'
 title: Stop-path safety, wheel-velocity position loop, and honest config provenance
-status: planning-docs
+status: closed
 branch: sprint/133-stop-path-safety-wheel-velocity-position-loop-and-honest-config-provenance
 worktree: false
 use-cases:
