@@ -280,11 +280,11 @@ msg::WheelControl defaultWheelControlGroup() {
     cfg.deficit_threshold = 0.0f;  // [mm/s]
     cfg.deficit_window = 0.0f;      // [ms]
     cfg.pid_kp = 0.0f;        // [1]
-    cfg.pid_ki = 0.0f;        // [1/s]
-    cfg.pid_i_max = 0.0f;    // [mm/s]
+    cfg.pid_ki = 6.0f;        // [1/s]
+    cfg.pid_i_max = 60.0f;    // [mm/s]
     cfg.pid_kaff = 0.0f;    // [s]
-    cfg.pid_max = 0.0f;    // [mm/s]
-    cfg.pos_err_max = 0.0f;  // [mm]
+    cfg.pid_max = 100.0f;    // [mm/s]
+    cfg.pos_err_max = 10.0f;  // [mm]
     return cfg;
 }
 

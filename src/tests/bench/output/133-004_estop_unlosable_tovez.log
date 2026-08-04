@@ -1,0 +1,120 @@
+--- trial 3/10 ---
+  [PASS] trial 3: baseline enc seeded  (enc_before=(88, 69))
+  [PASS] trial 3: move_wheels() ack confirmed  (ack=AckEntry(corr_id=5, ok=True, err_code=0))
+  [PASS] trial 3: wheels genuinely moving before estop()  (enc_before=(88, 69) enc_at_estop=(112, 92))
+  [PASS] trial 3: estop() ack confirmed  (ack=AckEntry(corr_id=6, ok=True, err_code=0))
+  [PASS] trial 3: encoders stop advancing within 0.15s  (settle_time=0.147s enc_final=(131, 111))
+  [PASS] trial 3: encoders stay stopped for the full 3.0s hold (no change after the 0.30s coast-down grace)  (held from 0.147s to 3.0s)
+
+--- trial 4/10 ---
+  [PASS] trial 4: baseline enc seeded  (enc_before=(131, 111))
+  [PASS] trial 4: move_wheels() ack confirmed  (ack=AckEntry(corr_id=7, ok=True, err_code=0))
+  [PASS] trial 4: wheels genuinely moving before estop()  (enc_before=(131, 111) enc_at_estop=(153, 136))
+  [PASS] trial 4: estop() ack confirmed  (ack=AckEntry(corr_id=8, ok=True, err_code=0))
+  [PASS] trial 4: encoders stop advancing within 0.15s  (settle_time=0.144s enc_final=(172, 156))
+  [PASS] trial 4: encoders stay stopped for the full 3.0s hold (no change after the 0.30s coast-down grace)  (held from 0.144s to 3.0s)
+
+--- trial 5/10 ---
+  [PASS] trial 5: baseline enc seeded  (enc_before=(172, 156))
+  [PASS] trial 5: move_wheels() ack confirmed  (ack=AckEntry(corr_id=9, ok=True, err_code=0))
+  [PASS] trial 5: wheels genuinely moving before estop()  (enc_before=(172, 156) enc_at_estop=(196, 180))
+  [PASS] trial 5: estop() ack confirmed  (ack=AckEntry(corr_id=10, ok=True, err_code=0))
+  [FAIL] trial 5: encoders stop advancing within 0.15s  (settle_time=0.207s enc_final=(217, 200))
+  [PASS] trial 5: encoders stay stopped for the full 3.0s hold (no change after the 0.30s coast-down grace)  (held from 0.207s to 3.0s)
+
+--- trial 6/10 ---
+  [PASS] trial 6: baseline enc seeded  (enc_before=(217, 200))
+  [PASS] trial 6: move_wheels() ack confirmed  (ack=AckEntry(corr_id=11, ok=True, err_code=0))
+  [PASS] trial 6: wheels genuinely moving before estop()  (enc_before=(217, 200) enc_at_estop=(242, 224))
+  [PASS] trial 6: estop() ack confirmed  (ack=AckEntry(corr_id=12, ok=True, err_code=0))
+  [FAIL] trial 6: encoders stop advancing within 0.15s  (settle_time=0.193s enc_final=(264, 244))
+  [PASS] trial 6: encoders stay stopped for the full 3.0s hold (no change after the 0.30s coast-down grace)  (held from 0.193s to 3.0s)
+
+--- trial 7/10 ---
+  [PASS] trial 7: baseline enc seeded  (enc_before=(264, 244))
+  [PASS] trial 7: move_wheels() ack confirmed  (ack=AckEntry(corr_id=13, ok=True, err_code=0))
+  [PASS] trial 7: wheels genuinely moving before estop()  (enc_before=(264, 244) enc_at_estop=(295, 272))
+  [PASS] trial 7: estop() ack confirmed  (ack=AckEntry(corr_id=14, ok=True, err_code=0))
+  [FAIL] trial 7: encoders stop advancing within 0.15s  (settle_time=0.243s enc_final=(320, 295))
+  [PASS] trial 7: encoders stay stopped for the full 3.0s hold (no change after the 0.30s coast-down grace)  (held from 0.243s to 3.0s)
+
+--- trial 8/10 ---
+  [PASS] trial 8: baseline enc seeded  (enc_before=(320, 295))
+  [PASS] trial 8: move_wheels() ack confirmed  (ack=AckEntry(corr_id=15, ok=True, err_code=0))
+  [PASS] trial 8: wheels genuinely moving before estop()  (enc_before=(320, 295) enc_at_estop=(347, 320))
+  [PASS] trial 8: estop() ack confirmed  (ack=AckEntry(corr_id=16, ok=True, err_code=0))
+  [PASS] trial 8: encoders stop advancing within 0.15s  (settle_time=0.147s enc_final=(368, 341))
+  [PASS] trial 8: encoders stay stopped for the full 3.0s hold (no change after the 0.30s coast-down grace)  (held from 0.147s to 3.0s)
+
+--- trial 9/10 ---
+  [PASS] trial 9: baseline enc seeded  (enc_before=(368, 341))
+  [PASS] trial 9: move_wheels() ack confirmed  (ack=AckEntry(corr_id=17, ok=True, err_code=0))
+  [PASS] trial 9: wheels genuinely moving before estop()  (enc_before=(368, 341) enc_at_estop=(392, 366))
+  [PASS] trial 9: estop() ack confirmed  (ack=AckEntry(corr_id=18, ok=True, err_code=0))
+  [PASS] trial 9: encoders stop advancing within 0.15s  (settle_time=0.131s enc_final=(412, 386))
+  [PASS] trial 9: encoders stay stopped for the full 3.0s hold (no change after the 0.30s coast-down grace)  (held from 0.131s to 3.0s)
+
+--- trial 10/10 ---
+  [PASS] trial 10: baseline enc seeded  (enc_before=(412, 386))
+  [PASS] trial 10: move_wheels() ack confirmed  (ack=AckEntry(corr_id=19, ok=True, err_code=0))
+  [PASS] trial 10: wheels genuinely moving before estop()  (enc_before=(412, 386) enc_at_estop=(436, 410))
+  [PASS] trial 10: estop() ack confirmed  (ack=AckEntry(corr_id=20, ok=True, err_code=0))
+  [FAIL] trial 10: encoders stop advancing within 0.15s  (settle_time=0.154s enc_final=(457, 430))
+  [PASS] trial 10: encoders stay stopped for the full 3.0s hold (no change after the 0.30s coast-down grace)  (held from 0.154s to 3.0s)
+
+--- tail: silent ---
+  [PASS] silent tail, trial 1: wheels genuinely moving before the halt  (travelled L=41.0 R=40.0 mm)
+  [PASS] silent tail, trial 1: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+8.0 R=+7.0 mm (worst 8.0); wheels kept turning 0.10s; anchor 0 ms old; 129 frames)
+  [PASS] silent tail, trial 2: wheels genuinely moving before the halt  (travelled L=35.0 R=33.0 mm)
+  [PASS] silent tail, trial 2: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+8.0 R=+7.0 mm (worst 8.0); wheels kept turning 0.09s; anchor 0 ms old; 128 frames)
+  [PASS] silent tail, trial 3: wheels genuinely moving before the halt  (travelled L=35.0 R=34.0 mm)
+  [PASS] silent tail, trial 3: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+7.0 R=+6.0 mm (worst 7.0); wheels kept turning 0.12s; anchor 0 ms old; 129 frames)
+  [PASS] silent tail, trial 4: wheels genuinely moving before the halt  (travelled L=32.0 R=34.0 mm)
+  [PASS] silent tail, trial 4: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+7.0 R=+7.0 mm (worst 7.0); wheels kept turning 0.10s; anchor 0 ms old; 128 frames)
+  [PASS] silent tail, trial 5: wheels genuinely moving before the halt  (travelled L=34.0 R=34.0 mm)
+  [PASS] silent tail, trial 5: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+9.0 R=+6.0 mm (worst 9.0); wheels kept turning 0.10s; anchor 0 ms old; 129 frames)
+
+--- tail: estop ---
+  [PASS] estop tail, trial 1: wheels genuinely moving before the halt  (travelled L=37.0 R=34.0 mm)
+  [PASS] estop tail, trial 1: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+34.0 R=+30.0 mm (worst 34.0); wheels kept turning 0.20s; anchor 70 ms old; 128 frames)
+  [PASS] estop tail, trial 2: wheels genuinely moving before the halt  (travelled L=36.0 R=35.0 mm)
+  [PASS] estop tail, trial 2: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+32.0 R=+31.0 mm (worst 32.0); wheels kept turning 0.23s; anchor 25 ms old; 128 frames)
+  [PASS] estop tail, trial 3: wheels genuinely moving before the halt  (travelled L=34.0 R=34.0 mm)
+  [PASS] estop tail, trial 3: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+31.0 R=+31.0 mm (worst 31.0); wheels kept turning 0.20s; anchor 70 ms old; 128 frames)
+  [PASS] estop tail, trial 4: wheels genuinely moving before the halt  (travelled L=35.0 R=34.0 mm)
+  [PASS] estop tail, trial 4: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+33.0 R=+31.0 mm (worst 33.0); wheels kept turning 0.23s; anchor 22 ms old; 129 frames)
+  [PASS] estop tail, trial 5: wheels genuinely moving before the halt  (travelled L=37.0 R=35.0 mm)
+  [PASS] estop tail, trial 5: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+33.0 R=+31.0 mm (worst 33.0); wheels kept turning 0.19s; anchor 47 ms old; 128 frames)
+
+--- tail: wheels0 ---
+  [PASS] wheels0 tail, trial 1: wheels genuinely moving before the halt  (travelled L=36.0 R=35.0 mm)
+  [PASS] wheels0 tail, trial 1: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+31.0 R=+31.0 mm (worst 31.0); wheels kept turning 0.22s; anchor 50 ms old; 129 frames)
+  [PASS] wheels0 tail, trial 2: wheels genuinely moving before the halt  (travelled L=42.0 R=43.0 mm)
+  [PASS] wheels0 tail, trial 2: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+31.0 R=+30.0 mm (worst 31.0); wheels kept turning 0.21s; anchor 27 ms old; 129 frames)
+  [PASS] wheels0 tail, trial 3: wheels genuinely moving before the halt  (travelled L=36.0 R=35.0 mm)
+  [PASS] wheels0 tail, trial 3: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+32.0 R=+30.0 mm (worst 32.0); wheels kept turning 0.19s; anchor 45 ms old; 128 frames)
+  [PASS] wheels0 tail, trial 4: wheels genuinely moving before the halt  (travelled L=44.0 R=43.0 mm)
+  [PASS] wheels0 tail, trial 4: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+33.0 R=+31.0 mm (worst 33.0); wheels kept turning 0.24s; anchor 24 ms old; 128 frames)
+  [PASS] wheels0 tail, trial 5: wheels genuinely moving before the halt  (travelled L=34.0 R=35.0 mm)
+  [PASS] wheels0 tail, trial 5: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+29.0 R=+32.0 mm (worst 32.0); wheels kept turning 0.22s; anchor 47 ms old; 128 frames)
+
+--- tail: stream ---
+  [PASS] stream tail, trial 1: wheels genuinely moving before the halt  (travelled L=34.0 R=35.0 mm)
+  [PASS] stream tail, trial 1: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+32.0 R=+31.0 mm (worst 32.0); wheels kept turning 0.22s; anchor 24 ms old; 129 frames)
+  [PASS] stream tail, trial 2: wheels genuinely moving before the halt  (travelled L=44.0 R=43.0 mm)
+  [PASS] stream tail, trial 2: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+34.0 R=+31.0 mm (worst 34.0); wheels kept turning 0.24s; anchor 20 ms old; 128 frames)
+  [PASS] stream tail, trial 3: wheels genuinely moving before the halt  (travelled L=36.0 R=35.0 mm)
+  [PASS] stream tail, trial 3: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+32.0 R=+31.0 mm (worst 32.0); wheels kept turning 0.21s; anchor 45 ms old; 129 frames)
+  [PASS] stream tail, trial 4: wheels genuinely moving before the halt  (travelled L=40.0 R=44.0 mm)
+  [PASS] stream tail, trial 4: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+31.0 R=+31.0 mm (worst 31.0); wheels kept turning 0.24s; anchor 24 ms old; 128 frames)
+  [PASS] stream tail, trial 5: wheels genuinely moving before the halt  (travelled L=35.0 R=35.0 mm)
+  [PASS] stream tail, trial 5: travel after commanded zero <= 60 mm  (travel after commanded zero: L=+32.0 R=+30.0 mm (worst 32.0); wheels kept turning 0.19s; anchor 48 ms old; 129 frames)
+
+  === stop tails (travel after the COMMANDED-ZERO transition, not the baseline frame) ===
+      tail  trials     median      worst  bound 60 mm
+    silent       5       8.0mm       9.0mm  PASS
+     estop       5      33.0mm      34.0mm  PASS
+   wheels0       5      32.0mm      33.0mm  PASS
+    stream       5      32.0mm      34.0mm  PASS
+
+==== 96/101 checks passed ====

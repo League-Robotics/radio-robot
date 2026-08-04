@@ -59,12 +59,13 @@ LIVE TUNING (133-003) -- the flags a wheel-controller session turns:
     --vmin --asteady --poserr --gain-left --gain-right     DBG verbs, RAM only
     --pid-kp --pid-ki --pid-kff --pid-imax --pid-kaw       WHEEL_CONTROL group
 
-Everything is asserted **after connect**, because opening this port resets
-the board -- a value set by any other process is already gone. Nothing is
-taken on trust: a DBG verb must produce the firmware's own `... applied`
-echo, and the WHEEL_CONTROL group is read back and compared field by field
-(an ack is not evidence). Any unconfirmed push aborts the run rather than
-reporting a distance against gains that were never set.
+Everything is asserted **after connect**, because a value set by any other
+process is already gone -- that process CLOSED the port, and closing is what
+resets this board (133-004 measured it; see `_assert_tuning()` for the
+numbers). Nothing is taken on trust: a DBG verb must produce the firmware's
+own `... applied` echo, and the WHEEL_CONTROL group is read back and compared
+field by field (an ack is not evidence). Any unconfirmed push aborts the run
+rather than reporting a distance against gains that were never set.
 
 The two channels do NOT behave the same way afterwards, and the gate says
 so on every run: the five `pid_*` fields are persisted to flash and survive
@@ -874,18 +875,37 @@ def _assert_tuning(conn, proto, args) -> "dict[str, float]":
     whether connecting resets the board, and it is why this gate was NOT
     re-ordered when the DTR policy changed.
 
-    UNRESOLVED, and deliberately left that way (133-006): this docstring
-    used to assert "opening this port RESETS the board (measured: uptime
-    29361 -> 34911 ms held open, but ~4051 ms after a close/reopen, and
-    suppressing DTR/RTS does not prevent it)". A later direct-USB
-    measurement on `tovez` reached the opposite conclusion -- opening with
-    `dtr = False` and sending `HELLO` classified normally with the robot
-    clock NOT resetting -- and `SerialConnection` now opens that way. Both
-    measurements are recorded; neither has been re-run against `tovez`
-    since the policy changed, because the robot was unplugged for 133-006.
-    Re-measure before relying on either claim. What is NOT in doubt: this
-    function's own confirm-by-read-back discipline below, which does not
-    depend on the answer.
+    RESOLVED 2026-08-04 (133-004), on `tovez` over direct USB. Both of the
+    earlier claims were half right, and the disagreement was never about
+    DTR at all -- it was about WHICH END of the connection resets the board:
+
+        opening the port does NOT reset it.  Held open, the robot clock
+        advanced 71755 -> 77555 ms across a 5.8 s wait: +5800 ms of real
+        uptime, no discontinuity.  `SerialConnection`'s 133-006 claim is
+        correct on this point.
+
+        CLOSING the port DOES reset it, every time, with `reset=False`.
+        Three consecutive close/reopen cycles each read the clock at
+        EXACTLY 5210 ms -- identical, which is the tell: the clock is being
+        restarted and read a fixed interval later.  Discriminated from
+        reset-on-open by varying the gap between close and reopen: with an
+        8 s gap the clock read 18960 ms against 18996 predicted, and with
+        15 s it read 25962 against 26005 -- i.e. `t ~= gap + connect_cost`,
+        which only holds if the reset fired at the CLOSE.  Reset-on-open
+        predicts a constant ~connect_cost regardless of the gap; it was not
+        constant.
+
+    So `_disable_hupcl()` (serial_conn.py) does NOT in fact suppress the
+    close-time reset on macOS -- it is called on the default `reset=False`
+    path and the board reboots anyway.  That is a HOST DEFECT, reported by
+    133-004 and deliberately not fixed inside a measurement ticket.
+
+    The practical rule is UNCHANGED, and that is why this gate was not
+    re-ordered: a live-pushed value is gone the moment any process closes
+    the port, so push and measure in the SAME connection.  Only the
+    mechanism was wrong, not the discipline.  What was never in doubt: this
+    function's own confirm-by-read-back below, which does not depend on the
+    answer either way.
 
     Two confirmation mechanisms, one per channel, and NEITHER is an ack:
 

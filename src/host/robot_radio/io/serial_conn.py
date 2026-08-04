@@ -214,8 +214,15 @@ def _disable_hupcl(ser) -> None:
 
     On macOS/Linux the default tty behaviour asserts DTR when the last handle
     closes (HUPCL = "hang up on close"), which the micro:bit DAPLink interprets
-    as a target reset. Clearing it lets a CLI command open/close the port
-    without rebooting the robot. No-op on platforms without termios.
+    as a target reset. Clearing it is INTENDED to let a CLI command open/close
+    the port without rebooting the robot. No-op on platforms without termios.
+
+    KNOWN INEFFECTIVE ON macOS (measured 2026-08-04, 133-004, ``tovez`` over
+    direct USB): the board still reboots on every close with this called.
+    See ``connect()``'s "DTR policy" section for the measurement that places
+    the reset at the close rather than the open. Do not rely on this function
+    to preserve live-pushed config across a disconnect -- push and measure in
+    the same connection.
     """
     try:
         import termios
@@ -583,14 +590,33 @@ class SerialConnection:
             relay path depends on the reset, so no ``RADIOBRIDGE`` exception is
             carried here.
 
-            ``reset=True`` remains the one deliberate way to reboot the device
-            from this class: on macOS/Linux ``close()`` pulses DTR via the
-            HUPCL termios flag, and ``_disable_hupcl()`` (called when
-            ``reset`` is False) is what suppresses it.
+            On macOS/Linux ``close()`` pulses DTR via the HUPCL termios flag,
+            and ``_disable_hupcl()`` (called when ``reset`` is False) is meant
+            to suppress it, leaving ``reset=True`` as the one deliberate way
+            to reboot the device from this class.
 
-            Beyond the config bug this fixes something larger: you can now
-            observe a robot without rebooting it.  Every host connection used
-            to disturb the thing it was measuring.
+            MEASURED 2026-08-04 (133-004), and it does NOT currently work:
+            on ``tovez`` over direct USB, macOS, three consecutive
+            close/reopen cycles on the default ``reset=False`` path each read
+            the robot clock at exactly 5210 ms — the board rebooted on every
+            close despite ``_disable_hupcl()`` having been called.  Confirmed
+            by varying the gap between close and reopen (``t ~= gap +
+            connect_cost``: 18960 ms measured against 18996 predicted at an
+            8 s gap, 25962 against 26005 at 15 s), which places the reset at
+            the CLOSE and not at the open.  ``_disable_hupcl()`` is therefore
+            a known-ineffective mitigation on this platform, not a working
+            one.  Not fixed here: 133-004 was a measurement ticket and
+            changing the transport mid-session would have invalidated its own
+            results.
+
+            What the ``dtr = False`` open DID buy is real and is confirmed by
+            the same session: **opening** no longer resets the device.  Held
+            open, the robot clock advanced 71755 -> 77555 ms across a 5.8 s
+            wait, with no discontinuity.  So a value pushed live survives for
+            as long as the connection is held — you can observe a robot
+            without rebooting it *within one session*.  What it does not yet
+            buy is surviving a disconnect: the next process still finds a
+            rebooted robot.  Push and measure in the SAME connection.
 
         Radio channel note:
             Channel/group matching between relay and robot is a bench-setup

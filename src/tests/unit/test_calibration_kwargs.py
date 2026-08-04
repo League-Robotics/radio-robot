@@ -142,14 +142,25 @@ def test_calibration_kwargs_never_includes_otos_keys() -> None:
 # ---------------------------------------------------------------------------
 
 
+# The pid.* values here track data/robots/tovez.json's wheel_control group and
+# are NOT free-standing expectations. They were all 0 while Stage B shipped
+# inert (130-004 through 133-003); 133-004 bench-tuned Stage B on `tovez` and
+# promoted the measured set, so this snapshot moved with it. Note the two
+# non-obvious wire spellings, which are the reason this snapshot is worth
+# keeping: `pid.kff` is the ACCEL feedforward `pid_kaff` (still 0 -- the
+# cmdAccel path is unvalidated), and `pid.kaw` is `pid_max`, the total
+# fast-loop authority cap, not an anti-windup gain. `pid.kp` is 0 as a
+# MEASURED result, not because Stage B is still inert -- 133-004 found the
+# velocity-domain P term bought no distance fidelity and cost straight-line
+# heading, so the position-domain I term (`pid.ki`) does the work alone.
 _EXPECTED_COMMANDS_TOVEZ = [
     ("SET ml=0.716500", 200),
     ("SET mr=0.707700", 200),
     ("SET pid.kp=0", 200),
-    ("SET pid.ki=0", 200),
+    ("SET pid.ki=6", 200),
     ("SET pid.kff=0", 200),
-    ("SET pid.iMax=0", 200),
-    ("SET pid.kaw=0", 200),
+    ("SET pid.iMax=60", 200),
+    ("SET pid.kaw=100", 200),
     ("OI", 500),
     ("OL 1.0275", 200),
     ("OA 0.987", 200),
