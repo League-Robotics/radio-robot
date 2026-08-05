@@ -2,7 +2,7 @@
 id: '134'
 title: 'Firmware-side tour closure: intent ledger, terminal fine-align, and the speed-floor
   fix'
-status: planning-docs
+status: closed
 branch: sprint/134-firmware-side-tour-closure-intent-ledger-terminal-fine-align-and-the-speed-floor-fix
 worktree: false
 use-cases: []
