@@ -467,17 +467,46 @@ def verb_estop(session: RogoSession, tokens: list[str]) -> None:
 def _cleartext(session: RogoSession, verb: str, reply_prefix: str,
                timeout_ms: int = 700) -> None:
     """Send one cleartext verb and print the first reply line containing
-    ``reply_prefix`` (the v5 cleartext plane is line-oriented, no corr_id)."""
-    session.proto.send_fast(verb)
-    deadline = time.monotonic() + timeout_ms / 1000.0
-    while time.monotonic() < deadline:
-        for line in session.proto.read_pending_lines():
-            if reply_prefix in line:
-                session.say(f"  {line.strip()}")
-                return
-        session.pump()  # keep recording/broadcast alive while we wait
-        time.sleep(0.01)
-    session.say(f"  {verb}: no {reply_prefix} reply within {timeout_ms}ms")
+    ``reply_prefix`` (the v5 cleartext plane is line-oriented, no corr_id).
+
+    Captures the reply via the connection's ``on_recv`` hook, NOT
+    ``read_pending_lines()`` — the reader thread's ``_handle_text_line()``
+    never routes ``DEVICE:``/``PONG:``/``ID:``/``VER:`` lines into the
+    drainable queues (see ``radio_bench_gate.py``'s "Design notes" for the
+    post-124-005 rationale; this is that gate's own capture pattern).
+    Verified against gopiv on the bench 2026-08-05: the queue-drain version
+    of this helper timed out on all four verbs; this version answers.
+    Falls back to ``read_pending_lines()`` when the connection has no
+    ``on_recv`` attribute (e.g. a test fake)."""
+    conn = session.conn
+    captured: list[str] = []
+    hookable = hasattr(conn, "on_recv")
+    if hookable:
+        original_on_recv = conn.on_recv
+
+        def _capture(line) -> None:
+            if isinstance(line, str):
+                captured.append(line)
+            if original_on_recv:
+                original_on_recv(line)
+
+        conn.on_recv = _capture
+    try:
+        session.proto.send_fast(verb)
+        deadline = time.monotonic() + timeout_ms / 1000.0
+        while time.monotonic() < deadline:
+            if not hookable:
+                captured.extend(session.proto.read_pending_lines())
+            for line in captured:
+                if reply_prefix in line:
+                    session.say(f"  {line.strip()}")
+                    return
+            session.pump()  # keep recording/broadcast alive while we wait
+            time.sleep(0.01)
+        session.say(f"  {verb}: no {reply_prefix} reply within {timeout_ms}ms")
+    finally:
+        if hookable:
+            conn.on_recv = original_on_recv
 
 
 def verb_ping(session, tokens): _cleartext(session, "PING", "PONG")
