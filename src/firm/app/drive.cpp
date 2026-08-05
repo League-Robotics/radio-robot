@@ -8,9 +8,35 @@ namespace App {
 Drive::Drive(Devices::Motor& left, Devices::Motor& right, float trackWidth)
     : left_(left), right_(right), trackWidth_(trackWidth) {}
 
+void Drive::configure(const Config::Robot& config) {
+  setWheelCorrection(
+      config.drive.wheel_gain_left_accel, config.drive.wheel_intercept_left_accel,
+      config.drive.wheel_gain_left_decel, config.drive.wheel_intercept_left_decel,
+      config.drive.wheel_gain_right_accel, config.drive.wheel_intercept_right_accel,
+      config.drive.wheel_gain_right_decel, config.drive.wheel_intercept_right_decel);
+  setCrawlPulse(config.drive.crawl_pulse);
+
+  ControlGains gains;
+  gains.kp = config.wheelControl.pid_kp;
+  gains.ki = config.wheelControl.pid_ki;
+  gains.iMax = config.wheelControl.pid_i_max;
+  gains.kaff = config.wheelControl.pid_kaff;
+  gains.pidMax = config.wheelControl.pid_max;
+  setControlGains(gains);
+
+  AdaptationBounds bounds;
+  bounds.vMin = config.wheelControl.v_min;
+  bounds.biasMax = config.wheelControl.bias_max;
+  bounds.tauAdapt = config.wheelControl.tau_adapt;
+  bounds.aSteady = config.wheelControl.a_steady;
+  bounds.posErrMax = config.wheelControl.pos_err_max;
+  bounds.deficitThreshold = config.wheelControl.deficit_threshold;
+  bounds.deficitWindow = config.wheelControl.deficit_window;
+  setAdaptationBounds(bounds);
+}
+
 void Drive::command(float vLeft, float vRight, float duration,
                     uint32_t moveId, uint32_t now) {
-  // Arm a bounded wheel command.
   targetLeft_ = vLeft;
   targetRight_ = vRight;
   commandDeadline_ = now + static_cast<uint32_t>(duration);
@@ -19,20 +45,19 @@ void Drive::command(float vLeft, float vRight, float duration,
 }
 
 void Drive::takeover() {
-  // Transfer motion ownership without resetting learned state.
   targetLeft_ = 0.0f;
   targetRight_ = 0.0f;
   commandActive_ = false;
+
 }
 
 void Drive::estop() {
-  // Full stop: zero motion, reset learned state, and reassert the stop.
   takeover();
 
   stopEnforceCountdown_ = kStopEnforceTicks;
 
-  pidIntegralLeft_ = 0.0f;
-  pidIntegralRight_ = 0.0f;
+  posRefLeft_ = PositionRef{};
+  posRefRight_ = PositionRef{};
   biasLeft_ = 0.0f;
   biasRight_ = 0.0f;
   deficitSinceLeft_ = 0;
@@ -52,7 +77,6 @@ void Drive::update(Types::RobotState& state, uint32_t now) {
   const bool owned = commandActive_;
 
   if (commandActive_ && static_cast<int32_t>(now - commandDeadline_) >= 0) {
-    // Expire the armed command and publish its completion.
     commandActive_ = false;
     targetLeft_ = 0.0f;
     targetRight_ = 0.0f;
@@ -60,11 +84,23 @@ void Drive::update(Types::RobotState& state, uint32_t now) {
     completedMoveId_ = commandMoveId_;
   }
 
-  if (!owned) return;
+  if (!owned) return;  // the planner owns motion; its update() is the writer
 
-  // Publish Drive's active command into the shared blackboard.
   state.wheelLeft.cmdVelocity = targetLeft_;
   state.wheelRight.cmdVelocity = targetRight_;
+
+  const float dt = static_cast<float>(state.time.cyclePeriod) * 1e-6f;  // [s]
+  if (dt > 0.0f) {
+    const float rawLeft = (targetLeft_ - previousTargetLeft_) / dt;    // [mm/s^2]
+    const float rawRight = (targetRight_ - previousTargetRight_) / dt;  // [mm/s^2]
+    cmdAccelLeft_ += kAccelSmoothing * (rawLeft - cmdAccelLeft_);
+    cmdAccelRight_ += kAccelSmoothing * (rawRight - cmdAccelRight_);
+  }
+  previousTargetLeft_ = targetLeft_;
+  previousTargetRight_ = targetRight_;
+  state.wheelLeft.cmdAccel = cmdAccelLeft_;
+  state.wheelRight.cmdAccel = cmdAccelRight_;
+
   state.command.moveActive = commandActive_;
   state.command.mode = commandActive_ ? Types::Mode::Velocity : Types::Mode::Idle;
   state.command.v_x = 0.5f * (targetLeft_ + targetRight_);
@@ -81,14 +117,14 @@ void Drive::setWheelCorrection(float gLA, float iLA, float gLD, float iLD,
 
 float Drive::correctedCommand(float desired, float previous, bool leftWheel,
                               float bias) const {
-  if (desired == 0.0f) return 0.0f;
+  if (desired == 0.0f) return 0.0f;  // stop is stop; never offset it (map OR bias)
   const int w = leftWheel ? 0 : 1;
   const int d = (std::fabs(desired) > std::fabs(previous)) ? 0 : 1;
   const float magnitude =
       (std::fabs(desired) - corrIntercept_[w][d]) / corrGain_[w][d];
-  if (magnitude <= 0.0f) return 0.0f;
+  if (magnitude <= 0.0f) return 0.0f;  // below the intercept: unreachable
   const float correctedMagnitude = magnitude + bias;
-  if (correctedMagnitude <= 0.0f) return 0.0f;
+  if (correctedMagnitude <= 0.0f) return 0.0f;  // never flip direction; not converged yet
   return std::copysign(correctedMagnitude, desired);
 }
 
@@ -107,10 +143,10 @@ float Drive::crawlDuty(float duty, float& carry) const {
 
 void Drive::applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
                             float& speedRight) const {
-  // Scale sub-floor wheel pairs so the dominant wheel reaches vMin.
   speedLeft = rawLeft;
   speedRight = rawRight;
-  if (bounds_.vMin <= 0.0f) return;
+  if (!owns()) return;               // 134-002: teleop affordance only, see above
+  if (bounds_.vMin <= 0.0f) return;  // uncalibrated: no-op, same as before
   const float dominantMag = std::max(std::fabs(rawLeft), std::fabs(rawRight));
   if (dominantMag <= 0.0f || dominantMag >= bounds_.vMin) return;
   const float scale = bounds_.vMin / dominantMag;
@@ -118,40 +154,50 @@ void Drive::applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
   speedRight = rawRight * scale;
 }
 
-float Drive::fastPid(float& integral, float err, float aCmd, float dt,
-                     bool steady) const {
-  // Stage B: proportional + feedforward + bounded integral.
+float Drive::fastPid(float posError, float err, float aCmd) const {
   const float proportional = gains_.kp * err;
   const float feed = gains_.kaff * aCmd;
 
-  const bool clamped = gains_.pidMax > 0.0f;
-  const float provisional = proportional + feed + integral;
-  const bool pushingIntoClamp =
-      clamped && ((provisional >= gains_.pidMax && err > 0.0f) ||
-                  (provisional <= -gains_.pidMax && err < 0.0f));
-
-  if (steady && gains_.iMax > 0.0f && gains_.ki != 0.0f && !pushingIntoClamp &&
-      dt > 0.0f) {
-    integral += gains_.ki * err * dt;
+  float integral = 0.0f;  // [mm/s]
+  if (gains_.iMax > 0.0f) {
+    integral = gains_.ki * posError;
     if (integral > gains_.iMax) integral = gains_.iMax;
     if (integral < -gains_.iMax) integral = -gains_.iMax;
   }
 
   float pid = proportional + feed + integral;
-  if (clamped) {
+  if (gains_.pidMax > 0.0f) {
     if (pid > gains_.pidMax) pid = gains_.pidMax;
     if (pid < -gains_.pidMax) pid = -gains_.pidMax;
   }
-  if (!std::isfinite(pid)) return 0.0f;
+  if (!std::isfinite(pid)) return 0.0f;  // fail closed, never inject NaN
   return pid;
+}
+
+float Drive::positionError(float speed, const Types::RobotState::Wheel& wheel,
+                           PositionRef& ref, float dt) const {
+  if (speed == 0.0f || dt <= 0.0f || !wheel.connected ||
+      wheel.positionEpoch != ref.epoch || !ref.armed) {
+    ref.armed = (speed != 0.0f) && wheel.connected;
+    ref.epoch = wheel.positionEpoch;
+    ref.origin = wheel.position;
+    ref.reference = 0.0f;
+    return 0.0f;
+  }
+  ref.reference += speed * dt;                                  // [mm]
+  float error = ref.reference - (wheel.position - ref.origin);  // [mm]
+  if (bounds_.posErrMax > 0.0f) {
+    if (error > bounds_.posErrMax) error = bounds_.posErrMax;
+    if (error < -bounds_.posErrMax) error = -bounds_.posErrMax;
+  }
+  return error;
 }
 
 void Drive::adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
                       bool fresh, float dt) const {
-  // Stage C: slow bias adaptation on fresh, steady, above-floor motion.
   if (bounds_.tauAdapt <= 0.0f || dt <= 0.0f || !fresh) return;
-  if (std::fabs(aCmd) >= bounds_.aSteady) return;
-  if (vCmdMagnitude < bounds_.vMin) return;
+  if (std::fabs(aCmd) >= bounds_.aSteady) return;  // ramping, not steady
+  if (vCmdMagnitude < bounds_.vMin) return;         // below the speed floor
   bias += err * dt / bounds_.tauAdapt;
   if (bounds_.biasMax > 0.0f) {
     if (bias > bounds_.biasMax) bias = bounds_.biasMax;
@@ -163,7 +209,6 @@ void Drive::adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
 
 void Drive::updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
                           bool& latched) const {
-  // Latch sustained large error once the window elapses.
   if (bounds_.deficitThreshold <= 0.0f || bounds_.deficitWindow <= 0.0f ||
       !conditionNow) {
     since = 0;
@@ -175,7 +220,6 @@ void Drive::updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
 }
 
 uint32_t Drive::sampleAge(uint32_t now, uint32_t sampleTime) const {
-  // Keep clock-domain skew from underflowing.
   return (now < sampleTime) ? 0u : (now - sampleTime);
 }
 
@@ -203,17 +247,15 @@ void Drive::tick(const Types::RobotState& state) {
   const float dt = static_cast<float>(state.time.cyclePeriod) * 1e-6f;  // [s]
   const float errLeft = speedLeft - state.wheelLeft.velocity;
   const float errRight = speedRight - state.wheelRight.velocity;
-  const bool steadyLeft = std::fabs(state.wheelLeft.cmdAccel) < bounds_.aSteady;
-  const bool steadyRight = std::fabs(state.wheelRight.cmdAccel) < bounds_.aSteady;
 
+  const float posErrorLeft = positionError(speedLeft, state.wheelLeft, posRefLeft_, dt);
+  const float posErrorRight = positionError(speedRight, state.wheelRight, posRefRight_, dt);
   const float pidLeft = (speedLeft == 0.0f)
       ? 0.0f
-      : fastPid(pidIntegralLeft_, errLeft, state.wheelLeft.cmdAccel, dt,
-                steadyLeft && freshLeft);
+      : fastPid(posErrorLeft, errLeft, state.wheelLeft.cmdAccel);
   const float pidRight = (speedRight == 0.0f)
       ? 0.0f
-      : fastPid(pidIntegralRight_, errRight, state.wheelRight.cmdAccel, dt,
-                steadyRight && freshRight);
+      : fastPid(posErrorRight, errRight, state.wheelRight.cmdAccel);
   lastPidLeft_ = pidLeft;
   lastPidRight_ = pidRight;
 
@@ -246,10 +288,12 @@ void Drive::tick(const Types::RobotState& state) {
   const bool enforceStop = stopEnforceCountdown_ > 0 || wheelsMoving;
   if (stopEnforceCountdown_ > 0) --stopEnforceCountdown_;
 
-  // Quiet-at-zero baseline unless stop reassertion is active.
   const bool commandedStop = dutyLeft == 0.0f && dutyRight == 0.0f;
   const bool alreadyQuiet =
       commandedStop && writtenLeft_ == 0.0f && writtenRight_ == 0.0f;
+
+  if (commandedStop && !alreadyQuiet) stopEnforceCountdown_ = kStopEnforceTicks;
+
   if (alreadyQuiet && !enforceStop) return;
   left_.setDuty(dutyLeft);
   right_.setDuty(dutyRight);
@@ -257,4 +301,4 @@ void Drive::tick(const Types::RobotState& state) {
   writtenRight_ = dutyRight;
 }
 
-}
+}  // namespace App

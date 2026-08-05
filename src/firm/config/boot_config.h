@@ -4,6 +4,7 @@
 
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "messages/robot_config.h"
 
 namespace Config {
 
@@ -100,8 +101,32 @@ struct PlannerBootConfig {
   float headingHoldGain = 0.0f;  // [1/s] rad/s of correction per rad of error
 
   float decelPlanFraction = 0.0f;  // [1] fraction of decel ceiling to plan brake-start against
+
+  float alignTol = 0.0f;         // [rad] fine-align residual tolerance
+  int32_t alignMaxNudges = 0;    // corrective pivots one Move may spend
+};
+
+// Commanded->actual values App::Drive::setWheelCorrection() installs.
+struct WheelCorrection {
+  float gainLeftAccel = 1.0f;
+  float interceptLeftAccel = 0.0f;   // [mm/s]
+  float gainLeftDecel = 1.0f;
+  float interceptLeftDecel = 0.0f;   // [mm/s]
+  float gainRightAccel = 1.0f;
+  float interceptRightAccel = 0.0f;  // [mm/s]
+  float gainRightDecel = 1.0f;
+  float interceptRightDecel = 0.0f;  // [mm/s]
 };
 
 PlannerBootConfig defaultPlannerLimits();
+
+msg::Geometry defaultGeometryGroup();
+msg::Motors defaultMotorsGroup();
+msg::Drive defaultDriveGroup();
+msg::WheelControl defaultWheelControlGroup();
+msg::Planner defaultPlannerGroup();
+msg::PlannerShaper defaultPlannerShaperGroup();
+msg::Otos defaultOtosGroup();
+msg::Estimator defaultEstimatorGroup();
 
 }

@@ -10,6 +10,8 @@ namespace Devices {
 
 constexpr uint8_t kOtosDeviceAddr = 0x17;
 
+int8_t scaleToRegister(float scale);
+
 class Otos {
  public:
   virtual ~Otos();
@@ -23,11 +25,16 @@ class Otos {
 
   virtual uint64_t sampleTime() const = 0;  // [us]
 
+  // Raw product-id byte from the last probe: 0x5F is the chip, 0x00/0xFF mean
+  // no ACK. Distinguishes "wrong device" from "nothing there" at diagnosis.
+  virtual uint8_t lastProbeId() const { return 0; }
+
   virtual void setLinearScalar(float scalar) = 0;
   virtual void setAngularScalar(float scalar) = 0;
-  virtual void setOffset(float x, float y, float heading) = 0;  // [mm] [mm] [rad]
+  virtual void setOffset(float x, float y, float heading) = 0;     // [mm] [mm] [rad]
   virtual void getOffset(float& x, float& y, float& heading) = 0;  // [mm] [mm] [rad]
   virtual void init() = 0;
+
 };
 
 class RealOtos : public Otos {
@@ -44,7 +51,7 @@ class RealOtos : public Otos {
 
   bool present() const override;
 
-  uint8_t lastProbeId() const { return lastProbeId_; }
+  uint8_t lastProbeId() const override { return lastProbeId_; }
 
   uint64_t sampleTime() const override { return lastReadUs_; }  // [us]
 
@@ -54,14 +61,13 @@ class RealOtos : public Otos {
 
   void setPose(float x, float y, float heading);  // [mm] [mm] [rad]
 
+  void resetTracking();  // OR — reset Kalman tracking
 
-  void resetTracking();
+  void setLinearScalar(float scalar) override;   // OL
+  void setAngularScalar(float scalar) override;  // OA
 
-  void setLinearScalar(float scalar) override;
-  void setAngularScalar(float scalar) override;
-
-  void setOffset(float x, float y, float heading) override;  // [mm] [mm] [rad]
-  void getOffset(float& x, float& y, float& heading) override;  // [mm] [mm] [rad]
+  void setOffset(float x, float y, float heading) override;       // [mm] [mm] [rad]
+  void getOffset(float& x, float& y, float& heading) override;    // [mm] [mm] [rad]
 
   void setSignalProcessConfig(uint8_t config);
   uint8_t signalProcessConfig();
@@ -77,17 +83,17 @@ class RealOtos : public Otos {
   bool initialized_ = false;
 
   bool connected_ = false;
-  uint8_t lastProbeId_ = 0;
+  uint8_t lastProbeId_ = 0;   // last product-ID byte read by begin()
 
   PoseReading cachedPose_{};
-  bool poseFresh_ = false;
+  bool poseFresh_ = false;   // poseFresh()'s backing field
 
   uint64_t lastReadUs_ = 0;  // [us] time of the most recent REAL bus read
-  bool hasRead_ = false;
+  bool hasRead_ = false;     // true once at least one real bus read has been attempted
 
   bool posePending_ = false;
-  float pendingX_ = 0.0f;  // [mm]
-  float pendingY_ = 0.0f;  // [mm]
+  float pendingX_ = 0.0f;        // [mm]
+  float pendingY_ = 0.0f;        // [mm]
   float pendingHeading_ = 0.0f;  // [rad]
 
   static constexpr uint8_t kRegProductId        = 0x00;
@@ -104,14 +110,12 @@ class RealOtos : public Otos {
 
   static constexpr uint8_t kImuCalibSamples = 255;
 
-  static constexpr float kPosMmPerLsb = 0.305f;  // [mm/LSB]
+  static constexpr float kPosMmPerLsb = 0.305f;                             // [mm/LSB]
   static constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);  // [rad/LSB]
 
   static constexpr uint32_t kBusClearance = 4000;  // [us]
 
   static constexpr uint64_t kReadPeriod = 20000;  // [us]
-
-  static int8_t scaleToRegister(float scale);
 
   void applyPendingPose();
 
@@ -131,4 +135,4 @@ class RealOtos : public Otos {
   void writePoseMm(uint8_t startReg, float xF, float yF, float hF);
 };
 
-}
+}  // namespace Devices

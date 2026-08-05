@@ -18,7 +18,6 @@ namespace App {
 
 #ifndef HOST_BUILD
 
-
 SerialTransport::SerialTransport(SerialPort& serial) : serial_(serial) {}
 
 bool SerialTransport::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
@@ -28,7 +27,6 @@ bool SerialTransport::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
 void SerialTransport::send(const uint8_t* data, uint16_t len) { serial_.send(data, len); }
 
 void SerialTransport::sendReliable(const char* msg) { serial_.sendReliable(msg); }
-
 
 RadioTransport::RadioTransport(Radio& radio) : radio_(radio) {}
 
@@ -41,7 +39,7 @@ void RadioTransport::send(const uint8_t* data, uint16_t len) { radio_.send(data,
 void RadioTransport::sendReliable(const char* msg) { radio_.send(reinterpret_cast<const uint8_t*>(msg),
                                                                   static_cast<uint16_t>(std::strlen(msg))); }
 
-#endif
+#endif  // HOST_BUILD
 
 namespace {
 
@@ -142,6 +140,43 @@ App::Comms::DbgAction classifyDbgArg(const uint8_t* data, uint16_t len) {
     action.kind = App::Comms::DbgActionKind::kClear;
     return action;
   }
+  if (std::strcmp(sub, "otos") == 0) {
+    action.kind = App::Comms::DbgActionKind::kOtos;
+    return action;
+  }
+  auto parseScalar = [&nextToken](float& out) -> bool {
+    const char* token = nextToken();
+    if (token == nullptr) return false;
+    char* end = nullptr;
+    const float parsed = std::strtof(token, &end);
+    if (end == token || *end != '\0') return false;  // empty or trailing junk
+    if (!(parsed >= 0.0f)) return false;             // negative, or NaN
+    out = parsed;
+    return true;
+  };
+
+  if (std::strcmp(sub, "vmin") == 0) {
+    if (!parseScalar(action.value)) return action;
+    action.kind = App::Comms::DbgActionKind::kVmin;
+    return action;
+  }
+  if (std::strcmp(sub, "asteady") == 0) {
+    if (!parseScalar(action.value)) return action;
+    action.kind = App::Comms::DbgActionKind::kASteady;
+    return action;
+  }
+  if (std::strcmp(sub, "pos") == 0) {
+    if (!parseScalar(action.value)) return action;
+    action.kind = App::Comms::DbgActionKind::kPos;
+    return action;
+  }
+  if (std::strcmp(sub, "gain") == 0) {
+    if (!parseScalar(action.value)) return action;
+    if (!parseScalar(action.value2)) return action;
+    if (action.value <= 0.0f || action.value2 <= 0.0f) return action;
+    action.kind = App::Comms::DbgActionKind::kGain;
+    return action;
+  }
   if (std::strcmp(sub, "wedge") == 0) {
     const char* which = nextToken();
     if (which == nullptr) return action;
@@ -156,20 +191,20 @@ App::Comms::DbgAction classifyDbgArg(const uint8_t* data, uint16_t len) {
   }
   return action;
 }
-#endif
+#endif  // ROBOT_DEBUG
 
 msg::Verb bodyKindToVerb(msg::ReplyEnvelope::BodyKind kind) {
   switch (kind) {
     case msg::ReplyEnvelope::BodyKind::TLM: return msg::Verb::TLM;
     case msg::ReplyEnvelope::BodyKind::OK: return msg::Verb::OK;
     case msg::ReplyEnvelope::BodyKind::ERR: return msg::Verb::ERR;
+    case msg::ReplyEnvelope::BodyKind::CFG: return msg::Verb::CFG;
     case msg::ReplyEnvelope::BodyKind::NONE:
     default: return msg::Verb::VERB_UNSPECIFIED;
   }
 }
 
-}
-
+}  // namespace
 
 Comms::Comms(Transport& serialLink, Transport& radioLink, const char* banner, const char* idLine)
     : serialLink_(serialLink), radioLink_(radioLink), banner_(banner), idLine_(idLine) {}
@@ -178,7 +213,7 @@ void Comms::pump(uint32_t now) {
   for (uint8_t consumed = 0; consumed < kPumpMaxLines; ++consumed) {
     if (pumpTransport(serialLink_, now)) continue;
     if (pumpTransport(radioLink_, now)) continue;
-    return;
+    return;  // both transports dry
   }
 }
 
@@ -214,7 +249,7 @@ bool Comms::takeCommand(Cmd& out) {
 void Comms::dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& out, uint32_t now) {
   if (isRelayControlPlaneLine(line, lineLen)) return;
 
-  uint16_t colonPos = lineLen;
+  uint16_t colonPos = lineLen;  // sentinel: no ':' found
   for (uint16_t i = 0; i < lineLen; ++i) {
     if (line[i] == ':') {
       colonPos = i;
@@ -329,7 +364,7 @@ void Comms::decodeBinaryFrame(const uint8_t* command, size_t commandLen, const u
 void Comms::sendReply(const msg::ReplyEnvelope& reply) {
   const msg::Verb verb = bodyKindToVerb(reply.body_kind);
   const char* name = verbName(verb);
-  if (name == nullptr) return;
+  if (name == nullptr) return;  // BodyKind::NONE -- nothing to send
   const size_t nameLen = std::strlen(name);
 
   uint8_t rawBuf[kMaxEnvelopeBytes];
@@ -343,18 +378,18 @@ void Comms::sendReply(const msg::ReplyEnvelope& reply) {
   size_t combinedLen = n;
   const uint16_t crc = crcOverScope(reinterpret_cast<const uint8_t*>(name), nameLen, rawBuf, n);
   if (!WireRuntime::encodeCrc16(crc, combined, sizeof(combined), &combinedLen)) {
-    return;
+    return;  // unreachable in practice -- combined is sized for exactly this
   }
 
   uint8_t cobsOut[kFramedMaxBytes];
   size_t cobsLen = 0;
   if (!WireRuntime::cobsEncode(combined, combinedLen, cobsOut, sizeof(cobsOut), &cobsLen, kCobsDelimiter)) {
-    return;
+    return;  // unreachable in practice -- cobsOut is sized to the worst case
   }
 
   uint8_t line[kMaxLineBytes];
   if (nameLen + 1 + cobsLen > sizeof(line)) {
-    return;
+    return;  // unreachable in practice -- kMaxLineBytes covers the worst case
   }
   std::memcpy(line, name, nameLen);
   line[nameLen] = ':';
@@ -376,7 +411,7 @@ void Comms::sendStatus(Transport& t) {
     case 0: tlmStr = "off"; break;
     case 1: tlmStr = "auto"; break;
     case 2: tlmStr = "on"; break;
-    default: break;
+    default: break;  // unreachable: only 0/1/2 are ever written
   }
 
   char line[128];
@@ -421,7 +456,7 @@ void Comms::sendTlmReply(TlmAction action) {
     case TlmAction::kNone:
     case TlmAction::kFrame:
     default:
-      break;
+      break;  // kFrame's reply is the forced telemetry frame emit() sends
   }
 }
 
@@ -437,7 +472,7 @@ void Comms::sendDebug(const char* line) {
   serialLink_.sendReliable(buf);
   radioLink_.sendReliable(buf);
 }
-#endif
+#endif  // ROBOT_DEBUG || HOST_BUILD
 
 void Comms::updateStatus(const Types::RobotState& state, const Telemetry& tlm) {
   Status status;
@@ -452,4 +487,4 @@ void Comms::updateStatus(const Types::RobotState& state, const Telemetry& tlm) {
   status_ = status;
 }
 
-}
+}  // namespace App
