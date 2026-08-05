@@ -367,6 +367,7 @@ def _build_main_window():  # type: ignore[return]
         TOURS,
         goto_distance,
         goto_reached,
+        tour_execution,
     )
     from robot_radio.testgui.operations import (
         build_panel as _build_ops_panel,
@@ -839,12 +840,28 @@ def _build_main_window():  # type: ignore[return]
     # Tour buttons therefore enable identically for Sim and hardware
     # connections -- see _on_connect() below, which no longer disables them
     # for is_sim_transport(transport).
+    # 134-005: the rest-to-rest tours ("Square") say so in their tooltip --
+    # the sequencing, not just the geometry, is what the operator is
+    # choosing between (see planner.tour.TourExecution).
+    def _tour_execution_note(name: str) -> str:
+        execution = tour_execution(name)
+        if not getattr(execution, "sequential", False):
+            return ""
+        return (
+            f" Rest-to-rest: one Move in flight at a time with a "
+            f"{execution.settle:.1f}s PASSIVE settle at every boundary "
+            "(nothing is sent during the dwell -- a wheels(0,0) lease "
+            "would clear the firmware's heading ledger). This is the "
+            "path ticket 134-004 measured at median 6.3 mm closure."
+        )
+
     def _tour_hw_tooltip(name: str) -> str:
         return (
             f"Run {name}: resets to the origin (display-only pending "
             "sprint 098's OZ/SI binary arms), then drives the tour's "
             "geometry via planner.tour.run_tour() (streamed twist()s, "
             "closed-loop heading correction)."
+            + _tour_execution_note(name)
         )
 
     def _tour_sim_tooltip(name: str) -> str:
@@ -853,6 +870,7 @@ def _build_main_window():  # type: ignore[return]
             "firmware simulator (SimLoop) via planner.tour.run_tour() "
             "(streamed twist()s, closed-loop heading correction) -- the "
             "same driver path as hardware."
+            + _tour_execution_note(name)
         )
 
     _tour_buttons: list[tuple[QPushButton, str]] = []
@@ -1793,19 +1811,36 @@ def _build_main_window():  # type: ignore[return]
         the thread.  Public shape (signals + ``stop()``) is UNCHANGED from
         the pre-107-003 implementation — only ``run()``'s internals
         changed, so ``_make_tour_handler`` needs no changes.
+
+        134-005 added ONE optional constructor argument, ``execution`` (a
+        ``planner.tour.TourExecution``), saying how this tour is sequenced:
+        the pipelined one-leg lookahead Tour 1 / Tour 2 have always used,
+        or the rest-to-rest passive-settle execution "Square" needs. It
+        defaults to ``None`` ("whatever ``run_tour()`` defaults to"), so
+        every four-argument construction still behaves exactly as before;
+        the signals and ``stop()`` are untouched.
         """
 
         log_line = Signal(str, str)
         finished = Signal()
 
         def __init__(
-            self, transport: "object", state: dict, name: str, steps: list[str]
+            self, transport: "object", state: dict, name: str, steps: list[str],
+            execution: "object | None" = None,
         ) -> None:
             super().__init__()
             self._transport = transport
             self._state = state
             self._name = name
             self._steps = steps
+            # 134-005: how this tour is SEQUENCED (a
+            # ``planner.tour.TourExecution``), separate from its geometry --
+            # "Square" is rest-to-rest with a passive dwell, Tour 1/2 keep
+            # the one-leg lookahead. ``None`` means "whatever run_tour()
+            # defaults to" (the pipelined path), which keeps every existing
+            # caller and test double that constructs a _TourRunner with four
+            # arguments working unchanged.
+            self._execution = execution
             self._stop = False
 
         def stop(self) -> None:
@@ -1871,8 +1906,15 @@ def _build_main_window():  # type: ignore[return]
                     self.log_line.emit(f"[TOUR] {self._name} aborted", "")
                     return
 
+                execution = self._execution
+                sequential = bool(getattr(execution, "sequential", False))
+                settle = float(getattr(execution, "settle", 0.0) or 0.0)
+                omega_max = getattr(execution, "omega_max", None)
+
                 self.log_line.emit(
-                    f"[TOUR] {self._name} starting — {len(legs)} legs", "")
+                    f"[TOUR] {self._name} starting — {len(legs)} legs"
+                    + (f", rest-to-rest ({settle:.1f}s passive settle per boundary)"
+                       if sequential else ""), "")
 
                 params = PlannerParams()
                 heading = HeadingCorrector(params, robot_config=get_robot_config())
@@ -1881,6 +1923,9 @@ def _build_main_window():  # type: ignore[return]
                 try:
                     result = run_tour(
                         protocol, params, heading, legs,
+                        sequential=sequential,
+                        settle=settle,
+                        omega_max=omega_max,
                         on_leg=self._on_leg,
                         row_callback=self._on_row,
                         should_stop=lambda: self._stop,
@@ -2674,7 +2719,8 @@ def _build_main_window():  # type: ignore[return]
             ops_ctrl.set_tour_running(True)
             from PySide6.QtCore import QThread  # type: ignore[import-untyped]
 
-            worker = _TourRunner(transport, _state, name, list(steps))
+            worker = _TourRunner(transport, _state, name, list(steps),
+                                 tour_execution(name))
             thread = QThread()
             worker.moveToThread(thread)
             # Marshal worker signals to the GUI thread via a main-thread bridge

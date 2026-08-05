@@ -130,6 +130,38 @@ wire strings.
 
 The tour is aborted (and the thread joined) on Disconnect and on app quit.
 
+### Square (sprint 134)
+
+**Square** is the closure tour: 4 × 500 mm legs and 4 × 90° left turns, with
+**no host-side heading trim** — the firmware's own planner does all the
+correction. Geometry (`planner.tour.TOUR_SQUARE`) is identical to
+`src/tests/bench/planner_square_tour.py`, the path ticket 134-004 measured at
+**median 6.3 mm closure** (n=9, 36/36 corners inside `align_tol`) on `tovez`.
+
+It is driven differently from Tour 1/Tour 2, and the difference matters more
+than the geometry does. Each named tour carries a `planner.tour.TourExecution`
+(`commands.TOUR_EXECUTION`, read via `commands.tour_execution(name)`):
+
+| tour | execution | sequencing |
+|---|---|---|
+| Tour 1, Tour 2 | `PIPELINED_EXECUTION` | one-leg lookahead; never rests |
+| Square | `SQUARE_EXECUTION` | one Move in flight; 1.2 s passive settle per boundary; 2.4 rad/s pivots |
+
+**The settle is passive — the GUI sends nothing at all during a dwell, and
+nothing may be added that does.** A zero-velocity `WHEELS` command is a teleop
+*takeover*, not a no-op: `App::RobotLoop::handleWheels()` calls
+`planner_.estop()`, which clears `carryValid_`, the planner's cumulative-heading
+intent ledger — the mechanism that makes this tour close. Holding a
+`wheels(0, 0)` lease through the dwells tears that ledger down at every corner:
+same firmware, same geometry, **34.2 mm closure with 1/8 corners in tolerance**,
+against 3.6/8.2 mm with 12/12 for a passive dwell (measured 2026-08-05). The
+turn rate is pinned at 2.4 rad/s rather than inherited from
+`PlannerParams.omega_max` (2.0) because slower pivots run the wheels near their
+breakaway dead zone and arc instead of turning in place.
+
+Run it over **Relay** for the radio path; a plain serial selection reaches the
+robot's own USB port, not the relay dongle.
+
 ---
 
 ## GOTO (camera-based go-to)

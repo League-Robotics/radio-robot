@@ -330,6 +330,216 @@ def test_run_tour_full_tour_completes_without_stop_when_every_leg_only_rides_the
     assert len(transport.move_calls) == 13, "one move() call per leg, no re-sends"
 
 
+# ---------------------------------------------------------------------------
+# 134-005: the square tour's own execution -- rest-to-rest sequencing with a
+# PASSIVE settle dwell.
+#
+# The whole reason this mode exists (measured on `tovez` 2026-08-05, ticket
+# 134-004): the firmware's cumulative-heading intent ledger (`carryValid_`)
+# is what closes the square tour, and `App::RobotLoop::handleWheels()` calls
+# `planner_.estop()` -- which CLEARS that ledger -- for any WHEELS command,
+# including a zero-velocity one. A host that holds a `wheels(0, 0)` lease
+# through each inter-move dwell therefore tears the ledger down at every
+# boundary: same firmware, same geometry, 34.2 mm closure with 1/8 corners
+# inside tolerance, against 3.6/8.2 mm with 12/12 for a passive dwell.
+#
+# These tests pin the two properties that difference depends on: exactly one
+# Move in flight at a time, and a dwell that writes NOTHING to the transport.
+# ---------------------------------------------------------------------------
+
+
+class _FakeClock:
+    """Deterministic clock driven by `sleep_fn` -- `sleep(dt)` advances it by
+    `dt`, so `run_tour()`'s deadlines behave exactly as they would in real
+    time without any test actually sleeping."""
+
+    def __init__(self) -> None:
+        self.now = 0.0  # [s]
+        self.sleeps: list[float] = []  # [s]
+
+    def clock(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.sleeps.append(seconds)
+        self.now += seconds
+
+
+class _CallCountingTransport(_RingOnlyFakeTransport):
+    """`_RingOnlyFakeTransport` that also counts telemetry drains, so a test
+    can tell "dwelled, draining" apart from "dwelled, doing nothing at
+    all"."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.read_calls = 0
+
+    def read_pending_binary_tlm_frames(self) -> list[TLMFrame]:
+        self.read_calls += 1
+        return super().read_pending_binary_tlm_frames()
+
+
+def _square_legs() -> list[TourLeg]:
+    from robot_radio.planner.tour import TOUR_SQUARE
+
+    return parse_tour(TOUR_SQUARE)
+
+
+def test_tour_square_geometry_is_four_500mm_legs_and_four_90deg_turns():
+    """The GUI's square tour is the SAME geometry
+    `src/tests/bench/planner_square_tour.py` measured (`LEG`=500 mm,
+    `CRUISE`=150 mm/s, `TURN`=90 deg), expressed in `D`/`RT`."""
+    legs = _square_legs()
+
+    assert len(legs) == 8
+    distance_legs = [leg for leg in legs if leg.kind == "distance"]
+    turn_legs = [leg for leg in legs if leg.kind == "turn"]
+    assert len(distance_legs) == 4 and len(turn_legs) == 4
+    assert all(leg.value == 500.0 and leg.speed == 150.0 for leg in distance_legs)
+    assert all(leg.value == 90.0 for leg in turn_legs)
+
+
+def test_square_execution_is_sequential_with_a_passive_settle():
+    """`SQUARE_EXECUTION` carries the non-geometry half of ticket 134-004's
+    measured configuration: rest-to-rest, a real dwell, and the 2.4 rad/s
+    pivot rate (NOT `PlannerParams.omega_max`, which is 2.0 -- at the lower
+    rates the wheels run near breakaway and the pivots arc)."""
+    from robot_radio.planner.tour import PIPELINED_EXECUTION, SQUARE_EXECUTION
+
+    assert SQUARE_EXECUTION.sequential is True
+    assert SQUARE_EXECUTION.settle > 0.0
+    assert SQUARE_EXECUTION.omega_max == 2.4
+    assert PlannerParams().omega_max != SQUARE_EXECUTION.omega_max
+    # The historical tours are unchanged -- no lookahead was taken away.
+    assert PIPELINED_EXECUTION.sequential is False
+    assert PIPELINED_EXECUTION.settle == 0.0
+
+
+def test_run_tour_sequential_keeps_exactly_one_move_in_flight():
+    """Rest-to-rest: leg N+1 is not enqueued until leg N's own completion
+    ack has landed. Observed at each leg's `on_leg` callback, which fires
+    after that leg completes and BEFORE the next one is sent -- so the
+    number of `move()` calls made so far is exactly the number of legs
+    STARTED so far."""
+    transport = _CallCountingTransport()
+    clock = _FakeClock()
+    legs = _square_legs()
+    sent_at_leg_end: list[int] = []
+
+    result = run_tour(
+        transport, PlannerParams(), _heading_for_test(), legs,
+        sequential=True, settle=1.2,
+        omega_max=2.4,
+        on_leg=lambda index, total, leg, leg_result: sent_at_leg_end.append(
+            len(transport.move_calls)),
+        clock_fn=clock.clock, sleep_fn=clock.sleep)
+
+    assert result.stopped_at is None, (
+        f"sequential tour did not complete: stopped at leg {result.stopped_at} "
+        f"({result.stopped_outcome})")
+    assert sent_at_leg_end == [1, 2, 3, 4, 5, 6, 7, 8], (
+        "one Move in flight at a time -- at the end of leg N exactly N moves "
+        f"should have been sent, got {sent_at_leg_end}")
+    assert len(transport.move_calls) == 8, "one move() per leg, no re-sends"
+    assert transport.stop_calls == 0, "a completed tour must never call stop()"
+
+
+def test_run_tour_pipelined_still_keeps_one_leg_queued_ahead():
+    """Regression guard on the default path: `sequential=False` (Tour 1 /
+    Tour 2) keeps the one-leg lookahead, so at the end of leg N there are
+    N+1 moves sent, not N."""
+    transport = _CallCountingTransport()
+    legs = _square_legs()
+    sent_at_leg_end: list[int] = []
+
+    run_tour(transport, PlannerParams(), _heading_for_test(), legs,
+             on_leg=lambda index, total, leg, leg_result: sent_at_leg_end.append(
+                 len(transport.move_calls)))
+
+    assert sent_at_leg_end == [2, 3, 4, 5, 6, 7, 8, 8], (
+        f"pipelined lookahead changed shape: {sent_at_leg_end}")
+
+
+def test_run_tour_sequential_settle_sends_nothing_and_keeps_draining():
+    """The dwell is PASSIVE. It must drain telemetry (so the pose the tour
+    reports is a settled one, and the GUI canvas keeps tracking) while
+    writing NOTHING to the transport -- no `wheels(0, 0)` lease, no `stop()`,
+    no keep-alive of any kind. See this section's own header for the
+    measured consequence of getting this wrong."""
+    transport = _CallCountingTransport()
+    clock = _FakeClock()
+    legs = _square_legs()
+
+    run_tour(transport, PlannerParams(), _heading_for_test(), legs,
+             sequential=True, settle=1.2, omega_max=2.4,
+             clock_fn=clock.clock, sleep_fn=clock.sleep)
+
+    # 8 legs => 9 boundaries dwelled (before leg 1, and after each leg; the
+    # last one is the final-settle window). At poll_interval 0.05s a 1.2s
+    # dwell is ~24 polls, so the drain count must be far above the ~8 a
+    # non-dwelling run would produce.
+    assert transport.read_calls > 8 * 20, (
+        f"the settle dwell is not draining telemetry (only {transport.read_calls} "
+        "reads for 8 legs)")
+    assert transport.move_calls and len(transport.move_calls) == 8, (
+        "the dwell must not send any extra command -- exactly one move per leg")
+    assert transport.stop_calls == 0, (
+        "the dwell must send nothing at all, least of all a stop()")
+    # `MoveTransport` has no wheels() member by construction -- the lease
+    # that would clear the firmware's heading ledger is structurally
+    # unreachable from this module. Pin that, so a future "just hold zero
+    # during the dwell" change has to widen the transport contract first.
+    assert not hasattr(transport, "wheels")
+
+
+def test_run_tour_sequential_applies_the_omega_override_to_every_turn():
+    """The 2.4 rad/s pivot rate reaches the wire: `PlannerParams.omega_max`
+    (2.0) must not silently win."""
+    transport = _CallCountingTransport()
+    clock = _FakeClock()
+
+    run_tour(transport, PlannerParams(), _heading_for_test(), _square_legs(),
+             sequential=True, settle=1.2, omega_max=2.4,
+             clock_fn=clock.clock, sleep_fn=clock.sleep)
+
+    turns = [call for call in transport.move_calls if call["stop_angle"] is not None]
+    assert len(turns) == 4
+    assert all(abs(call["omega"]) == 2.4 for call in turns), (
+        f"turn rate override did not reach the wire: {turns}")
+    straights = [call for call in transport.move_calls if call["stop_distance"] is not None]
+    assert all(call["v_x"] == 150.0 for call in straights), (
+        f"leg cruise speed changed: {straights}")
+
+
+def test_run_tour_sequential_stop_between_legs_sends_no_further_move():
+    """"Stop Tour" pressed during a dwell: no further leg is enqueued, and
+    the tour reports STOPPED. The dwell polls `should_stop()` itself --
+    without that, a stop during a 1.2s dwell would be ignored until the
+    next leg was already in flight."""
+    transport = _CallCountingTransport()
+    clock = _FakeClock()
+    legs = _square_legs()
+    stop_flag = {"stop": False}
+
+    def _on_leg(index, total, leg, leg_result) -> None:
+        if index == 1:  # ask to stop while dwelling after leg 2
+            stop_flag["stop"] = True
+
+    result = run_tour(transport, PlannerParams(), _heading_for_test(), legs,
+                      sequential=True, settle=1.2, omega_max=2.4,
+                      on_leg=_on_leg, should_stop=lambda: stop_flag["stop"],
+                      clock_fn=clock.clock, sleep_fn=clock.sleep)
+
+    assert result.stopped_outcome == RunOutcome.STOPPED
+    assert len(transport.move_calls) == 2, (
+        f"a leg was enqueued after the stop request: {transport.move_calls}")
+    assert result.stopped_at == 2, (
+        "stopped_at names the leg that was never attempted (index 2 == leg 3)")
+    assert transport.stop_calls == 0, (
+        "nothing was in flight -- a stop() here would queue behind nothing "
+        "and only confuse the next run")
+
+
 if __name__ == "__main__":
     import sys
 

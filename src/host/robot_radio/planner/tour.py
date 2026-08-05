@@ -191,6 +191,33 @@ TOUR_2: list[str] = [
 ]
 
 
+# The sprint-134 square tour: 4 x 500 mm legs + 4 x 90 deg left turns,
+# planned and corrected entirely by the firmware's own planner (no
+# host-side heading trim). Geometry is identical -- leg length, cruise
+# speed, turn angle -- to `src/tests/bench/planner_square_tour.py`'s own
+# `tour()` (`LEG`/`CRUISE`/`TURN`), which is the path ticket 134-004
+# measured at median 6.3 mm closure (n=9, 36/36 corners inside `align_tol`)
+# on `tovez` 2026-08-05. That script is a CLI; this list is the same
+# geometry expressed in the `D`/`RT` vocabulary `parse_tour()` reads, so
+# the TestGUI can drive it through the shared `run_tour()` loop instead of
+# reimplementing the sequence.
+#
+# The bench script's OTHER two knobs -- one Move in flight at a time and a
+# PASSIVE settle dwell at every boundary -- are not geometry and cannot be
+# expressed here; they live in `SQUARE_EXECUTION` below, and driving this
+# geometry without them does not reproduce the measured result.
+TOUR_SQUARE: list[str] = [
+    "D 150 150 500",
+    "RT 9000",
+    "D 150 150 500",
+    "RT 9000",
+    "D 150 150 500",
+    "RT 9000",
+    "D 150 150 500",
+    "RT 9000",
+]
+
+
 # ---------------------------------------------------------------------------
 # Defaults for MOVE-queue tour execution (109-008, re-pinned 2026-07-22 for
 # protocol v4). Accel/jerk ceilings are entirely firmware's own config now
@@ -227,6 +254,64 @@ DEFAULT_POLL_INTERVAL = 0.05  # [s] sleep between two consecutive ack-ring polls
 
 _BEGIN_DRAIN_RETRIES = 5  # bounded retry -- a single read_pending_binary_tlm_frames() call can
 _BEGIN_DRAIN_RETRY_INTERVAL = 0.05  # [s] legitimately race an idle queue between two ~25Hz pushes and come back empty.
+
+
+# ---------------------------------------------------------------------------
+# How a named tour must be DRIVEN (as opposed to what its geometry is)
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class TourExecution:
+    """The non-geometry half of a tour: how `run_tour()` sequences it.
+
+    A tour's `D`/`RT` list says where to go; this says how to get there.
+    The two are separate because the SAME geometry closes very differently
+    depending on the sequencing, and the difference is not visible in the
+    leg list at all.
+
+    `sequential` -- one `Move` in flight at a time: leg N+1 is not enqueued
+    until leg N's own completion ack has landed. `False` (the default, and
+    what `TOUR_1`/`TOUR_2` have always used) keeps the one-leg lookahead
+    that lets firmware carry velocity through a compatible boundary.
+
+    `settle` [s] -- the rest dwell held at every segment boundary in
+    `sequential` mode. **The dwell is PASSIVE: `run_tour()` sends nothing
+    at all while it waits.** That is load-bearing, not incidental. A
+    zero-velocity `WHEELS` command is a teleop TAKEOVER, not a no-op:
+    `App::RobotLoop::handleWheels()` calls `planner_.estop()`, which clears
+    `carryValid_` -- the planner's cumulative-heading intent ledger, the
+    mechanism that makes the square tour close. A host that leases
+    `wheels(0, 0)` through the dwell tears that ledger down at every
+    boundary and measures the teardown instead of the tour. Measured on
+    `tovez` 2026-08-05 (ticket 134-004): same firmware, same geometry, only
+    the dwell differs -- passive closed 3.6/8.2 mm with 12/12 corners
+    inside `align_tol`; a leased dwell closed 34.2 mm with 1/8. This is
+    structurally safe here (`MoveTransport` has no `wheels()` member at
+    all), but it is why nothing may be added to the dwell later.
+
+    `omega_max` [rad/s] -- per-tour turn-rate override, or `None` to use
+    `PlannerParams.omega_max`.
+    """
+
+    sequential: bool = False
+    settle: float = 0.0  # [s]
+    omega_max: float | None = None  # [rad/s]
+
+
+#: `TOUR_1`/`TOUR_2`: the historical pipelined execution (one-leg lookahead,
+#: never rests). Named so a caller states the choice rather than passing a
+#: bare default.
+PIPELINED_EXECUTION = TourExecution()
+
+#: `TOUR_SQUARE`: rest-to-rest, passive dwell, 2.4 rad/s pivots -- the exact
+#: execution ticket 134-004 measured at median 6.3 mm closure. The turn rate
+#: is NOT `PlannerParams.omega_max` (2.0): at 1.2 rad/s the wheels run near
+#: their breakaway dead zone and the pivots arc (measured: median 18.0 mm
+#: closure at 1.2 vs 6.1 mm at 2.4 -- see `planner_square_tour.py`'s own
+#: `OMEGA` comment), so the rate is pinned here with the geometry it was
+#: measured with rather than inherited.
+SQUARE_EXECUTION = TourExecution(sequential=True, settle=1.2, omega_max=2.4)
 
 
 # ---------------------------------------------------------------------------
@@ -596,6 +681,8 @@ def run_tour(
     omega_max: float | None = None,  # [rad/s] turn-leg yaw rate override; None (the default,
     # every existing caller) resolves to params.omega_max -- see the constants block above for why
     # this is no longer simply "UNUSED".
+    sequential: bool = False,  # one Move in flight at a time -- see TourExecution
+    settle: float = 0.0,  # [s] passive rest dwell at each boundary (sequential only)
     final_settle: float = DEFAULT_FINAL_SETTLE,
     move_timeout: float = DEFAULT_MOVE_TIMEOUT,
     poll_interval: float = DEFAULT_POLL_INTERVAL,
@@ -633,8 +720,18 @@ def run_tour(
     too, that is a follow-up call for the stakeholder, not this docstring
     fix.
 
-    One-leg lookahead (SUC-003): leg N+1's own `Move` is sent immediately
-    after leg N's (while leg N is still active, not after it completes) --
+    `sequential=True` (`TourExecution.sequential`) replaces the one-leg
+    lookahead below with rest-to-rest execution: ONE `Move` in flight at a
+    time, leg N+1 enqueued only after leg N's own completion ack has
+    landed, with a PASSIVE `settle` dwell (send nothing, keep draining) at
+    every boundary. This is the sprint-134 square tour's own execution --
+    see `TourExecution`'s docstring for why the dwell must stay passive
+    (a `wheels(0, 0)` lease clears the firmware's heading ledger and
+    quadruples the closure error) and for the measurement behind it.
+
+    One-leg lookahead (SUC-003, `sequential=False`): leg N+1's own `Move`
+    is sent immediately after leg N's (while leg N is still active, not
+    after it completes) --
     the ONE piece of host-side sequencing this function still does -- so
     firmware's own `App::MoveQueue` (1 active + 4 pending,
     `docs/protocol-v4.md` section 5.1) can carry velocity through a
@@ -684,6 +781,31 @@ def run_tour(
     def send_leg(i: int) -> None:
         transport.move(**move_kwargs[i])
 
+    def passive_settle(seconds: float) -> bool:
+        """Rest dwell at a segment boundary: wait `seconds`, draining
+        telemetry, and **send nothing at all**. Returns True if
+        `should_stop()` asked to abort during the dwell.
+
+        Sending nothing is the whole point -- see `TourExecution`'s own
+        docstring for the measured reason a `wheels(0, 0)` lease here
+        would destroy the firmware heading ledger this tour depends on.
+        Nothing may be added to this loop that writes to the transport.
+        """
+        if seconds <= 0.0:
+            return False
+        deadline = clock_fn() + seconds
+        while clock_fn() < deadline:
+            if should_stop is not None and should_stop():
+                return True
+            sleep_fn(poll_interval)
+            for frame in transport.read_pending_binary_tlm_frames():
+                latest_frame[0] = frame
+        return False
+
+    # Rest-to-rest tours dwell BEFORE leg 1 as well, so the captured start
+    # pose is a settled one (the pipelined path takes whatever is pending).
+    stop_during_settle = passive_settle(settle) if sequential else False
+
     # Capture the start pose from whatever's already pending, bounded retry
     # (mirrors StreamingExecutor.begin()'s own rationale: a single
     # read_pending_binary_tlm_frames() call can race an idle ~25Hz queue).
@@ -696,8 +818,18 @@ def run_tour(
             break
         sleep_fn(_BEGIN_DRAIN_RETRY_INTERVAL)
 
+    if stop_during_settle:
+        # Aborted during the pre-leg-1 dwell: nothing was ever sent, so
+        # there is nothing in flight to stop() and no leg result to report.
+        # `stopped_at=0` reads as "stopped at leg 1/N" for a caller
+        # narrating progress; `legs` is empty because none was attempted.
+        logger.warning("run_tour(): should_stop() requested during the pre-tour "
+                       "settle -- no Move was ever sent")
+        return TourResult(legs=[], closure=_compute_closure(start_pose, None),
+                          stopped_at=0, stopped_outcome=RunOutcome.STOPPED)
+
     send_leg(0)
-    if len(legs) > 1:
+    if len(legs) > 1 and not sequential:
         send_leg(1)  # one-leg lookahead -- see this function's own docstring
 
     leg_results: list[TourLegResult] = []
@@ -751,18 +883,38 @@ def run_tour(
                         "legs attempted", index + 1, len(legs), outcome.value)
             break
 
+        if sequential:
+            # Rest-to-rest: dwell passively at this boundary, THEN enqueue
+            # the next leg. Never more than one Move in flight.
+            if index + 1 < len(legs):
+                if passive_settle(settle):
+                    # Stopped BETWEEN legs -- leg `index` completed
+                    # normally and nothing is in flight, so `stopped_at`
+                    # names the leg that was never attempted (one past the
+                    # last entry in `legs`; no consumer indexes `legs` with
+                    # it -- they only report it and compare it to None).
+                    stopped_at = index + 1
+                    stopped_outcome = RunOutcome.STOPPED
+                    logger.warning("run_tour(): should_stop() requested during the "
+                                   "settle after leg %d/%d -- leg %d never sent",
+                                   index + 1, len(legs), index + 2)
+                    break
+                send_leg(index + 1)
         # Keep exactly one leg queued ahead of the active one (see this
         # function's own docstring) -- send leg index+2 now that leg
         # `index` (the one two ahead of the NEXT one to enqueue) has
         # completed and leg `index+1` is the new active command.
-        if index + 2 < len(legs):
+        elif index + 2 < len(legs):
             send_leg(index + 2)
 
         if index == len(legs) - 1:
             # Final leg -- settle window before capturing the tour's own
             # closure end pose (AC3): the terminal ack already confirmed
-            # DONE, but the plant needs real time to physically settle.
-            sleep_fn(final_settle)
+            # DONE, but the plant needs real time to physically settle. A
+            # rest-to-rest tour uses its own (longer) boundary dwell here
+            # too, so the closure end pose is measured on the same terms
+            # as every intermediate rest pose.
+            sleep_fn(max(final_settle, settle) if sequential else final_settle)
             for frame in transport.read_pending_binary_tlm_frames():
                 latest_frame[0] = frame
             end_pose = _frame_pose_rad(latest_frame[0])

@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: TestGUI square-tour button (OPTIONAL, droppable)
-status: open
+status: done
 use-cases:
 - SUC-001
 depends-on:
@@ -59,14 +59,57 @@ robot, not from a GUI-side file.
 
 ## Acceptance Criteria
 
-- [ ] TestGUI exposes a control that runs the square tour, sequential, with
+- [x] TestGUI exposes a control that runs the square tour, sequential, with
       **no host-side trim** (the firmware does the correction)
-- [ ] It reuses the existing tour path rather than reimplementing the sequence
-- [ ] `src/tests/testgui/test_gui_button_acceptance.py` passes headlessly for
+- [x] It reuses the existing tour path rather than reimplementing the sequence
+- [x] `src/tests/testgui/test_gui_button_acceptance.py` passes headlessly for
       the new control, and adds **no new failures** to that file
-- [ ] Zero changes to `src/motion` or `src/firm`
-- [ ] Run once against the real robot if hardware time permits; if not, say so
+- [x] Zero changes to `src/motion` or `src/firm`
+- [x] Run once against the real robot if hardware time permits; if not, say so
       plainly rather than implying it was exercised
+
+## As-built
+
+**A "Square" button next to Tour 1 / Tour 2** (`tour_btn_square`). Geometry
+is `planner.tour.TOUR_SQUARE` — 4 × 500 mm legs, 4 × 90° left turns, the same
+`LEG`/`CRUISE`/`TURN` values `src/tests/bench/planner_square_tour.py` uses,
+expressed as `D`/`RT` steps so the existing `parse_tour()`/`run_tour()` path
+drives it. No host-side trim anywhere in the path.
+
+**The sequencing is the load-bearing part, and it is now first-class.** Each
+named tour carries a `planner.tour.TourExecution` (`commands.TOUR_EXECUTION`,
+read via `commands.tour_execution(name)`) saying *how* it is driven, separate
+from *where* it goes:
+
+| tour | execution |
+|---|---|
+| Tour 1, Tour 2 | `PIPELINED_EXECUTION` — one-leg lookahead, unchanged |
+| Square | `SQUARE_EXECUTION` — sequential, 1.2 s passive settle, 2.4 rad/s |
+
+`run_tour()` gained `sequential=` and `settle=`. In sequential mode it keeps
+exactly one Move in flight and dwells passively at each boundary — **sending
+nothing at all**, which is why the firmware's `carryValid_` heading ledger
+survives and the tour closes. `MoveTransport` has no `wheels()` member, so the
+lease that would clear the ledger is structurally unreachable from this path;
+a unit test pins that alongside the sequencing.
+
+The GUI tour path never held a zero-velocity lease to begin with (`_TourRunner`
+drives `run_tour()`, which only ever calls `move()`/`stop()`), so there was no
+existing bug to fix there — the gap was that it had no rest-to-rest mode at all.
+
+### Not verified on hardware
+
+**This was not run against `tovez`.** The robot was left estopped and idle for
+the stakeholder. The 6.3 mm closure number belongs to ticket 134-004's bench
+run of the equivalent bench script, not to this button. What is verified here
+is that the button exists, dispatches the rest-to-rest execution, retires real
+legs against the sim, and stops on demand.
+
+The new acceptance test deliberately does **not** use `_run_tour()`, whose bar
+is whole-tour closure + per-leg turn accuracy against the sim plant — the two
+bars the pre-existing `test_tour_1`/`test_tour_2` failures in that file are
+already failing (sim 90° turns missing by ~13°). Reusing it would have added a
+third failure of an unrelated defect.
 
 ## Implementation Plan
 
