@@ -1279,6 +1279,10 @@ def main():
         prog="rogo",
         description="Direct serial control for QBot Pro via relay. "
                     "Speeds in mm/s, distances in mm.",
+        epilog="Run 'rogo --agent' for the detailed agent manual — the full "
+               "verb grammar, and everything about the rogo daemon "
+               "('rogo serve': one held-open serial connection shared by "
+               "many programs over TCP).",
     )
     parser.add_argument(
         "--port", default=None,
@@ -1287,6 +1291,11 @@ def main():
     parser.add_argument(
         "-v", "--verbose", action="store_true",
         help="Print connection and serial debug info",
+    )
+    parser.add_argument(
+        "--agent", action="store_true",
+        help="Print the detailed agent manual (verb grammar, daemon socket "
+             "protocol, client recipes) and exit.",
     )
 
     sub = parser.add_subparsers(dest="command", help="Available commands")
@@ -1642,6 +1651,11 @@ def main():
 
     args = parser.parse_args()
     _verbose = args.verbose
+
+    if args.agent:
+        from robot_radio.io.agent_manual import MANUAL
+        print(MANUAL)
+        return
 
     commands = {
         "ports": cmd_ports,

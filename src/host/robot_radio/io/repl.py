@@ -732,7 +732,8 @@ rogo commands (protocol v5: bounded Moves + always-on telemetry + cleartext live
   sleep <ms> | wait <ms>       idle (keeps recording telemetry)
   record <file> | record off   toggle telemetry->JSONL recording
   help                         this list;   # ... comments and blank lines ignored
-  quit | exit                  leave the REPL"""
+  quit | exit                  leave the REPL
+Full reference (daemon socket protocol, client recipes): rogo --agent"""
 
 
 def dispatch(session: RogoSession, line: str) -> DispatchResult:

@@ -155,6 +155,10 @@ ever closes the port (Ctrl-C, SIGTERM, or a client's `shutdown` verb).
 `sub tlm [N]` streams every Nth telemetry frame to that client; `status`
 reports the held port, uptime, and client count.
 
+**Full reference: `uv run rogo --agent`** — the agent manual (same
+convention as `mbdeploy --agent`): complete verb grammar, the daemon's
+socket protocol event shapes, `RogoClient` recipes, and the failure modes.
+
 ### Standing radio-relay bench gate (sprint 124's own acceptance gate)
 
 For a one-shot, self-scoring run of the full protocol v5 acceptance
