@@ -20,7 +20,16 @@ So the robot's camera fix is divided by that factor and the targets are not.
 Get this wrong and the robot chases coordinates in a frame it is not in --
 which is exactly what made earlier camera-driven tours fight themselves.
 
-    uv run python src/tests/bench/goto_otos.py 300 0
+Two target frames, both driven by the OTOS:
+
+    goto W  -- a point in WORLD coordinates (the playfield frame)
+    goto R  -- a point in the ROBOT's own frame at the moment the leg starts:
+               +x straight ahead, +y to the left. Resolved to world once, on
+               departure, so the target does not chase the robot as it turns.
+
+    uv run python src/tests/bench/goto_otos.py W 300 0
+    uv run python src/tests/bench/goto_otos.py R 400 0        # 400mm ahead
+    uv run python src/tests/bench/goto_otos.py R 0 300        # 300mm to port
     uv run python src/tests/bench/goto_otos.py NE SE SW NW
 """
 from __future__ import annotations
@@ -265,17 +274,26 @@ def main() -> int:
     dots = dict(DOTS)
     print(f"dots: { {k: (round(v[0]), round(v[1])) for k, v in sorted(dots.items())} }")
 
+    # A waypoint is (label, target, relative). A RELATIVE target is resolved
+    # to world coordinates at departure, not here: "400mm ahead" means ahead
+    # of wherever the robot is when that leg begins, which is not knowable
+    # until the previous leg has finished.
     waypoints = []
     toks = list(args.target)
     while toks:
         t = toks.pop(0)
-        if t.upper() in dots:
-            waypoints.append((t.upper(), dots[t.upper()]))
+        key = t.upper()
+        if key in dots:
+            waypoints.append((key, dots[key], False))
+        elif key in ("R", "W") and len(toks) >= 2:
+            x = float(toks.pop(0))
+            y = float(toks.pop(0))
+            waypoints.append((f"{key}({x:.0f},{y:.0f})", (x, y), key == "R"))
         elif toks:
             y = toks.pop(0)
-            waypoints.append((f"({t},{y})", (float(t), float(y))))
+            waypoints.append((f"({t},{y})", (float(t), float(y)), False))
         else:
-            print(f"unknown target {t!r}; known dots: {sorted(dots)}")
+            print(f"unknown target {t!r}; dots: {sorted(dots)}, or R/W <x> <y>")
             return 1
 
     bot = Robot(args.port)
@@ -287,7 +305,17 @@ def main() -> int:
             return 1
 
         results = []
-        for label, target in waypoints:
+        for label, target, relative in waypoints:
+            if relative:
+                here = bot.pose_blocking()
+                if here is None:
+                    print(f"  -> {label}: no OTOS pose to resolve against")
+                    break
+                c, s_ = math.cos(here[2]), math.sin(here[2])
+                target = (here[0] + target[0] * c - target[1] * s_,
+                          here[1] + target[0] * s_ + target[1] * c)
+                print(f"  {label} resolves to world "
+                      f"({target[0]:.0f}, {target[1]:.0f})")
             if not inside_fence(*target):
                 print(f"  -> {label} is outside the fence -- skipping")
                 continue
