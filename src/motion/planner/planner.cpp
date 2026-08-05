@@ -486,6 +486,31 @@ TickResult Planner::tick(const Types::RobotState& state) {
   // (Motion::PoseTracker::integrate()'s own doc comment, estimation.h).
   pose_.integrate(left_.basisPosition(), right_.basisPosition(), state.wheelLeft.positionEpoch,
                   state.wheelRight.positionEpoch);
+
+  // Heading comes from the OTOS whenever the chip has it, because every
+  // angular decision below -- the Angle stop condition, terminal fine-align,
+  // and the carryHeading_ ledger -- measures pose_.heading(). Wheel heading is
+  // scrub-limited (rotationalSlip is a fitted fudge, not a measurement), which
+  // is precisely why open-loop turns need a per-direction gain/offset
+  // calibration to land. Optical heading needs none.
+  //
+  // Absent or stale chip falls straight back to the wheel path, with no jump
+  // at either transition (PoseTracker::applyOtosHeading()).
+  // NEGATED, and that is not a fudge -- it reconciles a real, pre-existing
+  // sign inversion. Measured 2026-08-05 on a single commanded rotation: the
+  // OTOS turned +84.58deg while the encoder-derived heading reported
+  // -82.45deg. Same magnitude, opposite sign. The wheel path has always been
+  // internally self-consistent (it closes the loop on its own heading), so
+  // nothing ever surfaced it -- but it is why every host tool carries a
+  // YAW_SIGN = -1, and feeding unnegated optical truth into a planner built
+  // on the inverted convention makes the Angle stop condition count the wrong
+  // way and spin forever.
+  //
+  // The RIGHT fix is the body kinematics' omega sign, so commanded omega and
+  // world CCW finally agree. That is deliberately not done here: it changes
+  // the meaning of omega on the wire and invalidates both stored per-direction
+  // rotation calibrations, so it needs its own change with the bench free.
+  pose_.applyOtosHeading(-state.otos.heading, state.otos.present, state.otos.connected);
   // OTOS heading blend -- DELETED by 130-009 along with
   // PlannerLimits::headingOtosWeight/otosStaleness: the feature was live
   // code (pose_.blendHeading()) but configured off in every robot JSON

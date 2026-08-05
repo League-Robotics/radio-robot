@@ -202,7 +202,12 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
 
   m.requestedThreshold = m.threshold;
 
-  if (m.kind == Motion::Move::Kind::Angle) {
+  // The per-direction rotation gain/offset is an OPEN-LOOP correction: it
+  // pre-distorts the commanded angle so a scrub-limited wheel estimate lands
+  // on the requested one. When the OTOS is measuring heading the loop is
+  // closed on optical truth, and pre-distorting the target would just make it
+  // stop at the wrong place -- accurately.
+  if (m.kind == Motion::Move::Kind::Angle && !state_.otos.present) {
     const bool positive =
         (m.velocityKind == Motion::Move::VelocityKind::Twist)
             ? (m.omega >= 0.0f)

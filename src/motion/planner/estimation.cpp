@@ -74,10 +74,33 @@ void PoseTracker::blendHeading(float otosHeading, float weight) {
   heading_ += weight * residual;
 }
 
+void PoseTracker::applyOtosHeading(float otosHeading, bool fresh, bool connected) {
+  if (!connected) {
+    // Hand the accumulated heading back so the wheel path continues from
+    // where the OTOS left off rather than from its own drifted value.
+    if (otosActive_) heading_ = otosHeading_;
+    otosActive_ = false;
+    return;
+  }
+  if (!fresh) return;   // no new reading this cycle; hold what we have
+  if (!otosActive_) {
+    otosHeading_ = heading_;
+    lastOtosSample_ = otosHeading;
+    otosActive_ = true;
+    return;
+  }
+  const float delta = std::remainder(otosHeading - lastOtosSample_,
+                                     2.0f * static_cast<float>(M_PI));
+  lastOtosSample_ = otosHeading;
+  otosHeading_ += delta;
+}
+
 void PoseTracker::reset(float x, float y, float heading) {
   x_ = x;
   y_ = y;
   heading_ = heading;
+  otosHeading_ = heading;
+  otosActive_ = false;   // re-seed from the new baseline on the next sample
   // pathLength_ deliberately untouched (Odometry::reset()'s own precedent).
 }
 
