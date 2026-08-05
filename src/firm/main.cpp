@@ -132,7 +132,11 @@ int main() {
   static SerialPort serial(uBit.serial);
   serial.begin();
   static Radio radio(uBit.radio, uBit.messageBus);
-  radio.begin();
+  // Channel from the robot JSON's connection.radio_channel (baked --
+  // Config::kRadioChannel, default 0). Bake-only by design: no wire verb
+  // can retune it, so two robots sharing a bench stay on the channels
+  // their own config files say.
+  radio.begin(Config::kRadioChannel);
 
   static char banner[64];
   formatBanner(banner, sizeof(banner));

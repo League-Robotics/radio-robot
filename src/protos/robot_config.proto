@@ -243,6 +243,18 @@ message Connection {
 
   string device_announcement_name = 1;
   string serial_last_6             = 2;
+
+  // Radio channel (nRF frequency band, 0..83; group is fixed at 10 to match
+  // the RadioRelay -- com/radio.h). BAKE-ONLY by design, not a wire target:
+  // re-tuning a live link drops it (Radio::setChannel()'s own note), and the
+  // point of the field is that two robots sharing a bench NEVER share a
+  // channel unintentionally (2026-08-05: gopiv on tovez's channel 0 joined a
+  // cross-reply storm; the only prior way to move it was an uncommitted
+  // main.cpp literal). gen_boot_config.py emits Config::kRadioChannel from
+  // this field; main.cpp passes it to Radio::begin(). Absent field = proto3
+  // zero = channel 0, the historical hard-coded value -- every existing
+  // robot JSON keeps its behavior without an edit.
+  uint32 radio_channel = 3;  // [nRF frequency band]
 }
 
 // Vision -- the overhead-camera AprilTag mount this robot answers to (never

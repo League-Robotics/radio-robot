@@ -71,6 +71,9 @@
         },
         "serial_last_6": {
           "type": "string"
+        },
+        "radio_channel": {
+          "type": "integer"
         }
       }
     },

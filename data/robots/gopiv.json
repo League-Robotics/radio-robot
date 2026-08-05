@@ -9,6 +9,7 @@
   "connection": {
     "device_announcement_name": "gopiv",
     "serial_last_6": "407711",
+    "radio_channel": 1,
     "_i2c_addresses": {}
   },
   "vision": {

@@ -18,6 +18,14 @@ extern const char kRobotProfileName[];
 
 extern const char kDrivetrainType[];
 
+// Radio channel (nRF frequency band, 0..83) main.cpp passes to
+// Radio::begin(). Baked from the robot JSON's connection.radio_channel
+// (default 0 -- the historical hard-coded value); BAKE-ONLY by design, no
+// wire target: re-tuning a live link drops it, and the field exists so two
+// robots sharing a bench never share a channel unintentionally (see
+// robot_config.proto's Connection.radio_channel doc comment).
+extern const int kRadioChannel;  // [nRF frequency band]
+
 struct OtosBootConfig {
   float offsetX = 0.0f;  // [mm] mounting offset from chassis centre to sensor
   float offsetY = 0.0f;  // [mm]
