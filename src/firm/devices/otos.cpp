@@ -5,10 +5,6 @@
 namespace Devices {
 
 namespace {
-// CODAL's well-known convention: 0 == success (mirrors nezha_motor.cpp's
-// identical local kOk — I2CBus::write()/read() already shield this leaf from
-// any real-vs-HOST_BUILD MicroBit.h split, so no MICROBIT_OK include is
-// needed here either).
 constexpr int kOk = 0;
 
 float clampf(float v, float lo, float hi) {
@@ -16,7 +12,7 @@ float clampf(float v, float lo, float hi) {
     if (v > hi) return hi;
     return v;
 }
-}  // namespace
+}
 
 // ---------------------------------------------------------------------------
 // scaleToRegister -- see its declaration comment (otos.h) for why this is a
@@ -46,14 +42,11 @@ RealOtos::RealOtos(I2CBus& bus, const OtosConfig& config)
 {
 }
 
-// ---------------------------------------------------------------------------
-// begin() — product-ID detect, then init() + config scalars + zero pose.
-// ---------------------------------------------------------------------------
 
 void RealOtos::begin()
 {
     uint8_t id = readReg8(kRegProductId);
-    lastProbeId_ = id;   // captured for ODIAG bench triage
+    lastProbeId_ = id;
     initialized_ = (id == kExpectedProductId);
     connected_ = initialized_;
     if (!initialized_) return;
@@ -63,15 +56,9 @@ void RealOtos::begin()
     setLinearScalar(static_cast<float>(scaleToRegister(config_.linearScale)));
     setAngularScalar(static_cast<float>(scaleToRegister(config_.angularScale)));
 
-    // Zero the OTOS position AND heading at boot so it starts at the same
-    // origin as the freshly-zeroed encoders — the chip retains its tracked
-    // pose across a micro:bit reset/reflash.
     writeXYH(kRegPositionXl, 0, 0, 0);
 }
 
-// ---------------------------------------------------------------------------
-// pose() / poseFresh() / connected() / present() — cheap accessors, no I2C.
-// ---------------------------------------------------------------------------
 
 PoseReading RealOtos::pose() const { return cachedPose_; }
 
@@ -81,21 +68,12 @@ bool RealOtos::connected() const { return initialized_ && connected_; }
 
 bool RealOtos::present() const { return initialized_; }
 
-// ---------------------------------------------------------------------------
-// readDue() -- pure scheduling query, no I2C traffic. Deliberately NOT
-// gated on present()/initialized_ here -- that is the caller's own,
-// separate conjunct (see this method's declaration comment, otos.h).
-// ---------------------------------------------------------------------------
 
 bool RealOtos::readDue(uint64_t nowUs) const
 {
     return !hasRead_ || (nowUs - lastReadUs_) >= kReadPeriod;
 }
 
-// ---------------------------------------------------------------------------
-// setPose() -- stages a re-anchor request; touches no bus. See tick()'s
-// "Drain order" comment (otos.h) for how/when this is applied.
-// ---------------------------------------------------------------------------
 
 void RealOtos::setPose(float x, float y, float heading)
 {
@@ -105,28 +83,19 @@ void RealOtos::setPose(float x, float y, float heading)
     posePending_ = true;
 }
 
-// ---------------------------------------------------------------------------
-// tick() -- drain a staged setPose(), else rate-limited burst-read +
-// transform + cache. See otos.h's declaration comment for the full contract.
-// ---------------------------------------------------------------------------
 
 void RealOtos::tick(uint64_t nowUs)
 {
-    if (!initialized_) return;   // never detected at begin() -- no bus traffic
+    if (!initialized_) return;
 
     if (posePending_) {
-        // A staged re-anchor always takes this tick's bus slot ahead of the
-        // periodic read below -- see otos.h's "Drain order" comment.
         applyPendingPose();
         posePending_ = false;
-        poseFresh_ = false;   // no read performed this tick; pose() unchanged
+        poseFresh_ = false;
         return;
     }
 
     if (hasRead_ && (nowUs - lastReadUs_) < kReadPeriod) {
-        // Too soon since the last real read -- no bus traffic, mark stale so
-        // a downstream ring publish (DB-007) does not re-fuse the same
-        // reading every cycle.
         poseFresh_ = false;
         return;
     }
@@ -138,31 +107,21 @@ void RealOtos::tick(uint64_t nowUs)
     lastReadUs_ = nowUs;
     hasRead_ = true;
 
-    // Live per-tick bus health -- always re-evaluated (a transient failure
-    // does not latch permanently; see connected()'s own comment).
     connected_ = ok;
 
     if (!ok) {
-        // Hold the previously-cached pose but mark THIS sample stale.
         poseFresh_ = false;
         return;
     }
 
-    float xF = static_cast<float>(rx) * kPosMmPerLsb;    // [mm]
-    float yF = static_cast<float>(ry) * kPosMmPerLsb;    // [mm]
-    float hF = static_cast<float>(rh) * kHdgRadPerLsb;   // [rad]
+    float xF = static_cast<float>(rx) * kPosMmPerLsb;  // [mm]
+    float yF = static_cast<float>(ry) * kPosMmPerLsb;  // [mm]
+    float hF = static_cast<float>(rh) * kHdgRadPerLsb;  // [rad]
 
-    // Known discrepancy: the VELOCITY registers reuse the SAME
-    // kPosMmPerLsb/kHdgRadPerLsb constants as position/offset despite the
-    // chip documenting a different native velocity LSB scale -- see otos.h's
-    // kPosMmPerLsb declaration comment.
-    float vxF = static_cast<float>(rvx) * kPosMmPerLsb;    // [mm/s]
-    float vyF = static_cast<float>(rvy) * kPosMmPerLsb;    // [mm/s]
-    float whF = static_cast<float>(rvh) * kHdgRadPerLsb;   // [rad/s]
+    float vxF = static_cast<float>(rvx) * kPosMmPerLsb;  // [mm/s]
+    float vyF = static_cast<float>(rvy) * kPosMmPerLsb;  // [mm/s]
+    float whF = static_cast<float>(rvh) * kHdgRadPerLsb;  // [rad/s]
 
-    // Mounting-yaw rotation (config_.offsetYaw) applied to the LINEAR
-    // components only -- heading and yaw rate pass through unrotated (a
-    // constant mounting rotation has zero time-derivative).
     float ang = -config_.offsetYaw;
     float c = cosf(ang);
     float s = sinf(ang);
@@ -171,24 +130,18 @@ void RealOtos::tick(uint64_t nowUs)
     float rotVx = c * vxF - s * vyF;
     float rotVy = s * vxF + c * vyF;
 
-    // Lever-arm compensation using hF -- the SAME-INSTANT heading from THIS
-    // burst (see sensorToCentre()'s own comment, otos.h).
     float centreX = 0.0f, centreY = 0.0f;
     sensorToCentre(rotX, rotY, hF, config_.offsetX, config_.offsetY, centreX, centreY);
 
     cachedPose_.x = centreX;
     cachedPose_.y = centreY;
-    cachedPose_.heading = hF;   // heading takes no mounting offset
+    cachedPose_.heading = hF;
     cachedPose_.v_x = rotVx;
     cachedPose_.v_y = rotVy;
     cachedPose_.omega = whF;
     poseFresh_ = true;
 }
 
-// ---------------------------------------------------------------------------
-// applyPendingPose() -- exact inverse of tick()'s read transform: finds the
-// sensor-frame pose that reads back as the given world CENTRE pose.
-// ---------------------------------------------------------------------------
 
 void RealOtos::applyPendingPose()
 {
@@ -196,33 +149,22 @@ void RealOtos::applyPendingPose()
     centreToSensor(pendingX_, pendingY_, pendingHeading_, config_.offsetX, config_.offsetY,
                     sensorX, sensorY);
 
-    // Undo the mounting-yaw rotation tick() applies going the other way:
-    // tick() computes (rotX,rotY) = R(ang)*(xF,yF) with ang = -offsetYaw, so
-    // the inverse is (xF,yF) = R(-ang)*(rotX,rotY) = R(ang)^T*(rotX,rotY).
     float ang = -config_.offsetYaw;
     float c = cosf(ang);
     float s = sinf(ang);
     float xF =  c * sensorX + s * sensorY;
     float yF = -s * sensorX + c * sensorY;
-    float hF = pendingHeading_;   // heading takes no mounting offset
+    float hF = pendingHeading_;
 
     writePoseMm(kRegPositionXl, xF, yF, hF);
 }
 
-// ---------------------------------------------------------------------------
-// Remaining primitive setters/getters -- each a no-op if never initialized.
-// ---------------------------------------------------------------------------
 
 void RealOtos::init()
 {
     if (!initialized_) return;
-    // Enable all signal processing: LUT | Accel | Rotation | Variance = 0x0F.
     setSignalProcessConfig(0x0F);
-    // Reset Kalman tracking (bit 0 = 1) -- the SAME write resetTracking() performs.
     writeReg8(kRegReset, 0x01);
-    // Kick off IMU bias calibration -- fire-and-forget, no blocking poll for
-    // completion (see file header for why this deliberately does not
-    // block-poll).
     writeReg8(kRegImuCalibration, kImuCalibSamples);
 }
 
@@ -235,9 +177,6 @@ void RealOtos::resetTracking()
 void RealOtos::setOffset(float x, float y, float heading)
 {
     if (!initialized_) return;
-    // Direct write -- REG_OFFSET holds the mounting-offset VALUE ITSELF, not
-    // a world/chassis-centre pose to be converted through the lever arm the
-    // way applyPendingPose() converts one.
     writePoseMm(kRegOffsetXl, x, y, heading);
 }
 
@@ -249,9 +188,9 @@ void RealOtos::getOffset(float& x, float& y, float& heading)
     int16_t rx = 0, ry = 0, rh = 0;
     readXYH(kRegOffsetXl, rx, ry, rh);
 
-    x = static_cast<float>(rx) * kPosMmPerLsb;       // [mm]
-    y = static_cast<float>(ry) * kPosMmPerLsb;       // [mm]
-    heading = static_cast<float>(rh) * kHdgRadPerLsb; // [rad]
+    x = static_cast<float>(rx) * kPosMmPerLsb;  // [mm]
+    y = static_cast<float>(ry) * kPosMmPerLsb;  // [mm]
+    heading = static_cast<float>(rh) * kHdgRadPerLsb;  // [rad]
 }
 
 void RealOtos::setSignalProcessConfig(uint8_t config)
@@ -314,9 +253,6 @@ void RealOtos::centreToSensor(float centreX, float centreY, float centreHeading,
     sensorYOut = centreY + (s * offsetX + c * offsetY);
 }
 
-// ---------------------------------------------------------------------------
-// Private register-map helpers.
-// ---------------------------------------------------------------------------
 
 void RealOtos::writeReg8(uint8_t reg, uint8_t val)
 {
@@ -338,8 +274,6 @@ uint8_t RealOtos::readReg8(uint8_t reg)
 bool RealOtos::readPositionVelocity(int16_t& x, int16_t& y, int16_t& h,
                                  int16_t& vx, int16_t& vy, int16_t& vh)
 {
-    // ONE 12-byte burst read covers kRegPositionXl (6 bytes) followed
-    // immediately by the CONTIGUOUS kRegVelocityXl (6 bytes).
     uint8_t reg = kRegPositionXl;
     uint8_t raw[12] = {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0};
     int writeStatus = bus_.write(static_cast<uint16_t>(kOtosDeviceAddr << 1), &reg, 1, false,
@@ -402,4 +336,4 @@ void RealOtos::writePoseMm(uint8_t startReg, float xF, float yF, float hF)
              static_cast<int16_t>(rh));
 }
 
-}  // namespace Devices
+}

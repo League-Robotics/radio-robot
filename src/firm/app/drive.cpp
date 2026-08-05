@@ -1,5 +1,3 @@
-// drive.cpp -- App::Drive implementation. See drive.h's file header for the
-// controller's three responsibilities and the tick/update contract.
 #include <algorithm>
 #include <cmath>
 
@@ -52,30 +50,12 @@ void Drive::takeover() {
   targetLeft_ = 0.0f;
   targetRight_ = 0.0f;
   commandActive_ = false;
-  // completionPending_ is deliberately NOT set: a discarded command does
-  // not complete (drive.h's own estop() doc comment, which this shares). An
-  // ALREADY-latched completion from a command that expired normally this
-  // cycle is left alone -- it describes something that really happened.
 
-  // Deliberately NOT touched (131-001, see drive.h's own header): Stage B's
-  // integrators, Stage C's bias, the deficit latch, and
-  // stopEnforceCountdown_. This is an ownership handover, not a safety
-  // event -- the plant did not change, only the writer did, so there is
-  // nothing here to reset and no "verify the wheels actually reached rest"
-  // window to arm.
 }
 
 void Drive::estop() {
-  // Shared with takeover() (131-001, see drive.h's own header): zero
-  // targets, disarm the WHEELS command.
   takeover();
 
-  // Arm the stop re-assertion window (129-001, see drive.h's own header):
-  // the next kStopEnforceTicks tick() calls re-issue the zero duty write
-  // instead of taking the quiet-at-zero shortcut below. NOT part of
-  // takeover()'s shared half -- this window's whole purpose is verifying a
-  // commanded STOP is actually observed at rest, which only applies to a
-  // genuine safety stop, not an ownership handover.
   stopEnforceCountdown_ = kStopEnforceTicks;
 
   // Stage B/C reset (130-004, see drive.h's own header) -- part of the
@@ -112,9 +92,6 @@ bool Drive::takeCompletion(uint32_t* moveId) {
 }
 
 void Drive::update(Types::RobotState& state, uint32_t now) {
-  // Ownership is sampled BEFORE the expiry test so the cycle a command ends
-  // on still publishes -- that publish is the zero pair, which is exactly
-  // the value the wheels must be handed next cycle.
   const bool owned = commandActive_;
 
   if (commandActive_ && static_cast<int32_t>(now - commandDeadline_) >= 0) {
@@ -125,7 +102,7 @@ void Drive::update(Types::RobotState& state, uint32_t now) {
     completedMoveId_ = commandMoveId_;
   }
 
-  if (!owned) return;  // the planner owns motion; its update() is the writer
+  if (!owned) return;
 
   state.wheelLeft.cmdVelocity = targetLeft_;
   state.wheelRight.cmdVelocity = targetRight_;
@@ -175,12 +152,6 @@ void Drive::update(Types::RobotState& state, uint32_t now) {
   state.command.omega = (targetRight_ - targetLeft_) / trackWidth_;
 }
 
-// Crawl shaper: a request below the pulse amplitude becomes a train of
-// fixed-amplitude pulses, whole-cycle Bresenham-dithered so the AVERAGE
-// duty matches the request -- the wheel's ~230 ms inertia low-passes the
-// pulsing. At/above the amplitude the request passes through untouched.
-// crawlPulse_ == 0 disables (sim plants have no stiction; the amplitude
-// is a per-robot property that must clear the measured breakaway).
 void Drive::setWheelCorrection(float gLA, float iLA, float gLD, float iLD,
                                float gRA, float iRA, float gRD, float iRD) {
   corrGain_[0][0] = gLA;  corrIntercept_[0][0] = iLA;
@@ -189,51 +160,16 @@ void Drive::setWheelCorrection(float gLA, float iLA, float gLD, float iLD,
   corrGain_[1][1] = gRD;  corrIntercept_[1][1] = iRD;
 }
 
-// The characterization measured `actual = gain*commanded + intercept` per
-// wheel per direction of approach; inverting it gives the command whose
-// ACTUAL result is the speed asked for -- the feedforward's first guess.
-// The fit was taken on positive speeds, so a reverse command is corrected
-// on its magnitude and the sign restored.
-//
-// `bias` (Stage C's adapted parameter, 130-004) is added to the inverted
-// map here, INSIDE this function, rather than at tick()'s call site --
-// the `desired == 0.0f` guard immediately below must cover the bias term
-// too. A commanded-zero wheel must produce exactly zero corrected
-// command regardless of whatever bias the slow adaptation has learned,
-// or a nonzero bias would creep a stopped wheel forward/back -- the
-// exact defect this same guard already prevents for the map's own
-// intercept.
-//
-// 131-001 (sprint 131 Design Rationale Decision 2, review C3): `bias` is
-// applied in the MAGNITUDE domain, following `desired`'s CURRENT sign --
-// NOT as a body-frame-fixed additive term added after copysign(). Once
-// takeover() (131-001) stops resetting bias on every MOVE, a bias learned
-// under sustained motion in ONE direction becomes long-lived enough to be
-// exercised across a direction reversal for the first time; a fixed
-// additive term would then REDUCE a reverse command's magnitude whenever
-// the converged bias is positive (learned while under-delivering forward),
-// exactly backwards from what Stage C is for. Folding bias into the
-// magnitude before restoring the sign means a bias that boosts one
-// direction boosts the other too -- the physical droop it corrects is a
-// property of the wheel's instantaneous load, not which way it is
-// currently being asked to turn (130-004's own one-bias-per-wheel
-// rationale, unchanged). Never let the correction invert the commanded
-// direction (same "don't flip sign" posture as applySpeedFloor()'s own
-// doc comment below): a bias whose magnitude exceeds the commanded
-// magnitude means the correction hasn't converged usefully yet, not that
-// the wheel should reverse.
 float Drive::correctedCommand(float desired, float previous, bool leftWheel,
                               float bias) const {
-  if (desired == 0.0f) return 0.0f;  // stop is stop; never offset it (map OR bias)
+  if (desired == 0.0f) return 0.0f;
   const int w = leftWheel ? 0 : 1;
-  // "Accelerating" is about |speed| rising, not about which way the wheel
-  // turns: a pivot runs one wheel negative and both must classify sanely.
   const int d = (std::fabs(desired) > std::fabs(previous)) ? 0 : 1;
   const float magnitude =
       (std::fabs(desired) - corrIntercept_[w][d]) / corrGain_[w][d];
-  if (magnitude <= 0.0f) return 0.0f;  // below the intercept: unreachable
+  if (magnitude <= 0.0f) return 0.0f;
   const float correctedMagnitude = magnitude + bias;
-  if (correctedMagnitude <= 0.0f) return 0.0f;  // never flip direction; not converged yet
+  if (correctedMagnitude <= 0.0f) return 0.0f;
   return std::copysign(correctedMagnitude, desired);
 }
 
@@ -397,7 +333,7 @@ float Drive::fastPid(float posError, float err, float aCmd) const {
     if (pid > gains_.pidMax) pid = gains_.pidMax;
     if (pid < -gains_.pidMax) pid = -gains_.pidMax;
   }
-  if (!std::isfinite(pid)) return 0.0f;  // fail closed, never inject NaN
+  if (!std::isfinite(pid)) return 0.0f;
   return pid;
 }
 
@@ -487,29 +423,17 @@ float Drive::positionError(float speed, const Types::RobotState::Wheel& wheel,
 void Drive::adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
                       bool fresh, float dt) const {
   if (bounds_.tauAdapt <= 0.0f || dt <= 0.0f || !fresh) return;
-  if (std::fabs(aCmd) >= bounds_.aSteady) return;  // ramping, not steady
-  if (vCmdMagnitude < bounds_.vMin) return;         // below the speed floor
+  if (std::fabs(aCmd) >= bounds_.aSteady) return;
+  if (vCmdMagnitude < bounds_.vMin) return;
   bias += err * dt / bounds_.tauAdapt;
   if (bounds_.biasMax > 0.0f) {
     if (bias > bounds_.biasMax) bias = bounds_.biasMax;
     if (bias < -bounds_.biasMax) bias = -bounds_.biasMax;
   } else {
-    // No adaptation authority configured -- never let bias drift
-    // unbounded; hold it at exactly 0 (the same fail-closed posture as
-    // every other "0 = off" bound in this file).
     bias = 0.0f;
   }
 }
 
-// Deficit-flag policy sustained-condition latch: `conditionNow` (the
-// caller's own "error exceeds deficitThreshold AND both bias and the
-// fast PID are pinned at their configured authority" test, computed in
-// tick()) must hold continuously for deficitWindow ms before `latched`
-// goes true; it drops the instant `conditionNow` clears. `since == 0` is
-// the "not currently accumulating" sentinel (mirrors this file's other
-// uint32_t deadline/countdown fields). `deficitThreshold <= 0` OR
-// `deficitWindow <= 0` disables the policy outright -- the flag never
-// latches, matching this file's "0 = off" convention.
 void Drive::updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
                           bool& latched) const {
   if (bounds_.deficitThreshold <= 0.0f || bounds_.deficitWindow <= 0.0f ||
@@ -526,21 +450,7 @@ uint32_t Drive::sampleAge(uint32_t now, uint32_t sampleTime) const {
   return (now < sampleTime) ? 0u : (now - sampleTime);
 }
 
-// Apply the cycle's duty pair to the two leaves, crawl-shaped. Quiet at
-// zero: while both the commanded and last-written pairs are exactly zero
-// there is nothing to say to the hardware -- writing anyway would flip
-// the motors out of Mode::None from the first idle boot cycle and make
-// boot-time config pushes race the at-rest reconfigure gate. EXCEPT during
-// the post-estop() stop re-assertion window (129-001, see below and
-// drive.h's own header) -- neither condition applies there (mode_ is
-// already Active, past boot), and the write is worth repeating.
 void Drive::tick(const Types::RobotState& state) {
-  // Fail closed: with no calibration installed there is no honest
-  // speed->duty conversion to make, so write nothing at all rather than
-  // guess. A robot whose JSON is missing the
-  // calibration never gets here -- codegen fails first -- so reaching this
-  // return means a composition root that skipped setDutyPerSpeed(), and
-  // standing still is the right answer to that.
   if (!calibrated_) return;
 
   // Wheels-solid speed floor (Open Question 2), 131-003 REVISED
@@ -597,12 +507,6 @@ void Drive::tick(const Types::RobotState& state) {
   applySpeedFloor(state.wheelLeft.cmdVelocity, state.wheelRight.cmdVelocity,
                  speedLeft, speedRight);
 
-  // Stage A: the calibrated conversion map (correctedCommand()) plus
-  // Stage C's bias -- v_corrected = map(v_cmd) + bias (drive.h's own
-  // header). Slope is never adapted online; bias is the ONE adapted
-  // parameter, folded in here (not added separately) so the "stop is
-  // stop" guard covers it too -- see correctedCommand()'s own doc
-  // comment.
   const float correctedLeft =
       correctedCommand(speedLeft, lastSpeedLeft_, true, biasLeft_);
   const float correctedRight =
@@ -610,18 +514,6 @@ void Drive::tick(const Types::RobotState& state) {
   lastSpeedLeft_ = speedLeft;
   lastSpeedRight_ = speedRight;
 
-  // Wheel-measurement freshness gate (moved ahead of Stage B, 131-002,
-  // issue A-commanded-zero-leaks-through-stage-b.md): the SAME fresh/
-  // connected/non-frozen conjunct Stage C already computed, now shared by
-  // both stages. A failed encoder collect MANUFACTURES velocity = 0
-  // (Devices::NezhaMotor::collectEncoder()'s own doc comment,
-  // nezha_motor.cpp) rather than reporting the read as missing, so
-  // without this gate Stage B would wind its integrator toward closing a
-  // gap against a wheel it cannot actually see. `sampleTime` now reflects
-  // NezhaMotor's genuine `lastFreshUs_` (131-002, nezha_motor.h) -- the
-  // last SUCCESSFUL collect, not merely the last tick() attempt -- so
-  // this age check cannot be fooled by a wedged bus stamping "fresh" on a
-  // dead reading.
   const bool freshLeft = state.wheelLeft.connected && !state.health.wheelFrozenLeft &&
                         sampleAge(state.time.cycleStart, state.wheelLeft.sampleTime) <=
                             kMaxSampleAge;
@@ -698,23 +590,11 @@ void Drive::tick(const Types::RobotState& state) {
   const float dutyRight =
       crawlDuty((correctedRight + pidRight) * dutyPerSpeedRight_, crawlCarryRight_);
 
-  // Stage C: bounded bias adaptation -- steady, at/above the speed
-  // floor, and only on a fresh, connected, non-frozen measurement (never
-  // on a stale/disconnected reading -- robot_state.h's own
-  // Health::wheelFrozenLeft/Right doc comment anticipates this
-  // consumer). Computed AFTER this tick's duty (bias changes by at most
-  // dt/tauAdapt per cycle, so the update lands on the NEXT tick's Stage
-  // A, never stepping this tick's own output -- the bumpless-transfer
-  // property). freshLeft/Right computed once, above, shared with Stage B.
   adaptBias(biasLeft_, errLeft, state.wheelLeft.cmdAccel, std::fabs(speedLeft),
            freshLeft, dt);
   adaptBias(biasRight_, errRight, state.wheelRight.cmdAccel, std::fabs(speedRight),
            freshRight, dt);
 
-  // Deficit-flag policy (drive.h's own header): a sustained large error
-  // while BOTH bias and the fast PID sit pinned at their configured
-  // authority ceiling -- the robot has no more correction to give and
-  // must say so loudly rather than silently running slow.
   const bool biasSaturatedLeft =
       bounds_.biasMax > 0.0f && std::fabs(biasLeft_) >= bounds_.biasMax;
   const bool pidSaturatedLeft = gains_.pidMax > 0.0f && std::fabs(pidLeft) >= gains_.pidMax;
@@ -729,15 +609,6 @@ void Drive::tick(const Types::RobotState& state) {
                    pidSaturatedRight,
                state.time.cycleStart, deficitSinceRight_, deficitRight_);
 
-  // Stop re-assertion (129-001, see drive.h's own header): for
-  // kStopEnforceTicks cycles after estop(), and unconditionally for as long
-  // as either wheel still measures above kRestVelocity, a commanded zero
-  // duty pair bypasses the quiet-at-zero shortcut below -- the leaves keep
-  // being explicitly told to stop rather than Drive trusting a write it
-  // already believes landed. This can only ever ADD a write: the condition
-  // it overrides (alreadyQuiet, below) never holds unless dutyLeft/Right
-  // are already both zero, so a genuinely nonzero command is never
-  // touched.
   const bool wheelsMoving = std::fabs(left_.velocity()) > kRestVelocity ||
                             std::fabs(right_.velocity()) > kRestVelocity;
   const bool enforceStop = stopEnforceCountdown_ > 0 || wheelsMoving;
@@ -771,4 +642,4 @@ void Drive::tick(const Types::RobotState& state) {
   writtenRight_ = dutyRight;
 }
 
-}  // namespace App
+}

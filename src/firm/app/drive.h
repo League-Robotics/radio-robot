@@ -241,12 +241,6 @@ namespace App {
 
 class Drive {
  public:
-  // left/right -- the two drive-wheel NezhaMotor leaves, in BodyKinematics'
-  // own L/R convention. trackWidth -- [mm], BodyKinematics::inverse()/
-  // forward()'s own `b` parameter: Drive does no kinematics of its own, but
-  // holds and exposes this value because RobotLoop::publishPose() needs the
-  // SAME number to fuse the two leaves' measured velocities into the
-  // telemetry twist, and Drive is where it has always been constructed.
   Drive(Devices::Motor& left, Devices::Motor& right, float trackWidth);
 
   // The measured plant inverse: duty = speed * kDutyPerSpeed.
@@ -300,37 +294,20 @@ class Drive {
   // reversal.
   static constexpr float kDutyPerSpeed = 0.001182f;  // [duty/(mm/s)]
 
-  // Install this robot's own wheel calibration
-  // (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
-  // §6). Drive carries NO calibration defaults, so this MUST be called --
-  // by the composition root -- before any motion is commanded; until it is,
-  // tick() writes nothing (see calibrated() below).
   void setDutyPerSpeed(float left, float right) {  // [duty/(mm/s)] x2
     dutyPerSpeedLeft_ = left;
     dutyPerSpeedRight_ = right;
     calibrated_ = left != 0.0f && right != 0.0f;
   }
 
-  // Live observability of the installed conversion scale (130-005, issue
-  // 04's folded-in observability mandate -- "ships with the feature, not
-  // after it") -- wired into the wire Telemetry frame / TestGUI so the
-  // baked calibration this robot is actually running is visible without a
-  // firmware rebuild, same reasoning as biasLeft()/Right()/pidLeft()/
-  // Right() below.
-  float dutyPerSpeedLeft() const { return dutyPerSpeedLeft_; }    // [duty/(mm/s)]
+  float dutyPerSpeedLeft() const { return dutyPerSpeedLeft_; }  // [duty/(mm/s)]
   float dutyPerSpeedRight() const { return dutyPerSpeedRight_; }  // [duty/(mm/s)]
 
-  // Commanded->actual correction, per wheel per direction of approach
-  // (docs/design/wheel-speed-command-mapping.md). Drive inverts the measured
-  // line to seed the feedforward. gain 1 / intercept 0 = no correction.
   void setWheelCorrection(float gainLeftAccel, float interceptLeftAccel,
                           float gainLeftDecel, float interceptLeftDecel,
                           float gainRightAccel, float interceptRightAccel,
                           float gainRightDecel, float interceptRightDecel);
 
-  // Crawl-mode pulse amplitude; 0 disables (per-robot breakaway property,
-  // and the shipped default -- see Config::DriveBootConfig's own doc
-  // comment for why 0.20 was wrong).
   void setCrawlPulse(float crawlPulse) { crawlPulse_ = crawlPulse; }
 
   // Stage B's wire-tunable gains (wheel-speed-controller-moves-into-
@@ -380,15 +357,6 @@ class Drive {
   void setControlGains(const ControlGains& gains) { gains_ = gains; }
   const ControlGains& controlGains() const { return gains_; }
 
-  // Stage C / deficit-flag policy's generated-constant bounds (parameter
-  // table rows 4/6/7/13) -- population-measured (ticket 001) speed floor
-  // and adaptation authority, plus the design-chosen adaptation time
-  // constant/steady-gate/deficit thresholds. `tauAdapt <= 0` OR
-  // `aSteady <= 0` disables Stage C's adaptation outright (bias stays
-  // wherever estop()/the boot default left it, the same "0 = off"
-  // convention crawlPulse_/ControlGains::iMax/pidMax already use);
-  // `deficitThreshold <= 0` OR `deficitWindow <= 0` disables the
-  // deficit-flag policy outright.
   struct AdaptationBounds {
     float vMin = 0.0f;              // [mm/s] speed floor (Open Question 2)
     float biasMax = 0.0f;           // [mm/s] Stage C trim authority clamp
@@ -404,7 +372,7 @@ class Drive {
     // authority is still bounded by iMax and pidMax in that case.
     float posErrMax = 0.0f;         // [mm] Stage B position-error clamp; 0 = unclamped
     float deficitThreshold = 0.0f;  // [mm/s] sustained error magnitude that flags a deficit
-    float deficitWindow = 0.0f;     // [ms] how long the deficit condition must sustain
+    float deficitWindow = 0.0f;  // [ms] how long the deficit condition must sustain
   };
   void setAdaptationBounds(const AdaptationBounds& bounds) { bounds_ = bounds; }
   const AdaptationBounds& adaptationBounds() const { return bounds_; }
@@ -437,21 +405,9 @@ class Drive {
   bool deficitLeft() const { return deficitLeft_; }
   bool deficitRight() const { return deficitRight_; }
 
-  // False until setDutyPerSpeed() has landed a real (nonzero) pair. An
-  // uncalibrated Drive REFUSES to drive: tick() writes no duty at all,
-  // rather than quietly running this robot's wheels on some other robot's
-  // numbers. Same fail-closed posture RobotLoop's own `configured_` gate
-  // already takes for motion commands.
   bool calibrated() const { return calibrated_; }
 
-  // --- The WHEELS command lifecycle ---
 
-  // Arm a bounded wheel command: velocity targets + an expiry deadline +
-  // the id acked on completion (takeCompletion()). `duration` is REQUIRED
-  // and positive -- a wheel command is always time-bounded, so a dead host
-  // can never mean a runaway. Supersedes any command already armed; the
-  // superseded one does NOT emit a completion event (the caller that
-  // replaced it already knows, and RobotLoop acked its arrival).
   void command(float vLeft, float vRight, float duration, uint32_t moveId,
                uint32_t now);  // [mm/s] [mm/s] [ms] -- now [ms]
 
@@ -490,21 +446,9 @@ class Drive {
   // the speed floor is a teleop affordance and this is its gate.
   bool owns() const { return commandActive_; }
 
-  // One-shot completion event for a command that reached its deadline; the
-  // loop acks it. False (and *moveId untouched) when there is none pending.
   bool takeCompletion(uint32_t* moveId);
 
-  // --- The two-method contract ---
 
-  // Convert the commanded wheel speeds to duty -- Stage A (calibration +
-  // bias) -> Stage B (fast PID) -> Stage C (bias adaptation, computed
-  // this tick for NEXT tick's Stage A) -> Stage D (crawl shaping ->
-  // quiet-at-zero) -- and write the leaves. Reads state.wheelLeft/
-  // Right.cmdVelocity/cmdAccel/velocity/sampleTime/connected rather than
-  // its own targets: the loop hands it whichever subsystem's targets the
-  // blackboard currently carries, so there is one actuation path
-  // regardless of who decided the motion. See this file's own header
-  // for the full per-stage algorithm.
   void tick(const Types::RobotState& state);
 
   // Live override for Stage B's position-error clamp -- the DEVELOPMENT
@@ -547,32 +491,18 @@ class Drive {
   // AFTER Motion::Planner::update() in the cycle.
   void update(Types::RobotState& state, uint32_t now);  // [ms]
 
-  // Last-staged velocity targets (test observability; the blackboard's own
-  // copy is written by update()).
-  float targetLeft() const { return targetLeft_; }    // [mm/s] signed
+  float targetLeft() const { return targetLeft_; }  // [mm/s] signed
   float targetRight() const { return targetRight_; }  // [mm/s] signed
 
-  // trackWidth -- read-only accessor; fixed at construction, matching
-  // Drive's own "no live-reconfigure" contract. See the constructor's own
-  // doc comment for who reads it and why it lives here.
   float trackWidth() const { return trackWidth_; }  // [mm]
 
  private:
-  // Invert the measured line for one wheel: the command whose ACTUAL
-  // result is `desired`, PLUS `bias` (Stage C's adapted parameter) --
-  // see drive.cpp's own doc comment for why `bias` must be folded in
-  // here rather than added at the call site (the "stop is stop" guard
-  // below must cover the bias term too, or a nonzero adapted bias would
-  // creep a commanded-zero wheel). `previous` picks the accel/decel
-  // branch.
   float correctedCommand(float desired, float previous, bool leftWheel,
                          float bias) const;
 
-  // Correction table [wheel][direction]: 0 = left/right, 0 = accel/decel.
   float corrGain_[2][2] = {{1.0f, 1.0f}, {1.0f, 1.0f}};
   float corrIntercept_[2][2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
-  // Speed last converted per wheel -- the accel/decel discriminator.
-  float lastSpeedLeft_ = 0.0f;   // [mm/s]
+  float lastSpeedLeft_ = 0.0f;  // [mm/s]
   float lastSpeedRight_ = 0.0f;  // [mm/s]
 
   // Commanded-accel estimate for the WHEELS path (update(), drive.cpp) --
@@ -593,8 +523,6 @@ class Drive {
   // Crawl shaper (drive.cpp).
   float crawlDuty(float duty, float& carry) const;
 
-  // --- Stage B/C: the wheel-speed controller (130-004; see this file's
-  // own header for the full algorithm) ---
 
   // Stage B's per-wheel position reference (133-002). `reference` is the
   // integral of the COMMANDED speed since `origin` was anchored -- our
@@ -632,10 +560,6 @@ class Drive {
   float positionError(float speed, const Types::RobotState::Wheel& wheel,
                       PositionRef& ref, float dt) const;  // [mm/s] [s] -> [mm]
 
-  // Stage C's bounded bias adaptation -- mutates `bias` in place.
-  // `vCmdMagnitude` is the (already speed-floored) |commanded speed|,
-  // for the vMin gate. See drive.cpp's own doc comment for the full
-  // steady/floor/freshness gate.
   void adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
                 bool fresh, float dt) const;
 
@@ -652,14 +576,9 @@ class Drive {
   void applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
                        float& speedRight) const;
 
-  // Sustained-condition latch for the deficit-flag policy -- mutates
-  // `since`/`latched` in place. See drive.cpp's own doc comment.
   void updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
                      bool& latched) const;
 
-  // Guards the same now<sampleTime clock-domain edge Telemetry::ageOf()
-  // guards (telemetry.cpp) -- returns 0 rather than an underflowed huge
-  // value.
   uint32_t sampleAge(uint32_t now, uint32_t sampleTime) const;
 
   ControlGains gains_;
@@ -677,52 +596,38 @@ class Drive {
   float lastPidLeft_ = 0.0f;       // [mm/s] observability: last-computed Stage B output
   float lastPidRight_ = 0.0f;      // [mm/s]
 
-  float biasLeft_ = 0.0f;   // [mm/s] Stage C's ONE adapted parameter, per wheel
+  float biasLeft_ = 0.0f;  // [mm/s] Stage C's ONE adapted parameter, per wheel
   float biasRight_ = 0.0f;  // [mm/s]
 
-  // Deficit-flag sustained-condition tracking (0 == not currently
-  // accumulating; see updateDeficit()'s own doc comment, drive.cpp).
-  uint32_t deficitSinceLeft_ = 0;   // [ms]
+  uint32_t deficitSinceLeft_ = 0;  // [ms]
   uint32_t deficitSinceRight_ = 0;  // [ms]
   bool deficitLeft_ = false;
   bool deficitRight_ = false;
 
-  // Wheel-measurement freshness gate for Stage C (see adaptBias()'s own
-  // doc comment, drive.cpp) -- generous relative to one control period
-  // (~47-50ms) plus the brick's own per-wheel skew, so normal per-cycle
-  // jitter never trips it; a genuinely stale/disconnected reading does.
   static constexpr uint32_t kMaxSampleAge = 200;  // [ms]
 
   Devices::Motor& left_;
   Devices::Motor& right_;
   float trackWidth_;  // [mm]
 
-  float targetLeft_ = 0.0f;   // [mm/s]
+  float targetLeft_ = 0.0f;  // [mm/s]
   float targetRight_ = 0.0f;  // [mm/s]
 
-  // Armed bounded command (command() -> update() expiry).
   bool commandActive_ = false;
   uint32_t commandDeadline_ = 0;  // [ms]
   uint32_t commandMoveId_ = 0;
   bool completionPending_ = false;
   uint32_t completedMoveId_ = 0;
 
-  // Open-loop duty per commanded speed, per wheel. NO DEFAULTS (§6): zero
-  // until the composition root installs this robot's own measured pair via
-  // setDutyPerSpeed(), and zero means uncalibrated, which means tick()
-  // refuses to write. Baking a value here is what made one robot's
-  // gearboxes every robot's -- see Config::DriveBootConfig's own doc
-  // comment (config/boot_config.h) for the full history.
-  float dutyPerSpeedLeft_ = 0.0f;   // [duty/(mm/s)]
+  float dutyPerSpeedLeft_ = 0.0f;  // [duty/(mm/s)]
   float dutyPerSpeedRight_ = 0.0f;  // [duty/(mm/s)]
   bool calibrated_ = false;
 
   float crawlPulse_ = 0.0f;  // [-1, 1] pulse amplitude; 0 = off
-  float crawlCarryLeft_ = 0.0f;   // Bresenham accumulators
+  float crawlCarryLeft_ = 0.0f;
   float crawlCarryRight_ = 0.0f;
 
-  // Last duty pair actually written (quiet-at-zero baseline).
-  float writtenLeft_ = 0.0f;   // [-1, 1]
+  float writtenLeft_ = 0.0f;  // [-1, 1]
   float writtenRight_ = 0.0f;  // [-1, 1]
 
   // Stop re-assertion (see this file's own header) -- counts down once per
@@ -737,21 +642,9 @@ class Drive {
   // comment at that site for why an encoder-gated arm is not enough.
   uint8_t stopEnforceCountdown_ = 0;
 
-  // 30 cycles at RobotLoop::kCycle(50ms, 130-007: was 40ms) == 1.5s --
-  // comfortably past the <=0.15s measured stop-observed bound, without
-  // holding the re-assertion open indefinitely (App cannot reference
-  // App::RobotLoop::kCycle directly here without a layer cycle, so this
-  // is a plain literal, same as NezhaMotor's own kMinWriteIntervalUs
-  // comment coupling).
   static constexpr uint8_t kStopEnforceTicks = 30;
 
-  // Wheel-at-rest threshold for the unconditional half of the re-assertion
-  // window. NOT shared with MotorArmor's own kRestVelocity (motor_armor.h)
-  // or NezhaMotor's kStopConfirmVelocity (nezha_motor.h) -- each is a
-  // leaf/subsystem-local constant for its own guard, per this project's
-  // established pattern (see nezha_motor.h's kReconfigureRestVelocity
-  // comment).
   static constexpr float kRestVelocity = 8.0f;  // [mm/s]
 };
 
-}  // namespace App
+}
