@@ -1,10 +1,14 @@
 # Sprint 134 ticket 004 — bench acceptance on `tovez`, 2026-08-05
 
-> **This document has two parts.**
+> **This document has three parts.**
 > **Part I** (§1–§7) is the acceptance run made BEFORE ticket 134-006, on
-> sprint tip `10b7e13e`. **Part II** (§8 onward) is the re-run made AFTER
-> 134-006 (`0c235a2b`), same robot, same night. Read Part II for the
-> current verdict; Part I is kept because Part II's diagnosis rests on it.
+> sprint tip `10b7e13e`. **Part II** (§8–§12) is the re-run made AFTER
+> 134-006 (`0c235a2b`), same robot, same night, which found that the
+> harness itself was defeating the mechanism. **Part III** (§13 onward) is
+> the confirmation run on a passive settle: n = 9 on sprint firmware plus a
+> like-for-like n = 3 interleaved control A/B. **Read Part III for the
+> current verdict**; Parts I and II are kept because Part III's framing
+> rests on them.
 >
 > **Headline, after 006:** the gate arm still fails and the sprint firmware
 > still regresses it — but the cause is no longer the one Part I named. The
@@ -520,3 +524,238 @@ estopped and idle, wheels free on the stand, on `/dev/cu.usbmodem2121102`.
 The control hex is kept at
 `radio-robot-elite.worktrees/ctrl134/MICROBIT.hex` if the A/B wants
 repeating.
+
+---
+
+# PART III — the distribution, on a passive settle (2026-08-05, same robot)
+
+**Headline, the one number: YES. On sprint firmware, with the harness
+artifact removed, `planner_square_tour.py --sequential` closes at a
+median of 6.3 mm over n = 9 — range 5.0 – 8.1 mm, mean 6.35, sd 1.09.
+Eight of the nine runs are at or below 8.0 mm; the ninth is 8.1.
+All 36 corners land inside `align_tol`.**
+
+Part II established the mechanism on n = 2 and said plainly that n = 2 is
+not a distribution. This part is that distribution, plus a like-for-like
+control comparison.
+
+Robot: `tovez`, UID `9906360200052820a8fdb5e413abb276000000006e052820`,
+on the stand, wheels free, direct USB `/dev/cu.usbmodem2121102` (port taken
+from `mbdeploy list` this session; every flash targeted the UID).
+
+Sprint firmware: the same hex Part II measured — `MICROBIT.hex` built
+`--clean --robot-debug` from the tree at `0c235a2b`. The two commits since
+(`baa03801`, `21cd7bb3`) touch only this report and a ticket file; no
+firmware source changed. Control: the same
+`radio-robot-elite.worktrees/ctrl134/MICROBIT.hex` (`8aeb3a4a`, the
+pre-sprint parent).
+
+**`align_tol` was NOT tightened and no firmware constant was touched.**
+Read back off the board before the first run and after every reflash:
+`align_tol = 0.017453` rad, `align_max_nudges = 6`,
+`settle_epsilon_angular = 0.035` rad, `source = BAKED`. The control reads
+`align_tol = 0.0`, `align_max_nudges = 0` — that pair is the arm gate, and
+**no run below is reported on an unverified arm.**
+
+---
+
+## 13. The one host change — `--settle-mode`, defaulting to passive
+
+`src/tests/bench/planner_square_tour.py` gains
+`--settle-mode {passive,lease}`, default **`passive`**. This is the only
+file changed by this ticket, and it is a bench script — nothing under
+`src/firm`, `src/motion`, or `src/host` was touched.
+
+- **`passive`** (new default): during each settle dwell the tour waits,
+  drains telemetry, and **sends nothing**.
+- **`lease`**: the historical behaviour — hold `wheels(0, 0)` for the whole
+  dwell. Kept, because `wheels_square_tour.py`'s settle does exactly this
+  and a planner-vs-wheels comparison wants an identical dwell on both
+  sides, and because every result in this file's history before today was
+  measured that way.
+
+The reason is §10's measurement, and it is restated in the method's own
+docstring so nobody re-derives it: a zero-velocity WHEELS command is a
+**teleop takeover, not a no-op**. `App::RobotLoop::handleWheels()` calls
+`planner_.estop()`, and `Planner::estop()` clears `carryValid_` — the
+cumulative-heading intent ledger. Leasing through a settle therefore
+measures the ledger being torn down at every corner, not the tour. The
+firmware is failing closed exactly as designed; the instrument was lying to
+it. The per-run JSON now records `settle` and `settle_mode`, so a captured
+dataset says which instrument produced it.
+
+---
+
+## 14. Sprint firmware, sequential + passive, n = 6 (one flash, block)
+
+`planner_square_tour.py --sequential --settle-mode passive`, `--trim` off,
+no `--turn-scale`.
+
+| run | closure [mm] | sweep [deg] | per-leg [mm] | per-turn [deg] | in-leg curl [deg] | cum resid/corner [deg] | inside 1.0 deg | wall [s] |
+|---|---|---|---|---|---|---|---|---|
+| seq1 | **5.0** | +360.04 | 499.0 499.0 501.1 499.1 | +91.83 +91.16 +91.79 +91.61 | -1.71 -1.55 -1.72 -1.37 | -0.12 +0.27 +0.20 -0.04 | 4/4 | 41.6 |
+| seq2 | **7.2** | +359.70 | 498.0 500.1 502.0 499.0 | +91.89 +93.11 +91.33 +91.10 | -2.11 -2.18 -1.55 -1.89 | +0.22 -0.71 -0.49 +0.30 | 4/4 | 41.6 |
+| seq3 | **5.1** | +359.87 | 499.0 499.0 502.0 499.0 | +92.07 +90.53 +92.76 +90.64 | -1.20 -1.61 -1.95 -1.37 | -0.87 +0.21 -0.60 +0.13 | 4/4 | 41.6 |
+| seq4 | **8.1** | +359.87 | 499.0 500.0 501.0 499.0 | +91.66 +91.96 +91.68 +91.22 | -1.83 -1.66 -1.26 -1.90 | +0.17 -0.13 -0.55 +0.13 | 4/4 | 41.8 |
+| seq5 | **5.8** | +360.44 | 499.0 500.0 499.0 501.0 | +91.72 +92.30 +91.04 +91.56 | -1.60 -2.12 -1.54 -0.92 | -0.12 -0.30 +0.20 -0.44 | 4/4 | 41.4 |
+| seq6 | **5.4** | +359.98 | 499.0 500.0 501.0 501.0 | +92.46 +90.69 +91.38 +91.55 | -2.17 -0.68 -1.54 -1.71 | -0.29 -0.30 -0.14 +0.02 | 4/4 | 41.5 |
+
+| | mean | sd | median | min | max |
+|---|---|---|---|---|---|
+| closure [mm] | 6.10 | 1.26 | 5.6 | 5.00 | 8.06 |
+| heading sweep [deg] | 359.98 | 0.25 | 359.93 | 359.70 | 360.44 |
+| tour wall [s] | 41.6 | 0.14 | 41.6 | 41.4 | 41.9 |
+
+**24/24 corners inside `align_tol`.** Cumulative residual mean −0.14°,
+mean|r| 0.29°, worst single corner 0.87°.
+
+---
+
+## 15. Sprint vs control, interleaved, passive on both sides (n = 3 pairs)
+
+Reflashed between **every** run and identity-gated on the PLANNER
+read-back before every run. Within-pair order alternated (pair 0 control
+first, pair 1 sprint first, pair 2 control first). Same passive settle on
+both arms, so the comparison is like-for-like.
+
+| run | closure [mm] | sweep [deg] | per-leg [mm] | per-turn [deg] | in-leg curl [deg] | cum resid/corner [deg] | inside 1.0 deg | wall [s] |
+|---|---|---|---|---|---|---|---|---|
+| ab0_sprint | **7.0** | +360.61 | 498.0 500.0 500.0 502.0 | +91.89 +91.38 +91.55 +90.92 | -2.00 -0.91 -1.77 -0.45 | +0.11 -0.36 -0.14 -0.61 | 4/4 | 41.8 |
+| ab1_sprint | **7.3** | +359.93 | 498.0 499.1 500.0 501.0 | +90.92 +92.65 +90.76 +91.73 | -1.77 -1.38 -1.15 -1.83 | +0.85 -0.42 -0.03 +0.07 | 4/4 | 42.8 |
+| ab2_sprint | **6.3** | +360.61 | 499.0 502.1 499.0 502.0 | +91.27 +92.59 +90.58 +91.15 | -1.66 -1.67 -1.14 -0.51 | +0.39 -0.53 +0.03 -0.61 | 4/4 | 41.9 |
+| ab0_control | **26.9** | +356.49 | 499.0 500.1 497.5 498.8 | +90.57 +90.64 +90.41 +91.27 | -1.14 -2.29 -0.97 -2.00 | +0.57 +2.22 +2.78 +3.51 | 1/4 | 39.7 |
+| ab1_control | **25.5** | +356.09 | 500.0 501.2 497.5 501.2 | +90.51 +90.88 +90.07 +90.82 | -1.71 -1.72 -1.61 -1.15 | +1.20 +2.04 +3.58 +3.91 | 0/4 | 39.8 |
+| ab2_control | **30.5** | +355.97 | 498.0 500.4 497.8 500.2 | +90.35 +90.53 +90.41 +90.81 | -2.29 -1.38 -1.09 -1.37 | +1.94 +2.79 +3.47 +4.03 | 0/4 | 39.8 |
+
+| pair | sprint | control | Δ (sprint − control) |
+|---|---|---|---|
+| 0 | **7.0** | 26.9 | −19.9 |
+| 1 | **7.3** | 25.5 | −18.2 |
+| 2 | **6.3** | 30.5 | −24.1 |
+
+**Sprint better in 3 of 3. Mean Δ −20.7 mm.** Sprint mean 6.87 mm (range
+6.3–7.3), control mean 27.62 mm (range 25.5–30.5). The distributions do
+not come within 18 mm of each other. **4.0× improvement** on the paired
+means; 4.35× against the pooled n = 9 sprint mean.
+
+### The mechanism, visible in the per-corner numbers
+
+| firmware | per-turn delivered | in-leg curl | cum resid vs *n*×90° | corners inside 1.0° |
+|---|---|---|---|---|
+| **sprint** (n=9, 36 corners) | **+91.57°** (sd 0.64) | −1.54° (sd 0.44) | mean **−0.13°**, mean&#124;r&#124; 0.31° | **36/36 = 100%** |
+| control (n=3, 12 corners) | +90.61° (sd 0.31) | −1.56° (sd 0.46) | mean **+2.67°** | 1/12 = 8% |
+
+Identical leg curl on both arms (−1.54 vs −1.56°/leg). The sprint firmware
+**over-delivers each turn by +1.57°, which is very nearly the preceding
+leg's −1.54° curl** — that is the ledger repaying the curl, corner by
+corner, and it is why the cumulative residual stays flat at −0.13° instead
+of walking out to +2.67°. Sweep: sprint +360.12° (sd 0.34), control
++356.18° (sd 0.27).
+
+### One observation that revises Part II, and is not explained here
+
+Under the **lease** settle (Part II §8) the control firmware delivered
+**+91.33°**/corner and closed 21.3–26.1 mm. Under the **passive** settle it
+delivers **+90.61°**/corner and closes 25.5–30.5 mm. So part of the
+"accidental cancellation" that made control look competitive in Part II was
+itself a lease artifact. Recorded as measured; no mechanism is offered for
+it, and it does not affect any conclusion above (both arms are passive in
+§15, and control loses by 20 mm).
+
+---
+
+## 16. Pooled sprint distribution (n = 9, both blocks)
+
+The six block runs and the three A/B sprint runs are the same firmware, the
+same invocation, and the same settle; the A/B runs additionally had a fresh
+flash. Pooled:
+
+| | value |
+|---|---|
+| closures [mm] | 5.0, 5.1, 5.4, 5.8, 6.3, 7.0, 7.2, 7.3, 8.1 |
+| **median** | **6.3 mm** |
+| mean / sd | 6.35 / 1.09 mm |
+| min / max | 5.0 / 8.1 mm |
+| runs ≤ 8.0 mm | **8 / 9** |
+| runs ≤ 12.0 mm | **9 / 9** |
+| heading sweep | mean +360.12°, sd 0.34, range 359.70 – 360.61 |
+| corners inside `align_tol` | **36 / 36 = 100%** |
+| per-leg length | 499.88 mm (sd 1.22) against a 500 mm target |
+| per-turn delivered | +91.57° (sd 0.64) |
+| in-leg curl | −1.54°/leg (sd 0.44) |
+| tour wall time | 41.8 s (41.4 – 42.8) |
+
+### The bars
+
+| bar | requirement | measured (n=9, passive) | verdict |
+|---|---|---|---|
+| sprint acceptance | closure ≤ 8 mm | median **6.3**, 8/9 runs ≤ 8.0 | **PASS on the median; 1 of 9 runs at 8.1** |
+| mechanism | closure ≤ 12 mm | 9/9 | **PASS** |
+| mechanism | ≥90% corners inside `align_tol` | **100%** (36/36) | **PASS** |
+| mechanism | ≥3× over same-session control | **4.0×** (27.6 → 6.9 mm, paired) | **PASS** |
+
+**Nudges per corner is still not directly observable** — unchanged from
+Parts I and II. The `0 nudge(s)` printed on every corner line is the
+tour's *host-side* trim counter (`--trim` is off); the firmware's own
+`alignStep()` emits no DBG line and no telemetry counter. Convergence
+above is measured from the per-corner cumulative residual, as before.
+
+---
+
+## 17. What this does and does not settle
+
+**Settled.** The sprint-134 mechanism — intent carry, the cumulative
+ledger, and the terminal fine-align — works on hardware, repeatably, and
+beats its pre-sprint parent by 4× on a like-for-like interleaved A/B with
+a per-run firmware-identity gate. The number the sprint was asked for is
+**median 6.3 mm, n = 9, range 5.0 – 8.1**.
+
+**Not settled, and unchanged from Part II §12:**
+
+1. **The gate as literally specified still fails.** `--settle-mode lease`
+   — the default until today — still closes ~34–40 mm on this firmware,
+   because a zero-WHEELS lease routes to `planner_.estop()` and clears the
+   ledger at every corner. Part III fixes the *instrument* (option (a) of
+   §12's three candidates, the free one). It does **not** answer whether
+   the *firmware* should treat a zero-velocity WHEELS command, or a lease
+   that expires with the robot never having moved, as a real takeover.
+   That is a design decision (§12 candidates (b) and (c)), not a bench
+   call, and nothing here was changed to pre-empt it. Any host that leases
+   zero-wheels between planner Moves will still get the 30-mm answer.
+2. **The pipelined arm was not re-measured this session.** Part II's n = 3
+   (6.2 mm mean) stands as the most recent measurement of it.
+3. **Camera truth. Still none.** Every number in all three parts is
+   encoder odometry. The −1.54°/leg curl that this whole mechanism exists
+   to repay has never been checked against the overhead camera, and it
+   remains the single largest unverified quantity in the report. A ledger
+   that repays a *mis-measured* curl would look exactly like this.
+4. **`align_tol` tightening remains untested**, deliberately. Part I's
+   measurement that tightening is counterproductive (convergence 93%→64%)
+   is unchallenged.
+5. **Cost.** The sequential passive tour runs 41.8 s vs the control's
+   39.8 s — the align phase's settle costs ~0.5 s per corner, ~2 s per
+   tour, and it is not free.
+
+## Artifacts (Part III)
+
+All under `src/tests/bench/output/`, prefixed `sprint134_final_`:
+
+- `trimtol_sprint134_final_seq{1..6}.json` — the n = 6 block, per-run rest
+  poses, corners, segments, and now `settle_mode`
+- `trimtol_sprint134_final_ab{0,1,2}_{sprint,control}.json` — the
+  interleaved A/B
+- `planner_square_tour_sprint134_final_*.png` — per-run dual-trace charts
+- `planner_tour_results.csv` — appended (the pre-existing `best` row intact)
+
+`planner_square_tour_best.png`, `planner_tour_results.csv`'s `best` row,
+and `trimtol_best.json` are untouched.
+
+## Bench state at handoff (Part III)
+
+`tovez` is on the **SPRINT** firmware — verified by config read-back after
+the final flash (`align_tol = 0.017453`, `align_max_nudges = 6`,
+`source = BAKED`) — **estopped and idle**: telemetry `flags` bit 2
+(`kFlagActive`) clear, encoder positions and velocities flat across a
+1.5 s re-read. Wheels free on the stand, direct USB
+`/dev/cu.usbmodem2121102`. The control hex remains at
+`radio-robot-elite.worktrees/ctrl134/MICROBIT.hex`.
