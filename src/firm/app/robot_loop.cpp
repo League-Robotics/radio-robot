@@ -108,32 +108,7 @@ void RobotLoop::routeCommand(const Cmd& cmd) {
       handleEstop(cmd.env);
       break;
     case msg::CommandEnvelope::CmdKind::CONFIG:
-      // 132-013 (patch-surface retirement): CONFIG now carries a
-      // SetConfigGroup (robot_config.proto), not the deleted ConfigDelta --
-      // a whole-group push, decoded straight into Configurator's owned
-      // Config::Robot via applyGroup(), same "no per-command ReplyEnvelope,
-      // outcome rides the ack ring" shape as SET_FIELD below. The
-      // Configurator owns everything a CONFIG means (configurator.h);
-      // RobotLoop's whole job here is the ack.
-      tlm_.ack(cmd.env.corr_id,
-               static_cast<uint32_t>(configurator_.applyGroup(
-                   cmd.env.cmd.config.target, cmd.env.cmd.config.body_,
-                   cmd.env.cmd.config.body_count)));
-      break;
-    case msg::CommandEnvelope::CmdKind::GET_CONFIG:
-      handleGetConfig(cmd.env);
-      break;
-    case msg::CommandEnvelope::CmdKind::SET_FIELD:
-      // 132-012 (SetConfigField / Configurator::applyField()): the
-      // single-field dev-mode push, same "no per-command ReplyEnvelope,
-      // outcome rides the ack ring" shape as CONFIG just above -- unlike
-      // GET_CONFIG, which replies synchronously (a group's worth of
-      // values has no room in the ack ring).
-      tlm_.ack(cmd.env.corr_id,
-               static_cast<uint32_t>(configurator_.applyField(
-                   cmd.env.cmd.set_field.target,
-                   static_cast<uint16_t>(cmd.env.cmd.set_field.field),
-                   cmd.env.cmd.set_field.value)));
+      tlm_.ack(cmd.env.corr_id, configurator_.apply(cmd.env));
       break;
     case msg::CommandEnvelope::CmdKind::NONE:
     default:
@@ -141,41 +116,6 @@ void RobotLoop::routeCommand(const Cmd& cmd) {
   }
 }
 
-// handleGetConfig() -- 132-011 (GetConfig/ConfigSnapshot wire read-back):
-// the one CONFIG-arm outcome that does NOT ride the ack ring (§7.1,
-// docs/protocol-v5.md) -- a ring entry has no room for a group's worth of
-// values, so this replies SYNCHRONOUSLY via Comms::sendReply(), the same
-// path App::Telemetry::emitPrimary() uses for its own unsolicited push
-// (the only other live call site, until now). Read-back is honest for
-// every ConfigGroupTarget, including boot-only ones (GEOMETRY/PLANNER) --
-// Configurator::encodeSnapshot() is deliberately NOT gated by
-// isLiveConfigurable() the way applyGroup()/install() are; only WRITES are
-// gated.
-void RobotLoop::handleGetConfig(const msg::CommandEnvelope& env) {
-  const msg::ConfigGroupTarget target = env.cmd.get_config.target;
-
-  msg::ConfigSnapshot snapshot;
-  const msg::ErrCode result = configurator_.encodeSnapshot(target, snapshot);
-
-  msg::ReplyEnvelope reply;
-  reply.corr_id = env.corr_id;
-  if (result == msg::ErrCode::ERR_NONE) {
-    reply.body_kind = msg::ReplyEnvelope::BodyKind::CFG;
-    reply.body.cfg = snapshot;
-  } else {
-    // An unrecognized target is reported, never silently dropped -- the
-    // same "loud rejection, not silence" discipline applyGroup()'s own
-    // ERR_NOT_LIVE rejection follows for writes.
-    reply.body_kind = msg::ReplyEnvelope::BodyKind::ERR;
-    reply.body.err.code = result;
-    reply.body.err.field = static_cast<uint32_t>(target);
-  }
-  comms_.sendReply(reply);
-}
-
-// Every MOVE goes to the planner, twist or wheels-velocity, whatever its
-// stop condition -- never diverted to Drive, which has no odometry and so
-// cannot honor a DISTANCE/ANGLE stop condition.
 void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
   if (!configured_) {
     tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
@@ -228,35 +168,6 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
     }
   }
 
-  // The caller's INTENT, captured before the calibration rewrite below
-  // turns `threshold` into an actuation-sized command (134-001). Nothing
-  // downstream can reconstruct it once that happens, and
-  // Motion::Planner's cumulative-baseline ledger needs it: a chained turn
-  // must repay the residual its predecessor left, which means targeting
-  // "baseline + what this Move was ASKED to turn", not "baseline + what we
-  // commanded the wheels to do". Set for every Kind -- only the Angle
-  // branch of the ledger reads it today, but the field means the same
-  // thing on every axis and a Kind-conditional assignment would be a trap
-  // for the next reader.
-  m.requestedThreshold = m.threshold;
-
-  // Turn calibration. The measured response of an ANGLE-stopped move is
-  // affine, actual = gain * commanded + offset, so to LAND on the requested
-  // angle we command (requested - offset) / gain.
-  //
-  // Measured 2026-07-29 against overhead camera truth, 48 shuffled in-place
-  // turns: 15..180 deg, both directions, omega 2.5..8.0 rad/s. The same law
-  // holds at every rate -- this is geometry/stiction, not a deceleration
-  // artifact -- so ONE pair of constants per direction covers the range.
-  //
-  // The offset is what makes this worth doing: it is roughly -6 deg
-  // regardless of size, which is invisible at 180 and ruinous at 15 (a 15
-  // deg command landed at 9). A pure scale factor cannot correct it, which
-  // is why calibrating against 180-degree turns alone did not transfer down.
-  //
-  // Per direction because the two gearboxes are not identical. Direction is
-  // taken from the commanded rotation itself: omega for a twist, the wheel
-  // difference for a wheels-velocity move.
   if (m.kind == Motion::Move::Kind::Angle) {
     const bool positive =
         (m.velocityKind == Motion::Move::VelocityKind::Twist)
@@ -331,16 +242,6 @@ void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
 void RobotLoop::handleEstop(const msg::CommandEnvelope& env) {
   drive_.estop();
   planner_.estop();
-  // Zero the blackboard's own commanded speeds too. Both subsystems'
-  // update() calls would land the same zeros at the end of this cycle
-  // anyway, but an emergency stop should not depend on the rest of the
-  // schedule running to completion to take effect.
-  //
-  // 133-001: this is App::RobotLoop acting as the SAFETY ARBITER, not as a
-  // third decider -- the same rule zeroUnownedMotion() runs under, stated
-  // in full at publishWheels() below. Zero-only, superseding every
-  // decider. It is an instance of the invariant, not an unexplained
-  // special case.
   state_.wheelLeft.cmdVelocity = 0.0f;
   state_.wheelRight.cmdVelocity = 0.0f;
   tlm_.ack(env.corr_id, 0);
@@ -383,37 +284,6 @@ void RobotLoop::boot() {
 }
 
 
-// UNOWNED-MOTION GUARD (133-001, the 2026-08-03 runaway). Measured on
-// vevov, 16/16 reproductions: after a WHEELS command expires with the host
-// silent, the wheels keep turning at the last commanded speed with no
-// decay -- 936mm of continued travel, still going when the capture ended,
-// and estop() failed to stop it in 5 of 6 attempts. The Nezha brick
-// physically latches its last commanded speed and does not reset on an
-// nRF52 reset, so a lost zero write is permanent, not transient.
-//
-// Every individual link was defensible in isolation, which is exactly why
-// this belongs here rather than inside one of them: Drive::update()
-// publishes one zero pair on the expiry cycle and then returns early
-// forever after (`if (!owned) return;`), and Planner::update() runs
-// unconditionally but republishes only ITS OWN idea of the command.
-// Nothing re-stated "no one is driving, so the speed is zero" on the
-// cycles in between.
-//
-// This states it, every cycle, ahead of the single actuation path, so the
-// wheels cannot inherit a stale target from a decider that has stopped
-// publishing. Idleness is DERIVED from the two existing public ownership
-// queries -- no new interface, no new handoff edge between the deciders,
-// and no idle owner that would have to be told to take over (see this
-// method's own doc comment, robot_loop.h, for why that distinction is the
-// whole design). Both deciders write cmdVelocity later in the same cycle
-// anyway, so when either owns the wheels this is a plain no-op.
-void RobotLoop::zeroUnownedMotion() {
-  if (planner_.active() || drive_.owns()) return;
-  // ONLY 0.0f is ever written here -- the monotone contract (robot_loop.h).
-  state_.wheelLeft.cmdVelocity = 0.0f;
-  state_.wheelRight.cmdVelocity = 0.0f;
-}
-
 void RobotLoop::publishWheel(Devices::Motor& motor,
                              Types::RobotState::Wheel& wheel,
                              uint8_t& positionEpoch, bool& clamped) {
@@ -432,28 +302,6 @@ void RobotLoop::publishWheel(Devices::Motor& motor,
   wheel.positionEpoch = positionEpoch;
 }
 
-// THE cmdVelocity OWNERSHIP INVARIANT (revised 133-001; this comment used
-// to claim "exactly one writer per cycle," which was already false on
-// master -- handleEstop() below has written cmdVelocity from the loop
-// since 128-001, with a comment explaining why that is correct. The honest
-// invariant was never "one writer"; it was "one decider plus a safety
-// override," merely undocumented):
-//
-//   cmdVelocity has exactly one DECIDER per cycle -- Motion::Planner::
-//   update() or App::Drive::update() -- and exactly one SAFETY ARBITER,
-//   App::RobotLoop, whose writes are restricted to zero, which runs after
-//   every decider and before actuation, and which supersedes all deciders.
-//   No other writer exists.
-//
-// App::RobotLoop's arbiter writes are exactly two, both zero-only:
-// zeroUnownedMotion() (the per-cycle derived-idle guard) and
-// handleEstop() (the ESTOP wire verb). Adding a third is a change to this
-// invariant, not a local edit.
-//
-// publishWheels() itself deliberately does NOT touch wheel.cmdVelocity --
-// it is neither a decider nor the arbiter, it is the measurement publisher.
-// Writing it from here would overwrite the owner's staged command with the
-// value being actuated THIS cycle, one generation stale.
 void RobotLoop::publishWheels() {
   bool clampedL = false;
   bool clampedR = false;
@@ -544,16 +392,6 @@ void RobotLoop::cycle() {
   state_.time.cycleStart = markTime();  // [ms] pace anchor + wire `now`
   const uint64_t cycleStartUs = clock_.nowMicros();  // [us]
 
-  // Safety arbitration, LAST thing before actuation: if neither decider
-  // owns motion, the commanded speed is zero (133-001). Zero-only by
-  // contract -- see this method's own doc comment (robot_loop.h) and its
-  // definition above.
-  zeroUnownedMotion();
-
-  // Actuate the speeds the owning subsystem staged onto the blackboard last
-  // cycle -- one actuation path regardless of which decider produced them
-  // (one cycle of command-to-wheels latency, the same the planner's own
-  // actuationDelay compensates for).
   drive_.tick(state_);
 
   motorL_.requestSample();
@@ -617,14 +455,6 @@ void RobotLoop::cycle() {
 
 
 #ifdef ROBOT_DEBUG
-void RobotLoop::captureTuningBaseline() {
-  if (dbgTuningBaselined_) return;
-  dbgBoundsBaseline_ = drive_.adaptationBounds();
-  dbgDutyPerSpeedBaseLeft_ = drive_.dutyPerSpeedLeft();
-  dbgDutyPerSpeedBaseRight_ = drive_.dutyPerSpeedRight();
-  dbgTuningBaselined_ = true;
-}
-
 void RobotLoop::applyDbgAction(uint32_t now) {
   if (dbgWedgeUntilL_ != 0 && dbgWedgeUntilL_ != UINT32_MAX &&
       static_cast<int32_t>(now - dbgWedgeUntilL_) >= 0) {
@@ -658,100 +488,12 @@ void RobotLoop::applyDbgAction(uint32_t now) {
                   static_cast<unsigned long>(action.duration));
       break;
     }
-    // --- 133-003 live tuning arms ---------------------------------------
-    //
-    // Every echo below reports the value that LANDED, formatted from the
-    // float actually handed to the setter -- never a re-print of the wire
-    // text. newlib-nano's printf has no float support (debug.h's own
-    // header), so each splits DBG_MILLI()'s rounded integer milli-unit
-    // into whole and thousandths parts: "vmin 60.000 applied". Rounding
-    // rather than truncating matters at this scale -- static_cast<int>(
-    // 1.02f * 1000.0f) is 1019, so a truncating echo would report a gain
-    // of 1.019 for a push of 1.02 and send an operator hunting a
-    // firmware bug that is really a printf.
-    //
-    // The literal token "applied" is a CONTRACT with
-    // src/tests/bench/velocity_profile_gate.py's _assert_tuning(), which
-    // waits for it before it will report a run. Do not reword it.
-    case Comms::DbgActionKind::kVmin: {
-      captureTuningBaseline();
-      drive_.setSpeedFloor(action.value);
-      const long milli = DBG_MILLI(action.value);
-      App::debugf("vmin %ld.%03ld applied", milli / 1000, milli % 1000);
-      break;
-    }
-    case Comms::DbgActionKind::kASteady: {
-      // Stage C's bias adaptation gates on |cmdAccel| < aSteady, so at the
-      // baked 30 mm/s^2 it is frozen through every ramp the profile gate
-      // drives (even the gentle 200 mm/s trapezoid ramps at ~267 mm/s^2).
-      // Raising this is how 004 finds out whether the residual L/R
-      // distance imbalance is banked in the ramps.
-      captureTuningBaseline();
-      drive_.setASteady(action.value);
-      const long milli = DBG_MILLI(action.value);
-      App::debugf("asteady %ld.%03ld applied", milli / 1000, milli % 1000);
-      break;
-    }
-    case Comms::DbgActionKind::kPos: {
-      // Stage B's position-error clamp [mm] -- 133-002's setter. The
-      // INPUT-side bound; its OUTPUT-side sibling (ControlGains::iMax) has
-      // a CONFIG key already. NOTE for a tuning session: pos_err_max IS in
-      // the robot JSON and IS live-configurable over the WHEEL_CONTROL
-      // wire group, so this verb is the RAM-only shortcut, not the only
-      // path -- a value worth keeping goes in data/robots/<robot>.json.
-      captureTuningBaseline();
-      drive_.setPositionErrorMax(action.value);
-      const long milli = DBG_MILLI(action.value);
-      App::debugf("pos %ld.%03ld applied", milli / 1000, milli % 1000);
-      break;
-    }
-    case Comms::DbgActionKind::kGain: {
-      // Per-wheel multiplier on the BOOT-INSTALLED dutyPerSpeed pair --
-      // the L/R plateau-speed imbalance trim. Multiplying the captured
-      // baseline (not the current value) makes a re-push idempotent and
-      // `gain 1 1` a true restore; see captureTuningBaseline()'s own doc
-      // comment (robot_loop.h) for why the baseline is the installed pair
-      // rather than Drive::kDutyPerSpeed.
-      //
-      // MEASURED, and the reason that distinction is not academic: the Sim
-      // composition root boots at dutyPerSpeed 0.002, while
-      // Drive::kDutyPerSpeed is 0.001182. Scaling the CONSTANT would make
-      // `DBG:gain 1 1` -- the documented identity push -- a silent 41%
-      // recalibration there, and the same trap waits on any robot whose
-      // JSON does not happen to carry 0.001182. See
-      // src/tests/sim/system/test_dbg_tuning_verbs.py's own idempotence
-      // and clear-restores scenarios.
-      captureTuningBaseline();
-      drive_.setDutyPerSpeed(dbgDutyPerSpeedBaseLeft_ * action.value,
-                             dbgDutyPerSpeedBaseRight_ * action.value2);
-      const long milliLeft = DBG_MILLI(action.value);
-      const long milliRight = DBG_MILLI(action.value2);
-      App::debugf("gain L=%ld.%03ld R=%ld.%03ld applied",
-                  milliLeft / 1000, milliLeft % 1000,
-                  milliRight / 1000, milliRight % 1000);
-      break;
-    }
     case Comms::DbgActionKind::kClear:
       motorL_.setForcedWedge(false);
       motorR_.setForcedWedge(false);
       dbgWedgeUntilL_ = 0;
       dbgWedgeUntilR_ = 0;
-      // "clear every injected override" (this verb's own documented
-      // contract, comms.cpp) now genuinely means EVERY one: the tuning
-      // arms above are overrides too, and leaving them latched after a
-      // clear would let a sweep's last value silently ride into the next
-      // measurement. Restores only when a tuning verb actually landed --
-      // otherwise there is no baseline and nothing to restore, and
-      // writing zeros here would UNCALIBRATE the robot.
-      if (dbgTuningBaselined_) {
-        drive_.setAdaptationBounds(dbgBoundsBaseline_);
-        drive_.setDutyPerSpeed(dbgDutyPerSpeedBaseLeft_,
-                               dbgDutyPerSpeedBaseRight_);
-        dbgTuningBaselined_ = false;
-        App::debugf("clear (tuning restored to boot)");
-      } else {
-        App::debugf("clear");
-      }
+      App::debugf("clear");
       break;
     case Comms::DbgActionKind::kUnrecognized:
       App::debugf("unrecognized dbg: %s", action.text);
