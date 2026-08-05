@@ -213,4 +213,23 @@ enum Verb {
   // this verb pair does NOT become the new worst-case name and the 249-byte
   // figure is unchanged by this addition.
   SET_FIELD  = 21 [(binary) = true];
+  // SEED -- "SEED:<x>,<y>,<heading>" in, "SEED:<x>:<y>:<mrad>" back.
+  // Seeds the robot's world pose (centre of rotation, [mm] [mm] [rad]) from
+  // an external fix -- normally the overhead camera at the start of a run.
+  // Writes BOTH pose sources: the OTOS chip's own position register (lever
+  // arm applied in firmware by Devices::RealOtos) and the encoder odometry,
+  // so the two start agreed and their later divergence IS the drift.
+  //
+  // Cleartext, so it works from a plain terminal with no binary codec. Both
+  // a command and its own reply verb, like ID, VER and STATUS.
+  SEED       = 22 [(binary) = false];
+  // POSE -- "POSE" in, "POSE:<ox>:<oy>:<omrad>:<ex>:<ey>:<emrad>:<fresh>" back.
+  // The OTOS chip's world pose and the encoder odometry's, in one line, in
+  // integer mm and milliradians (newlib-nano printf has no float).
+  //
+  // Two pose sources seeded from one fix (see SEED) must agree at t=0; their
+  // divergence over a run IS the drift being measured, so reporting them
+  // together -- same cycle, same frame -- is the measurement. Cleartext so a
+  // control loop can poll it without the binary codec.
+  POSE       = 23 [(binary) = false];
 }

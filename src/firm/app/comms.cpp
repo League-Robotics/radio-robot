@@ -280,6 +280,11 @@ void Comms::dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& 
     return;
   }
 
+  if (entry->verb == msg::Verb::SEED) {
+    stageSeed(dataPtr, dataLen, t);
+    return;
+  }
+
 #ifdef ROBOT_DEBUG
   if (entry->verb == msg::Verb::DBG) {
     pushDbgAction(classifyDbgArg(dataPtr, dataLen));
@@ -292,6 +297,48 @@ void Comms::dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& 
   } else {
     dispatchCleartext(entry->verb, t, now);
   }
+}
+
+void Comms::sendPose(Transport& t) {
+  char line[96];
+  std::snprintf(line, sizeof(line), "POSE:%ld:%ld:%ld:%ld:%ld:%ld:%d",
+                static_cast<long>(status_.otosX), static_cast<long>(status_.otosY),
+                static_cast<long>(status_.otosHeading),
+                static_cast<long>(status_.encX), static_cast<long>(status_.encY),
+                static_cast<long>(status_.encHeading),
+                status_.otosPresent ? 1 : 0);
+  t.sendReliable(line);
+}
+
+void Comms::stageSeed(const uint8_t* data, uint16_t len, Transport& t) {
+  // "<x>,<y>,<heading>" -- commas or spaces, all three required and signed.
+  char buf[64];
+  if (data == nullptr || len == 0 || len >= sizeof(buf)) {
+    ++malformedCount_;
+    return;
+  }
+  std::memcpy(buf, data, len);
+  buf[len] = '\0';
+
+  float parsed[3] = {0.0f, 0.0f, 0.0f};
+  const char* cursor = buf;
+  for (int i = 0; i < 3; ++i) {
+    while (*cursor == ',' || *cursor == ' ') ++cursor;
+    char* end = nullptr;
+    const float value = std::strtof(cursor, &end);
+    if (end == cursor || value != value) {  // nothing consumed, or NaN
+      ++malformedCount_;
+      return;
+    }
+    parsed[i] = value;
+    cursor = end;
+  }
+
+  seed_.x = parsed[0];
+  seed_.y = parsed[1];
+  seed_.heading = parsed[2];
+  seed_.reply = &t;
+  seed_.pending = true;
 }
 
 void Comms::dispatchCleartext(msg::Verb verb, Transport& t, uint32_t now) {
@@ -316,6 +363,9 @@ void Comms::dispatchCleartext(msg::Verb verb, Transport& t, uint32_t now) {
       return;
     case msg::Verb::HELP:
       sendHelp(t);
+      return;
+    case msg::Verb::POSE:
+      sendPose(t);
       return;
     default:
       ++malformedCount_;
@@ -484,6 +534,12 @@ void Comms::updateStatus(const Types::RobotState& state, const Telemetry& tlm) {
   status.wedged = state.health.wedgeLatch;
   status.flags = tlm.flags();
   status.tlmMode = static_cast<uint8_t>(tlm.mode());
+  status.otosX = static_cast<int32_t>(state.otos.x);
+  status.otosY = static_cast<int32_t>(state.otos.y);
+  status.otosHeading = static_cast<int32_t>(state.otos.heading * 1000.0f);
+  status.encX = static_cast<int32_t>(state.pose.x);
+  status.encY = static_cast<int32_t>(state.pose.y);
+  status.encHeading = static_cast<int32_t>(state.pose.heading * 1000.0f);
   status_ = status;
 }
 

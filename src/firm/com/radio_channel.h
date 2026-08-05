@@ -14,7 +14,7 @@ namespace radiochan {
 
 constexpr int kMin     = 0;     // frequency band lower bound
 constexpr int kMax     = 35;    // upper bound — single base-36 digit (0-9, A-Z)
-constexpr int kDefault = 0;     // matches RadioRelay default channel
+constexpr int kDefault = 3;     // private channel: tovez + the getez relay only
 constexpr int kGroup   = 10;    // fixed radio group (never changes)
 
 inline int clamp(int c) { return c < kMin ? kMin : (c > kMax ? kMax : c); }

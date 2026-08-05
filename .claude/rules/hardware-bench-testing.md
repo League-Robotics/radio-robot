@@ -32,6 +32,30 @@ uv run mbdeploy list          # UID -> port -> name, live
 Identify BOTH boards, then target `tovez` and leave `vizev` alone. The rule is
 about which device you act on, not about looking.
 
+### Radio channel 3 is ours (2026-08-05)
+
+`tovez` and the `getez` relay both run on **channel 3**, group 10. This is a
+private channel, and it is not a preference — it is how the bench stays
+usable.
+
+On channel 0 (the old default) several boards answer at once: every `ID`
+came back two or three times, `POSE`/`STATUS` returned another robot's
+numbers as readily as tovez's, and one board flooded the channel with `DBG:`
+output. That flood is self-sustaining, because protocol v5 ends a verb at
+the first colon: a robot's own `DBG:` OUTPUT is a syntactically valid `DBG`
+COMMAND to every robot that hears it, so robots answer each other forever
+and the DBG action ring saturates. Commands sent to a shared channel also
+reach every robot on it.
+
+- firmware: `radiochan::kDefault` (`src/firm/com/radio_channel.h`), applied
+  at `main.cpp`'s `radio.begin(radiochan::kDefault)`.
+- relay: `!C 3` on its control plane, persisted in its flash (`?` reports
+  `channel: 3 group: 10`). A relay that has been `!DEFAULTS`-ed drops back
+  to 0 and must be set again.
+
+Both ends must match or the robot is simply unreachable. If a session sees
+duplicate replies to one command, check the channel before anything else.
+
 ### Then, before any hardware command
 
 Confirm the row says `tovez`, take the PORT from that row for this session only,

@@ -20,6 +20,7 @@
 #include "app/comms.h"
 #include "com/banner.h"
 #include "com/radio.h"
+#include "com/radio_channel.h"
 #include "com/serial_port.h"
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
@@ -132,7 +133,7 @@ int main() {
   static SerialPort serial(uBit.serial);
   serial.begin();
   static Radio radio(uBit.radio, uBit.messageBus);
-  radio.begin();
+  radio.begin(radiochan::kDefault);
 
   static char banner[64];
   formatBanner(banner, sizeof(banner));

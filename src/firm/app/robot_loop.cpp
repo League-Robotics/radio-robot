@@ -2,6 +2,7 @@
 #include "app/debug.h"
 
 #include <cmath>
+#include <cstdio>
 
 #include "messages/envelope.h"
 #include "motion/body_kinematics.h"
@@ -377,6 +378,25 @@ void RobotLoop::publishLineColor(bool tickedLine) {
   if (colorFresh) state_.perception.color = packColor(color_.reading());
 }
 
+void RobotLoop::applySeed() {
+  const Comms::SeedRequest seed = comms_.takeSeed();
+  if (!seed.pending) return;
+
+  // Both pose sources, one fix: the chip (lever arm applied inside setPose)
+  // and the encoder odometry. Their later divergence is the drift we measure.
+  otos_.setPose(seed.x, seed.y, seed.heading);
+  odom_.reset(seed.x, seed.y, seed.heading, motorL_.position(), motorR_.position());
+
+  if (seed.reply != nullptr) {
+    // Heading as integer milliradians: newlib-nano's printf has no float.
+    char line[64];
+    std::snprintf(line, sizeof(line), "SEED:%d:%d:%d",
+                  static_cast<int>(seed.x), static_cast<int>(seed.y),
+                  static_cast<int>(seed.heading * 1000.0f));
+    seed.reply->sendReliable(line);
+  }
+}
+
 void RobotLoop::publishPose() {
   float twistVx = 0.0f;
   float twistOmega = 0.0f;
@@ -475,6 +495,8 @@ void RobotLoop::cycle() {
 #ifdef ROBOT_DEBUG
     applyDbgAction(state_.time.cycleStart);
 #endif
+
+    applySeed();
 
     const Comms::TlmAction tlmAction = comms_.takeTlmAction();
     const bool forceFrame = tlm_.applyAction(tlmAction);
