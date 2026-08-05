@@ -33,37 +33,28 @@ class TestSelectCamera:
         assert result == "Brio 501"
 
     def test_preferred_absent_falls_back_to_fallback_contains(self):
-        """Default fallback_contains="3" matches a name containing the digit."""
+        """Default fallback_contains="arducam" matches the playfield camera."""
         from robot_radio.testgui.camera_prefs import select_camera
 
-        available = ["Brio 501", "Arducam Camera 3"]
+        available = ["Brio 501", "arducam-ov9782-usb-camera"]
         result = select_camera(available, preferred="Some Other Camera")
-        assert result == "Arducam Camera 3"
+        assert result == "arducam-ov9782-usb-camera"
 
     def test_no_preferred_falls_back_to_fallback_contains(self):
-        """Default fallback_contains="3" matches a name containing the digit."""
+        """Default fallback_contains="arducam" matches the playfield camera."""
         from robot_radio.testgui.camera_prefs import select_camera
 
-        available = ["Brio 501", "Arducam Camera 3"]
+        available = ["Brio 501", "arducam-ov9782-usb-camera"]
         result = select_camera(available, preferred=None)
-        assert result == "Arducam Camera 3"
+        assert result == "arducam-ov9782-usb-camera"
 
     def test_preferred_present_takes_priority_over_fallback(self):
-        """A persisted preference wins even when it isn't the fallback match.
-
-        This is the scenario used by the multi-call-site tests in
-        test_operations.py / test_live_view.py: the real "Arducam OV9782 USB
-        Camera" name does not literally contain the digit "3" (the historical
-        `_PLAYFIELD_CAMERA_INDEX = 3` heuristic keys off the *index*, not a
-        digit embedded in every camera's model name), so those tests rely on
-        a persisted preference to resolve to the Arducam camera rather than
-        `cams[0]` -- exercising priority #1 (preferred), not the fallback.
-        """
+        """A persisted preference wins even when it isn't the fallback match."""
         from robot_radio.testgui.camera_prefs import select_camera
 
-        available = ["Brio 501", "Arducam OV9782 USB Camera"]
-        result = select_camera(available, preferred="Arducam OV9782 USB Camera")
-        assert result == "Arducam OV9782 USB Camera"
+        available = ["arducam-ov9782-usb-camera", "Brio 501"]
+        result = select_camera(available, preferred="Brio 501")
+        assert result == "Brio 501"
         assert result != available[0]
 
     def test_no_fallback_match_falls_back_to_first(self):
@@ -86,15 +77,31 @@ class TestSelectCamera:
         result = select_camera(available, preferred=None, fallback_contains="B")
         assert result == "cam-B"
 
-    def test_default_fallback_contains_is_three(self):
+    def test_default_fallback_contains_matches_the_playfield_camera(self):
+        """The default fallback must actually match the real camera name.
+
+        Regression pin: the default used to be ``"3"`` -- a mechanical
+        conversion of the historical ``_PLAYFIELD_CAMERA_INDEX = 3`` into a
+        NAME-substring match. The live daemon names the camera
+        ``"arducam-ov9782-usb-camera"``, which contains no ``"3"``, so the
+        rule could never fire and selection always fell through to "first
+        available". It looked right only because one camera was open.
+        """
         from robot_radio.testgui.camera_prefs import (
             DEFAULT_FALLBACK_CONTAINS,
             select_camera,
         )
 
-        assert DEFAULT_FALLBACK_CONTAINS == "3"
-        available = ["cam-1", "cam-3", "cam-5"]
-        assert select_camera(available, preferred=None) == "cam-3"
+        assert DEFAULT_FALLBACK_CONTAINS == "arducam"
+        available = ["Brio 501", "arducam-ov9782-usb-camera", "Logitech C920"]
+        assert select_camera(available, preferred=None) == "arducam-ov9782-usb-camera"
+
+    def test_fallback_match_is_case_insensitive(self):
+        """The daemon lower-cases the slug; older listings used title case."""
+        from robot_radio.testgui.camera_prefs import select_camera
+
+        available = ["Brio 501", "Arducam OV9782 USB Camera"]
+        assert select_camera(available, preferred=None) == "Arducam OV9782 USB Camera"
 
     def test_single_camera_unaffected(self):
         """Existing single-camera setups behave exactly as before (no regression)."""

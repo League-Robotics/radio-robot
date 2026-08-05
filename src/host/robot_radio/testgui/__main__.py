@@ -114,6 +114,7 @@ from __future__ import annotations
 
 import logging
 import math
+import pathlib
 import sys
 import time
 
@@ -1287,10 +1288,20 @@ def _build_main_window():  # type: ignore[return]
     # (128 mm, the project's usual trackwidth) when no config is resolvable
     # or it carries no trackwidth. Kept live via ``trace_model.
     # set_trackwidth()`` in ``_on_robot_changed`` below.
+    #
+    # It must be the EFFECTIVE track (trackwidth / rotational_slip), the same
+    # quantity the firmware derives at boot in
+    # ``src/firm/app/boot_calibration.cpp``'s ``effectiveTrackWidth()`` and
+    # hands to Drive/Odometry/plannerLimits -- NOT the raw caliper value
+    # ``_active_cfg.trackwidth`` returns. Both integrators consume the SAME
+    # encoder counts, so a raw 128.0 here against the firmware's 140.4 makes
+    # the host over-rotate by 1.097x on every turn and the orange (host
+    # encoder) trace fan away from the magenta (firmware fused) trace in
+    # proportion to accumulated rotation. This construction path was the last
+    # place still passing the raw value; ``_on_robot_changed`` already used
+    # the helper. Do not "simplify" it back.
     _initial_trackwidth = (
-        _active_cfg.trackwidth
-        if _active_cfg is not None and _active_cfg.trackwidth
-        else traces_mod._DEFAULT_TRACKWIDTH
+        _effective_track_width(_active_cfg) or traces_mod._DEFAULT_TRACKWIDTH
     )
     trace_model = TraceModel(trackwidth=_initial_trackwidth)
 
@@ -1363,6 +1374,13 @@ def _build_main_window():  # type: ignore[return]
     # below (graph_panel.add_tlm / add_camera). Inserted at splitter index 0
     # so the stretch factors / setSizes below still apply.
     graph_panel = TurnGraphPanel(playfield_widget=canvas_widget)
+    # The panel keeps its OWN EncoderDeadReckoner for the Heading/Distance
+    # strip charts, defaulted to a hard-coded 128.0 and updated only by
+    # `_on_robot_changed` -- which never fires when the operator just uses the
+    # robot already selected. Seed it from the same effective track the
+    # TraceModel got, so both host-side integrators start out agreeing with
+    # the firmware instead of only after a combo change.
+    graph_panel.recorder.set_trackwidth(_initial_trackwidth)
     right_splitter.addWidget(graph_panel)
 
     # Turn-control socket (turn_control.py) — lets an external process drive
@@ -3573,12 +3591,78 @@ def _build_main_window():  # type: ignore[return]
     return window, app
 
 
-def main() -> None:
-    """Launch the Robot Test GUI and block until the window is closed."""
+def main(argv: "list[str] | None" = None) -> None:
+    """Launch the Robot Test GUI and block until the window is closed.
+
+    With ``--screenshot PATH`` the window is grabbed to a PNG once the event
+    loop has settled and the app exits instead of blocking -- a scriptable way
+    to prove what the GUI actually renders.
+
+    The grab uses Qt's own ``QWidget.grab()``, NOT ``osascript``: macOS screen
+    recording needs assistive access this process does not have, and a widget
+    grabbing itself needs no permission at all. It also means a REAL window,
+    shown normally -- do not reach for an offscreen Qt platform here, an
+    offscreen grab would not be evidence of anything the operator sees.
+    """
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        prog="python -m robot_radio.testgui",
+        description="Robot Test GUI.",
+    )
+    parser.add_argument(
+        "--screenshot",
+        metavar="PATH",
+        default=None,
+        help="Grab the main window to PATH (PNG) once the event loop has "
+             "settled, then exit without blocking.",
+    )
+    parser.add_argument(
+        "--screenshot-settle",
+        type=float,
+        default=8.0,
+        metavar="SECONDS",
+        help="How long to let the GUI settle before grabbing. [s] The "
+             "startup playfield grab fires at 200 ms and then waits on a "
+             "camera + daemon round trip, so the default leaves room for the "
+             "image to actually land. (default: 8.0)",
+    )
+    args, _qt_argv = parser.parse_known_args(argv)
+
     global _ENABLE_STDOUT_CAPTURE
     _ENABLE_STDOUT_CAPTURE = True   # real GUI: capture sim cout/cerr to the console
     window, app = _build_main_window()
     window.show()
+
+    if args.screenshot:
+        from PySide6.QtCore import QTimer  # type: ignore[import-untyped]
+
+        settle = max(0.0, float(args.screenshot_settle))  # [s]
+        out_path = pathlib.Path(args.screenshot).expanduser()
+
+        def _grab_and_quit() -> None:
+            try:
+                out_path.parent.mkdir(parents=True, exist_ok=True)
+                pixmap = window.grab()
+                if pixmap.isNull():
+                    print(f"[SCREENSHOT] FAILED: grab returned a null pixmap",
+                          file=sys.stderr, flush=True)
+                elif not pixmap.save(str(out_path), "PNG"):
+                    print(f"[SCREENSHOT] FAILED: could not write {out_path}",
+                          file=sys.stderr, flush=True)
+                else:
+                    print(
+                        f"[SCREENSHOT] wrote {out_path} "
+                        f"({pixmap.width()}x{pixmap.height()} px)",
+                        flush=True,
+                    )
+            except Exception as exc:  # noqa: BLE001 — report, never hang
+                print(f"[SCREENSHOT] FAILED: {exc}", file=sys.stderr, flush=True)
+            finally:
+                app.quit()
+
+        QTimer.singleShot(int(settle * 1000.0), _grab_and_quit)
+
     sys.exit(app.exec())
 
 

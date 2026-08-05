@@ -21,11 +21,18 @@ Selection priority (:func:`select_camera`)
 -------------------------------------------
 1. The persisted preference, if it is present in the daemon's current camera
    list.
-2. The first camera whose name contains ``fallback_contains`` (default
-   ``"3"``, matching the historical ``_PLAYFIELD_CAMERA_INDEX = 3`` /
-   "Arducam OV9782 USB Camera" heuristic in ``operations.py``).
+2. The first camera whose name contains ``fallback_contains``
+   (case-insensitive; default ``"arducam"``).
 3. The first available camera.
 4. ``None`` if no cameras are available at all.
+
+The default used to be ``"3"``, a mechanical conversion of the historical
+``_PLAYFIELD_CAMERA_INDEX = 3`` into a *name-substring* match.  That rule
+could never fire: the playfield camera is named ``"arducam-ov9782-usb-camera"``,
+which contains no ``"3"``, so selection always fell through to priority 3
+("first available") and happened to be right only because a single camera
+was open.  Matching ``"arducam"`` makes the intent explicit instead of
+accidental.
 
 ``list_cameras()`` vs ``enumerate_cameras()``
 ----------------------------------------------
@@ -66,9 +73,11 @@ _PROJECT_ROOT = Path(__file__).parent.parent.parent.parent.parent
 _PREFS_DIR = _PROJECT_ROOT / "data" / "testgui"
 _PREFS_PATH = _PREFS_DIR / "camera_prefs.json"
 
-#: Fallback substring matching the historical _PLAYFIELD_CAMERA_INDEX = 3
-#: behavior ("Arducam OV9782 USB Camera" is the current playfield camera).
-DEFAULT_FALLBACK_CONTAINS = "3"
+#: Fallback substring identifying the playfield camera by NAME, matched
+#: case-insensitively.  The live daemon reports it as
+#: "arducam-ov9782-usb-camera".  (Was "3" -- see the module docstring for why
+#: that never matched anything.)
+DEFAULT_FALLBACK_CONTAINS = "arducam"
 
 
 def select_camera(
@@ -79,8 +88,9 @@ def select_camera(
     """Resolve the camera to use given what's available and the preference.
 
     Priority: ``preferred`` (if present in ``available``) > first entry in
-    ``available`` whose name contains ``fallback_contains`` > first entry in
-    ``available`` > ``None`` (if ``available`` is empty).
+    ``available`` whose name contains ``fallback_contains``
+    (case-insensitive) > first entry in ``available`` > ``None`` (if
+    ``available`` is empty).
 
     Parameters
     ----------
@@ -91,8 +101,8 @@ def select_camera(
         The persisted preference (from :func:`load_camera_pref`), or
         ``None``.
     fallback_contains:
-        Substring to match when ``preferred`` is absent or unset. Defaults
-        to ``"3"``, matching the historical playfield-camera heuristic.
+        Substring to match (case-insensitively) when ``preferred`` is absent
+        or unset. Defaults to ``"arducam"``, the playfield camera's name.
 
     Returns
     -------
@@ -103,8 +113,9 @@ def select_camera(
         return None
     if preferred is not None and preferred in available:
         return preferred
+    needle = fallback_contains.lower()
     for name in available:
-        if fallback_contains in name:
+        if needle in name.lower():
             return name
     return available[0]
 

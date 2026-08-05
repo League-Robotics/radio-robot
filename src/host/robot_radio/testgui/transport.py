@@ -246,6 +246,14 @@ def effective_track_width(config: Any) -> "float | None":  # [mm]
 
     Returns None when there is no usable geometry, so callers can decline to
     integrate rather than silently produce a plausible-but-wrong pose.
+
+    WHERE THE SLIP LIVES: ``geometry.rotational_slip``. This function used to
+    read ``calibration.rotational_slip``, which 132-014 retired -- and since
+    ``calibration`` is now absent entirely, the lookup silently returned the
+    RAW trackwidth for every robot, reintroducing the exact 1.097x divergence
+    the function exists to prevent. A silent correct-looking fallback is what
+    made that regression invisible, so the legacy path is still read second
+    (for any config predating the move) but is no longer the only path.
     """
     if config is None:
         return None
@@ -253,9 +261,13 @@ def effective_track_width(config: Any) -> "float | None":  # [mm]
     trackwidth = getattr(geom, "trackwidth", None) if geom is not None else None
     if not trackwidth:
         return None
-    cal = getattr(config, "calibration", None)
-    slip = getattr(cal, "rotational_slip", None) if cal is not None else None
+    slip = getattr(geom, "rotational_slip", None) if geom is not None else None
+    if slip is None:
+        # Legacy schema (pre-132-014): slip lived under `calibration`.
+        cal = getattr(config, "calibration", None)
+        slip = getattr(cal, "rotational_slip", None) if cal is not None else None
     # slip == 0 is the documented "uncalibrated" sentinel: apply no correction.
+    # Mirrors App::effectiveTrackWidth()'s `(kScrub > 0.0f)` guard exactly.
     if slip is None or slip <= 0.0:
         return float(trackwidth)
     return float(trackwidth) / float(slip)

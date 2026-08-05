@@ -739,8 +739,9 @@ class OpsController:
                         if result is None:
                             try:
                                 log_cb(
-                                    "[INFO] Refresh Playfield: no aprilcam camera — "
-                                    "showing placeholder; click Refresh after calibrating"
+                                    "[INFO] Refresh Playfield: no camera or not "
+                                    "calibrated — showing placeholder; click Refresh "
+                                    "after calibrating"
                                 )
                             except Exception:
                                 pass
@@ -880,6 +881,16 @@ class OpsController:
         so the rectified image always matches the daemon's current calibration.
         origin_x / origin_y are the daemon's A1 offset (corner-origin cm) — the
         canvas uses these to place world (0,0) at tag 1's real pixel position.
+
+        When the camera has no stored calibration the TagFrame carries no
+        homography and the deskew cannot run. An un-deskewed frame is not
+        registered to the canvas's world→pixel transform at all -- the traces
+        and the robot avatar would sit on top of an image they do not
+        correspond to, which reads as "the camera is broken" when it is
+        actually just uncalibrated. Raises instead, so the caller shows the
+        grey placeholder and logs why (matches ``live_view.py``'s
+        ``_capture_and_emit``, which drops an un-deskewable frame the same
+        way for PLAYFIELD MODE).
         """
         try:
             from aprilcam.config import Config  # type: ignore[import]
@@ -915,7 +926,13 @@ class OpsController:
         if raw_bgr is None:
             return None
 
-        return _deskew_bgr_with_tag_frame(raw_bgr, tag_frame)
+        result = _deskew_bgr_with_tag_frame(raw_bgr, tag_frame)
+        if result is None:
+            raise RuntimeError(
+                "camera not calibrated -- aprilcam reports no homography, "
+                "cannot deskew (calibrate the playfield first)"
+            )
+        return result
 
 
 def _bgr_ndarray_to_pixmap(bgr: "object") -> "object | None":
@@ -1077,3 +1094,5 @@ def _deskew_bgr_with_tag_frame(
         _log.debug("_deskew_bgr_with_tag_frame: _bgr_ndarray_to_pixmap returned None")
         return None
     return pixmap, origin_x, origin_y
+
+
