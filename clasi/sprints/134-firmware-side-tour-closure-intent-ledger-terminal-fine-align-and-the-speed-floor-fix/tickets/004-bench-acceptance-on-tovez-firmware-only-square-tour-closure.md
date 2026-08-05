@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: 'Bench acceptance on tovez: firmware-only square-tour closure'
-status: exception
+status: done
 use-cases:
 - SUC-001
 - SUC-003
