@@ -194,10 +194,13 @@ def build_live_view_worker() -> object:
                 return
 
             result = _deskew_bgr_ndarray(raw_bgr, tag_frame)
-            if result is None:
-                # Deskew failed (e.g. uncalibrated camera or cv2 missing).
-                return
-            bgr, origin_x, origin_y = result
+            if result is not None:
+                bgr, origin_x, origin_y = result
+            else:
+                # No homography: show the frame as captured rather than nothing.
+                bgr = raw_bgr
+                origin_x = float(getattr(tag_frame, "origin_x", 0.0) or 0.0)  # [cm]
+                origin_y = float(getattr(tag_frame, "origin_y", 0.0) or 0.0)  # [cm]
 
             # Extract tag-100 pose.  Use by_id() which is the correct TagFrame API
             # (tags is a list[TagRecord], not a dict).  Hold last known pose when

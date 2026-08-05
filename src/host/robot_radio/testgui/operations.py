@@ -883,14 +883,9 @@ class OpsController:
         canvas uses these to place world (0,0) at tag 1's real pixel position.
 
         When the camera has no stored calibration the TagFrame carries no
-        homography and the deskew cannot run. An un-deskewed frame is not
-        registered to the canvas's world→pixel transform at all -- the traces
-        and the robot avatar would sit on top of an image they do not
-        correspond to, which reads as "the camera is broken" when it is
-        actually just uncalibrated. Raises instead, so the caller shows the
-        grey placeholder and logs why (matches ``live_view.py``'s
-        ``_capture_and_emit``, which drops an un-deskewable frame the same
-        way for PLAYFIELD MODE).
+        homography and the deskew cannot run; the raw frame is returned as
+        captured, so the panel shows the camera image rather than a grey
+        placeholder (it is not registered to the world→pixel transform).
         """
         try:
             from aprilcam.config import Config  # type: ignore[import]
@@ -927,12 +922,15 @@ class OpsController:
             return None
 
         result = _deskew_bgr_with_tag_frame(raw_bgr, tag_frame)
-        if result is None:
-            raise RuntimeError(
-                "camera not calibrated -- aprilcam reports no homography, "
-                "cannot deskew (calibrate the playfield first)"
-            )
-        return result
+        if result is not None:
+            return result
+        # No homography: show the frame as captured rather than a placeholder.
+        pixmap = _bgr_ndarray_to_pixmap(raw_bgr)
+        if pixmap is None:
+            return None
+        origin_x = float(getattr(tag_frame, "origin_x", 0.0) or 0.0)  # [cm]
+        origin_y = float(getattr(tag_frame, "origin_y", 0.0) or 0.0)  # [cm]
+        return pixmap, origin_x, origin_y
 
 
 def _bgr_ndarray_to_pixmap(bgr: "object") -> "object | None":
