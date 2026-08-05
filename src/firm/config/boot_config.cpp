@@ -273,7 +273,7 @@ msg::WheelControl defaultWheelControlGroup() {
     // grouped-shape migration; pos_err_max added 133-002) --
     // wheel_controller_config_for_config() above.
     msg::WheelControl cfg;
-    cfg.v_min = 99.7f;                       // [mm/s]
+    cfg.v_min = 20.0f;                       // [mm/s]
     cfg.bias_max = 23.8f;                 // [mm/s]
     cfg.tau_adapt = 30.0f;                // [s]
     cfg.a_steady = 30.0f;                  // [mm/s^2]
