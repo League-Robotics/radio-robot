@@ -41,6 +41,33 @@ struct Move {
   float omega = 0.0f;      // [rad/s] signed cruise, Twist
   float vLeft = 0.0f;      // [mm/s] signed cruise, Wheels
   float vRight = 0.0f;     // [mm/s] signed cruise, Wheels
+  // What the CALLER asked for, before any upstream rewrite of `threshold`
+  // (134-001). `threshold` is the ACTUATION-sized command the profiler
+  // plans against; an ingestion-side corrector may legitimately size it to
+  // something other than the request -- App::RobotLoop::handleMove()'s
+  // rotation-calibration inversion does exactly that, turning a 90 deg
+  // request into whatever command lands 90 deg on this plant. Both readers
+  // are right and they want different numbers: the PROFILER wants the
+  // command, the Planner's cumulative-baseline LEDGER wants the intent
+  // ("how much heading was this Move meant to contribute to the chain?"),
+  // and without a second field the ledger cannot recover it.
+  //
+  // <= 0 means UNSET, and the ledger then falls back to `threshold` -- the
+  // same fail-open convention the rest of this surface uses for an
+  // unconfigured <=0 bound ("contributes nothing", not "zero"). For every
+  // direct caller with no ingestion-side rewrite in front of it (the
+  // ctests, the sim harnesses, the ctypes bench harness) the command IS
+  // the intent, so the fallback is the right answer, not a degraded one.
+  // Note it is NOT the same answer 130-010's measured carry gave those
+  // callers: an unset Move now projects an EXACT baseline+threshold
+  // instead of whatever pose_.heading() read at the completion tick, which
+  // typically ran ~1 deg behind true rest. That difference is the point of
+  // this change, not a side effect of the default.
+  // [ms] Time / [mm] Distance / [rad] Angle; positive. 0 = unset.
+  float requestedThreshold = 0.0f;
+  // APPEND NEW FIELDS TO THE END. src/tests/bench/planner_harness.py
+  // mirrors this struct field-for-field over ctypes; capi.cpp's
+  // plannerStructSizes() is the only guard, and it is size-only.
 };
 
 // PlannerLimits -- 130-009 (planner-honesty-pass-50ms-period-tick-state-

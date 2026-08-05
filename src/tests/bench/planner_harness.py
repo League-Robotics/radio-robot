@@ -156,7 +156,16 @@ class Move(ctypes.Structure):
                 ("v_y", ctypes.c_float),         # [mm/s] ignored on differential
                 ("omega", ctypes.c_float),       # [rad/s]
                 ("vLeft", ctypes.c_float),       # [mm/s]
-                ("vRight", ctypes.c_float)]      # [mm/s]
+                ("vRight", ctypes.c_float),      # [mm/s]
+                # 134-001. What the CALLER asked for, before an
+                # ingestion-side rewrite of `threshold` (App::RobotLoop::
+                # handleMove()'s rotation-calibration inversion) turns that
+                # into an actuation-sized command. Read only by the
+                # Planner's cumulative-baseline ledger; <= 0 means UNSET and
+                # falls back to `threshold`, so a harness Move that leaves
+                # it at zero behaves exactly as it did before this field
+                # existed.
+                ("requestedThreshold", ctypes.c_float)]  # [ms]/[mm]/[rad]
 
 
 # PlannerLimits -- 130-009 reshaped this from 34 flat fields to 18 fields

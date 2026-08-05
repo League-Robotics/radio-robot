@@ -252,6 +252,18 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
     }
   }
 
+  // The caller's INTENT, captured before the calibration rewrite below
+  // turns `threshold` into an actuation-sized command (134-001). Nothing
+  // downstream can reconstruct it once that happens, and
+  // Motion::Planner's cumulative-baseline ledger needs it: a chained turn
+  // must repay the residual its predecessor left, which means targeting
+  // "baseline + what this Move was ASKED to turn", not "baseline + what we
+  // commanded the wheels to do". Set for every Kind -- only the Angle
+  // branch of the ledger reads it today, but the field means the same
+  // thing on every axis and a Kind-conditional assignment would be a trap
+  // for the next reader.
+  m.requestedThreshold = m.threshold;
+
   // Turn calibration. The measured response of an ANGLE-stopped move is
   // affine, actual = gain * commanded + offset, so to LAND on the requested
   // angle we command (requested - offset) / gain.

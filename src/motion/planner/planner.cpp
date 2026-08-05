@@ -170,6 +170,19 @@ float angularDirection(const Move& m) {
   return sign(m.omega);
 }
 
+// What this Move was ASKED to do on its own axis, as opposed to what its
+// `threshold` commands the wheels to do (134-001, Move::requestedThreshold's
+// own doc comment). Only the cumulative-baseline ledger wants this; every
+// profiling/measurement path deliberately keeps reading `threshold`, which
+// is the command an ingestion-side corrector shaped for this plant.
+//
+// <= 0 is UNSET (Move::requestedThreshold's fail-open convention): a caller
+// that never sets the field gets `threshold` back, which for a caller with
+// no ingestion-side rewrite in front of it IS the intent.
+float requestedThresholdOf(const Move& m) {
+  return m.requestedThreshold > 0.0f ? m.requestedThreshold : m.threshold;
+}
+
 }  // namespace
 
 Planner::Planner(const PlannerLimits& limits) : limits_(limits) {
@@ -613,12 +626,14 @@ TickResult Planner::tick(const Types::RobotState& state) {
     result.settled = settleReached(measured, dt);
     // Cumulative-baseline carry (chain-exact accounting): a normally
     // completed Twist Distance/Angle Move hands the next Move BOTH
-    // cumulative baselines -- "where the boundary IS" on its own axis
-    // (baseline + threshold) and its own UNCHANGED baseline on the other
-    // axis (a straight leg intends zero heading change; a pivot intends
-    // zero path change). Carrying the full ledger across KINDS is what
-    // closes a mixed leg/turn tour: each turn targets the cumulative
-    // n*90deg and each leg's heading-hold pulls back to the carried
+    // cumulative baselines -- "where the boundary WAS MEANT to be" on its
+    // own axis (baseline + this Move's own INTENT on that axis:
+    // `threshold` for Distance, requestedThresholdOf() for Angle -- see
+    // the Angle branch's own comment below) and its own UNCHANGED baseline
+    // on the other axis (a straight leg intends zero heading change; a
+    // pivot intends zero path change). Carrying the full ledger across
+    // KINDS is what closes a mixed leg/turn tour: each turn targets the
+    // cumulative n*90deg and each leg's heading-hold pulls back to the carried
     // square heading, so per-landing residuals cancel instead of
     // accumulating (measured on the bench tour: +17 deg over 8 moves
     // with same-kind-only carry, every leg/turn boundary re-anchoring
@@ -642,21 +657,36 @@ TickResult Planner::tick(const Types::RobotState& state) {
         carryHeading_ = active_.baselineHeading;
       } else {
         carryPath_ = active_.baselinePath;
-        // MEASURED heading (pose_.heading()), not baseline + m.threshold
-        // projected forward -- 130-010. Those used to agree because
-        // m.threshold IS what this Move was asked to turn, but an upstream
-        // caller can rewrite it before the Planner ever sees it (e.g.
-        // App::RobotLoop::handleMove()'s rotation-calibration inversion,
-        // which sizes Motion::Move::threshold to compensate for a plant's
-        // own coast-down overshoot, not to describe "the intended
-        // cumulative contribution" this ledger wants). Carrying the
-        // measured heading is honest by construction once completion
-        // itself lands close to the real target (the profile-complete gate
-        // just above, in the Move::Kind::Angle case of tick()'s own
-        // switch) -- and it is a no-op for the ordinary, uncalibrated case,
-        // where pose_.heading() and baseline+threshold already agree to
-        // within the arrival tolerance.
-        carryHeading_ = pose_.heading();
+        // INTENT, not measurement: baseline + what this Move was ASKED to
+        // turn. 134-001 restores the projection 130-010 had to give up,
+        // and the reason it can is Move::requestedThreshold -- the
+        // caller's own request, captured in
+        // App::RobotLoop::handleMove() BEFORE that function's
+        // rotation-calibration inversion rewrites `threshold` into an
+        // actuation-sized command. 130-010 was right that `threshold`
+        // could no longer be read as intent; it was wrong only in
+        // concluding the intent was unrecoverable, and it carried
+        // pose_.heading() instead.
+        //
+        // Carrying the MEASURED heading makes every landing its own new
+        // truth: the residual a corner leaves is never owed to anybody, so
+        // it is never repaid. Measured on the sequential planner square
+        // tour (docs/bench-reports/motion-planning-lab-2026-08-04.md
+        // §1/§2): +1.5 / +5.3 / +6.3 / +10.6 deg of cumulative heading
+        // drift across four corners, 64.1 mm closure, against 7.3-11.5 mm
+        // for the same firmware with a host-side per-corner correction
+        // grafted on. Nothing but this carry differed.
+        //
+        // With the intent carried, the next Move activates against the
+        // CUMULATIVE target (activateNext()'s ledger adoption), so
+        // measure()'s own `m.threshold - (heading - baseline) * dir`
+        // already starts a debt-carrying turn short by exactly the
+        // residual -- the repayment needs no separate mechanism and no new
+        // constant. A leg is repaid the same way one corner later:
+        // Distance carries its heading baseline through unchanged (below),
+        // so a leg's curl shows up as residual at the NEXT corner.
+        carryHeading_ = active_.baselineHeading +
+                        angularDirection(m) * requestedThresholdOf(m);
       }
     }
     active_.occupied = false;

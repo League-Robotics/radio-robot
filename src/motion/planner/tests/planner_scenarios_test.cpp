@@ -201,6 +201,95 @@ void testOrthogonalChainExact() {
   CHECK_NEAR(heading, quarterTurn, 1e-5);
 }
 
+// 134-001: the cumulative-INTENT ledger. A turn whose predecessor landed
+// short of what that predecessor was ASKED to turn must target the
+// cumulative intent, repaying the shortfall, instead of re-anchoring to
+// wherever the predecessor actually stopped.
+//
+// The shortfall is injected the same way the real robot injects it: by
+// giving the first Move a `threshold` (the actuation-sized command the
+// profiler plans against) that differs from its `requestedThreshold` (what
+// the caller asked for). App::RobotLoop::handleMove()'s rotation-
+// calibration inversion is exactly that rewrite, and reproducing it here
+// -- rather than reaching for a lagging plant -- keeps the arithmetic
+// exact on a PerfectPlant, so the assertion is a hard equality rather than
+// a tolerance the test could pass for the wrong reason.
+//
+// Move 30 asks for 90 deg but commands 80, so a perfect plant lands 10 deg
+// short of intent. Move 31 asks for and commands 90. Under the intent
+// ledger it activates against the CUMULATIVE 90 deg baseline, measures
+// itself 10 deg behind it, and therefore turns 100 -- final heading 180.
+// Under 130-010's measured carry (carryHeading_ = pose_.heading()) it
+// would re-anchor at 80 and turn 90, landing at 170: the shortfall would
+// become the new truth, never repaid. That is the 64.1 mm square-tour
+// closure in docs/bench-reports/motion-planning-lab-2026-08-04.md §2.
+void testAngleChainRepaysRequestedIntentResidual() {
+  Planner planner(benchLimits());
+  PerfectPlant plant;
+  Types::RobotState state;
+  uint32_t now = 0;
+  const float quarterTurn = static_cast<float>(M_PI) * 0.5f;   // [rad] 90 deg
+  const float commanded = 80.0f * static_cast<float>(M_PI) / 180.0f;  // [rad]
+
+  Move shortCommand = angleMove(30, commanded, 2.0f);
+  shortCommand.requestedThreshold = quarterTurn;  // asked 90, commands 80
+  CHECK(planner.move(shortCommand, false));
+
+  Move repaying = angleMove(31, quarterTurn, 2.0f);
+  repaying.requestedThreshold = quarterTurn;  // asked 90, commands 90
+  CHECK(planner.move(repaying, false));
+
+  int completions = 0;
+  for (int i = 0; i < 800 && completions < 2; ++i) {
+    if (cycle(planner, state, plant, now, kPeriod).completed) ++completions;
+  }
+  CHECK(completions == 2);
+  for (int i = 0; i < 10; ++i) cycle(planner, state, plant, now, kPeriod);
+
+  const float heading = (plant.positionRight - plant.positionLeft) / 100.0f;
+  CHECK_NEAR(heading, 2.0f * quarterTurn, 1e-5);
+  // Guard the guard: the pre-134-001 re-anchoring answer must NOT pass.
+  CHECK(std::fabs(heading - (commanded + quarterTurn)) > 0.1f);
+  // A pivot pair still leaves the path untouched -- mirrored wheels.
+  CHECK_NEAR(plant.positionLeft, -plant.positionRight, 1e-4);
+}
+
+// The other half of the same rule: `requestedThreshold` <= 0 means UNSET,
+// and the ledger then falls back to `threshold` (Move::requestedThreshold's
+// own doc comment). For a caller with no ingestion-side rewrite in front of
+// it -- every ctest above, the sim harnesses, the ctypes bench harness --
+// the command IS the intent, so there is nothing to repay.
+//
+// Same 80-then-90 chain as above with the field left at its default: the
+// pair lands at 170 deg, not 180. This is what pins the fallback; without
+// it, a zero-default field would silently make every legacy caller's turn
+// target its own activation baseline and swallow the first 80 degrees.
+// (170 EXACTLY, not the 169.07 the same chain measured under 130-010's
+// carryHeading_ = pose_.heading() -- the projection is taken from the
+// baseline rather than from a completion-tick pose reading that still runs
+// slightly behind true rest. That gap is this ticket's whole subject.)
+void testAngleChainWithoutRequestedIntentCarriesTheCommand() {
+  Planner planner(benchLimits());
+  PerfectPlant plant;
+  Types::RobotState state;
+  uint32_t now = 0;
+  const float quarterTurn = static_cast<float>(M_PI) * 0.5f;   // [rad]
+  const float commanded = 80.0f * static_cast<float>(M_PI) / 180.0f;  // [rad]
+
+  CHECK(planner.move(angleMove(32, commanded, 2.0f), false));
+  CHECK(planner.move(angleMove(33, quarterTurn, 2.0f), false));
+
+  int completions = 0;
+  for (int i = 0; i < 800 && completions < 2; ++i) {
+    if (cycle(planner, state, plant, now, kPeriod).completed) ++completions;
+  }
+  CHECK(completions == 2);
+  for (int i = 0; i < 10; ++i) cycle(planner, state, plant, now, kPeriod);
+
+  const float heading = (plant.positionRight - plant.positionLeft) / 100.0f;
+  CHECK_NEAR(heading, commanded + quarterTurn, 1e-5);
+}
+
 void testTimeoutReported() {
   // A distance the cruise can never cover before the timeout.
   Planner planner(benchLimits());
@@ -508,6 +597,8 @@ int main() {
   testAngle146DegreesExact();
   testSameAxisChainExactAndCarried();
   testOrthogonalChainExact();
+  testAngleChainRepaysRequestedIntentResidual();
+  testAngleChainWithoutRequestedIntentCarriesTheCommand();
   testTimeoutReported();
   testStopFlushes();
   testReplacePreempts();
