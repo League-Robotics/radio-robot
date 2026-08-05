@@ -35,6 +35,13 @@ def _make_session(frame_batches: "list[list[TLMFrame]]") -> RogoSession:
     session = object.__new__(RogoSession)
     session.recorder = None
     session._latest = None
+    # New session fields grown by the 2026-08-05 rogo revival: the ack
+    # backlog confirm() now scans first (acks drained by an EARLIER pump
+    # stay findable), and the daemon's abort event.
+    import collections
+    import threading
+    session._ack_backlog = collections.deque(maxlen=64)
+    session.abort_event = threading.Event()
     batches = iter(frame_batches)
 
     def _pump() -> "list[TLMFrame]":

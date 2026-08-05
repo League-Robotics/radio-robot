@@ -1237,6 +1237,41 @@ def cmd_pose(args):
             cam.close()
 
 
+def cmd_serve(args):
+    """Run the rogo daemon: one held-open serial connection, many TCP
+    clients (robot_radio.io.server). SIGTERM/Ctrl-C halts the robot
+    (halt_now via RogoSession.close()) before the port closes."""
+    import signal
+
+    from robot_radio.io.repl import RogoSession
+    from robot_radio.io.server import RogoServer, parse_addr
+
+    host, tcp_port = parse_addr(args.listen or os.environ.get("ROGO_ADDR"))
+    try:
+        session = RogoSession(args, getattr(args, "record", None), _verbose)
+    except ConnectionError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+    server = RogoServer(session, host=host, port=tcp_port)
+
+    def _on_sigterm(signum, frame):
+        print("rogo serve: SIGTERM -- halting robot and shutting down",
+              file=sys.stderr)
+        server.shutdown()
+
+    signal.signal(signal.SIGTERM, _on_sigterm)
+
+    meta = session._meta if isinstance(session._meta, dict) else {}
+    print(f"rogo daemon: serial={meta.get('port', '?')} "
+          f"(mode={meta.get('mode', '?')}) held open; "
+          f"listening on {server.host}:{server.port}", file=sys.stderr)
+    print("connect with: rogo repl --connect"
+          + (f" {server.host}:{server.port}"
+             if (server.host, server.port) != ("127.0.0.1", 7646) else ""),
+          file=sys.stderr)
+    server.serve_forever()
+
+
 def main():
     global _verbose
 
@@ -1260,12 +1295,14 @@ def main():
         "repl", aliases=["run", "exec"],
         help="Run commands over one persistent connection: from the argument "
              "list, piped stdin, or an interactive prompt. Optional "
-             "telemetry->JSONL recording.",
+             "telemetry->JSONL recording. --connect runs through a rogo "
+             "daemon instead of opening the serial port.",
         description="Execute rogo commands over a single persistent binary "
                     "connection.\n"
-                    "  rogo repl \"twist 150 0 1000\" stop   # argument list\n"
+                    "  rogo repl \"drive 200\" stop            # argument list\n"
                     "  cat run.rogo | rogo repl               # piped stdin\n"
                     "  rogo repl                              # interactive\n"
+                    "  rogo repl --connect                    # through 'rogo serve'\n"
                     "Add --record FILE.jsonl to log every telemetry frame as "
                     "JSON lines.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -1275,6 +1312,33 @@ def main():
                              "omitted, read from stdin")
     p_repl.add_argument("--record", default=None, metavar="FILE.jsonl",
                         help="Record every telemetry frame to this JSON-lines file")
+    p_repl.add_argument("--connect", nargs="?", const="", default=None,
+                        metavar="HOST:PORT",
+                        help="Run through a rogo daemon ('rogo serve') instead "
+                             "of opening the serial port directly (default "
+                             "address: $ROGO_ADDR, else 127.0.0.1:7646)")
+
+    p_serve = sub.add_parser(
+        "serve",
+        help="Run the rogo daemon: hold the serial port open and serve the "
+             "repl grammar to multiple local programs over TCP. Closing the "
+             "serial port resets the robot (macOS HUPCL), so a held-open "
+             "daemon is how live-pushed config survives between commands.",
+        description="Hold ONE serial connection open and accept repl commands "
+                    "over TCP (newline-delimited; plain text or "
+                    "{\"id\":..,\"cmd\":..} JSON; JSON-line replies).\n"
+                    "  rogo serve                       # 127.0.0.1:7646\n"
+                    "  rogo serve --listen :7700        # another port\n"
+                    "Clients: 'rogo repl --connect', robot_radio.io.client."
+                    "RogoClient, or netcat.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p_serve.add_argument("--listen", default=None, metavar="HOST:PORT",
+                         help="Listen address (default: $ROGO_ADDR, else "
+                              "127.0.0.1:7646)")
+    p_serve.add_argument("--record", default=None, metavar="FILE.jsonl",
+                         help="Record every telemetry frame to this JSON-lines "
+                              "file for the daemon's whole lifetime")
 
     sub.add_parser("ports", help="List available serial ports")
     sub.add_parser("hello", help="Probe device (send HELLO, print announcement)")
@@ -1608,6 +1672,10 @@ def main():
     if args.command in ("repl", "run", "exec"):
         from robot_radio.io import repl as _repl
         sys.exit(_repl.run(args, _verbose))
+
+    if args.command == "serve":
+        cmd_serve(args)
+        return
 
     if args.command == "sync":
         sync_commands = {
