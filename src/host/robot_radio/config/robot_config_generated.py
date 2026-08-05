@@ -129,6 +129,8 @@ class Planner(BaseModel):
     settle_epsilon_angular: float = 0.0
     heading_hold_gain: float = 0.0
     decel_plan_fraction: float = 0.0
+    align_tol: float = 0.0
+    align_max_nudges: int = 0
 
 class PlannerShaper(BaseModel):
     model_config = ConfigDict(extra="forbid")

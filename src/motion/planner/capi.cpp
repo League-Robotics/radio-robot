@@ -107,6 +107,12 @@ uint32_t plannerLimitsOffsets(uint32_t* out, uint32_t count) {
       offsetof(L, landing.settleRestVelocity),
       offsetof(L, landing.settleRestOmega),
       offsetof(L, landing.decelPlanFraction),
+      // 134-003 terminal fine-align. alignMaxNudges is int32, the first
+      // non-float leaf in this table -- the guard compares OFFSETS, and
+      // the int32 keeps Landing's 4-byte stride, so it needs no special
+      // handling beyond the harness mirroring its type (ctypes.c_int32).
+      offsetof(L, landing.alignTol),
+      offsetof(L, landing.alignMaxNudges),
       // tracking
       offsetof(L, tracking.headingHoldGain),
   };

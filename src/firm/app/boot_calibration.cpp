@@ -72,6 +72,8 @@ Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainC
   out.landing.settleEpsilonLinear = src.settleEpsilonLinear;
   out.landing.settleEpsilonAngular = src.settleEpsilonAngular;
   out.landing.decelPlanFraction = src.decelPlanFraction;
+  out.landing.alignTol = src.alignTol;
+  out.landing.alignMaxNudges = src.alignMaxNudges;
 
   out.tracking.headingHoldGain = src.headingHoldGain;
 

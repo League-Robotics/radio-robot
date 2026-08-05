@@ -181,6 +181,9 @@ PlannerBootConfig defaultPlannerLimits() {
     cfg.headingHoldGain = 0.0f;  // [1/s]
 
     cfg.decelPlanFraction = 0.4f;  // [1]
+
+    cfg.alignTol = 0.017453f;  // [rad]
+    cfg.alignMaxNudges = 6;
     return cfg;
 }
 
@@ -314,6 +317,8 @@ msg::Planner defaultPlannerGroup() {
     cfg.settle_epsilon_angular = 0.035f;  // [rad]
     cfg.heading_hold_gain = 0.0f;   // [1/s]
     cfg.decel_plan_fraction = 0.4f;  // [1]
+    cfg.align_tol = 0.017453f;  // [rad]
+    cfg.align_max_nudges = 6;
     return cfg;
 }
 

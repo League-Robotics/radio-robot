@@ -362,6 +362,10 @@ REQUIRED_FIELD_HOMES = [
     ("Planner", "settle_epsilon_angular"),
     ("Planner", "heading_hold_gain"),
     ("Planner", "decel_plan_fraction"),
+    # 134-003 terminal fine-align -- boot-only, so both live in Planner
+    # rather than the live PlannerShaper group.
+    ("Planner", "align_tol"),
+    ("Planner", "align_max_nudges"),
     # travel_calib_for_ports() / fwd_sign_for_ports() (soft _get(), not
     # _require() -- included per this ticket's own explicit mapping text)
     ("Motors", "travel_calib_left"),

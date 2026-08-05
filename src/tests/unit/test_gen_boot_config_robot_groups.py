@@ -216,6 +216,12 @@ def test_default_planner_group_matches_tovez_json():
     # test_gen_boot_config_planner.py failures still expect.
     assert "cfg.heading_hold_gain = 0.0f;" in content
     assert "cfg.decel_plan_fraction = 0.4f;" in content
+    # 134-003 terminal fine-align. align_tol is RADIANS -- 0.017453 rad is
+    # the bench report's 1.0 DEGREE operating point, converted once in
+    # tovez.json. A value near 1.0 here would mean degrees leaked into a
+    # radian field (57x), which no downstream check would notice.
+    assert "cfg.align_tol = 0.017453f;" in content
+    assert "cfg.align_max_nudges = 6;" in content
     # DELETED, 132-015 -- confirm they stay gone.
     assert "shaper_a_max" not in content
     assert "shaper_yaw_jerk_max" not in content

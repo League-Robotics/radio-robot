@@ -165,6 +165,40 @@ struct PlannerLimits {
     // the landing stays discrete-exact and an infeasible state still brakes
     // as hard as it can.
     float decelPlanFraction = 0.0f;  // [1] 0 or 1 = full authority
+
+    // TERMINAL FINE-ALIGN (134-003, docs/bench-reports/motion-planning-lab-
+    // 2026-08-04.md §5.2/§3). After a Twist Angle Move's profile has
+    // landed, the Planner holds the Move open in MoveLifecycle::Aligning
+    // and trims the residual against the cumulative-intent ledger with
+    // bounded low-speed pivot nudges, re-settling between each. Measured
+    // on `tovez` by the host-side graft this reproduces: planner square-tour
+    // closure 25.8 -> 9.4 mm, ~2 s/corner, nothing else changed.
+    //
+    // alignTol is RADIANS. The report states the operating point in
+    // DEGREES (1.0 deg); the conversion happens once, in the robot JSON
+    // (0.017453 rad), and never again -- these are siblings of
+    // settleEpsilonAngular [rad] and settleRestOmega [rad/s], not of
+    // anything measured in degrees.
+    //
+    // NEITHER IS A TUNING KNOB TO REACH FOR. Both come from 333 individual
+    // trim nudges: the low-speed corrective pivot is bimodal (26% deliver
+    // <0.25 deg, no breakaway; the rest a median 1.72 deg), so a tolerance
+    // under that ~1.8 deg quantum asks for authority the mechanism does not
+    // have -- at 0.3 deg, corner convergence measured 93% -> 64%, cost
+    // tripled, and some corners got WORSE. The road below ~8 mm of closure
+    // is a finer terminal ACTUATOR (report §5.4), not a finer threshold.
+    //
+    // <= 0 on EITHER field is UNSET and disables the phase outright (the
+    // same fail-open convention the rest of this struct uses for an
+    // unconfigured bound): a Move then completes at its landing exactly as
+    // it did before this feature existed, which is what every direct
+    // caller that never sets these -- the ctests, the sim harnesses, the
+    // ctypes bench harness -- gets by construction from these defaults.
+    float alignTol = 0.0f;       // [rad] 0 = fine-align disabled
+    // int32, not a narrower count type: it keeps Landing's uniform 4-byte
+    // stride, so no padding appears between it and whatever is appended
+    // next and capi.cpp's flat offset guard stays meaningful.
+    int32_t alignMaxNudges = 0;  // 0 = fine-align disabled
   } landing;
 
   // Angular tracking correction on top of the profiled command.

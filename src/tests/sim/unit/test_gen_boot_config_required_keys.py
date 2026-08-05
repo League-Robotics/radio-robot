@@ -181,6 +181,11 @@ _REQUIRED_KEY_PATHS = [
     ("planner", "settle_epsilon_angular"),
     ("planner", "heading_hold_gain"),
     ("planner", "decel_plan_fraction"),
+    # 134-003 terminal fine-align -- fail-closed like every other planner
+    # key: a profile missing either one breaks the build rather than
+    # silently baking a disabled fine-align phase.
+    ("planner", "align_tol"),
+    ("planner", "align_max_nudges"),
 ]
 
 

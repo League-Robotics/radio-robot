@@ -233,6 +233,13 @@ struct PlannerBootConfig {
   float headingHoldGain = 0.0f;       // [1/s] rad/s of correction per rad of error
 
   float decelPlanFraction = 0.0f;  // [1] fraction of decel ceiling to plan brake-start against
+
+  // Terminal fine-align (134-003) -- Motion::PlannerLimits::Landing's own
+  // alignTol/alignMaxNudges. alignTol is RADIANS: the bench report states
+  // the operating point in degrees (1.0 deg) and the robot JSON converts
+  // it once (0.017453 rad), so nothing from here down ever sees degrees.
+  float alignTol = 0.0f;         // [rad] fine-align residual tolerance
+  int32_t alignMaxNudges = 0;    // corrective pivots one Move may spend
 };
 
 // The boot PlannerBootConfig default -- see PlannerBootConfig's own doc

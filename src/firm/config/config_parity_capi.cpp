@@ -110,6 +110,11 @@ uint32_t configParityFieldOffsets(uint32_t group, uint32_t* out, uint32_t count)
           offsetof(T, settle_rest_velocity),  offsetof(T, settle_rest_omega),
           offsetof(T, settle_epsilon_linear), offsetof(T, settle_epsilon_angular),
           offsetof(T, heading_hold_gain),     offsetof(T, decel_plan_fraction),
+          // 134-003 terminal fine-align. align_max_nudges is the first
+          // non-float field this group has ever carried (int32); the parity
+          // check compares OFFSETS, not types, so the int32 sits in the
+          // table exactly like its float siblings.
+          offsetof(T, align_tol),             offsetof(T, align_max_nudges),
       };
       return writeCapped(kOffsets, sizeof(kOffsets) / sizeof(kOffsets[0]), out, count);
     }
