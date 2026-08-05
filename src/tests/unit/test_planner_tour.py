@@ -540,6 +540,26 @@ def test_run_tour_sequential_stop_between_legs_sends_no_further_move():
         "and only confuse the next run")
 
 
+def test_successive_runs_never_reuse_a_move_id():
+    """Measured on `tovez` over the radio relay 2026-08-05: a `Move.id` the
+    robot has already completed still rides firmware's depth-12 ack ring, so
+    a rerun that reuses it matches the STALE completion on its first poll and
+    skips the leg outright -- and the duplicate wedges the firmware command
+    path (the next command got no enqueue ack at all). Every run must draw
+    fresh ids."""
+    seen: set[int] = set()
+    for _ in range(5):
+        transport = _RingOnlyFakeTransport()
+        clock = _FakeClock()
+        run_tour(transport, PlannerParams(), _heading_for_test(), _square_legs(),
+                 sequential=True, settle=1.2, omega_max=2.4,
+                 clock_fn=clock.clock, sleep_fn=clock.sleep)
+        ids = [call["id"] for call in transport.move_calls]
+        assert len(set(ids)) == len(ids), f"a run reused an id within itself: {ids}"
+        assert not (seen & set(ids)), f"a later run reused an earlier run's ids: {sorted(seen & set(ids))}"
+        seen.update(ids)
+
+
 if __name__ == "__main__":
     import sys
 

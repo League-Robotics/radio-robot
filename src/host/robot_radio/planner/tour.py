@@ -51,12 +51,12 @@ from enum import Enum
 from typing import TYPE_CHECKING, Callable, Literal, Protocol, Sequence
 
 from robot_radio.controllers.pid import normalize_angle
-from robot_radio.robot.protocol import wheel_frozen_reason
+from robot_radio.robot.protocol import AckEntry, wheel_frozen_reason
 
 if TYPE_CHECKING:
     from robot_radio.planner.heading import HeadingCorrector
     from robot_radio.planner.model import PlannerParams
-    from robot_radio.robot.protocol import AckEntry, TLMFrame
+    from robot_radio.robot.protocol import TLMFrame
 
 logger = logging.getLogger(__name__)
 
@@ -250,7 +250,20 @@ _MOVE_MIN_TIMEOUT = 2000.0    # [ms]
 # ring/slot -- see `_drain_and_poll()`'s own docstring for why that collision would be a
 # false-positive.
 _TOUR_MOVE_ID_BASE = 1 << 20
+# ...and NEVER reused, run to run. A completed `Move.id` stays live in firmware's
+# depth-12 ack ring (`src/firm/app/telemetry.h`) long after the leg ends, so a rerun
+# that reuses it matches the STALE completion on its first poll and skips the leg --
+# and the duplicate itself wedges the firmware command path (measured on `tovez` over
+# the relay 2026-08-05: reused id -> never active, enc_delta=0; the NEXT command then
+# got no enqueue ack at all). Each run draws a fresh block below.
+_TOUR_MOVE_ID_MAX = (1 << 28) - 1  # ack ring packs `corr_id << 4 | err` into a uint32
+_MOVE_ID_BLOCK = 64  # ids reserved per run -- bounds the per-second stride below
+_move_id_cursor = [0]
 DEFAULT_POLL_INTERVAL = 0.05  # [s] sleep between two consecutive ack-ring polls
+
+# Frames with `kFlagActive` clear that stand in for a lost terminal ack -- see
+# `_wait_for_move_terminal()`. Only ever consulted after the move was SEEN active.
+_ACTIVE_CLEAR_STREAK = 3
 
 _BEGIN_DRAIN_RETRIES = 5  # bounded retry -- a single read_pending_binary_tlm_frames() call can
 _BEGIN_DRAIN_RETRY_INTERVAL = 0.05  # [s] legitimately race an idle queue between two ~25Hz pushes and come back empty.
@@ -469,6 +482,18 @@ def _compute_closure(
         heading_delta=normalize_angle(end_pose[2] - start_pose[2]))
 
 
+def _next_move_ids(count: int) -> list[int]:
+    """`count` fresh, never-before-used `Move.id`s -- see `_TOUR_MOVE_ID_BASE`.
+    The clock term keeps two SEPARATE host processes off each other's block;
+    the cursor keeps successive runs inside one process off each other's."""
+    start = max(_move_id_cursor[0],
+                _TOUR_MOVE_ID_BASE + (int(time.time()) % 1_000_000) * _MOVE_ID_BLOCK)
+    if start + count > _TOUR_MOVE_ID_MAX:
+        start = _TOUR_MOVE_ID_BASE
+    _move_id_cursor[0] = start + count
+    return [start + i for i in range(count)]
+
+
 def _move_timeout_for(duration_s: float) -> float:  # [ms]
     """Expected-duration-based `Move.timeout` safety backstop -- see
     `_MOVE_TIMEOUT_FACTOR`/`_MOVE_MIN_TIMEOUT`'s own module-level comment
@@ -518,7 +543,9 @@ def _move_kwargs_for_leg(leg: TourLeg, v_max: float, turn_rate: float,
 
 
 def _drain_and_poll(transport: "MoveTransport", move_id: int,
-                    latest_frame: list) -> "tuple[TLMFrame, AckEntry] | None":
+                    latest_frame: list,
+                    active_state: list | None = None,
+                    ) -> "tuple[TLMFrame, AckEntry] | None":
     """Non-blocking: drain every currently-pending `TLMFrame`, updating
     `latest_frame[0]` to the last one drained (mirrors the pre-109-008
     path's own `ex.latest_frame` bookkeeping), and return the
@@ -561,10 +588,20 @@ def _drain_and_poll(transport: "MoveTransport", move_id: int,
     correct and sufficient PROVIDED `move_id` cannot collide with some other
     command's own auto-assigned envelope `corr_id` landing in the same ring/
     slot -- `_TOUR_MOVE_ID_BASE`'s own comment is why that is true for
-    every `move_id` `run_tour()` assigns."""
+    every `move_id` `run_tour()` assigns.
+
+    `active_state`, if given, is `[observed_active, consecutive_clear]` and
+    is updated per drained frame off `TLMFrame.active` (flags bit 2) -- see
+    `_wait_for_move_terminal()`'s lossy-link fallback."""
     terminal: "tuple[TLMFrame, AckEntry] | None" = None
     for frame in transport.read_pending_binary_tlm_frames():
         latest_frame[0] = frame
+        if active_state is not None:
+            if frame.active is True:
+                active_state[0] = True
+                active_state[1] = 0
+            elif frame.active is False:
+                active_state[1] += 1
         if terminal is not None:
             continue
         for entry in frame.acks:
@@ -581,6 +618,7 @@ def _wait_for_move_terminal(transport: "MoveTransport", move_id: int, latest_fra
                             should_stop: Callable[[], bool] | None,
                             row_callback: RowCallback | None,
                             global_tick_index_box: list, leg_index: int, leg: TourLeg,
+                            active_fallback: bool = False,
                             ) -> "tuple[tuple[TLMFrame, AckEntry] | None, int, bool]":
     """Poll for `move_id`'s own terminal (completion-ack-bearing) frame, up
     to `timeout` seconds, sleeping `poll_interval` between polls. Also polls
@@ -603,11 +641,12 @@ def _wait_for_move_terminal(transport: "MoveTransport", move_id: int, latest_fra
     """
     deadline = clock_fn() + timeout
     tick_count = 0
+    active_state = [False, 0]  # [seen active, consecutive clear-active frames]
     while True:
         if should_stop is not None and should_stop():
             return None, tick_count, True
 
-        terminal = _drain_and_poll(transport, move_id, latest_frame)
+        terminal = _drain_and_poll(transport, move_id, latest_frame, active_state)
         tick_count += 1
         if row_callback is not None:
             result = TickResult(v_x=0.0, omega=0.0, corr_id=move_id,
@@ -617,6 +656,15 @@ def _wait_for_move_terminal(transport: "MoveTransport", move_id: int, latest_fra
 
         if terminal is not None:
             return terminal, tick_count, False
+        # Lossy-link fallback: if the completion ack never arrives, a move seen ACTIVE
+        # and then clear on _ACTIVE_CLEAR_STREAK straight frames counts as done. Only
+        # sound one-Move-in-flight (`sequential`) -- pipelined, the active flag may
+        # belong to the PREVIOUS leg and go clear at the queue boundary.
+        if active_fallback and active_state[0] and active_state[1] >= _ACTIVE_CLEAR_STREAK:
+            logger.warning("run_tour(): leg %d completed via active-flag fallback "
+                           "(terminal ack not seen)", leg_index + 1)
+            frame = latest_frame[0]
+            return (frame, AckEntry(corr_id=move_id, ok=True, err_code=0)), tick_count, False
         if clock_fn() >= deadline:
             return None, tick_count, False
         sleep_fn(poll_interval)
@@ -770,7 +818,7 @@ def run_tour(
     # comment for why this range is safe against a corr_id collision). The
     # first leg preempts (replace=True); every later leg enqueues behind the
     # one before it (replace=False) -- see this function's own docstring.
-    move_ids = [_TOUR_MOVE_ID_BASE + i for i in range(len(legs))]
+    move_ids = _next_move_ids(len(legs))
     move_kwargs = [
         _move_kwargs_for_leg(leg, v_max, turn_rate, move_ids[i], replace=(i == 0))
         for i, leg in enumerate(legs)
@@ -848,7 +896,8 @@ def run_tour(
             transport, move_ids[index], latest_frame, timeout=move_timeout,
             poll_interval=poll_interval, clock_fn=clock_fn, sleep_fn=sleep_fn,
             should_stop=should_stop, row_callback=row_callback,
-            global_tick_index_box=global_tick_index_box, leg_index=index, leg=leg)
+            global_tick_index_box=global_tick_index_box, leg_index=index, leg=leg,
+            active_fallback=sequential)
 
         if stop_requested:
             logger.warning("run_tour(): should_stop() requested mid-leg %d/%d -- stopping now",
