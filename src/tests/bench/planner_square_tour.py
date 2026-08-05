@@ -25,12 +25,19 @@ from __future__ import annotations
 
 import argparse
 import math
+import pathlib
 import signal
 import sys
 import time
 
 from robot_radio.io.serial_conn import SerialConnection
 from robot_radio.robot.protocol import NezhaProtocol
+
+# The heading-trim mechanism under test is the wheels tour's, imported --
+# not reimplemented -- so the planner arm and the wheels arm are corrected by
+# the SAME code and any difference in closure is the tour, not the trim.
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from wheels_square_tour import rest_stats, trim_to_heading  # noqa: E402
 
 DEFAULT_PORT = "/dev/cu.usbmodem2121102"
 ACK_TIMEOUT = 1000   # [ms] wait_for_ack() bound for each enqueue ack
@@ -56,7 +63,8 @@ QUEUE_DEPTH = 5      # 1 active + 4 pending
 WALL_LIMIT = 120.0   # [s] whole-tour wall-clock bound
 
 
-def tour(omega: float = OMEGA, id_base: int | None = None) -> list[dict]:
+def tour(omega: float = OMEGA, id_base: int | None = None,
+         cruise: float = CRUISE) -> list[dict]:
     """The 8 tour moves as move_twist() kwargs, in order.
 
     `omega` [rad/s] sets the pivot rate, i.e. each wheel runs at
@@ -90,13 +98,171 @@ def tour(omega: float = OMEGA, id_base: int | None = None) -> list[dict]:
         id_base = (int(time.time()) % 1_000_000) * 100
     moves = []
     for i in range(4):
-        moves.append(dict(v_x=CRUISE, v_y=0.0, omega=0.0,
+        moves.append(dict(v_x=cruise, v_y=0.0, omega=0.0,
                           stop_distance=LEG, timeout=MOVE_TIMEOUT,
                           replace=False, move_id=id_base + 1 + 2 * i))
         moves.append(dict(v_x=0.0, v_y=0.0, omega=omega,
                           stop_angle=TURN, timeout=MOVE_TIMEOUT,
                           replace=False, move_id=id_base + 2 + 2 * i))
     return moves
+
+
+def _append_frame(log: dict, f, t: float) -> None:
+    """Append one telemetry frame to the shared log dict (the same columns
+    the pipelined path logs, so all downstream reporting is unchanged)."""
+    if f.enc_left is None or f.enc_right is None:
+        return
+    log["t"].append(t)
+    log["velLeft"].append(f.enc_left.velocity)
+    log["velRight"].append(f.enc_right.velocity)
+    log["posLeft"].append(f.enc_left.position)
+    log["posRight"].append(f.enc_right.position)
+    log["heading"].append(f.pose[2] / 100.0 if f.pose else float("nan"))
+    log["x"].append(f.pose[0] if f.pose else float("nan"))
+    log["y"].append(f.pose[1] if f.pose else float("nan"))
+    if f.twist is not None:
+        v = float(f.twist[0])
+        omega = float(f.twist[1]) / 1000.0                    # [rad/s]
+        half = 0.5 * TRACK * omega
+        log["cmdLeft"].append(v - half)
+        log["cmdRight"].append(v + half)
+    else:
+        log["cmdLeft"].append(float("nan"))
+        log["cmdRight"].append(float("nan"))
+
+
+class SequentialTour:
+    """Rest-to-rest planner tour: ONE Move in flight at a time, a settle
+    dwell at every segment boundary, and (optionally) a host-side heading
+    trim after each turn Move using the wheels tour's own nudge helper.
+
+    The shipped pipelined tour keeps the queue topped up and never rests, so
+    it has no moment at which a heading correction could be applied. This
+    path exists to answer one question: does the planner, given the same
+    per-corner correction the wheels path gets, close like the wheels path?
+    """
+
+    SETTLE_TICK = 0.10   # [s]
+    LEASE = 400.0        # [ms] the WHEELS lease the settle/nudges re-arm
+    ENQUEUE_RETRY_S = 2.0
+    ENQUEUE_RETRIES_MAX = 5
+    MOVE_WALL = 30.0     # [s] per-move host-side backstop
+
+    def __init__(self, proto, args, log, t0):
+        self.proto = proto
+        self.args = args
+        self.log = log
+        self.t0 = t0
+        self.acks: "list[tuple[float, object]]" = []
+        self.completions: "list[tuple[float, int]]" = []
+
+    # -- telemetry ----------------------------------------------------
+    def drain(self, _proto=None, _log=None) -> None:
+        """Drain pending frames. The two ignored parameters let this be
+        handed straight to stream_segment()/trim_to_heading() as their
+        drain_fn, which call it as drain(proto, log)."""
+        for f in self.proto.read_pending_binary_tlm_frames():
+            t = time.monotonic() - self.t0
+            _append_frame(self.log, f, t)
+            for entry in f.acks:
+                self.acks.append((t, entry))
+
+    def settle(self):
+        """Rest dwell, holding a zero WHEELS command exactly as the wheels
+        tour's settle does. Returns ((x, y, heading), rest-spread stats)."""
+        mark = len(self.log["heading"])
+        end = time.monotonic() + self.args.settle
+        while time.monotonic() < end:
+            self.proto.wheels(0.0, 0.0, self.LEASE)
+            time.sleep(self.SETTLE_TICK)
+            self.drain()
+        pose = (self.log["x"][-1], self.log["y"][-1], self.log["heading"][-1])
+        return pose, rest_stats(self.log["heading"][mark:])
+
+    # -- one move -----------------------------------------------------
+    def run_move(self, spec: dict) -> float:
+        """Enqueue one Move, wait for its enqueue ack, then for its
+        completion ack. Returns the completion time [s since t0]."""
+        # Let any WHEELS lease from the preceding settle/nudge expire before
+        # handing motion ownership back to the planner.
+        time.sleep(0.5)
+        self.drain()
+        self.acks.clear()
+        move_id = spec["move_id"]
+        corr = self.proto.move_twist(**spec)
+        enqueued = False
+        tries = 0
+        enq_deadline = time.monotonic() + self.ENQUEUE_RETRY_S
+        deadline = time.monotonic() + self.MOVE_WALL
+        while time.monotonic() < deadline:
+            self.drain()
+            while self.acks:
+                _t, entry = self.acks.pop(0)
+                if entry.corr_id == corr and not enqueued:
+                    if not entry.ok:
+                        raise RuntimeError(
+                            f"enqueue move {move_id} rejected: "
+                            f"err={entry.err_code}")
+                    enqueued = True
+                elif enqueued and entry.corr_id == move_id:
+                    t = time.monotonic() - self.t0
+                    self.completions.append((t, move_id))
+                    return t
+            if not enqueued and time.monotonic() > enq_deadline:
+                tries += 1
+                if tries > self.ENQUEUE_RETRIES_MAX:
+                    raise RuntimeError(f"move {move_id} enqueue never acked")
+                corr = self.proto.move_twist(**spec)
+                enq_deadline = time.monotonic() + self.ENQUEUE_RETRY_S
+                print(f"  (retry {tries} for move {move_id})")
+            time.sleep(0.02)
+        raise RuntimeError(f"move {move_id} never completed within "
+                           f"{self.MOVE_WALL:.0f}s")
+
+    # -- the tour -----------------------------------------------------
+    def run(self, moves: "list[dict]"):
+        rest_poses = []
+        corners = []
+        pose, start_stats = self.settle()
+        rest_poses.append(pose)
+        h_start = pose[2]
+        for corner in range(4):
+            self.run_move(moves[2 * corner])                  # leg
+            pose, leg_stats = self.settle()
+            rest_poses.append(pose)
+            self.run_move(moves[2 * corner + 1])              # turn
+            pose, turn_stats = self.settle()
+            rest_poses.append(pose)
+            target = h_start + 90.0 * (corner + 1)            # [deg]
+            rec = dict(corner=corner + 1, target=target,
+                       heading_pre_trim=pose[2],
+                       residual_pre_trim=target - pose[2],
+                       raw_turn=pose[2] - rest_poses[-2][2],
+                       rest_sd_after_turn=turn_stats["sd"],
+                       rest_ptp_after_turn=turn_stats["ptp"],
+                       rest_sd_after_leg=leg_stats["sd"],
+                       nudges=[], trim_seconds=0.0)
+            if self.args.trim:
+                pose, nudges, elapsed = trim_to_heading(
+                    self.proto, self.log, pose, target, self.args.trim_tol,
+                    self.args.trim_max_nudges, 1.0,
+                    settle_fn=self.settle, drain_fn=self.drain)
+                rest_poses[-1] = pose
+                rec["nudges"] = nudges
+                rec["trim_seconds"] = elapsed
+            rec["heading_post_trim"] = rest_poses[-1][2]
+            rec["residual_post_trim"] = target - rest_poses[-1][2]
+            rec["nudge_count"] = len(rec["nudges"])
+            rec["converged"] = abs(rec["residual_post_trim"]) <= self.args.trim_tol
+            corners.append(rec)
+            print(f"  corner {corner + 1}/4: heading {rest_poses[-1][2]:7.1f} "
+                  f"(turn {rest_poses[-1][2] - rest_poses[-2][2]:+6.1f})  "
+                  f"x={rest_poses[-1][0]:7.1f} y={rest_poses[-1][1]:7.1f}  "
+                  f"resid {rec['residual_pre_trim']:+5.2f} -> "
+                  f"{rec['residual_post_trim']:+5.2f} in "
+                  f"{rec['nudge_count']} nudge(s) / {rec['trim_seconds']:.1f}s"
+                  + ("" if rec["converged"] else "  [NOT CONVERGED]"))
+        return rest_poses, corners, start_stats
 
 
 def _install_estop_signal_handler(proto: NezhaProtocol) -> None:
@@ -150,7 +316,36 @@ def main() -> int:
                         "on the well-behaved part of the curve; 1.2 = "
                         "+/-76.8 mm/s, inside the plant's erratic "
                         "near-breakaway region (see tour()).")
+    p.add_argument("--cruise", type=float, default=CRUISE,
+                   help="[mm/s] leg cruise speed handed to the planner "
+                        "(default 150, the shipped tour speed)")
+    p.add_argument("--outdir", default=None,
+                   help="directory for the chart + a per-run rest-pose CSV; "
+                        "overrides --out")
+    p.add_argument("--label", default="tour",
+                   help="run label used in the --outdir filenames")
+    p.add_argument("--settle", type=float, default=1.2,
+                   help="[s] rest dwell before the first move and after the "
+                        "last completion ack. Closure is measured between "
+                        "those two REST poses -- the same basis "
+                        "wheels_square_tour.py uses, so the two tours are "
+                        "comparable. 0 restores the old first-sample/"
+                        "last-sample basis.")
+    p.add_argument("--sequential", action="store_true",
+                   help="one Move in flight at a time with a settle dwell at "
+                        "every segment boundary, instead of the shipped "
+                        "pipelined queue. Implied by --trim (a correction "
+                        "needs a rest boundary to be applied at).")
+    p.add_argument("--trim", action="store_true",
+                   help="after each turn Move completes and settles, close "
+                        "the CUMULATIVE heading residual to n*90 deg with "
+                        "wheels_square_tour.py's own low-speed pivot nudges, "
+                        "then send the next leg. Implies --sequential.")
+    p.add_argument("--trim-tol", type=float, default=1.0)   # [deg]
+    p.add_argument("--trim-max-nudges", type=int, default=6)
     args = p.parse_args()
+    if args.trim:
+        args.sequential = True
 
     conn = SerialConnection(port=args.port,
                             mode="relay" if args.relay else None)
@@ -159,9 +354,14 @@ def main() -> int:
     _install_estop_signal_handler(proto)
     print(f"connected on {args.port}; waiting {BOOT_WAIT:.0f}s for boot preamble")
     time.sleep(BOOT_WAIT)
+    # Telemetry is silent at idle by design, so the pre-first-move and
+    # post-last-move REST dwells would see no frames at all without this --
+    # the tour itself only ever saw frames because a Move was running.
+    proto.tlmOn()
+    time.sleep(0.5)
     proto.read_pending_binary_tlm_frames()
 
-    moves = tour(args.omega)
+    moves = tour(args.omega, cruise=args.cruise)
     next_enqueue = 0
     inflight = 0
     # corr_id -> (move_id, send_time, retries). Over the RADIO RELAY ~20%
@@ -181,10 +381,47 @@ def main() -> int:
     log = dict(t=[], velLeft=[], velRight=[], posLeft=[], posRight=[],
                heading=[], cmdLeft=[], cmdRight=[], x=[], y=[])
     enc_start = None
+    # Rest poses, the same boundary-pose basis wheels_square_tour.py uses:
+    # index 0 is the settled pose BEFORE the first move, index -1 the settled
+    # pose after the last completion ack. The eight entries between them are
+    # the pose sampled AT each completion ack -- the planner runs its queue
+    # back to back with no dwell, so those eight are in-motion boundaries,
+    # not rest poses, and are labelled as such wherever they are reported.
+    rest_poses: "list[tuple[float, float, float]]" = []
+    boundary_poses: "list[tuple[int, float, float, float]]" = []
+    corners: "list[dict]" = []
+    start_stats: dict = {}
+    started_wall = time.time()
     t0 = time.monotonic()
 
+    def settle(seconds: float) -> "tuple[float, float, float] | None":
+        """Dwell `seconds` draining telemetry, return the last pose seen."""
+        end = time.monotonic() + seconds
+        last = None
+        while time.monotonic() < end:
+            for f in proto.read_pending_binary_tlm_frames():
+                if f.pose is not None:
+                    last = (f.pose[0], f.pose[1], f.pose[2] / 100.0)
+            time.sleep(0.02)
+        return last
+
     try:
-        while time.monotonic() - t0 < WALL_LIMIT:
+        if args.sequential:
+            seq = SequentialTour(proto, args, log, t0)
+            rest_poses, corners, start_stats = seq.run(moves)
+            completions = seq.completions
+            next_enqueue = len(moves)
+            enc_start = (log["posLeft"][0], log["posRight"][0])
+            # The 8 boundary poses the per-segment report wants are exactly
+            # rest_poses[1:] here -- REST boundaries, not in-motion ones.
+            boundary_poses = [
+                (moves[i]["move_id"], p[0], p[1], p[2])
+                for i, p in enumerate(rest_poses[1:])]
+        elif args.settle > 0.0:
+            pose = settle(args.settle)
+            if pose is not None:
+                rest_poses.append(pose)
+        while not args.sequential and time.monotonic() - t0 < WALL_LIMIT:
             # Top the queue up (replace=False; leave one slot of headroom
             # against ack latency so ERR_FULL never races the ring). Enqueue
             # acks are matched off the SAME single telemetry drain below --
@@ -275,14 +512,26 @@ def main() -> int:
                     if entry.corr_id in wanted and entry.corr_id not in done:
                         completions.append((t, entry.corr_id))
                         inflight -= 1
+                        if log["x"]:
+                            boundary_poses.append((entry.corr_id, log["x"][-1],
+                                                   log["y"][-1],
+                                                   log["heading"][-1]))
                         print(f"  move {entry.corr_id} complete at t={t:.1f}s")
             if len(completions) == len(moves):
                 break
             time.sleep(0.02)
+        if args.settle > 0.0 and not args.sequential:
+            pose = settle(args.settle)
+            if pose is not None:
+                rest_poses.append(pose)
     finally:
         proto.estop()
         time.sleep(0.5)
         proto.read_pending_binary_tlm_frames()
+        try:
+            proto.tlmOff()
+        except Exception:
+            pass
         conn.disconnect()
 
     if pending_enqueues:
@@ -308,12 +557,95 @@ def main() -> int:
           f"(target 360; error {heading_enc - 360.0:+.1f})")
 
     # Closure: how far the pose ended from where it started, and how far
-    # the final heading is from a full 360 turn.
-    x0, y0 = log["x"][0], log["y"][0]
-    x1, y1 = log["x"][-1], log["y"][-1]
+    # the final heading is from a full 360 turn. Measured between the two
+    # REST poses when --settle > 0 (wheels_square_tour.py's basis), else
+    # between the first and last telemetry samples (the old basis).
+    if len(rest_poses) >= 2:
+        x0, y0, h0 = rest_poses[0]
+        x1, y1, h1 = rest_poses[-1]
+        basis = f"rest poses, {args.settle:.1f}s settle"
+    else:
+        x0, y0, h0 = log["x"][0], log["y"][0], log["heading"][0]
+        x1, y1, h1 = log["x"][-1], log["y"][-1], log["heading"][-1]
+        basis = "first/last telemetry sample (no settle)"
     closure = math.hypot(x1 - x0, y1 - y0)
+    heading_sweep = h1 - h0
     print(f"  pose closure {closure:.1f} mm from start "
-          f"(finish at {x1 - x0:+.1f}, {y1 - y0:+.1f})")
+          f"(finish at {x1 - x0:+.1f}, {y1 - y0:+.1f}) [{basis}]")
+    print(f"  heading sweep {heading_sweep:+.1f} deg (target +360)")
+
+    # Per-segment truth, from the pose sampled at each completion ack. The
+    # planner never rests between moves, so these are IN-MOTION boundaries.
+    seg_lengths: "list[float]" = []
+    seg_turns: "list[float]" = []
+    seg_drift: "list[float]" = []
+    if len(boundary_poses) == 8:
+        chain = [(x0, y0, h0)] + [(bx, by, bh) for _, bx, by, bh in boundary_poses]
+        for i in range(4):
+            a = chain[2 * i]
+            b = chain[2 * i + 1]
+            c = chain[2 * i + 2]
+            seg_lengths.append(math.hypot(b[0] - a[0], b[1] - a[1]))
+            seg_turns.append(c[2] - b[2])
+            seg_drift.append(b[2] - a[2])
+        print("  per-leg length [mm]: "
+              + "  ".join(f"{d:6.1f}" for d in seg_lengths)
+              + f"   (target {LEG:.0f})")
+        print("  per-turn angle [deg]: "
+              + "  ".join(f"{d:+6.1f}" for d in seg_turns) + "   (target +90)")
+        print("  in-leg heading drift [deg]: "
+              + "  ".join(f"{d:+6.1f}" for d in seg_drift))
+
+    if args.outdir:
+        import csv as _csv
+        import pathlib as _pathlib
+        outdir_p = _pathlib.Path(args.outdir)
+        outdir_p.mkdir(parents=True, exist_ok=True)
+        results = outdir_p / "planner_tour_results.csv"
+        new = not results.exists()
+        with open(results, "a", newline="") as fh:
+            w = _csv.writer(fh)
+            if new:
+                w.writerow(["label", "cruise", "omega", "closure",
+                            "heading_sweep", "path", "wall",
+                            "l1", "l2", "l3", "l4", "t1", "t2", "t3", "t4"])
+            w.writerow([args.label, args.cruise, args.omega,
+                        f"{closure:.1f}", f"{heading_sweep:+.1f}",
+                        f"{path:.1f}", f"{wall:.1f}",
+                        *([f"{d:.1f}" for d in seg_lengths] or [""] * 4),
+                        *([f"{d:+.1f}" for d in seg_turns] or [""] * 4)])
+        print(f"  results: {results}")
+
+        # Per-run record, same schema as the wheels arm's, so both arms
+        # analyze through one reader.
+        import json as _json
+        nudge_total = sum(c["nudge_count"] for c in corners)
+        trim_total = sum(c["trim_seconds"] for c in corners)
+        if corners:
+            resid_post = [c["residual_post_trim"] for c in corners]
+            print("  cumulative residual after trim [deg]: "
+                  + "  ".join(f"{r:+5.2f}" for r in resid_post)
+                  + f"   mean|r| {sum(abs(r) for r in resid_post) / 4.0:.2f}")
+            print(f"  trim: {nudge_total} nudges / {trim_total:.1f}s over 4 "
+                  f"corners; tour wall {wall:.1f}s")
+        run = dict(label=args.label,
+                   arm="planner-sequential" if args.sequential else "planner",
+                   started_wall=started_wall,
+                   started_iso=time.strftime("%Y-%m-%dT%H:%M:%S",
+                                             time.localtime(started_wall)),
+                   trim=bool(args.trim), trim_tol=args.trim_tol,
+                   trim_max_nudges=args.trim_max_nudges,
+                   cruise=args.cruise, omega=args.omega,
+                   closure=closure, heading_sweep=heading_sweep,
+                   wall=wall, nudge_total=nudge_total,
+                   trim_seconds=trim_total,
+                   seg_lengths=seg_lengths, turn_deltas=seg_turns,
+                   leg_heading_drift=seg_drift,
+                   rest_poses=[list(p) for p in rest_poses],
+                   start_rest_stats=start_stats, corners=corners)
+        jpath = outdir_p / f"trimtol_{args.label}.json"
+        jpath.write_text(_json.dumps(run, indent=1))
+        print(f"  run record: {jpath}")
 
     import matplotlib
     matplotlib.use("Agg")
@@ -343,10 +675,10 @@ def main() -> int:
                     fontsize=7.5, rotation=90, va="top", ha="right",
                     color="#666666")
     lim = 1.15 * max(max(abs(v) for v in log["velLeft"]),
-                     max(abs(v) for v in log["velRight"]), CRUISE)
+                     max(abs(v) for v in log["velRight"]), args.cruise)
     ax.set_ylim(-lim, lim)
     ax.axhline(0.0, color="black", lw=0.5)
-    ax.axhline(CRUISE, color="#cccccc", lw=0.7, ls=":")
+    ax.axhline(args.cruise, color="#cccccc", lw=0.7, ls=":")
     ax.set_xlabel("time [s]")
     ax.set_ylabel("wheel speed [mm/s]")
     ax.legend(loc="lower right", fontsize=8, ncol=2, framealpha=0.9)
@@ -394,7 +726,10 @@ def main() -> int:
         f"heading {heading_enc:.1f}/360 deg ({heading_enc - 360.0:+.1f})   "
         f"pose closure {closure:.1f} mm",
         fontsize=12)
-    out = args.out or (__file__.rsplit("/", 1)[0] + "/planner_square_tour.png")
+    if args.outdir:
+        out = str(pathlib.Path(args.outdir) / f"planner_square_tour_{args.label}.png")
+    else:
+        out = args.out or (__file__.rsplit("/", 1)[0] + "/planner_square_tour.png")
     fig.savefig(out, dpi=130, bbox_inches="tight")
     print(f"wrote {out}")
     return 0 if ok else 1

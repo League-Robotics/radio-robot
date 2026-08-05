@@ -1,2 +1,4 @@
-**/*.csv
-**/*.png
+# Bench run output -- charts, CSVs, JSON captures. Never committed:
+# runs are session artifacts; durable findings go in docs/bench-reports/.
+*
+!.gitignore
