@@ -251,6 +251,11 @@ enum class MoveLifecycle : uint8_t {
               // measurably left rest)
   Tracking,   // active Move driving its profile -- see MovePhase for the
               // Accel/Hold/Decel sub-phase
+  Aligning,   // 134-003: a Twist Angle Move whose profile has LANDED, held
+              // open while it trims its cumulative-heading residual with
+              // bounded low-speed pivot nudges. The Move is not done until
+              // it has landed, so the completion ack fires on the way OUT
+              // of this state, not on the way in.
   Stopping,   // an active Kind::Stop entry ramping the body to rest
 };
 

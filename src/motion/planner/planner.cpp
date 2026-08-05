@@ -66,6 +66,43 @@ constexpr float kStallWindow = 0.5f;            // [s]
 constexpr float kStallEpsilonLinear = 0.25f;    // [mm] ~3.5 encoder quanta
 constexpr float kStallEpsilonAngular = 0.004f;  // [rad] ~3.6 heading quanta
 
+// TERMINAL FINE-ALIGN (134-003, MoveLifecycle::Aligning). Two derived
+// bounds; the phase's two TUNED numbers are config, not constants
+// (PlannerLimits::Landing::alignTol/alignMaxNudges).
+//
+// kAlignRestWindow -- how long the body must READ at rest, with the staged
+// command already drained to zero, before its heading is trusted enough to
+// size a corrective nudge from. Same value and the same reasoning as
+// kStallWindow above: "has actually stopped" is a claim about a body, not
+// about one sample, and the filtered omega this tests is an EMA over
+// samples that are one sample-age plus one actuationDelay stale. The bench
+// report's §6 measured the next command landing in the SAME control cycle
+// as the previous DONE ack, with the plant still moving in 3/5 trials --
+// a heading read there is noise, and a nudge sized from noise is a nudge
+// spent closing a residual that was never there. Deliberately its own
+// constant rather than a reuse of kStallWindow: the stall backstop answers
+// a different question ("is this Move going nowhere?") and the two are
+// free to move apart.
+constexpr float kAlignRestWindow = 0.5f;  // [s]
+//
+// kAlignSettleAllowance -- the plant-coast slack added to each nudge's own
+// bounded window, mirroring plannedStopWindow()'s own settle allowance and
+// sized the same way: enough for a commanded ramp that has reached zero to
+// actually stop the body.
+constexpr float kAlignSettleAllowance = 500.0f;  // [ms]
+//
+// kAlignNudgeOmegaFraction -- the corrective pivot's angular cruise, as a
+// fraction of the robot's own configured omegaMax. Sized to reproduce the
+// host-side graft this phase moves into firmware: 333 measured nudges were
+// delivered at 30 mm/s of wheel speed, and on `tovez`'s configured 3.0
+// rad/s ceiling this fraction gives 0.45 rad/s, which across its 128 mm
+// track IS 28.8 mm/s. Derived from configured limits rather than written
+// as a wheel-speed literal because the planner plans in body/shape space
+// and has no business knowing a wheel speed. It is a CEILING, not a
+// schedule -- profileStep() plans the actual command against the measured
+// residual, so a sub-degree trim never approaches it.
+constexpr float kAlignNudgeOmegaFraction = 0.15f;  // [1]
+
 // Arrival gates (settleReached(), used directly by tick()'s `arrived`
 // event -- 130-008 deleted the settle-confirm DEFER path that used to sit
 // between profile-complete and these, but the tolerances themselves are
@@ -272,8 +309,11 @@ void Planner::estop() {
   cmdRightPrevious_ = 0.0f;
   // ANY -> Idle (tick()'s own doc comment): unconditional, this instant --
   // not deferred to the next tick(), so an observer reading lifecycle()
-  // right after estop() never sees a stale active-Move state.
+  // right after estop() never sees a stale active-Move state. That
+  // includes Aligning: a panic stop abandons the trim mid-nudge, with no
+  // completion ack, exactly as it abandons any other active Move.
   lifecycle_ = MoveLifecycle::Idle;
+  align_ = AlignState{};
 }
 
 // Age the staged command by one tick. Called from the two places that
@@ -299,6 +339,9 @@ void Planner::rollCommandHistory() {
 //              body has not been MEASURED to have left rest.
 //   Tracking   active Move driving its profile (MovePhase sub-phase:
 //              Accel/Hold/Decel).
+//   Aligning   134-003: a Twist Angle Move whose profile has LANDED, held
+//              open while it trims its cumulative-heading residual. The
+//              Move is still active and still un-acked here.
 //   Stopping   an active Kind::Stop entry ramping the body to rest.
 //
 // TRANSITIONS
@@ -321,7 +364,28 @@ void Planner::rollCommandHistory() {
 //                                 tick's fresh recomputation shows the Move
 //                                 was never truly braking, so it is no
 //                                 longer a clean analogy for "one-way.")
-//   {Breakaway,Tracking,Stopping}
+//   {Breakaway,Tracking} -> Aligning
+//                                 134-003: a TWIST ANGLE Move's own
+//                                 completion event fires (EVENT 3 or 4
+//                                 below -- never 1 or 2, a timed-out or
+//                                 stalled Move aborts instead), it is not
+//                                 handing off at speed (activeBoundary_ <=
+//                                 0), and both align config fields are set.
+//                                 The Move does NOT complete here; it is
+//                                 held open, and `TickResult::completed`
+//                                 fires on the way OUT instead. See
+//                                 alignStep() for the settle -> measure ->
+//                                 nudge -> re-settle loop this runs.
+//   Aligning -> {Breakaway,Tracking,Stopping,Draining,Idle}
+//                                 the alignment finishes: the residual is
+//                                 inside alignTol, the alignMaxNudges
+//                                 budget is spent, or the Move's own
+//                                 wall-clock timeout fires from inside the
+//                                 phase (which still outranks it, so a
+//                                 non-converging alignment can never wedge
+//                                 the queue). NOW the Move completes and
+//                                 the row below applies.
+//   {Breakaway,Tracking,Stopping,Aligning}
 //     -> {Breakaway,Tracking,Stopping,Draining,Idle}
 //                                 a Move COMPLETES (see EVENTS below) and
 //                                 activateNext() either finds a next
@@ -357,6 +421,20 @@ void Planner::rollCommandHistory() {
 //                        Distance/Angle's planned-residual epsilon
 //                        (kDoneEpsilon*), or a Kind::Stop's
 //                        drained-command-and-at-rest test.
+//
+// 134-003 inserts ONE state between events 3/4 and the ack, and changes
+// nothing about the events themselves: a Twist Angle Move that fires event
+// 3 or 4 with activeBoundary_ <= 0 enters Aligning instead of completing,
+// and completes when the trim converges, exhausts its nudge budget, or the
+// Move's own event-1 timeout fires from inside the phase. Events 1 and 2
+// still abort outright -- a timed-out or stalled Move has not delivered its
+// motion and has nothing honest to trim toward.
+//
+// One reporting subtlety: an event-1 expiry from INSIDE Aligning ends the
+// Move (the queue is never wedged) but is NOT reported as
+// `TickResult::timedOut`. That field is the wire's kFlagFaultMoveTimeout, a
+// fault on the MOTION, and a Move in Aligning has already met its stop
+// condition -- see `motionTimedOut` at the completion site.
 //
 // `TickResult::settled` is always settleReached(), evaluated truthfully
 // regardless of which event completed the Move -- 130-008 deletes the
@@ -426,6 +504,24 @@ TickResult Planner::tick(const Types::RobotState& state) {
   const bool timedOut = m.timeout > 0.0f &&
                         static_cast<float>(elapsed) >= m.timeout;
 
+  // TERMINAL FINE-ALIGN (134-003). This Move's profile has already landed
+  // and the Move is being held open to trim its cumulative-heading
+  // residual, so alignStep()'s own bounded settle -> measure -> nudge ->
+  // re-settle loop stands in for the stall/arrival/profile-complete chain
+  // below for as long as it runs. The wall-clock timeout is the ONE thing
+  // that still outranks it (EVENT 1 in this function's own doc comment: a
+  // safety backstop always outranks the motion it is backstopping), which
+  // is what makes it impossible for a non-converging alignment to wedge
+  // the queue.
+  const bool aligning = lifecycle_ == MoveLifecycle::Aligning;
+  bool done = false;
+  if (aligning) {
+    done = timedOut || alignStep(now, dt, measured);
+    // Not finished: alignStep() has already staged this tick's command,
+    // exactly one staging call per tick like every other path out of here.
+    if (!done) return result;
+  }
+
   // Stall backstop + the Breakaway -> Tracking advance. Only for the two
   // kinds whose completion is a POSITION the plant has to reach and that
   // are meant to land at rest -- a Time Move's stop condition is the
@@ -433,7 +529,13 @@ TickResult Planner::tick(const Types::RobotState& state) {
   // supposed to stop at all, so neither can legitimately stall or needs
   // arrival detection armed. Evaluated before `done` so a stalled Move
   // completes on the same tick it is recognised.
+  //
+  // Never during Aligning (134-003): that Move's profile has already
+  // landed, so it IS at rest and making no progress by construction --
+  // every settle tick would read as a stall. The alignment's own nudge
+  // budget and per-nudge window are its backstops, plus the Move timeout.
   const bool stallApplies =
+      !aligning &&
       (m.kind == Move::Kind::Distance || m.kind == Move::Kind::Angle) &&
       activeBoundary_ <= 0.0f;
   bool stalled = false;
@@ -481,7 +583,10 @@ TickResult Planner::tick(const Types::RobotState& state) {
   // independently re-tests activeBoundary_ <= 0.0f, so a stale Breakaway
   // label can never suppress or admit a completion it should not).
 
-  bool done = timedOut || stalled;
+  // `done` is already true and settled when `aligning` -- the alignment
+  // finished (or its Move timed out) and this tick is its completion tick;
+  // re-deriving it from the stall/timeout pair would silently discard that.
+  if (!aligning) done = timedOut || stalled;
   // ARRIVED: a Distance/Angle Move that is inside the robot's own
   // configured arrival tolerance (settleEpsilonLinear/Angular) AND at rest
   // is finished. The kDoneEpsilon* tests below are float NOISE FLOORS, not
@@ -611,6 +716,19 @@ TickResult Planner::tick(const Types::RobotState& state) {
     }
   }
 
+  // TERMINAL FINE-ALIGN ENTRY (134-003). A Twist Angle Move that got here
+  // honestly -- its own arrival or profile-complete event, not a timeout or
+  // a stall, and not handing off at speed -- does not complete yet. It is
+  // held open in MoveLifecycle::Aligning to trim whatever heading residual
+  // its landing left, against the cumulative-intent ledger. The completion
+  // ack fires on the way OUT (the `if (done)` block below, reached on a
+  // later tick), because a Move is not done until it has landed.
+  if (done && !aligning && alignApplies(m, timedOut, stalled)) {
+    enterAligning(now);
+    alignSettleCommand(dt);  // stages this tick's command (and rolls history)
+    return result;           // result.completed stays false
+  }
+
   if (done) {
     // settleReached() is reported truthfully and unconditionally -- the
     // settle-confirm DEFER path that used to sit here (holding a
@@ -622,7 +740,22 @@ TickResult Planner::tick(const Types::RobotState& state) {
     // `settled` truthfully at the same tick does not.
     result.completed = true;
     result.moveId = m.id;
-    result.timedOut = timedOut;
+    // 134-003: `timedOut` answers "did this Move END VIA ITS BACKSTOP
+    // instead of via its stop condition?" -- it is what the wire publishes
+    // as kFlagFaultMoveTimeout, a FAULT flag, and what the ledger reads as
+    // "the motion was aborted". A Move that reached Aligning already MET
+    // its stop condition; the profile landed and only the trim was still
+    // running. A wall-clock expiry there is the trim running out of budget,
+    // not the motion failing, and reporting it as a move-timeout fault
+    // would be a false fault on a Move that drove correctly.
+    //
+    // The queue is freed either way -- that is what the backstop is for,
+    // and it still fires from inside Aligning. What changes here is only
+    // the LABEL on a completion, and the label follows the motion.
+    // Alignment cost is reported where it belongs: in ticket 004's own
+    // per-corner nudge count and wall time, not as a fault bit.
+    const bool motionTimedOut = timedOut && !aligning;
+    result.timedOut = motionTimedOut;
     result.settled = settleReached(measured, dt);
     // Cumulative-baseline carry (chain-exact accounting): a normally
     // completed Twist Distance/Angle Move hands the next Move BOTH
@@ -648,7 +781,13 @@ TickResult Planner::tick(const Types::RobotState& state) {
     // identically to "leg, leg" -- the stop is a pause in the sequence,
     // not a new origin.
     if (m.kind != Move::Kind::Stop) {
-      carryValid_ = !timedOut &&
+      // 134-003: `motionTimedOut`, not the raw `timedOut` -- an expiry
+      // inside Aligning is the trim running out of budget, not an aborted
+      // motion (see its definition above). Dropping the carry there would
+      // re-anchor the chain to wherever the trim gave up, which is exactly
+      // the re-anchoring 134-001 removed; the residual is owed to the next
+      // corner either way.
+      carryValid_ = !motionTimedOut &&
                     m.velocityKind == Move::VelocityKind::Twist &&
                     (m.kind == Move::Kind::Distance ||
                      m.kind == Move::Kind::Angle);
@@ -685,8 +824,18 @@ TickResult Planner::tick(const Types::RobotState& state) {
         // constant. A leg is repaid the same way one corner later:
         // Distance carries its heading baseline through unchanged (below),
         // so a leg's curl shows up as residual at the NEXT corner.
-        carryHeading_ = active_.baselineHeading +
-                        angularDirection(m) * requestedThresholdOf(m);
+        //
+        // 134-003: read the LATCHED target when this Move went through
+        // Aligning. It is the SAME expression -- enterAligning() evaluates
+        // exactly this line -- but evaluated BEFORE the corrective nudges
+        // rewrote active_.move.threshold/omega and active_.baselineHeading
+        // to reach planWheels() through the normal path. Recomputing it
+        // here would read the last nudge's own baseline and give the
+        // ledger the nudge's intent instead of the Move's.
+        carryHeading_ = aligning
+                            ? align_.target
+                            : active_.baselineHeading +
+                                  angularDirection(m) * requestedThresholdOf(m);
       }
     }
     active_.occupied = false;
@@ -710,6 +859,11 @@ TickResult Planner::tick(const Types::RobotState& state) {
 }
 
 void Planner::activateNext(uint32_t now) {
+  // 134-003: whatever the previous Move's terminal fine-align was doing is
+  // over the moment we look for a successor. Cleared here rather than at
+  // each of the several exits from Aligning because activateNext() is on
+  // every one of those paths -- completion, queue-drain, and replace().
+  align_ = AlignState{};
   carryValid_ = carryValid_ && pendingCount_ > 0;  // carry consumed below or dropped
   if (pendingCount_ == 0) {
     return;
@@ -895,6 +1049,311 @@ bool Planner::settleReached(const Measurement& measured, float dt) const {
   return false;
 }
 
+// ---------------------------------------------------------------------------
+// Terminal fine-align (134-003, MoveLifecycle::Aligning).
+//
+// WHAT THIS IS. The per-corner heading trim, moved off the host and into
+// the Move. Measured on `tovez` by the host-side graft it reproduces
+// (docs/bench-reports/motion-planning-lab-2026-08-04.md §5.2): planner
+// square-tour closure 25.8 -> 9.4 mm at a 1.0 deg tolerance, ~2 s/corner,
+// with nothing else changed. §1 is why it works at all -- square-tour
+// closure is propagated per-corner cumulative-heading residual
+// (corr = +0.95), so the only work that moves closure is work that reduces
+// that residual.
+//
+// WHY IT NEEDS BOTH ITS SIBLINGS. 134-001 gives it an honest target: with
+// Move::requestedThreshold the ledger can project baseline + direction *
+// INTENT again, instead of re-anchoring to wherever the corner stopped.
+// 134-002 gives it a deliverable actuator: applySpeedFloor() no longer
+// boosts planner-shaped commands, so a ~29 mm/s corrective pivot reaches
+// the wheels as itself rather than as a v_min-sized lunge.
+//
+// THE LOOP, per iteration: settle (command drained to zero and the body
+// reading at rest for kAlignRestWindow) -> measure the residual against
+// the latched ledger target -> if it exceeds alignTol, emit one bounded
+// low-speed pivot nudge through the ordinary planWheels() path -> re-settle
+// -> re-measure. Capped at alignMaxNudges, then complete regardless.
+//
+// WHY RE-SETTLE EVERY TIME, not just before the first nudge: report §6
+// measured the next command landing in the SAME control cycle as the
+// previous DONE ack, with the plant still moving in 3/5 trials. Measuring
+// heading on a body that is still turning reads noise, and a nudge sized
+// from noise is a nudge spent against a residual that was never there --
+// and the budget is only alignMaxNudges deep.
+
+bool Planner::alignApplies(const Move& m, bool timedOut, bool stalled) const {
+  // Unconfigured is OFF, on either field -- the same fail-open convention
+  // the rest of this surface uses for a <=0 bound. Every direct caller that
+  // never sets these (the ctests, the sim harnesses, the ctypes bench
+  // harness) therefore keeps its pre-134-003 behavior exactly.
+  if (!(limits_.landing.alignTol > 0.0f) || limits_.landing.alignMaxNudges <= 0) {
+    return false;
+  }
+  // No configured angular ceiling means no nudge to size (alignNudgeOmega()
+  // is a fraction of it), and a zero-speed "pivot" has no shape at all --
+  // fail closed rather than burn the whole budget commanding nothing.
+  if (!(alignNudgeOmega() > 0.0f)) return false;
+  // Events 1 and 2 (tick()'s own doc comment) abort: a timed-out or stalled
+  // Move has not delivered its motion, so there is no honest landing to
+  // trim -- and the ledger deliberately carries no intent for it either.
+  if (timedOut || stalled) return false;
+  // TWIST ANGLE only, and never handing off at speed. The same guard set
+  // the `arrived` event uses, and for the same reason: the ledger's own
+  // carryValid_ is gated on VelocityKind::Twist, so a Wheels-velocity Move
+  // has no heading intent to align against, and a Move with a positive
+  // boundary is not supposed to come to a stop at all.
+  //
+  // The activeBoundary_ half is a REAL LIMITATION, not merely a guard: in
+  // a PIPELINED tour every corner but the last hands off at speed and
+  // therefore gets no trim. That is the right scope -- the measured
+  // 25.8 -> 9.4 mm result came from a SEQUENTIAL tour
+  // (planner_square_tour.py --sequential --trim), and a pipelined tour is
+  // a different arm with a different number (report §2 finding 3: the
+  // shipped pipelined tour's 26 mm is two errors cancelling, not a near
+  // miss). Trimming a corner the caller deliberately asked to flow through
+  // would also silently convert its at-speed hand-off into a full stop.
+  return m.velocityKind == Move::VelocityKind::Twist &&
+         m.kind == Move::Kind::Angle && activeBoundary_ <= 0.0f;
+}
+
+void Planner::enterAligning(uint32_t now) {
+  lifecycle_ = MoveLifecycle::Aligning;
+  align_ = AlignState{};
+  align_.settleStart = now;
+  // Latch the cumulative-intent target NOW, before any nudge rewrites the
+  // Move it is derived from. Byte-identical to the expression tick()'s own
+  // completion block uses for carryHeading_ (and to what measure() has been
+  // driving this Move against): baseline + direction * INTENT, where intent
+  // is the caller's own pre-calibration request (134-001).
+  align_.target = active_.baselineHeading +
+                  angularDirection(active_.move) *
+                      requestedThresholdOf(active_.move);
+}
+
+bool Planner::alignStep(uint32_t now, float dt, const Measurement& measured) {
+  if (align_.nudging) {
+    // A corrective pivot is in flight. It ends when its own profile has
+    // finished commanding -- the same test Move::Kind::Angle's
+    // profile-complete branch uses, requiring the commanded ramp itself to
+    // have decayed to the rest floor, not merely the lookahead-adjusted
+    // prediction to have crossed zero -- or when its bounded window
+    // expires.
+    //
+    // The window is not belt-and-braces. Report §3 measured the low-speed
+    // corrective pivot as BIMODAL: 26% of 333 nudges delivered under
+    // 0.25 deg, i.e. never broke away at all. Those move the residual by
+    // nothing, so "has it landed?" never answers yes on its own and the
+    // alignment would sit here until the Move's own timeout.
+    //
+    // settleReached() is deliberately NOT the test: it compares against
+    // settleEpsilonAngular, an ARRIVAL tolerance sized to this robot's
+    // creep resolution (0.035 rad on tovez) and therefore WIDER than a
+    // typical nudge's whole threshold -- it would report every nudge
+    // already arrived on its first tick and the pivot would never run.
+    const bool profileDone =
+        (limits_.landing.settleRestOmega <= 0.0f ||
+         std::fabs(profileVelocity_) <= limits_.landing.settleRestOmega) &&
+        measured.plannedRemaining <= kDoneEpsilonAngular;
+    const bool expired = static_cast<float>(now - align_.nudgeStart) >=
+                         align_.nudgeWindow;
+    if (!profileDone && !expired) {
+      planActive(now, dt, measured);  // the ordinary path, no bypass
+      return false;
+    }
+    align_.nudging = false;
+    align_.restTicks = 0;  // this nudge's own re-settle starts from zero
+    align_.settleStart = now;
+  }
+
+  // SETTLING. Two independent conditions, deliberately kept apart:
+  //
+  //   DWELL, on the COMMAND. The staged pair must have been at zero for
+  //   kAlignRestWindow. This is the noise-immune half -- the command is a
+  //   number this class wrote, not a measurement -- and it is what actually
+  //   gives the plant time to coast to a physical stop and land a fresh
+  //   encoder sample.
+  //
+  //   BODY QUIET, on the MEASUREMENT, instantaneously. The filtered angular
+  //   rate must be inside the robot's own rest floor (settleRestOmega, the
+  //   same floor settleReached() and the stall backstop already call
+  //   "stopped"). This is the physical confirmation, and it refuses to read
+  //   heading off a body that is demonstrably still turning.
+  //
+  // The dwell counter keys off the command rather than off the conjunction
+  // on purpose. Keyed off the measurement, a single noisy sample would
+  // restart the whole window, and the two robots' configured floors sit
+  // only a little above their measured rest noise (tovez: floor 0.16 rad/s
+  // against a ~0.11 rad/s raw noise band) -- close enough that a flicker is
+  // ordinary, not exceptional. Restarting there could stall the phase until
+  // the Move's own timeout on nothing but noise. As written, a flicker
+  // costs one tick.
+  const bool commandQuiet = cmdLeft_ == 0.0f && cmdRight_ == 0.0f;
+  align_.restTicks = commandQuiet ? align_.restTicks + 1 : 0;
+  const bool dwelt = dt > 0.0f && static_cast<float>(align_.restTicks) * dt >=
+                                      kAlignRestWindow;
+  const bool bodyQuiet =
+      std::fabs(measured.omega) <= limits_.landing.settleRestOmega;
+  if (!dwelt || !bodyQuiet) {
+    // Bounded, so a plant whose measured omega never quiets below its own
+    // rest floor cannot hold the Move here forever. The Move `timeout` is
+    // the outer backstop, but it is OPTIONAL on the wire (0 = none), and
+    // "no timeout" must not mean "may wedge the queue" -- the identical
+    // argument plannedStopWindow() makes for a Kind::Stop entry. Giving up
+    // completes the Move where it stands, which is exactly what happens
+    // today without this phase at all.
+    if (static_cast<float>(now - align_.settleStart) >= alignSettleWindow()) {
+      return true;
+    }
+    alignSettleCommand(dt);
+    return false;
+  }
+
+  // MEASURING. pose_.heading() is unwrapped (estimation.h) and so is the
+  // latched target, so this plain difference is the signed residual with no
+  // wrapping to get wrong.
+  const float residual = align_.target - pose_.heading();  // [rad] signed
+  if (std::fabs(residual) <= limits_.landing.alignTol) return true;
+  if (align_.nudges >= limits_.landing.alignMaxNudges) return true;
+
+  // STOP IF THE LAST NUDGE MADE IT WORSE. The corrective pivot has a
+  // coarse quantum of its own -- report §3 measured a median 1.72 deg
+  // delivery against a 1.0 deg tolerance -- so a plant whose nudges
+  // consistently over-deliver cannot land inside the tolerance and will
+  // instead oscillate across it, spending the whole budget and ending no
+  // better than it started. That is the same "a nudge fires at a residual
+  // it cannot resolve, and the corner gets WORSE" failure §3 measured when
+  // the tolerance was tightened; here it is detected directly, from the
+  // mechanism's own delivered result, instead of being assumed away.
+  //
+  // "Worse", not "no better": a nudge that delivers NOTHING is the
+  // measured 26% no-breakaway case, and retrying it is exactly what earns
+  // the 94% convergence at 1.3 nudges/corner -- stopping there would throw
+  // that away. Only a residual that grew by more than a few measurement
+  // quanta (kStallEpsilonAngular, the same "is this change real or is it
+  // noise?" threshold the stall backstop uses) counts.
+  if (align_.residualBefore >= 0.0f &&
+      std::fabs(residual) > align_.residualBefore + kStallEpsilonAngular) {
+    return true;
+  }
+
+  startAlignNudge(now, residual);
+  // Re-measure: startAlignNudge() just rewrote the Move's threshold and
+  // baseline, and `measured` was taken against the previous pair.
+  planActive(now, dt, measure(now));
+  return false;
+}
+
+void Planner::startAlignNudge(uint32_t now, float residual) {  // [ms] [rad]
+  ++align_.nudges;
+  align_.nudging = true;
+  align_.nudgeStart = now;
+  align_.residualBefore = std::fabs(residual);
+
+  // Re-arm the ACTIVE Move as a bounded low-speed pivot of exactly the
+  // residual and let it flow through planActive()/planWheels() like any
+  // other Angle Move. That is the point of doing it this way rather than
+  // writing cmdLeft_/cmdRight_ directly: the ratio lock, the discrete-exact
+  // terminal step, the per-wheel accel ceiling and the decel latch all
+  // apply to a nudge exactly as they apply to the corner it is trimming,
+  // and there is no second actuation path to keep in sync.
+  //
+  // Rewriting the Move in place is safe because enterAligning() already
+  // latched align_.target: nothing downstream still needs the Move's
+  // original threshold or baseline.
+  const float magnitude = std::fabs(residual);
+  const float omega = alignNudgeOmega();  // [rad/s] magnitude
+  Move& move = active_.move;
+  move.threshold = magnitude;
+  // A PURE pivot, even when the Move being aligned was an arc: v_x/v_y are
+  // zeroed so a heading trim can never add path length to a leg it has no
+  // business touching. requestedThreshold is deliberately left alone -- the
+  // ledger target is already latched, and rewriting it would make the
+  // Move's own record of what the caller asked for a lie.
+  move.v_x = 0.0f;
+  move.v_y = 0.0f;
+  move.omega = residual > 0.0f ? omega : -omega;
+
+  active_.baselineHeading = pose_.heading();
+  active_.closingIssued = false;
+  active_.decelLatched = false;
+  active_.phase = MovePhase::Idle;
+  active_.stallTicks = 0;
+  active_.stallRemaining = 0.0f;
+  active_.shape = shapeOf(move, limits_.plant.trackWidth);
+  active_.wheelLimits = shapeLimits(active_.shape, limits_);
+  if (active_.shape.valid && active_.wheelLimits.aDecel > 0.0f) {
+    lastShapeDecel_ = active_.wheelLimits.aDecel;
+  }
+  // axisPerLambda for a pivot, derived the same way activateNext() derives
+  // it: heading advances by the wheel difference over the track.
+  active_.axisPerLambda = 1.0f;
+  if (active_.shape.valid) {
+    active_.axisPerLambda =
+        std::fabs(active_.shape.unitRight - active_.shape.unitLeft) /
+        limits_.plant.trackWidth;
+  }
+  if (!(active_.axisPerLambda > 0.0f)) active_.axisPerLambda = 1.0f;
+
+  // Start the profile from rest -- alignStep() has just confirmed the body
+  // IS at rest and the staged command IS zero, so there is no carry to
+  // preserve and nothing for profileStep() to misread as a coast.
+  profileVelocity_ = 0.0f;
+  profileAccel_ = 0.0f;
+  lastAxis_ = Axis::Angular;
+
+  align_.nudgeWindow = alignNudgeWindow(magnitude, omega);
+}
+
+void Planner::alignSettleCommand(float dt) {  // [s]
+  rollCommandHistory();
+  // Ramp out at the shape's own decel ceiling, the same one drainToZero()
+  // uses, so a nudge's terminal step always fits inside exactly one step
+  // here (drainToZero()'s own doc comment has the reasoning).
+  rampCommandsToZero(drainDecel(dt));
+  // profileVelocity_ is in the Move's own axis units -- [rad/s] for an
+  // Angle Move -- so it decays against the ANGULAR ceiling, not
+  // drainToZero()'s body-frame linear one. That difference is the only
+  // reason this is not simply a call to drainToZero().
+  profileVelocity_ =
+      std::max(0.0f, profileVelocity_ - limits_.ceilings.alphaDecel * dt);
+  profileAccel_ = 0.0f;
+  activeBoundary_ = 0.0f;
+  active_.phase = MovePhase::Decel;
+}
+
+float Planner::alignNudgeOmega() const {  // [rad/s]
+  return limits_.ceilings.omegaMax * kAlignNudgeOmegaFraction;
+}
+
+float Planner::alignNudgeWindow(float threshold,
+                                float omega) const {  // [rad] [rad/s] -> [ms]
+  // Derived from the pivot itself, not chosen: the time to sweep
+  // `threshold` at `omega`, plus the ramp up and the ramp down at the
+  // configured angular ceilings, plus one plant-coast allowance. An
+  // unconfigured ceiling simply contributes nothing to the sum (the same
+  // fail-open convention used elsewhere here) rather than making the
+  // window infinite or zero.
+  if (!(omega > 0.0f)) return kAlignSettleAllowance;
+  float window = 1000.0f * threshold / omega;  // [ms] sweep at cruise
+  if (limits_.ceilings.alphaMax > 0.0f) {
+    window += 1000.0f * omega / limits_.ceilings.alphaMax;
+  }
+  if (limits_.ceilings.alphaDecel > 0.0f) {
+    window += 1000.0f * omega / limits_.ceilings.alphaDecel;
+  }
+  return window + kAlignSettleAllowance;
+}
+
+float Planner::alignSettleWindow() const {  // [ms]
+  // The dwell this phase actually asks for, plus the derived worst case for
+  // reaching rest at all -- plannedStopWindow(), which is already "the
+  // worst-case decel ramp from vMax plus one settle allowance" and is
+  // already the answer to this same question for a Kind::Stop entry. Reused
+  // rather than re-derived so the two cannot drift into disagreeing about
+  // how long stopping takes on this robot.
+  return 1000.0f * kAlignRestWindow + plannedStopWindow();
+}
+
 Planner::Axis Planner::axisOf(const Move& m) {
   // A planned stop profiles no axis -- Axis::None also makes whatever
   // follows it start its profile from rest, which is exactly right: we
@@ -934,6 +1393,14 @@ Planner::Axis Planner::axisOf(const Move& m) {
 // It is automatically right about a planned stop, whose shape is invalid
 // by construction -- nothing ever hands off at speed into a stop.
 float Planner::boundaryLambda(float dt) const {
+  // 134-003: a Move in its terminal fine-align never hands off at speed.
+  // The whole phase is "come to rest, read the heading, trim" -- with a
+  // compatible Move already pending, an unguarded lookahead would plan a
+  // nonzero landing speed for a corrective nudge and the loop would never
+  // reach the rest it has to measure from. It also keeps activeBoundary_
+  // pinned at 0 for the duration, which is what alignApplies()' own
+  // "not handing off at speed" guard assumes about the state it enters.
+  if (lifecycle_ == MoveLifecycle::Aligning) return 0.0f;
   if (pendingCount_ == 0) return 0.0f;
   // Fail closed: never plan a hand-off we have no configured authority to
   // brake out of.

@@ -370,6 +370,408 @@ void testReplaceReactivatesBreakaway() {
   CHECK(planner.lifecycle() == MoveLifecycle::Breakaway);
 }
 
+// ---- Tracking -> Aligning -> {Draining,Idle}: terminal fine-align -------
+//
+// 134-003. The trim that took `tovez`'s planner square tour from 25.8 mm
+// of closure to 9.4 mm, moved into the Move (docs/bench-reports/
+// motion-planning-lab-2026-08-04.md §5.2). These tests pin the STATE
+// machine -- entry conditions, the nudge cap, the timeout backstop, and
+// which Kinds are excluded. They cannot and do not pin the ACCURACY claim:
+// the sim's corner behavior sign-flips against hardware (report §7), so
+// the real gate is a bench run on `tovez`.
+
+// benchLimits() plus the two fine-align fields the robot JSON supplies on
+// a real boot. alignTol is [rad] -- 0.017453 rad IS the measured 1.0 deg
+// operating point; a value near 1.0 here would be degrees in a radian
+// field.
+Motion::PlannerLimits alignLimits(int32_t maxNudges = 3) {
+  Motion::PlannerLimits limits = benchLimits();
+  limits.landing.alignTol = 0.017453f;  // [rad] 1.0 deg
+  limits.landing.alignMaxNudges = maxNudges;
+  return limits;
+}
+
+Move angleMove(uint32_t id, float threshold, float omega) {
+  Move m;
+  m.id = id;
+  m.kind = Move::Kind::Angle;
+  m.threshold = threshold;
+  m.omega = omega;
+  m.timeout = 60000.0f;
+  return m;
+}
+
+// What an Aligning phase did, watched from outside the Planner: how many
+// corrective pivots it emitted, whether it ever acked while still in the
+// phase (it must not), and how it ended.
+struct AlignWatch {
+  bool sawAligning = false;
+  bool ackedWhileAligning = false;
+  int nudges = 0;
+  bool completed = false;
+  bool timedOut = false;
+  uint32_t moveId = 0;
+  int ticks = 0;
+};
+
+// Run until the active Move completes (or `maxTicks` runs out), watching
+// the alignment. `disturb` is applied AFTER each cycle while the planner is
+// aligning -- a test-only way to make a residual that cannot be closed,
+// standing in for a plant with no corrective authority. It moves the
+// encoder POSITIONS only, never the published velocities, so the phase's
+// own at-rest test still reads an honestly-resting body.
+template <typename Plant>
+AlignWatch runAlignment(Planner& planner, Types::RobotState& state, Plant& plant,
+                        uint32_t& now, int maxTicks, float disturb = 0.0f) {
+  AlignWatch watch;
+  // Seeded true so whatever command the landing itself left behind is never
+  // miscounted as the first nudge.
+  bool previousCommanding = true;
+  for (int i = 0; i < maxTicks && !watch.completed; ++i) {
+    const TickResult result = cycle(planner, state, plant, now, kPeriod);
+    ++watch.ticks;
+    const bool aligning = planner.lifecycle() == MoveLifecycle::Aligning;
+    if (aligning) {
+      watch.sawAligning = true;
+      if (result.completed) watch.ackedWhileAligning = true;
+      const bool commanding = planner.commandedLeft() != 0.0f ||
+                              planner.commandedRight() != 0.0f;
+      if (commanding && !previousCommanding) ++watch.nudges;
+      previousCommanding = commanding;
+      if (disturb != 0.0f) plant.disturbHeading(disturb, 100.0f);
+    } else {
+      previousCommanding = true;
+    }
+    if (result.completed) {
+      watch.completed = true;
+      watch.timedOut = result.timedOut;
+      watch.moveId = result.moveId;
+    }
+  }
+  return watch;
+}
+
+// Entry, the held-back ack, and a nudge that actually closes the residual.
+//
+// The residual is made the way a real corner makes one: `threshold` is the
+// ACTUATION-sized command (what App::RobotLoop::handleMove()'s rotation-
+// calibration inversion produces) and `requestedThreshold` is the caller's
+// own intent (134-001). A perfect plant lands the command exactly, so the
+// gap between the two IS the residual the trim must close -- 0.05 rad, or
+// 2.9 deg, comfortably outside the 1.0 deg tolerance.
+void testFineAlignEntersTrimsAndAcksOnTheWayOut() {
+  Planner planner(alignLimits());
+  PerfectPlant plant;
+  Types::RobotState state;
+  uint32_t now = 0;
+
+  Move move = angleMove(1, 0.50f, 2.0f);
+  move.requestedThreshold = 0.55f;  // [rad] what the caller ASKED for
+  CHECK(planner.move(move, false));
+
+  const AlignWatch watch = runAlignment(planner, state, plant, now, 600);
+
+  CHECK(watch.sawAligning);
+  // The Move is not done until it has landed: no ack may ride out while
+  // the trim is still running.
+  CHECK(!watch.ackedWhileAligning);
+  CHECK(watch.completed);
+  CHECK(!watch.timedOut);
+  // A nudge rewrites the ACTIVE Move in place; that must not change the
+  // identity the host is waiting on.
+  CHECK(watch.moveId == 1u);
+  CHECK(watch.nudges >= 1);
+  CHECK(watch.nudges <= 3);
+
+  // Landed on the INTENT (0.55 rad), not on the command (0.50 rad), and
+  // inside the tolerance. Without the trim this would sit at 0.50.
+  const float heading =
+      (plant.positionRight - plant.positionLeft) / 100.0f;  // [rad]
+  std::printf("  fine-align: %d nudge(s), heading %.5f rad vs intent 0.55\n",
+              watch.nudges, static_cast<double>(heading));
+  CHECK(std::fabs(0.55f - heading) <= 0.017453f);
+
+  // The queue is not wedged: with nothing pending, the planner drains out.
+  CHECK(planner.lifecycle() == MoveLifecycle::Draining ||
+        planner.lifecycle() == MoveLifecycle::Idle);
+}
+
+// A residual that nudges cannot close stops at alignMaxNudges, not at the
+// Move timeout.
+//
+// The plant is stalled the moment the phase begins -- wheel gains to zero,
+// so every nudge is commanded and delivers exactly nothing. That is the
+// measured NO-BREAKAWAY case (report §3: 26% of 333 nudges delivered under
+// 0.25 deg), and it is the one that has to spend the whole budget: the
+// residual never improves, but it never gets WORSE either, so the
+// made-it-worse guard correctly stays out of the way and the retries the
+// measured 94% convergence depends on all happen.
+void testFineAlignStopsAtTheNudgeCap() {
+  constexpr int32_t kBudget = 3;
+  Planner planner(alignLimits(kBudget));
+  TestPlanner::NoisyPlant plant;  // defaults = a clean plant, until stalled below
+  Types::RobotState state;
+  uint32_t now = 0;
+
+  Move move = angleMove(1, 0.50f, 2.0f);
+  move.requestedThreshold = 0.55f;  // [rad] a 2.9 deg residual to chase
+  CHECK(planner.move(move, false));
+
+  bool completed = false;
+  bool timedOut = false;
+  bool sawAligning = false;
+  bool previousCommanding = true;
+  int nudges = 0;
+  int ticks = 0;
+  for (; ticks < 2000 && !completed; ++ticks) {
+    const TickResult result = cycle(planner, state, plant, now, kPeriod);
+    if (planner.lifecycle() == MoveLifecycle::Aligning) {
+      sawAligning = true;
+      // Stall the wheels for the whole phase: commanded, but delivering
+      // nothing.
+      plant.gainLeft = 0.0f;
+      plant.gainRight = 0.0f;
+      const bool commanding = planner.commandedLeft() != 0.0f ||
+                              planner.commandedRight() != 0.0f;
+      if (commanding && !previousCommanding) ++nudges;
+      previousCommanding = commanding;
+    } else {
+      previousCommanding = true;
+    }
+    if (result.completed) {
+      completed = true;
+      timedOut = result.timedOut;
+    }
+  }
+
+  CHECK(sawAligning);
+  CHECK(completed);
+  // The CAP ended it, not the 60 s timeout -- which is the whole point of
+  // having a cap.
+  CHECK(!timedOut);
+  std::printf("  fine-align cap: %d nudges spent (budget %d), %d ticks\n",
+              nudges, static_cast<int>(kBudget), ticks);
+  CHECK(nudges == kBudget);
+}
+
+// A nudge that made the residual measurably WORSE ends the phase, well
+// inside the budget.
+//
+// The corrective pivot has a coarse quantum of its own (report §3: median
+// 1.72 deg delivered against a 1.0 deg tolerance), so a plant that
+// consistently over-delivers cannot land inside the tolerance -- it
+// oscillates across it, and without this guard it spends the whole budget
+// to end no better than it started. Measured directly in the sim while
+// building this ticket: a 1.9 deg residual, nudged, came back +3.3 deg the
+// other way, and the loop hunted between the two for all six nudges.
+//
+// Reproduced here by yanking the heading further out after every aligning
+// tick -- a residual that grows under correction, which is what an
+// over-delivering nudge looks like from the phase's own side.
+void testFineAlignStopsWhenANudgeMakesItWorse() {
+  constexpr int32_t kBudget = 6;
+  Planner planner(alignLimits(kBudget));
+  PerfectPlant plant;
+  Types::RobotState state;
+  uint32_t now = 0;
+  CHECK(planner.move(angleMove(1, 0.50f, 2.0f), false));
+
+  const AlignWatch watch =
+      runAlignment(planner, state, plant, now, 2000, /*disturb=*/0.004f);
+
+  CHECK(watch.sawAligning);
+  CHECK(watch.completed);
+  CHECK(!watch.timedOut);
+  std::printf("  fine-align worse-guard: stopped after %d nudge(s) of a %d "
+              "budget, %d ticks\n", watch.nudges, static_cast<int>(kBudget),
+              watch.ticks);
+  // Bounded well under the budget -- that is the whole point.
+  CHECK(watch.nudges >= 1);
+  CHECK(watch.nudges < kBudget);
+}
+
+// The wall-clock timeout still fires from INSIDE Aligning. A non-
+// converging alignment with a budget it cannot exhaust must not be able to
+// wedge the queue -- this is the acceptance criterion the nudge cap alone
+// does not cover.
+//
+// It ends the Move but does NOT raise the move-timeout fault: the Move met
+// its ANGLE stop condition and only the trim overran, so the wire's
+// kFlagFaultMoveTimeout would be a false fault. Asserted both ways below.
+void testFineAlignTimeoutFiresFromInsideAligning() {
+  Planner planner(alignLimits(/*maxNudges=*/1000));
+  PerfectPlant plant;
+  Types::RobotState state;
+  uint32_t now = 0;
+  Move move = angleMove(1, 0.50f, 2.0f);
+  // Long enough for the 0.5 rad turn itself (a few hundred ms), far too
+  // short for an alignment that can never converge.
+  move.timeout = 3000.0f;  // [ms]
+  CHECK(planner.move(move, false));
+
+  const AlignWatch watch =
+      runAlignment(planner, state, plant, now, 2000, /*disturb=*/0.004f);
+
+  CHECK(watch.sawAligning);
+  CHECK(watch.completed);
+  CHECK(watch.moveId == 1u);
+  // ...but NOT reported as a move-timeout fault. The Move met its ANGLE
+  // stop condition; what expired was the trim's budget, and
+  // `TickResult::timedOut` is the wire's kFlagFaultMoveTimeout -- a fault
+  // on the MOTION. See tick()'s own `motionTimedOut` for the argument.
+  CHECK(!watch.timedOut);
+  // And the queue really is free again -- which is the property that
+  // actually matters here.
+  CHECK(!planner.active());
+  CHECK(planner.lifecycle() == MoveLifecycle::Draining ||
+        planner.lifecycle() == MoveLifecycle::Idle);
+}
+
+// The exclusions, one per rejected entry condition. None of these may ever
+// enter Aligning: Distance and Time Moves have no heading intent to trim,
+// a Wheels-velocityKind Move is structurally excluded from the ledger that
+// supplies the target, and a Move that timed out mid-motion never
+// delivered the motion there would be anything honest to trim toward.
+void testFineAlignNeverEntersForExcludedMoves() {
+  struct Case {
+    const char* name;
+    Move move;
+  };
+  Case cases[4];
+
+  cases[0].name = "Distance";
+  cases[0].move = distanceMove(1, 300.0f, 150.0f);
+
+  cases[1].name = "Time";
+  Move timeMove;
+  timeMove.id = 2;
+  timeMove.kind = Move::Kind::Time;
+  timeMove.threshold = 400.0f;  // [ms]
+  timeMove.omega = 2.0f;
+  timeMove.timeout = 60000.0f;
+  cases[1].move = timeMove;
+
+  cases[2].name = "Wheels-velocity Angle";
+  Move wheelsMove;
+  wheelsMove.id = 3;
+  wheelsMove.kind = Move::Kind::Angle;
+  wheelsMove.velocityKind = Move::VelocityKind::Wheels;
+  wheelsMove.threshold = 0.50f;  // [rad]
+  wheelsMove.vLeft = -100.0f;
+  wheelsMove.vRight = 100.0f;
+  wheelsMove.timeout = 60000.0f;
+  cases[2].move = wheelsMove;
+
+  cases[3].name = "timed-out Angle";
+  Move timedOutAngle = angleMove(4, 3.0f, 2.0f);  // a long turn...
+  timedOutAngle.timeout = 200.0f;                 // ...cut off mid-motion
+  cases[3].move = timedOutAngle;
+
+  for (const Case& scenario : cases) {
+    Planner planner(alignLimits());
+    PerfectPlant plant;
+    Types::RobotState state;
+    uint32_t now = 0;
+    CHECK(planner.move(scenario.move, false));
+
+    bool completed = false;
+    bool sawAligning = false;
+    for (int i = 0; i < 600 && !completed; ++i) {
+      completed = cycle(planner, state, plant, now, kPeriod).completed;
+      if (planner.lifecycle() == MoveLifecycle::Aligning) sawAligning = true;
+    }
+    std::printf("  fine-align excluded: %s -- completed %d, aligned %d\n",
+                scenario.name, completed ? 1 : 0, sawAligning ? 1 : 0);
+    CHECK(completed);
+    CHECK(!sawAligning);
+  }
+}
+
+// A Move handing off AT SPEED does not align -- and the ledger still
+// carries its intent through the successor's own alignment.
+//
+// Two same-ratio Angle Moves queued together hand off at speed
+// (boundaryLambda()'s exact-ratio fast path), so the first is not supposed
+// to come to a stop at all and is excluded exactly as `arrived` excludes
+// it. The SECOND has an empty queue behind it, lands at zero, and aligns.
+//
+// THIS IS A REAL LIMITATION, NOT JUST A GUARD: in a PIPELINED tour every
+// corner but the last hands off at speed and therefore gets no trim. The
+// measured 25.8 -> 9.4 mm result came from a SEQUENTIAL tour
+// (planner_square_tour.py --sequential --trim), which is the
+// configuration this phase reproduces; a pipelined tour is a different
+// arm with a different number.
+//
+// The final heading is the discriminating check. Each Move commands 0.50
+// rad and intends 0.55, so a chain that carries INTENT lands on 1.10 --
+// and it only lands there if the second Move's alignment aimed at the
+// LATCHED ledger target rather than at a target recomputed from whatever
+// baseline its own corrective nudges left behind.
+void testFineAlignSkipsAnAtSpeedHandoffAndKeepsTheLedger() {
+  Planner planner(alignLimits());
+  PerfectPlant plant;
+  Types::RobotState state;
+  uint32_t now = 0;
+
+  Move first = angleMove(1, 0.50f, 2.0f);
+  first.requestedThreshold = 0.55f;  // [rad]
+  Move second = angleMove(2, 0.50f, 2.0f);
+  second.requestedThreshold = 0.55f;  // [rad]
+  CHECK(planner.move(first, false));
+  CHECK(planner.move(second, false));
+
+  int aligningDuringFirst = 0;
+  int aligningDuringSecond = 0;
+  bool firstAcked = false;
+  bool secondAcked = false;
+  for (int i = 0; i < 800 && !secondAcked; ++i) {
+    const TickResult result = cycle(planner, state, plant, now, kPeriod);
+    if (planner.lifecycle() == MoveLifecycle::Aligning) {
+      if (firstAcked) {
+        ++aligningDuringSecond;
+      } else {
+        ++aligningDuringFirst;
+      }
+    }
+    if (result.completed && result.moveId == 1u) firstAcked = true;
+    if (result.completed && result.moveId == 2u) secondAcked = true;
+  }
+
+  const float heading =
+      (plant.positionRight - plant.positionLeft) / 100.0f;  // [rad]
+  std::printf("  fine-align at-speed handoff: aligning ticks %d (first) / %d "
+              "(second), heading %.5f rad vs intent 1.10\n",
+              aligningDuringFirst, aligningDuringSecond,
+              static_cast<double>(heading));
+  CHECK(firstAcked);
+  CHECK(secondAcked);
+  CHECK(aligningDuringFirst == 0);
+  CHECK(aligningDuringSecond > 0);
+  CHECK(std::fabs(1.10f - heading) <= 0.017453f);
+}
+
+// Unconfigured is OFF. With both fields at their structural zero -- which
+// is what every direct caller that never sets them gets -- an Angle Move
+// completes at its landing exactly as it did before 134-003 existed.
+void testFineAlignDisabledWhenUnconfigured() {
+  Planner planner(benchLimits());  // alignTol/alignMaxNudges both 0
+  PerfectPlant plant;
+  Types::RobotState state;
+  uint32_t now = 0;
+  Move move = angleMove(1, 0.50f, 2.0f);
+  move.requestedThreshold = 0.55f;  // a residual the trim WOULD have closed
+  CHECK(planner.move(move, false));
+
+  const AlignWatch watch = runAlignment(planner, state, plant, now, 600);
+
+  CHECK(watch.completed);
+  CHECK(!watch.sawAligning);
+  // Landed on the command, residual left standing for the ledger to repay.
+  const float heading =
+      (plant.positionRight - plant.positionLeft) / 100.0f;  // [rad]
+  CHECK(std::fabs(0.50f - heading) <= 0.01f);
+}
+
 }  // namespace
 
 int main() {
@@ -384,6 +786,13 @@ int main() {
   testStallWindowExpiryEvent();
   testEstopForcesIdleImmediately();
   testReplaceReactivatesBreakaway();
+  testFineAlignEntersTrimsAndAcksOnTheWayOut();
+  testFineAlignStopsAtTheNudgeCap();
+  testFineAlignStopsWhenANudgeMakesItWorse();
+  testFineAlignTimeoutFiresFromInsideAligning();
+  testFineAlignNeverEntersForExcludedMoves();
+  testFineAlignSkipsAnAtSpeedHandoffAndKeepsTheLedger();
+  testFineAlignDisabledWhenUnconfigured();
   std::printf("planner_lifecycle_test: all checks passed\n");
   return 0;
 }

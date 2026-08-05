@@ -17,13 +17,22 @@
 // tick()'s own Move lifecycle (130-008, planner-honesty-pass-50ms-period-
 // tick-state-machine-limits-reduction.md item 2) is an explicit state
 // machine, Motion::MoveLifecycle (planner_types.h): Idle -> Breakaway ->
-// Tracking -> (Idle|Draining), with Stopping as the parallel path a
-// Kind::Stop entry takes, and Draining as the transient path back to Idle
-// once the queue runs dry. Replaces the previous implicit encoding as
+// Tracking -> (Aligning) -> (Idle|Draining), with Stopping as the parallel
+// path a Kind::Stop entry takes, and Draining as the transient path back to
+// Idle once the queue runs dry. Replaces the previous implicit encoding as
 // interacting `occupied`/`hasMoved`/`settling` booleans. MovePhase
 // (Accel/Hold/Decel) is `Tracking`'s own sub-phase, not a sibling state.
 // Full transition table, event definitions, and completion-priority order:
 // Planner::tick()'s own doc comment in planner.cpp.
+//
+// Aligning (134-003) is the one state a Move can be in AFTER its profile
+// has landed and BEFORE it is acked: a Twist Angle Move holds itself open
+// there while it trims its residual against the cumulative-intent ledger
+// with bounded low-speed pivot nudges, re-settling between each. "A Move
+// is not done until it has landed" -- so `TickResult::completed` fires on
+// the transition OUT of Aligning, never into it. The Move's own wall-clock
+// `timeout` keeps running throughout and still outranks the trim, so a
+// non-converging alignment cannot wedge the queue.
 #pragma once
 
 #include <cstdint>
@@ -281,6 +290,56 @@ class Planner {
   // Age the staged command by one tick (see cmdLeftPrevious_).
   void rollCommandHistory();
 
+  // ---- Terminal fine-align (134-003, MoveLifecycle::Aligning) -----------
+  //
+  // The per-corner heading trim, in firmware. Proven on `tovez` by the
+  // host-side graft this reproduces: planner square-tour closure 25.8 ->
+  // 9.4 mm at a 1.0 deg tolerance, ~2 s/corner, nothing else changed
+  // (docs/bench-reports/motion-planning-lab-2026-08-04.md §5.2). Depends
+  // on the cumulative-intent ledger (134-001) for an honest target and on
+  // the speed floor no longer boosting planner-shaped commands (134-002)
+  // for a deliverable nudge.
+
+  // May the just-completed Move hold itself open to trim? Twist Angle
+  // Moves only, completed normally (never on timeout or stall), never one
+  // handing off at speed, and only with both config fields set.
+  bool alignApplies(const Move& m, bool timedOut, bool stalled) const;
+
+  // Latch the ledger target and open the nudge budget. Called ONCE, on the
+  // tick the Move would otherwise have completed.
+  void enterAligning(uint32_t now);  // [ms]
+
+  // One Aligning tick. Returns true when the alignment is finished and the
+  // Move may complete; false while it continues -- in which case this call
+  // has already staged the tick's own command, exactly one staging call per
+  // tick like every other path through tick().
+  bool alignStep(uint32_t now, float dt, const Measurement& measured);
+
+  // Re-arm active_ as a bounded low-speed corrective pivot of `residual`,
+  // so the nudge reaches the wheels through the NORMAL planActive()/
+  // planWheels() path rather than a private bypass.
+  void startAlignNudge(uint32_t now, float residual);  // [ms] [rad]
+
+  // The settling half of an Aligning tick: ramp the staged command out at
+  // the shape's own decel ceiling and hold the boundary at zero.
+  void alignSettleCommand(float dt);  // [s]
+
+  // The corrective pivot's angular cruise -- a bounded fraction of the
+  // configured angular ceiling (see the definition for the sizing).
+  float alignNudgeOmega() const;  // [rad/s]
+
+  // The bounded window one corrective pivot may run for before the phase
+  // gives up on it and re-measures. Derived from the pivot itself; needed
+  // because a measured 26% of nudges never break away at all.
+  float alignNudgeWindow(float threshold, float omega) const;  // [rad] [rad/s] -> [ms]
+
+  // The bounded window one settle phase may wait for rest before giving up
+  // and completing the Move where it stands -- the same "a noisy plant
+  // cannot wedge the queue here" backstop plannedStopWindow() provides for
+  // a Kind::Stop, and the reason a Move with no `timeout` at all still
+  // cannot hang in Aligning.
+  float alignSettleWindow() const;  // [ms]
+
   PlannerLimits limits_;
   WheelChannel left_, right_;
   PoseTracker pose_;
@@ -312,6 +371,27 @@ class Planner {
   // kept so the post-completion drain (which runs with no active Move)
   // ramps at the same ceiling the profile landed under.
   float lastShapeDecel_ = 0.0f;  // [mm/s^2]
+
+  // Terminal fine-align working state (134-003). Lives BESIDE active_, not
+  // inside it, for one specific reason: a corrective nudge deliberately
+  // REWRITES active_.move (threshold/omega/v_x) and active_.baselineHeading
+  // -- that rewrite is what lets the nudge flow through the ordinary
+  // planWheels() path instead of a bypass -- so the ledger target this
+  // phase is aiming at has to be latched somewhere that rewrite cannot
+  // reach.
+  struct AlignState {
+    float target = 0.0f;       // [rad] cumulative-intent heading to land on
+    uint32_t nudgeStart = 0;   // [ms] when the current nudge's window opened
+    uint32_t settleStart = 0;  // [ms] when the current settle phase opened
+    float nudgeWindow = 0.0f;  // [ms] how long that nudge may run
+    // |residual| the last nudge was fired at, so the next measurement can
+    // tell "this nudge helped / did nothing / made it worse" apart.
+    float residualBefore = -1.0f;  // [rad] magnitude; <0 = no nudge yet
+    int32_t nudges = 0;        // corrective pivots spent so far
+    uint32_t restTicks = 0;    // consecutive command-quiet ticks
+    bool nudging = false;      // driving a nudge (else settling to measure)
+  };
+  AlignState align_{};
 
   // Cumulative-baseline carry staged between a completion and the next
   // activation (see activateNext()).

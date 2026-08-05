@@ -380,7 +380,23 @@ void scenarioAngleStopCompletesWithinTolerance() {
   sim.injectMove(/*v_x=*/0.0f, /*v_y=*/0.0f, kOmega, TestSupport::MoveStopKind::kAngle, kStopAngleRad,
                 kTimeoutMs, /*replace=*/true, kMoveId, kCorrId);
 
-  constexpr int kRunCycles = 80;  // 4s -- comfortably past the ~1s ideal turn time
+  // 134-003: the completion ack for a Twist ANGLE Move now lands AFTER the
+  // terminal fine-align phase (MoveLifecycle::Aligning), not at the
+  // profile's landing -- a Move is not done until it has landed. The window
+  // has to cover the turn, the phase, and the Move's own 5s timeout
+  // backstop, which is what ends the phase in THIS sim: the harness's own
+  // note below records a ~0.21 rad (12 deg) landing residual, far outside
+  // the ~1.8 deg corrective-pivot quantum the phase's tolerance is sized
+  // to, so the trim spends its whole nudge budget here. That is a SIM
+  // artifact -- the sim's corner behaviour sign-flips against hardware
+  // (docs/bench-reports/motion-planning-lab-2026-08-04.md §7), where the
+  // measured residual is ~1.5-2.6 deg and the phase costs ~2 s/corner.
+  //
+  // The assertions below are unchanged and still binding: the ack lands,
+  // err is 0, kFlagFaultMoveTimeout stays CLEAR (an expiry inside Aligning
+  // is the trim overrunning, not the motion failing -- planner.cpp's own
+  // `motionTimedOut`), and the heading is still inside tolerance.
+  constexpr int kRunCycles = 160;  // 8s -- turn (~1s) + fine-align, bounded by the Move's 5s timeout
   bool sawOppositeWheelSigns = false;
   std::vector<DecodedLine> frames;
   for (int i = 0; i < kRunCycles; ++i) {
