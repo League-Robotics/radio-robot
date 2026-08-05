@@ -768,6 +768,19 @@ def drivetrain_type_for_config(cfg: dict) -> str:
     return str(_get(cfg, "identity", "drivetrain_type", default="differential"))
 
 
+def radio_channel_for_config(cfg: dict) -> int:
+    """``connection.radio_channel`` (robot_config.proto's Connection group,
+    host-only) -- the nRF frequency band ``main.cpp`` passes to
+    ``Radio::begin()``. Defaults to 0 (the historical hard-coded value and
+    the RadioRelay default) when absent, so every pre-existing robot JSON
+    keeps its behavior without an edit. Clamped to the nRF band range
+    [0, 83] (``Radio::begin()``'s own documented domain) rather than
+    trusting the file blindly -- a robot silently deaf on a nonsense band
+    looks exactly like a dead radio."""
+    channel = int(_get(cfg, "connection", "radio_channel", default=0))
+    return min(83, max(0, channel))
+
+
 def generate(cfg: dict, source_path: str) -> str:
     try:
         trackwidth   = trackwidth_for_config(cfg)
@@ -793,6 +806,7 @@ def generate(cfg: dict, source_path: str) -> str:
 
     profile_name = profile_name_for_source(source_path)
     drivetrain_type = drivetrain_type_for_config(cfg)
+    radio_channel = radio_channel_for_config(cfg)
 
     # Config::Robot's Motors group (132-005) only has room for the drive
     # pair's own left/right values -- no per-port array, no placeholder
@@ -844,6 +858,11 @@ const char kRobotProfileName[] = "{profile_name}";
 // identity.drivetrain_type (robot JSON), defaulting to "differential"
 // per the schema's own documented default.
 const char kDrivetrainType[] = "{drivetrain_type}";
+
+// kRadioChannel — see boot_config.h's own doc comment. Baked from
+// connection.radio_channel (robot JSON), defaulting to 0 (the historical
+// hard-coded Radio::begin() value) when absent.
+const int kRadioChannel = {radio_channel};  // [nRF frequency band]
 
 void defaultMotorConfigs(msg::MotorConfig* out) {{
     // Velocity PID gains — baked from the robot JSON's motors.vel_* keys

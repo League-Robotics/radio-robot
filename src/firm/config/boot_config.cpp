@@ -22,6 +22,11 @@ const char kRobotProfileName[] = "tovez";
 // per the schema's own documented default.
 const char kDrivetrainType[] = "differential";
 
+// kRadioChannel — see boot_config.h's own doc comment. Baked from
+// connection.radio_channel (robot JSON), defaulting to 0 (the historical
+// hard-coded Radio::begin() value) when absent.
+const int kRadioChannel = 0;  // [nRF frequency band]
+
 void defaultMotorConfigs(msg::MotorConfig* out) {
     // Velocity PID gains — baked from the robot JSON's motors.vel_* keys
     // (132-017 JSON reshape retarget -- was control.vel_* before the

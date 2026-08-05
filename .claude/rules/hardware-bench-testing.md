@@ -127,6 +127,38 @@ motion is a bounded `Move` sent through `NezhaProtocol`
 not a hand-typed wire line — use `rogo repl` or one of the bench scripts
 below rather than typing verbs directly at the serial port.
 
+### `rogo serve` — hold the port open; share the robot between programs
+
+**Closing the serial port RESETS the robot** (macOS HUPCL drops DTR on last
+close — `clasi/issues/later/A-port-close-resets-the-robot-live-config-still-
+wiped.md`), so every one-shot `rogo` invocation reboots the MCU and wipes
+live-pushed config. For any session with more than one command, run the
+daemon instead:
+
+```bash
+uv run rogo serve
+```
+
+It opens the serial connection ONCE, holds it for its whole lifetime, and
+serves the repl grammar on TCP `127.0.0.1:7646` (`--listen HOST:PORT`, or
+`$ROGO_ADDR`) to any number of concurrent local programs:
+
+- interactively: `uv run rogo repl --connect`
+- from Python: `robot_radio.io.client.RogoClient` —
+  `RogoClient().cmd("drive 200")`, `.estop()`, `.subscribe_tlm()`
+- from anything: newline-delimited plain text (or `{"id":..,"cmd":..}`
+  JSON) in, JSON lines out — even `nc 127.0.0.1 7646`
+
+`estop`/`halt` from ANY client jumps the daemon's command queue and aborts
+an in-progress wait, and the daemon halts the robot (`halt_now`) before it
+ever closes the port (Ctrl-C, SIGTERM, or a client's `shutdown` verb).
+`sub tlm [N]` streams every Nth telemetry frame to that client; `status`
+reports the held port, uptime, and client count.
+
+**Full reference: `uv run rogo --agent`** — the agent manual (same
+convention as `mbdeploy --agent`): complete verb grammar, the daemon's
+socket protocol event shapes, `RogoClient` recipes, and the failure modes.
+
 ### Standing radio-relay bench gate (sprint 124's own acceptance gate)
 
 For a one-shot, self-scoring run of the full protocol v5 acceptance
