@@ -1,5 +1,21 @@
 # Sprint 134 ticket 004 — bench acceptance on `tovez`, 2026-08-05
 
+> **This document has two parts.**
+> **Part I** (§1–§7) is the acceptance run made BEFORE ticket 134-006, on
+> sprint tip `10b7e13e`. **Part II** (§8 onward) is the re-run made AFTER
+> 134-006 (`0c235a2b`), same robot, same night. Read Part II for the
+> current verdict; Part I is kept because Part II's diagnosis rests on it.
+>
+> **Headline, after 006:** the gate arm still fails and the sprint firmware
+> still regresses it — but the cause is no longer the one Part I named. The
+> ledger fix WORKS; the gate harness destroys it at every corner by holding
+> a zero-WHEELS lease during its settle dwell, which routes to
+> `planner_.estop()`. Measured directly in §10.
+
+---
+
+## PART I — before 134-006 (sprint tip `10b7e13e`)
+
 **Verdict: the gate FAILS both bars, and the sprint firmware measurably
 REGRESSES the gate's own invocation against its immediate predecessor.**
 
@@ -255,3 +271,252 @@ All under `src/tests/bench/output/` (gitignored), prefixed `sprint134_`:
 - `sprint134_alignprobe.{json,csv}` — isolated Angle Moves, per-nudge trace
 - `sprint134_ledgerprobe.json` — the PAIRED/SEQUENTIAL carry A/B
 - `sprint134_floorprobe.json` — the speed-floor verification
+
+---
+
+# PART II — re-run after 134-006 (`0c235a2b`), same night, same robot
+
+**Verdict, in one line: 134-006 works. The gate still fails, because the
+gate harness destroys the thing 134-006 fixed, at every corner.**
+
+The sequential arm is still worse than control — 4 of 4 interleaved pairs,
+mean +15.9 mm, essentially unchanged from Part I's +19.7 mm. But Part I
+blamed the wrong line. The queue-occupancy proxy 134-006 removed was real
+and its removal is correct; it is simply not what kills the ledger in this
+arm. What kills it is `SequentialTour.settle()`'s own zero-WHEELS lease,
+measured directly in §10 — and with that one host behaviour removed, the
+same firmware closes **3.6 / 8.2 mm with 12/12 corners inside `align_tol`**.
+
+Firmware: sprint `MICROBIT.hex` built `--clean --robot-debug` from the tree
+at `0c235a2b` (`VER` string `0.20260805.1`; repo version deliberately still
+`0.20260804.6` — not drift). Control: `8aeb3a4a`, the same pre-sprint parent
+Part I used, rebuilt `--clean --robot-debug` in a throwaway worktree.
+
+Identity read back off the board before EVERY run, same gate as Part I
+(`align_tol` nonzero ⇒ sprint, 0 ⇒ control). Sprint reads
+`align_tol = 0.017453` rad, `align_max_nudges = 6`,
+`settle_epsilon_angular = 0.035` rad, `source = BAKED`. Reflashed between
+every single run. Within-pair order alternated. **No run in Part II is
+reported on an unverified arm.**
+
+**No file under `src/` was modified by this re-run**, same as Part I.
+
+---
+
+## 8. Priority 1 — sequential, sprint vs control, interleaved (n = 4 each)
+
+`planner_square_tour.py --sequential`, `--trim` off, no `--turn-scale`.
+
+| pair | sprint | control | Δ (sprint − control) |
+|---|---|---|---|
+| 0 | 36.2 | **22.0** | +14.2 |
+| 1 | 41.9 | **26.1** | +15.8 |
+| 2 | 38.0 | **23.2** | +14.8 |
+| 3 | 40.2 | **21.3** | +19.0 |
+
+**Control better in 4 of 4. Mean Δ +15.9 mm.** Sprint mean 39.1 mm (range
+36.2–41.9), control mean 23.1 mm (range 21.3–26.1). The two distributions
+do not overlap.
+
+### The bars
+
+| bar | requirement | measured | verdict |
+|---|---|---|---|
+| sprint acceptance | closure ≤ 8 mm | 39.1 mm | **FAIL** |
+| mechanism acceptance | closure ≤ 12 mm | 39.1 mm | **FAIL** |
+| mechanism acceptance | ≥90% corners inside `align_tol` | **0%** cumulative (0/16) | **FAIL** |
+| mechanism acceptance | ≥3× over same-session control | **0.59×** (1.7× *worse*) | **FAIL** |
+
+Part I's note stands: the sprint's 64.1 mm premise still does not
+reproduce. This session's interleaved control measured **21.3–26.1 mm**,
+even tighter than last night's 8.5–42.5. The 3× bar is scored against that
+control, as instructed, not against 64.1.
+
+### The one number that says what is actually happening
+
+Split the per-corner residual two ways — against the corner's OWN 90°
+intent, and against cumulative *n*×90°:
+
+| firmware | turn delivered/corner | leg curl/leg | resid vs own 90° | resid vs *n*×90° |
+|---|---|---|---|---|
+| **sprint** | **+90.14°** (sd 0.37) | −1.65° (sd 0.38) | mean +0.14°, **16/16 = 100% inside 1.0°** | mean −3.76°, **0/16 = 0%** |
+| control | +91.33° (sd 0.85) | −1.97° (sd 0.41) | mean +1.33°, 5/16 = 31% | mean −1.38°, 2/16 = 12% |
+
+**The align phase is not failing. It is succeeding, perfectly, at the wrong
+target.** Sprint lands every one of 16 corners within 1.0° of that Move's
+own 90° — 100%, against control's 31%. Ticket 003's mechanism is the most
+accurate thing on the robot. But because it is aimed at per-Move intent
+rather than the cumulative ledger, the −1.65°/leg curl is never repaid, and
+it accumulates: sweep 353.98° against control's 357.41°.
+
+Control is *less* accurate per turn (+91.33°, over-rotating by 1.33°) and
+that inaccuracy happens to cancel most of the leg curl. Part I called this
+"removing an error that was accidentally cancelling another one," and that
+description survives the re-run intact.
+
+---
+
+## 9. Priority 2 — pipelined, sprint vs control, interleaved (n = 3 each)
+
+**134-006 did not disturb the arm that already worked.**
+
+| pair | sprint | control | Δ |
+|---|---|---|---|
+| 0 | 8.1 | 8.0 | +0.1 |
+| 1 | **8.2** | 19.8 | −11.6 |
+| 2 | **2.2** | 5.8 | −3.6 |
+
+Sprint mean 6.2 mm / median 8.1; control mean 11.2 / median 8.0. Mean
+Δ −5.0 mm. Direction matches Part I (which measured −11.2 mm); pair 0 is a
+tie rather than a win, on n = 3.
+
+The sweep is the cleaner discriminator, and it is unambiguous:
+
+| firmware | sweeps | turn/corner | leg curl/leg |
+|---|---|---|---|
+| **sprint** | **359.47, 359.53, 360.10** | +91.79° | −1.87° |
+| control | 361.70, 362.68, 361.93 | +94.04° | −3.53° |
+
+Sprint lands within 0.53° of a perfect 360° on all three runs; control
+overshoots by 1.7–2.7° on all three. And the sprint turns over-deliver by
++1.79°/corner against a −1.87°/leg curl — **that is the ledger repaying the
+curl**, exactly as designed. This is the same mechanism the sequential arm
+cannot reach.
+
+As predicted by 134-006's own comment, the pipelined path never sets
+`idleLatched_`, so it is untouched by the fix.
+
+---
+
+## 10. Why 134-006 is inert in the gate arm — measured, not inferred
+
+`App::RobotLoop::handleWheels()` (`src/firm/app/robot_loop.cpp:365`):
+
+```cpp
+planner_.estop();  // Drive takes over motion (one owner at a time)
+```
+
+and `Planner::estop()` (`src/motion/planner/planner.cpp:308`) clears
+`carryValid_`.
+
+`planner_square_tour.py`'s `SequentialTour.settle()` holds a zero-WHEELS
+lease for the whole 1.2 s dwell:
+
+```python
+while time.monotonic() < end:
+    self.proto.wheels(0.0, 0.0, self.LEASE)
+```
+
+So the gate arm calls `planner_.estop()` tens of times at **every one of its
+eight segment boundaries**, and the ledger is cleared at every corner — by
+134-006's own fail-closed rule, and *correctly* by that rule's own logic: a
+WHEELS command genuinely is another owner taking motion. 134-006 fixed the
+idle-gap proxy; the gate arm never reaches that path, because it hits the
+estop path first.
+
+### Direct A/B — same firmware, same tour, only the settle differs
+
+4 × (500 mm leg + 90° turn), rest-to-rest, waiting for each completion ack.
+`LEASE` holds `wheels(0,0)` exactly as the tour does; `PASSIVE` drains
+telemetry and sends nothing.
+
+| arm | n | closure | sweep | turn delivered/corner | leg curl | corners inside 1.0° |
+|---|---|---|---|---|---|---|
+| **PASSIVE** (carry lives) | 3 | **3.6, 8.2 mm** | **+359.98 … +360.56** | **+91.33°** | −1.27° | **12/12 = 100%** |
+| LEASE (carry killed) | 2 | 34.2 mm | +354.60, +355.46 | +90.23° | −1.47° | 1/8 = 12% |
+
+Per-corner, the passive arm's turn tracks the preceding leg's curl and
+repays it:
+
+| leg curl | −1.48 | −0.69 | −1.49 | −0.34 |
+|---|---|---|---|---|
+| turn delivered | +91.37 | +90.93 | +91.39 | +90.52 |
+| cumulative residual | −0.11 | +0.13 | +0.03 | +0.21 |
+
+The lease arm, on identical leg curl, delivers a flat +90° and walks the
+residual out to −5.4°.
+
+**This is the whole finding.** The ledger, the intent carry, and the
+terminal fine-align all work on hardware. One line of host settle behaviour
+in the measuring instrument switches them off.
+
+---
+
+## 11. What passes and what fails — stated plainly
+
+**The gate, as ticket 004 specifies it, FAILS.** `planner_square_tour.py
+--sequential` on sprint firmware closes 39.1 mm against an ≤8 mm sprint bar
+and an ≤12 mm mechanism bar, and is 1.7× *worse* than the same-session
+interleaved control. That is the honest answer to the question as asked,
+and it is the same answer as Part I.
+
+**The mechanism, measured without the harness artifact, PASSES every
+mechanism bar:**
+
+| bar | requirement | measured (passive settle) | verdict |
+|---|---|---|---|
+| mechanism | closure ≤ 12 mm | **3.6 / 8.2 mm** | **PASS** |
+| mechanism | ≥90% corners inside `align_tol` | **100%** (12/12) | **PASS** |
+| mechanism | ≥3× over same-session baseline | **5.8×** (34.2 → 5.9 mm mean) | **PASS** |
+
+One of the two passive runs (3.6 mm) also clears the ≤8 mm *sprint*
+acceptance bar; the other (8.2 mm) sits 0.2 mm outside it.
+
+These two statements are not in tension and neither should be dropped when
+this is summarized. The sprint built a mechanism that meets its bar. The
+sprint's own acceptance gate cannot see it, because the gate holds a WHEELS
+lease that tells the firmware someone else is driving.
+
+**`align_tol` was NOT tightened.** It read back 0.017453 rad on every run.
+Part I's measurement that tightening is counterproductive (convergence
+93%→64%) stands unchallenged and untested — deliberately.
+
+---
+
+## 12. What this leaves open
+
+1. **The decision is now a scoping question, not a tuning one.** A WHEELS
+   command dropping the carry is defensible; a *zero* WHEELS command that
+   commands no motion arguably is not, and neither is one whose lease
+   expires with the robot never having moved. The candidates, in rough
+   order of cost: (a) fix the harness — `settle()` need not hold a lease at
+   all, and the passive dwell measured here is strictly better
+   instrumentation; (b) make `handleWheels()` skip `planner_.estop()` when
+   both wheel velocities are zero AND the planner is idle; (c) apply the
+   §10 idle-drift test to the estop path too, so a takeover that never
+   moved the robot does not invalidate the ledger. **(a) is nearly free and
+   makes the gate honest; (b)/(c) change firmware semantics and want a
+   design decision, not a bench call.** Not attempted here.
+2. **Whether `--sequential` is the right acceptance arm at all.** The
+   pipelined arm — the one that closes at 6.2 mm — is what a real tour
+   does. The sequential arm exists to make per-corner poses observable, and
+   it perturbs the thing it measures.
+3. **Nudges/corner still not directly observable.** Unchanged from Part I:
+   the align phase emits no DBG line, and the tour's `nudge_count` reports
+   only host-side trim. Convergence here is inferred from per-corner
+   residual, as before.
+4. **Camera truth.** Still entirely encoder odometry. The −1.3…−2.0°/leg
+   curl that drives this whole result has never been checked against the
+   overhead camera, and it is the single largest unverified quantity in
+   both parts of this report.
+
+## Artifacts (Part II)
+
+All under `src/tests/bench/output/`, prefixed `sprint134_rerun_`:
+
+- `sprint134_rerun_summary.json` — every A/B run, one record each, with the
+  firmware-identity read-back embedded per run
+- `trimtol_sprint134_rerun_*.json` — per-run rest poses, corners, segments
+- `planner_square_tour_sprint134_rerun_*.png` — per-run dual-trace charts
+- `sprint134_rerun_carry_{passive,lease}*.json` — the §10 settle A/B
+
+The pre-existing `planner_square_tour_best.png`, `planner_tour_results.csv`
+(appended to, `best` row intact) and `trimtol_best.json` are untouched.
+
+## Bench state at handoff
+
+`tovez` is on the **sprint** firmware (`0.20260805.1`, `--robot-debug`),
+estopped and idle, wheels free on the stand, on `/dev/cu.usbmodem2121102`.
+The control hex is kept at
+`radio-robot-elite.worktrees/ctrl134/MICROBIT.hex` if the A/B wants
+repeating.
