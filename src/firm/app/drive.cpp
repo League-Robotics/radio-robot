@@ -10,6 +10,7 @@ Drive::Drive(Devices::Motor& left, Devices::Motor& right, float trackWidth)
 
 void Drive::command(float vLeft, float vRight, float duration,
                     uint32_t moveId, uint32_t now) {
+  // Arm a bounded wheel command.
   targetLeft_ = vLeft;
   targetRight_ = vRight;
   commandDeadline_ = now + static_cast<uint32_t>(duration);
@@ -18,13 +19,14 @@ void Drive::command(float vLeft, float vRight, float duration,
 }
 
 void Drive::takeover() {
+  // Transfer motion ownership without resetting learned state.
   targetLeft_ = 0.0f;
   targetRight_ = 0.0f;
   commandActive_ = false;
-
 }
 
 void Drive::estop() {
+  // Full stop: zero motion, reset learned state, and reassert the stop.
   takeover();
 
   stopEnforceCountdown_ = kStopEnforceTicks;
@@ -50,6 +52,7 @@ void Drive::update(Types::RobotState& state, uint32_t now) {
   const bool owned = commandActive_;
 
   if (commandActive_ && static_cast<int32_t>(now - commandDeadline_) >= 0) {
+    // Expire the armed command and publish its completion.
     commandActive_ = false;
     targetLeft_ = 0.0f;
     targetRight_ = 0.0f;
@@ -59,6 +62,7 @@ void Drive::update(Types::RobotState& state, uint32_t now) {
 
   if (!owned) return;
 
+  // Publish Drive's active command into the shared blackboard.
   state.wheelLeft.cmdVelocity = targetLeft_;
   state.wheelRight.cmdVelocity = targetRight_;
   state.command.moveActive = commandActive_;
@@ -103,6 +107,7 @@ float Drive::crawlDuty(float duty, float& carry) const {
 
 void Drive::applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
                             float& speedRight) const {
+  // Scale sub-floor wheel pairs so the dominant wheel reaches vMin.
   speedLeft = rawLeft;
   speedRight = rawRight;
   if (bounds_.vMin <= 0.0f) return;
@@ -115,6 +120,7 @@ void Drive::applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
 
 float Drive::fastPid(float& integral, float err, float aCmd, float dt,
                      bool steady) const {
+  // Stage B: proportional + feedforward + bounded integral.
   const float proportional = gains_.kp * err;
   const float feed = gains_.kaff * aCmd;
 
@@ -142,6 +148,7 @@ float Drive::fastPid(float& integral, float err, float aCmd, float dt,
 
 void Drive::adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
                       bool fresh, float dt) const {
+  // Stage C: slow bias adaptation on fresh, steady, above-floor motion.
   if (bounds_.tauAdapt <= 0.0f || dt <= 0.0f || !fresh) return;
   if (std::fabs(aCmd) >= bounds_.aSteady) return;
   if (vCmdMagnitude < bounds_.vMin) return;
@@ -156,6 +163,7 @@ void Drive::adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
 
 void Drive::updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
                           bool& latched) const {
+  // Latch sustained large error once the window elapses.
   if (bounds_.deficitThreshold <= 0.0f || bounds_.deficitWindow <= 0.0f ||
       !conditionNow) {
     since = 0;
@@ -167,6 +175,7 @@ void Drive::updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
 }
 
 uint32_t Drive::sampleAge(uint32_t now, uint32_t sampleTime) const {
+  // Keep clock-domain skew from underflowing.
   return (now < sampleTime) ? 0u : (now - sampleTime);
 }
 
@@ -237,6 +246,7 @@ void Drive::tick(const Types::RobotState& state) {
   const bool enforceStop = stopEnforceCountdown_ > 0 || wheelsMoving;
   if (stopEnforceCountdown_ > 0) --stopEnforceCountdown_;
 
+  // Quiet-at-zero baseline unless stop reassertion is active.
   const bool commandedStop = dutyLeft == 0.0f && dutyRight == 0.0f;
   const bool alreadyQuiet =
       commandedStop && writtenLeft_ == 0.0f && writtenRight_ == 0.0f;
