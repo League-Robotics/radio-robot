@@ -100,6 +100,12 @@ int main() {
                "landing.settleEpsilonAngular");
   checkFloatEq(simLimits.landing.decelPlanFraction, hw.landing.decelPlanFraction,
                "landing.decelPlanFraction");
+  // 134-003 terminal fine-align. alignMaxNudges is an int32 count, compared
+  // through the same float check as its siblings -- both sides are small
+  // exact integers, so the 1e-4 tolerance is a strict equality here.
+  checkFloatEq(simLimits.landing.alignTol, hw.landing.alignTol, "landing.alignTol");
+  checkFloatEq(static_cast<float>(simLimits.landing.alignMaxNudges),
+               static_cast<float>(hw.landing.alignMaxNudges), "landing.alignMaxNudges");
   checkFloatEq(simLimits.tracking.headingHoldGain, hw.tracking.headingHoldGain,
                "tracking.headingHoldGain");
   checkFloatEq(simLimits.plant.velocityFilterWeight, hw.plant.velocityFilterWeight,

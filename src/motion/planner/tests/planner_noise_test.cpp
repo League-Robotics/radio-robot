@@ -679,6 +679,59 @@ void testHeadingHoldUnderNoiseAndLag() {
   CHECK(std::fabs(path - 500.0f) <= kCruise * kPeriod * 0.001f);
 }
 
+// 134-003 terminal fine-align, on the dirty plant. The state machine's own
+// coverage is planner_lifecycle_test; what THIS tier has to answer is
+// whether the phase still converges once the samples are noisy, stale and
+// one cycle late -- i.e. whether it can measure a residual on a lagging
+// plant at all, and whether the nudge it sizes from that measurement
+// actually closes it rather than hunting.
+//
+// This is NOT the accuracy gate. The sim's corner behavior sign-flips
+// against hardware (docs/bench-reports/motion-planning-lab-2026-08-04.md
+// §7: -1.4 deg under-rotation in sim vs +1.55 deg over on `tovez`), so no
+// sim number here can confirm or refute the 25.8 -> 9.4 mm closure claim.
+// A bench run owns that.
+void testFineAlignConvergesUnderNoiseAndLag() {
+  PlannerLimits limits = noisyLimits();
+  limits.landing.alignTol = 0.017453f;  // [rad] the measured 1.0 deg point
+  limits.landing.alignMaxNudges = 6;    // the measured budget
+  Planner planner(limits);
+  NoisyPlant plant = dirtyPlant();
+  Types::RobotState state;
+  uint32_t now = 0;
+
+  // The residual is made the way a real corner makes one: `threshold` is
+  // the actuation-sized command, `requestedThreshold` the caller's intent
+  // (134-001). 0.05 rad -- 2.9 deg -- of gap, well outside tolerance.
+  Move move = angleMove(1, 0.50f, kCruiseOmega);
+  move.requestedThreshold = 0.55f;  // [rad]
+  CHECK(planner.move(move, false));
+
+  bool completed = false;
+  bool sawAligning = false;
+  bool ackedWhileAligning = false;
+  int ticks = 0;
+  for (; ticks < 1200 && !completed; ++ticks) {
+    const TickResult result = cycle(planner, state, plant, now, kPeriod);
+    if (planner.lifecycle() == Motion::MoveLifecycle::Aligning) {
+      sawAligning = true;
+      if (result.completed) ackedWhileAligning = true;
+    }
+    completed = result.completed;
+  }
+
+  const float heading =
+      (plant.positionRight - plant.positionLeft) / limits.plant.trackWidth;
+  std::printf("  fine-align on a dirty plant: heading %.5f rad vs intent "
+              "0.55, %d ticks\n", static_cast<double>(heading), ticks);
+  CHECK(completed);
+  CHECK(sawAligning);
+  CHECK(!ackedWhileAligning);
+  // Converged, not merely finished: inside the tolerance it was given.
+  // Against the 0.05 rad it started with, this is the trim doing its job.
+  CHECK(std::fabs(0.55f - heading) <= limits.landing.alignTol);
+}
+
 }  // namespace
 
 int main() {
@@ -696,6 +749,7 @@ int main() {
   testHeadingHoldOffLeavesDisturbanceStanding();
   testHeadingHoldClampedToVelocityCeiling();
   testHeadingHoldUnderNoiseAndLag();
+  testFineAlignConvergesUnderNoiseAndLag();
   std::printf("planner_noise_test: all checks passed\n");
   return 0;
 }

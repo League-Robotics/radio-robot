@@ -324,6 +324,14 @@
         "decel_plan_fraction": {
           "type": "number",
           "minimum": 0.0
+        },
+        "align_tol": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "align_max_nudges": {
+          "type": "integer",
+          "minimum": 0.0
         }
       }
     },

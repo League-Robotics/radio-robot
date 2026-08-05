@@ -40,9 +40,18 @@ from typing import Any, TypedDict
 # FUTURE `planner.tour` breakage taking the whole module down); only
 # `TOURS` (below) would degrade to empty if it ever fired again.
 try:
-    from robot_radio.planner.tour import TOUR_1, TOUR_2
+    from robot_radio.planner.tour import (
+        PIPELINED_EXECUTION,
+        SQUARE_EXECUTION,
+        TOUR_1,
+        TOUR_2,
+        TOUR_SQUARE,
+        TourExecution,
+    )
 except (ImportError, AttributeError):
-    TOUR_1 = TOUR_2 = []
+    TOUR_1 = TOUR_2 = TOUR_SQUARE = []
+    TourExecution = None  # type: ignore[assignment]
+    PIPELINED_EXECUTION = SQUARE_EXECUTION = None  # type: ignore[assignment]
 
 
 # ---------------------------------------------------------------------------
@@ -216,8 +225,29 @@ def build_wire_string(spec: CommandSpec, values: dict[str, Any]) -> str:
 #: Named tours available to the GUI (label → ordered wire strings).
 TOURS: dict[str, list[str]] = {
     "Tour 1": TOUR_1,
-    "Tour 2": TOUR_2
+    "Tour 2": TOUR_2,
+    "Square": TOUR_SQUARE,
 }
+
+#: How each named tour must be DRIVEN (label → ``TourExecution``). Separate
+#: from ``TOURS`` because the geometry alone does not determine the result:
+#: "Square" only reproduces ticket 134-004's measured 6.3 mm closure when it
+#: is driven rest-to-rest with a PASSIVE dwell (see ``planner.tour``'s own
+#: ``TourExecution`` docstring). Every entry in ``TOURS`` has an entry here;
+#: ``tour_execution()`` below is the accessor callers should use.
+TOUR_EXECUTION: "dict[str, TourExecution]" = {
+    "Tour 1": PIPELINED_EXECUTION,
+    "Tour 2": PIPELINED_EXECUTION,
+    "Square": SQUARE_EXECUTION,
+}
+
+
+def tour_execution(name: str) -> "TourExecution | None":
+    """The ``TourExecution`` for tour *name*, defaulting to the historical
+    pipelined execution for any tour without an explicit entry. Returns
+    ``None`` only if ``planner.tour`` itself failed to import (the guard at
+    the top of this module), in which case there is no tour to run anyway."""
+    return TOUR_EXECUTION.get(name, PIPELINED_EXECUTION)
 
 
 # ---------------------------------------------------------------------------

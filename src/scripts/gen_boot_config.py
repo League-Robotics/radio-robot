@@ -313,6 +313,14 @@ def _f(v) -> str:
     return s + "f"
 
 
+def _i32(v) -> str:
+    """Format a Python number as a C++ int32_t literal (rounded to the
+    nearest integer -- a count-valued JSON field, e.g. planner.
+    align_max_nudges, is a plain JSON number that the C++ side stores as
+    int32_t)."""
+    return f"{int(round(float(v)))}"
+
+
 def _u32(v) -> str:
     """Format a Python number as a C++ uint32_t literal (rounded to the
     nearest integer -- staleness_ms's own JSON value is a plain number,
@@ -717,6 +725,14 @@ def planner_config_for_config(cfg: dict) -> dict:
         "headingHoldGain": float(_require(cfg, "planner", "heading_hold_gain")),
 
         "decelPlanFraction": float(_require(cfg, "planner", "decel_plan_fraction")),
+
+        # Terminal fine-align (134-003). alignTol is [rad] -- the robot JSON
+        # is where the report's 1.0 DEGREE operating point is converted, once
+        # (0.017453 rad); nothing downstream re-converts. alignMaxNudges is a
+        # plain count, carried as an int32 so PlannerLimits::Landing keeps its
+        # uniform 4-byte stride.
+        "alignTol": float(_require(cfg, "planner", "align_tol")),
+        "alignMaxNudges": int(_require(cfg, "planner", "align_max_nudges")),
     }
 
 
@@ -979,6 +995,9 @@ PlannerBootConfig defaultPlannerLimits() {{
     cfg.headingHoldGain = {_f(planner["headingHoldGain"])};  // [1/s]
 
     cfg.decelPlanFraction = {_f(planner["decelPlanFraction"])};  // [1]
+
+    cfg.alignTol = {_f(planner["alignTol"])};  // [rad]
+    cfg.alignMaxNudges = {_i32(planner["alignMaxNudges"])};
     return cfg;
 }}
 
@@ -1112,6 +1131,8 @@ msg::Planner defaultPlannerGroup() {{
     cfg.settle_epsilon_angular = {_f(planner["settleEpsilonAngular"])};  // [rad]
     cfg.heading_hold_gain = {_f(planner["headingHoldGain"])};   // [1/s]
     cfg.decel_plan_fraction = {_f(planner["decelPlanFraction"])};  // [1]
+    cfg.align_tol = {_f(planner["alignTol"])};  // [rad]
+    cfg.align_max_nudges = {_i32(planner["alignMaxNudges"])};
     return cfg;
 }}
 

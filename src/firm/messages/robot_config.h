@@ -104,6 +104,8 @@ struct Planner {
     float settle_epsilon_angular = 0.0f;
     float heading_hold_gain = 0.0f;
     float decel_plan_fraction = 0.0f;
+    float align_tol = 0.0f;
+    int32_t align_max_nudges = 0;
 
     // --- array / optional-string accessors ---
 };

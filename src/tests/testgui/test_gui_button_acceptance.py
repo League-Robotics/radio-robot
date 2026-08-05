@@ -55,7 +55,10 @@ Button surface covered (sprint brief's own enumeration)
    exercised at the entry-point level, matching the ticket's own framing
    ("exercises ... the SAME entry points every motion button calls").
    Also the Managed Test buttons (``test_s_btn``/``test_t_btn``).
-3. Tour 1 and Tour 2, clicked end to end (``tour_btn_tour_1``/
+3. The Square tour (``tour_btn_square``, 134-005): starts, announces the
+   rest-to-rest execution, retires real legs, and stops on demand. Runs
+   BEFORE Tour 1/Tour 2 on purpose -- see that section's own header.
+3b. Tour 1 and Tour 2, clicked end to end (``tour_btn_tour_1``/
    ``tour_btn_tour_2``).
 4. STOP mid-motion (``ops_btn_stop``, clicked during a running Tour 1):
    motion ceases and the tour queue is flushed (no further leg-completion
@@ -793,7 +796,134 @@ def test_test_button_managed_turn_360deg(gui, recorder):
 
 
 # ---------------------------------------------------------------------------
-# 3. Tour 1 / Tour 2 end to end.
+# 3. Square tour (134-005) -- the button the stakeholder presses.
+#
+# ORDERING IS LOAD-BEARING: this runs BEFORE Tour 1 / Tour 2, not after.
+# Tour 1 currently fails (sim 90deg turns missing by ~13deg, the same defect
+# test_tour_closure_gate.py's own shaped-band gate fails on) and takes the
+# sim plant down with it -- measured 2026-08-05, Tour 2 immediately after it
+# reports "closure 0.0mm, 0 turns" and any later tour's first leg times out
+# waiting for a completion ack that never comes. A tour test placed after
+# those two is testing a dead plant, not its own button.
+#
+# It also deliberately does NOT go through _run_tour() below, whose bar is
+# whole-tour closure + per-leg turn accuracy against that same sim plant --
+# precisely the pre-existing failures above. Reusing it here would add a
+# third failure of somebody else's bug and say nothing about THIS control.
+# What this control has to be right about is the SEQUENCING, and that is
+# what is checked: the button exists, it dispatches the rest-to-rest
+# execution (not the pipelined one), legs actually retire, and Stop Tour
+# winds it down. The per-leg NUMBERS were measured on HARDWARE in ticket
+# 134-004 (median 6.3 mm closure, n=9); the sim plant is not the instrument
+# for that claim and never was.
+# ---------------------------------------------------------------------------
+
+
+def test_square_tour_button_runs_rest_to_rest_and_stops_cleanly(gui, recorder):
+    """``tour_btn_square`` starts the sprint-134 square tour, announces the
+    rest-to-rest execution, retires real legs, and stops on demand.
+
+    The rest-to-rest claim is checked at the narration the GUI itself emits
+    (``planner.tour.TourExecution`` -> ``_TourRunner`` -> the ``[TOUR]
+    Square starting`` line), because that is the only place the choice is
+    observable from outside the worker thread. Its MECHANISM -- one Move in
+    flight at a time and a dwell that writes nothing -- is pinned directly
+    in ``src/tests/unit/test_planner_tour.py``; if that ever regresses to a
+    ``wheels(0, 0)`` lease the firmware's heading ledger is cleared at every
+    boundary and the tour closes ~5x worse (measured, ticket 134-004).
+
+    Leaves the plant idle for whatever runs next: Stop Tour is a PLANNED
+    stop (it queues behind the active leg), so this finishes with the
+    Operations STOP, which flushes the queue outright.
+    """
+    from PySide6.QtWidgets import QPushButton  # type: ignore[import-untyped]
+
+    tour_btn = gui.find(QPushButton, "tour_btn_square")
+    stop_tour_btn = gui.find(QPushButton, "stop_tour_btn")
+    assert tour_btn.isEnabled(), "tour_btn_square must be enabled while connected"
+    assert not stop_tour_btn.isEnabled(), "Stop Tour must start disabled"
+
+    gui.frames.clear()
+    t0 = time.monotonic()
+    try:
+        gui.click(tour_btn.objectName())
+        assert stop_tour_btn.isEnabled(), "tour did not actually start running"
+        assert not tour_btn.isEnabled(), "tour button must ghost while its tour runs"
+
+        # Wait for the FIRST leg to retire -- proves the run is really
+        # driving the wire, not just spawning a worker that immediately
+        # dies. Leg 1 is one 500 mm straight, preceded by one passive
+        # settle dwell, so this is well inside the whole-tour budget.
+        deadline = t0 + TOUR_TIMEOUT_S
+        first_leg_line = "Square leg 1/8"
+        while time.monotonic() < deadline and first_leg_line not in gui.log_text():
+            gui.app.processEvents()
+            time.sleep(0.02)
+        log_at_leg_1 = gui.log_text()
+        first_leg_retired = first_leg_line in log_at_leg_1
+        leg_1_elapsed = time.monotonic() - t0
+
+        # The execution choice must be visible to the operator, not silent.
+        announced_rest_to_rest = "rest-to-rest" in log_at_leg_1
+
+        stop_requested = stop_tour_btn.isEnabled()
+        if stop_requested:
+            gui.click("stop_tour_btn")
+        stop_deadline = time.monotonic() + 10.0
+        while time.monotonic() < stop_deadline and stop_tour_btn.isEnabled():
+            gui.app.processEvents()
+            time.sleep(0.02)
+        stopped_cleanly = (not stop_tour_btn.isEnabled()) and tour_btn.isEnabled()
+    finally:
+        # Flush whatever is still queued (Stop Tour alone does not) so the
+        # next test in this module starts from an idle plant.
+        gui.click("ops_btn_stop")
+        gui.pump(0.3)
+    elapsed = time.monotonic() - t0
+
+    span = encoder_span(gui.frames)
+    moved = span is not None and max(span) >= MIN_ENCODER_SPAN_MM
+
+    ok = (first_leg_retired and announced_rest_to_rest and stopped_cleanly
+          and moved and stop_requested)
+    recorder.record(Row(
+        button="tour_btn_square", path="tour",
+        commanded="8 legs (Square), rest-to-rest",
+        measured=(
+            f"leg 1/8 retired in {leg_1_elapsed:.1f}s; "
+            f"rest-to-rest announced={announced_rest_to_rest}; "
+            f"stopped cleanly={stopped_cleanly}"
+        ),
+        elapsed_s=elapsed,
+        tolerance="leg 1 retires, run is rest-to-rest, Stop Tour winds it down",
+        encoder_advanced=moved, verdict="PASS" if ok else "FAIL",
+    ))
+
+    assert first_leg_retired, (
+        f"tour_btn_square: leg 1/8 never retired within {TOUR_TIMEOUT_S:.0f}s "
+        f"-- log:\n{log_at_leg_1}"
+    )
+    assert announced_rest_to_rest, (
+        "tour_btn_square: the run did not announce the rest-to-rest execution, "
+        "so it dispatched the PIPELINED path -- the square tour's measured "
+        f"closure does not hold there. Log:\n{log_at_leg_1}"
+    )
+    assert moved, (
+        f"tour_btn_square: no encoder excursion beyond {MIN_ENCODER_SPAN_MM}mm"
+    )
+    assert stop_requested, (
+        "tour_btn_square: the run ended on its own before Stop Tour could be "
+        f"clicked -- log:\n{gui.log_text()}"
+    )
+    assert stopped_cleanly, (
+        "tour_btn_square: Stop Tour did not wind the run down -- "
+        f"stop_tour_btn enabled={stop_tour_btn.isEnabled()}, "
+        f"tour_btn_square enabled={tour_btn.isEnabled()}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# 3b. Tour 1 / Tour 2 end to end.
 # ---------------------------------------------------------------------------
 
 

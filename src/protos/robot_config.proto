@@ -493,6 +493,26 @@ message Planner {
   float  heading_hold_gain       = 15 [(min) = 0.0];  // [1/s] rad/s of correction per rad of error
   float  decel_plan_fraction     = 16 [(min) = 0.0];  // [1] fraction of decel ceiling to plan brake-start against
 
+  // Terminal fine-align (134-003, docs/bench-reports/motion-planning-lab-
+  // 2026-08-04.md §5.2/§3): the per-corner heading trim that took the
+  // planner square tour from 25.8 mm to 9.4 mm of closure on `tovez` with
+  // nothing else changed. `align_tol` is the residual (against the
+  // cumulative-intent ledger) below which the Move stops trimming;
+  // `align_max_nudges` bounds how many corrective pivots it may spend.
+  //
+  // BOOT-ONLY, like the rest of this message: `Motion::PlannerLimits::
+  // Landing` has no post-construction setter, so retuning either value
+  // needs a rebuild and reflash. Accepted deliberately (sprint 134 D3) --
+  // §3 already swept the tolerance across 333 measured nudges and found
+  // the operating point, and tightening it is measured counterproductive.
+  //
+  // align_tol is in RADIANS. The report states the operating point in
+  // degrees (1.0 deg); every angular field in this group and in
+  // PlannerLimits is radians, so the conversion happens ONCE, in the robot
+  // JSON (1.0 deg == 0.017453 rad), and never again downstream.
+  float  align_tol               = 23 [(min) = 0.0];  // [rad] fine-align residual tolerance
+  int32  align_max_nudges        = 24 [(min) = 0.0];  // [1] corrective pivots per Move
+
   // a_max/a_decel/alpha_max/alpha_decel/jerk_max/yaw_jerk_max -- MOVED,
   // 132-017: now PlannerShaper's own fields 1-6 (below), a LIVE target.
   // shaper_a_max/shaper_a_decel/shaper_alpha_max/shaper_alpha_decel/

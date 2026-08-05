@@ -41,6 +41,33 @@ struct Move {
   float omega = 0.0f;      // [rad/s] signed cruise, Twist
   float vLeft = 0.0f;      // [mm/s] signed cruise, Wheels
   float vRight = 0.0f;     // [mm/s] signed cruise, Wheels
+  // What the CALLER asked for, before any upstream rewrite of `threshold`
+  // (134-001). `threshold` is the ACTUATION-sized command the profiler
+  // plans against; an ingestion-side corrector may legitimately size it to
+  // something other than the request -- App::RobotLoop::handleMove()'s
+  // rotation-calibration inversion does exactly that, turning a 90 deg
+  // request into whatever command lands 90 deg on this plant. Both readers
+  // are right and they want different numbers: the PROFILER wants the
+  // command, the Planner's cumulative-baseline LEDGER wants the intent
+  // ("how much heading was this Move meant to contribute to the chain?"),
+  // and without a second field the ledger cannot recover it.
+  //
+  // <= 0 means UNSET, and the ledger then falls back to `threshold` -- the
+  // same fail-open convention the rest of this surface uses for an
+  // unconfigured <=0 bound ("contributes nothing", not "zero"). For every
+  // direct caller with no ingestion-side rewrite in front of it (the
+  // ctests, the sim harnesses, the ctypes bench harness) the command IS
+  // the intent, so the fallback is the right answer, not a degraded one.
+  // Note it is NOT the same answer 130-010's measured carry gave those
+  // callers: an unset Move now projects an EXACT baseline+threshold
+  // instead of whatever pose_.heading() read at the completion tick, which
+  // typically ran ~1 deg behind true rest. That difference is the point of
+  // this change, not a side effect of the default.
+  // [ms] Time / [mm] Distance / [rad] Angle; positive. 0 = unset.
+  float requestedThreshold = 0.0f;
+  // APPEND NEW FIELDS TO THE END. src/tests/bench/planner_harness.py
+  // mirrors this struct field-for-field over ctypes; capi.cpp's
+  // plannerStructSizes() is the only guard, and it is size-only.
 };
 
 // PlannerLimits -- 130-009 (planner-honesty-pass-50ms-period-tick-state-
@@ -138,6 +165,40 @@ struct PlannerLimits {
     // the landing stays discrete-exact and an infeasible state still brakes
     // as hard as it can.
     float decelPlanFraction = 0.0f;  // [1] 0 or 1 = full authority
+
+    // TERMINAL FINE-ALIGN (134-003, docs/bench-reports/motion-planning-lab-
+    // 2026-08-04.md §5.2/§3). After a Twist Angle Move's profile has
+    // landed, the Planner holds the Move open in MoveLifecycle::Aligning
+    // and trims the residual against the cumulative-intent ledger with
+    // bounded low-speed pivot nudges, re-settling between each. Measured
+    // on `tovez` by the host-side graft this reproduces: planner square-tour
+    // closure 25.8 -> 9.4 mm, ~2 s/corner, nothing else changed.
+    //
+    // alignTol is RADIANS. The report states the operating point in
+    // DEGREES (1.0 deg); the conversion happens once, in the robot JSON
+    // (0.017453 rad), and never again -- these are siblings of
+    // settleEpsilonAngular [rad] and settleRestOmega [rad/s], not of
+    // anything measured in degrees.
+    //
+    // NEITHER IS A TUNING KNOB TO REACH FOR. Both come from 333 individual
+    // trim nudges: the low-speed corrective pivot is bimodal (26% deliver
+    // <0.25 deg, no breakaway; the rest a median 1.72 deg), so a tolerance
+    // under that ~1.8 deg quantum asks for authority the mechanism does not
+    // have -- at 0.3 deg, corner convergence measured 93% -> 64%, cost
+    // tripled, and some corners got WORSE. The road below ~8 mm of closure
+    // is a finer terminal ACTUATOR (report §5.4), not a finer threshold.
+    //
+    // <= 0 on EITHER field is UNSET and disables the phase outright (the
+    // same fail-open convention the rest of this struct uses for an
+    // unconfigured bound): a Move then completes at its landing exactly as
+    // it did before this feature existed, which is what every direct
+    // caller that never sets these -- the ctests, the sim harnesses, the
+    // ctypes bench harness -- gets by construction from these defaults.
+    float alignTol = 0.0f;       // [rad] 0 = fine-align disabled
+    // int32, not a narrower count type: it keeps Landing's uniform 4-byte
+    // stride, so no padding appears between it and whatever is appended
+    // next and capi.cpp's flat offset guard stays meaningful.
+    int32_t alignMaxNudges = 0;  // 0 = fine-align disabled
   } landing;
 
   // Angular tracking correction on top of the profiled command.
@@ -190,6 +251,11 @@ enum class MoveLifecycle : uint8_t {
               // measurably left rest)
   Tracking,   // active Move driving its profile -- see MovePhase for the
               // Accel/Hold/Decel sub-phase
+  Aligning,   // 134-003: a Twist Angle Move whose profile has LANDED, held
+              // open while it trims its cumulative-heading residual with
+              // bounded low-speed pivot nudges. The Move is not done until
+              // it has landed, so the completion ack fires on the way OUT
+              // of this state, not on the way in.
   Stopping,   // an active Kind::Stop entry ramping the body to rest
 };
 

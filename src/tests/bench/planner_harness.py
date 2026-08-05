@@ -156,7 +156,16 @@ class Move(ctypes.Structure):
                 ("v_y", ctypes.c_float),         # [mm/s] ignored on differential
                 ("omega", ctypes.c_float),       # [rad/s]
                 ("vLeft", ctypes.c_float),       # [mm/s]
-                ("vRight", ctypes.c_float)]      # [mm/s]
+                ("vRight", ctypes.c_float),      # [mm/s]
+                # 134-001. What the CALLER asked for, before an
+                # ingestion-side rewrite of `threshold` (App::RobotLoop::
+                # handleMove()'s rotation-calibration inversion) turns that
+                # into an actuation-sized command. Read only by the
+                # Planner's cumulative-baseline ledger; <= 0 means UNSET and
+                # falls back to `threshold`, so a harness Move that leaves
+                # it at zero behaves exactly as it did before this field
+                # existed.
+                ("requestedThreshold", ctypes.c_float)]  # [ms]/[mm]/[rad]
 
 
 # PlannerLimits -- 130-009 reshaped this from 34 flat fields to 18 fields
@@ -190,7 +199,13 @@ class Landing(ctypes.Structure):
                 ("settleEpsilonAngular", ctypes.c_float),  # [rad]
                 ("settleRestVelocity", ctypes.c_float),    # [mm/s]
                 ("settleRestOmega", ctypes.c_float),       # [rad/s]
-                ("decelPlanFraction", ctypes.c_float)]     # [1] decel leeway
+                ("decelPlanFraction", ctypes.c_float),     # [1] decel leeway
+                # 134-003 terminal fine-align. alignTol is [rad] (the
+                # report's 1.0 deg operating point, converted once in the
+                # robot JSON); alignMaxNudges is c_int32, matching the C++
+                # side's int32_t so Landing keeps its 4-byte stride.
+                ("alignTol", ctypes.c_float),              # [rad] 0 = off
+                ("alignMaxNudges", ctypes.c_int32)]        # 0 = off
 
 
 class Tracking(ctypes.Structure):
@@ -219,6 +234,7 @@ _LIMITS_FIELD_PATHS = [
     ("landing", "settleEpsilonLinear"), ("landing", "settleEpsilonAngular"),
     ("landing", "settleRestVelocity"), ("landing", "settleRestOmega"),
     ("landing", "decelPlanFraction"),
+    ("landing", "alignTol"), ("landing", "alignMaxNudges"),
     ("tracking", "headingHoldGain"),
 ]
 

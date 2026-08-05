@@ -168,12 +168,42 @@ class SequentialTour:
                 self.acks.append((t, entry))
 
     def settle(self):
-        """Rest dwell, holding a zero WHEELS command exactly as the wheels
-        tour's settle does. Returns ((x, y, heading), rest-spread stats)."""
+        """Rest dwell at a segment boundary. Returns ((x, y, heading),
+        rest-spread stats).
+
+        Two modes, selected by `--settle-mode` (default `passive`):
+
+        `passive` -- wait, draining telemetry, and send NOTHING. This is the
+        default, and the correct instrument, for one measured reason: a
+        zero-velocity WHEELS command is a TELEOP TAKEOVER, not a no-op.
+        `App::RobotLoop::handleWheels()` calls `planner_.estop()` ("Drive
+        takes over motion -- one owner at a time"), and `Planner::estop()`
+        clears `carryValid_`, the planner's cumulative-heading intent
+        ledger. So a lease held through the dwell destroys that ledger at
+        EVERY segment boundary, and the tour then measures the ledger being
+        torn down rather than measuring the tour. That is not a firmware
+        bug -- the firmware fails closed exactly as designed, because the
+        host told it someone else is driving.
+
+        Measured on `tovez` 2026-08-05 (ticket 134-004, report
+        `docs/bench-reports/sprint-134-004-bench-acceptance-2026-08-05.md`
+        Part II section 10): same firmware, same tour, only the settle
+        differs -- passive closed 3.6/8.2 mm with 12/12 corners inside
+        `align_tol`; lease closed 34.2 mm with 1/8.
+
+        `lease` -- the historical behaviour: hold `wheels(0, 0)` for the
+        whole dwell, re-arming a short lease every tick. Kept because the
+        wheels tour's own settle does exactly this, so a planner-vs-wheels
+        comparison wants an identical dwell on both sides, and because
+        every result in this file's history before 2026-08-05 was measured
+        this way.
+        """
         mark = len(self.log["heading"])
         end = time.monotonic() + self.args.settle
+        lease = self.args.settle_mode == "lease"
         while time.monotonic() < end:
-            self.proto.wheels(0.0, 0.0, self.LEASE)
+            if lease:
+                self.proto.wheels(0.0, 0.0, self.LEASE)
             time.sleep(self.SETTLE_TICK)
             self.drain()
         pose = (self.log["x"][-1], self.log["y"][-1], self.log["heading"][-1])
@@ -331,6 +361,19 @@ def main() -> int:
                         "wheels_square_tour.py uses, so the two tours are "
                         "comparable. 0 restores the old first-sample/"
                         "last-sample basis.")
+    p.add_argument("--settle-mode", choices=("passive", "lease"),
+                   default="passive",
+                   help="what the SEQUENTIAL tour does during each settle "
+                        "dwell. passive (default): wait and send nothing. "
+                        "lease: hold wheels(0,0) for the whole dwell -- the "
+                        "historical behaviour. A zero-velocity WHEELS "
+                        "command is a teleop takeover, so it routes to "
+                        "planner_.estop() and clears the planner's "
+                        "cumulative-heading ledger; leasing during a settle "
+                        "therefore measures the ledger being destroyed "
+                        "rather than the tour. See SequentialTour.settle(). "
+                        "No effect on the pipelined tour, which never "
+                        "leases.")
     p.add_argument("--sequential", action="store_true",
                    help="one Move in flight at a time with a settle dwell at "
                         "every segment boundary, instead of the shipped "
@@ -633,6 +676,7 @@ def main() -> int:
                    started_wall=started_wall,
                    started_iso=time.strftime("%Y-%m-%dT%H:%M:%S",
                                              time.localtime(started_wall)),
+                   settle=args.settle, settle_mode=args.settle_mode,
                    trim=bool(args.trim), trim_tol=args.trim_tol,
                    trim_max_nudges=args.trim_max_nudges,
                    cruise=args.cruise, omega=args.omega,

@@ -1,6 +1,10 @@
 ---
-status: pending
+status: in-progress
 priority: high
+sprint: '134'
+tickets:
+- 134-001
+- 134-006
 ---
 
 # Turn undershoot: the cumulative-baseline ledger carries a completed leg's baseline unchanged, ignoring the drift that leg accumulated

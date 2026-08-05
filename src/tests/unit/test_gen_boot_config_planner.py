@@ -64,6 +64,14 @@ _EXPECTED_RAW = {
     "settleEpsilonAngular": 0.035,
     "headingHoldGain": 2.0,
     "decelPlanFraction": 0.4,
+    # 134-003 terminal fine-align -- NOT part of the pre-ticket main.cpp
+    # literal block this dict otherwise mirrors; a genuinely new pair of
+    # planner keys. alignTol is [rad]: 0.017453 rad IS the report's 1.0 deg
+    # operating point, converted once in tovez.json. If this assertion ever
+    # reads ~1.0 instead, someone has stored degrees in a radian field --
+    # a 57x error that nothing downstream would catch.
+    "alignTol": 0.017453,
+    "alignMaxNudges": 6,
 }
 # 130-009: requireSettle/settleWindow, the M4 duty-stage gains (velKp/
 # velKi/velIMax/velIAccelGate/dutyFloor, plus the derived velKff/velKaff),
@@ -163,6 +171,9 @@ def test_generate_emits_default_planner_limits_byte_identical_to_pre_ticket_lite
     assert "cfg.settleEpsilonAngular = 0.035f;" in content
     assert "cfg.headingHoldGain = 2.0f;" in content
     assert "cfg.decelPlanFraction = 0.4f;" in content
+    # 134-003: [rad], not degrees -- see _EXPECTED_RAW's own note.
+    assert "cfg.alignTol = 0.017453f;" in content
+    assert "cfg.alignMaxNudges = 6;" in content
     # 130-009: requireSettle/settleWindow, the M4 duty-stage gains (velKff/
     # velKp/velKi/velIMax/velKaff/velIAccelGate/dutyFloor), and the dead
     # planner-side trim gains (trimKp/trimKi/trimIMax/trimKaff/trimMax) no

@@ -76,6 +76,21 @@ Types::RobotState wheelCmd(float vLeft, float vRight) {  // [mm/s] x2
   return state;
 }
 
+// 134-002: applySpeedFloor() is a TELEOP affordance -- it engages only
+// while Drive itself owns motion (Drive::owns()). A freshly-constructed
+// Drive owns nothing (commandActive_ == false, the planner's state), so
+// every floor scenario below arms a WHEELS command first and only then
+// ticks the same pair through the blackboard -- which is also what
+// robot_loop.cpp does for real, one cycle apart: Drive::update() publishes
+// its armed targets onto state, Drive::tick() reads them back. The
+// duration is deliberately enormous so the deadman never expires inside a
+// single-tick scenario; the expiry edge has its own coverage in
+// scenarioSpeedFloorIsATeleopAffordanceNotAGlobalOne() below, which also
+// pins the un-owned (planner) side of the gate.
+void armTeleop(App::Drive& drive, float vLeft, float vRight) {  // [mm/s] x2
+  drive.command(vLeft, vRight, /*duration=*/1.0e6f, /*moveId=*/1, /*now=*/0);
+}
+
 // --- Hand-rolled assertion plumbing (see app_telemetry_harness.cpp) ------
 
 int g_failureCount = 0;
@@ -1829,6 +1844,14 @@ void scenarioBiasPersistsAcrossChainedTakeoverBoundaries() {
 // robot's real, LOW-CONFIDENCE 99.7 figure; ticket 131-003 is
 // semantics-only and must not entangle a test constant with the
 // production one).
+//
+// 134-002: every scenario in this block now calls armTeleop() (above)
+// before its tick(), because the floor engages only while Drive owns
+// motion. That is not scaffolding to keep old tests green -- it is what
+// these scenarios always meant. Each one measures the floor's ARITHMETIC,
+// which only ever ran on the teleop path's behalf; the ownership gate
+// itself is scenario 18's subject, and it pins the planner-owned side
+// these five deliberately do not cover.
 // ===========================================================================
 
 // 13. AC#1 (unchanged numbers from the superseded implementation -- see
@@ -1868,6 +1891,7 @@ void scenarioDifferentialTrimAtFloorBoundaryStaysProportional() {
   const float cmdLeft = commonMode - differential;   // 97
   const float cmdRight = commonMode + differential;  // 103 -- the dominant wheel
 
+  armTeleop(drive, cmdLeft, cmdRight);  // 134-002: the floor only runs for its owner
   drive.tick(wheelCmd(cmdLeft, cmdRight));
 
   checkFloatEq(left.lastDutyCmd, cmdLeft,
@@ -1890,6 +1914,7 @@ void scenarioDifferentialTrimAtFloorBoundaryStaysProportional() {
   drive2.setDutyPerSpeed(1.0f, 1.0f);
   drive2.setAdaptationBounds(bounds);
   const float cruiseCommon = 150.0f;  // [mm/s] comfortably above vMin
+  armTeleop(drive2, cruiseCommon - differential, cruiseCommon + differential);
   drive2.tick(wheelCmd(cruiseCommon - differential, cruiseCommon + differential));
   checkFloatEq(left2.lastDutyCmd, cruiseCommon - differential,
               "healthy-margin case: left wheel duty matches the raw commanded value exactly");
@@ -1924,6 +1949,7 @@ void scenarioSymmetricPivotBelowFloorBoostsToExactVMin() {
   drive.setAdaptationBounds(bounds);
 
   const float lambda = 40.0f;  // [mm/s] -- a pivot's own sub-floor ramp magnitude
+  armTeleop(drive, -lambda, lambda);      // 134-002: the floor only runs for its owner
   drive.tick(wheelCmd(-lambda, lambda));  // unit = (-1, +1): a pure in-place rotation
 
   checkFloatEq(left.lastDutyCmd, -bounds.vMin,
@@ -1960,6 +1986,7 @@ void scenarioAsymmetricPairBelowFloorPreservesRatio() {
 
   const float rawLeft = 20.0f;   // [mm/s] -- the sub-dominant wheel
   const float rawRight = 80.0f;  // [mm/s] -- the dominant wheel, still below vMin
+  armTeleop(drive, rawLeft, rawRight);  // 134-002: the floor only runs for its owner
   drive.tick(wheelCmd(rawLeft, rawRight));
 
   // scale = vMin / dominantMag = 100 / 80 = 1.25
@@ -2009,6 +2036,7 @@ void scenarioDifferentialWithNearZeroCommonModeNowBoostedTowardVMin() {
     drive.setAdaptationBounds(bounds);
 
     const float differential = 3.0f;  // [mm/s]
+    armTeleop(drive, -differential, differential);  // 134-002: floor runs for its owner only
     drive.tick(wheelCmd(-differential, differential));
 
     checkFloatEq(left.lastDutyCmd, -bounds.vMin,
@@ -2033,6 +2061,7 @@ void scenarioDifferentialWithNearZeroCommonModeNowBoostedTowardVMin() {
     drive.setAdaptationBounds(bounds);
 
     const float subFloorCommon = 5.0f;  // [mm/s] -- below vMin, no differential
+    armTeleop(drive, subFloorCommon, subFloorCommon);  // 134-002: floor runs for its owner only
     drive.tick(wheelCmd(subFloorCommon, subFloorCommon));
 
     checkFloatEq(left.lastDutyCmd, bounds.vMin,
@@ -2084,6 +2113,7 @@ void scenarioRawZeroWheelStaysZeroUnderRatioPreservingScale() {
     const float rawLeft = 0.0f;   // [mm/s] -- exactly zero, from vector cancellation
     const float rawRight = 50.0f;  // [mm/s] -- the dominant wheel, below vMin
 
+    armTeleop(drive, rawLeft, rawRight);  // 134-002: the floor only runs for its owner
     drive.tick(wheelCmd(rawLeft, rawRight));
 
     checkFloatEq(left.lastDutyCmd, 0.0f,
@@ -2108,6 +2138,11 @@ void scenarioRawZeroWheelStaysZeroUnderRatioPreservingScale() {
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setAdaptationBounds(bounds);
 
+    // Owned, deliberately: a teleop wheels(0, 0) IS how a standing command
+    // stops, and it is the case where the floor is live and must still not
+    // manufacture motion. The un-owned stop is trivially covered too --
+    // the gate returns before the scale is even computed.
+    armTeleop(drive, 0.0f, 0.0f);
     drive.tick(wheelCmd(0.0f, 0.0f));
 
     checkFloatEq(left.lastDutyCmd, 0.0f,
@@ -2115,6 +2150,165 @@ void scenarioRawZeroWheelStaysZeroUnderRatioPreservingScale() {
                 "ratio-preserving scale");
     checkFloatEq(right.lastDutyCmd, 0.0f,
                 "genuine full stop: right wheel writes EXACTLY 0.0 duty");
+  }
+}
+
+// 18. NEW, 134-002 (SUC-003, sprint 134 Design Rationale D2): the speed
+// floor is a TELEOP AFFORDANCE and runs only while Drive owns motion. The
+// SAME sub-vMin wheel pair is ticked through twice -- once planner-owned,
+// once teleop-owned -- and must come out differently: untouched for the
+// planner, boosted to vMin (ratio preserved) for teleop. Both halves matter
+// and neither is decorative. Half (a) is the fix: a deliberately-dying
+// profile tail and (134-003) a terminal alignment nudge are shaped small on
+// purpose, and boosting them to 20 mm/s on `tovez` makes terminal authority
+// undeliverable -- two independent bench sessions hit this on 2026-08-04
+// (docs/bench-reports/motion-planning-lab-2026-08-04.md Section 5.3; the
+// companion turn-tuning session had to push `DBG vmin 0` to measure a turn
+// at all). Half (b) is the regression guard, and is the one that matters
+// most on review: the whole risk of this change is silently disabling the
+// floor for EVERYONE, and a sub-breakaway standing teleop command that is
+// no longer boosted stalls and buzzes (sprint 114's dead-zone defect, one
+// layer down in the duty domain).
+void scenarioSpeedFloorIsATeleopAffordanceNotAGlobalOne() {
+  beginScenario("134-002: the speed floor is a TELEOP affordance -- the same sub-vMin pair "
+                "passes through UNMODIFIED while the planner owns motion and is still boosted "
+                "to vMin while a WHEELS command owns it");
+
+  App::Drive::AdaptationBounds bounds;
+  bounds.vMin = 100.0f;  // [mm/s] test-local floor -- NOT tovez.json's real 20.0
+
+  // A planner-shaped decelerating tail: a symmetric pivot's ramp-out, well
+  // below the floor. This is the exact pair scenario 14 above proves gets
+  // boosted for teleop -- the ONLY difference here is who owns motion.
+  const float tailLeft = -12.0f;   // [mm/s]
+  const float tailRight = 12.0f;   // [mm/s]
+
+  // (a) Planner owns motion. handleMove() calls takeover() before every
+  // planner Move (robot_loop.cpp), and takeover() clears commandActive_ --
+  // so takeover() here is the real ownership transition, not a test poke at
+  // some private flag.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setAdaptationBounds(bounds);
+
+    armTeleop(drive, tailLeft, tailRight);  // teleop first, so takeover() has something to take
+    checkTrue(drive.owns(), "setup: an armed WHEELS command means Drive owns motion");
+    drive.takeover();  // a planner Move arrives
+    checkTrue(!drive.owns(), "setup: takeover() hands motion to the planner");
+
+    drive.tick(wheelCmd(tailLeft, tailRight));
+
+    checkFloatEq(left.lastDutyCmd, tailLeft,
+                "planner-owned sub-vMin tail reaches actuation UNMODIFIED -- not boosted to "
+                "-vMin, which is what made terminal authority undeliverable");
+    checkFloatEq(right.lastDutyCmd, tailRight,
+                "planner-owned sub-vMin tail, right wheel: same, unmodified");
+  }
+
+  // (b) Teleop owns motion -- the 131-003 behaviour must be intact. THIS is
+  // the regression guard: the floor's own justification (a standing command
+  // below breakaway stalls and buzzes instead of crawling) is untouched by
+  // this ticket.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setAdaptationBounds(bounds);
+
+    armTeleop(drive, tailLeft, tailRight);
+    drive.tick(wheelCmd(tailLeft, tailRight));
+
+    checkFloatEq(left.lastDutyCmd, -bounds.vMin,
+                "teleop-owned sub-vMin command is STILL boosted to exactly -vMin -- 131-003's "
+                "behaviour is intact for the path it was written for");
+    checkFloatEq(right.lastDutyCmd, bounds.vMin,
+                "teleop-owned sub-vMin command, right wheel: still boosted to exactly +vMin");
+    checkFloatEq(right.lastDutyCmd, -left.lastDutyCmd,
+                "and the boost is still ratio-preserving (equal and opposite in, equal and "
+                "opposite out)");
+  }
+
+  // (c) An asymmetric teleop pair, to prove the ratio-preserving property
+  // itself survived the gate rather than only the symmetric special case.
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setAdaptationBounds(bounds);
+
+    const float rawLeft = 20.0f;   // [mm/s]
+    const float rawRight = 80.0f;  // [mm/s] dominant, still below vMin
+    armTeleop(drive, rawLeft, rawRight);
+    drive.tick(wheelCmd(rawLeft, rawRight));
+
+    checkFloatEq(left.lastDutyCmd, 25.0f,
+                "teleop asymmetric pair: scaled by vMin/dominantMag (x1.25), ratio preserved");
+    checkFloatEq(right.lastDutyCmd, bounds.vMin,
+                "teleop asymmetric pair: the dominant wheel still lands at exactly vMin");
+  }
+
+  // (d) "Stop is stop" under the gate, both ownerships: a genuine full stop
+  // writes exactly (0.0, 0.0) whether or not the floor is allowed to run.
+  {
+    MockMotor leftOwned;
+    MockMotor rightOwned;
+    App::Drive driveOwned(leftOwned, rightOwned, 200.0f);
+    driveOwned.setDutyPerSpeed(1.0f, 1.0f);
+    driveOwned.setAdaptationBounds(bounds);
+    armTeleop(driveOwned, 0.0f, 0.0f);
+    driveOwned.tick(wheelCmd(0.0f, 0.0f));
+    checkFloatEq(leftOwned.lastDutyCmd, 0.0f, "teleop-owned full stop: exactly 0.0 duty left");
+    checkFloatEq(rightOwned.lastDutyCmd, 0.0f, "teleop-owned full stop: exactly 0.0 duty right");
+
+    MockMotor leftPlanner;
+    MockMotor rightPlanner;
+    App::Drive drivePlanner(leftPlanner, rightPlanner, 200.0f);
+    drivePlanner.setDutyPerSpeed(1.0f, 1.0f);
+    drivePlanner.setAdaptationBounds(bounds);
+    drivePlanner.tick(wheelCmd(0.0f, 0.0f));
+    checkFloatEq(leftPlanner.lastDutyCmd, 0.0f, "planner-owned full stop: exactly 0.0 duty left");
+    checkFloatEq(rightPlanner.lastDutyCmd, 0.0f,
+                "planner-owned full stop: exactly 0.0 duty right");
+  }
+
+  // (e) The deadman-expiry edge, decided and documented in
+  // applySpeedFloor()'s own doc comment: an EXPIRING command is not
+  // floored. update() clears commandActive_ the moment the deadline passes,
+  // and tick() runs BEFORE update() within a cycle -- so the floor covers
+  // every cycle the command was live and no cycle after it. A command on
+  // its way out is allowed to reach zero rather than being boosted back up
+  // to vMin. The pair ticked here is deliberately the STALE nonzero one
+  // (update() itself zeroes the targets at expiry, so on the real loop this
+  // arm is belt-and-braces -- but the ordering is pinned rather than
+  // assumed).
+  {
+    MockMotor left;
+    MockMotor right;
+    App::Drive drive(left, right, 200.0f);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setAdaptationBounds(bounds);
+
+    drive.command(tailLeft, tailRight, /*duration=*/100.0f, /*moveId=*/9, /*now=*/1000);
+    checkTrue(drive.owns(), "setup: the armed command owns motion before its deadline");
+
+    Types::RobotState state = wheelCmd(tailLeft, tailRight);
+    drive.update(state, /*now=*/1200);  // past the deadline: the deadman expires
+    checkTrue(!drive.owns(), "an expired WHEELS command no longer owns motion");
+    checkFloatEq(state.wheelLeft.cmdVelocity, 0.0f,
+                "expiry publishes a zeroed left target, as it always did");
+    checkFloatEq(state.wheelRight.cmdVelocity, 0.0f,
+                "expiry publishes a zeroed right target, as it always did");
+
+    drive.tick(wheelCmd(tailLeft, tailRight));
+    checkFloatEq(left.lastDutyCmd, tailLeft,
+                "after expiry the floor is OFF: a still-nonzero command on its way out reaches "
+                "zero instead of being boosted back up to vMin");
+    checkFloatEq(right.lastDutyCmd, tailRight, "after expiry, right wheel: same");
   }
 }
 
@@ -2144,6 +2338,7 @@ int main() {
   scenarioAsymmetricPairBelowFloorPreservesRatio();
   scenarioDifferentialWithNearZeroCommonModeNowBoostedTowardVMin();
   scenarioRawZeroWheelStaysZeroUnderRatioPreservingScale();
+  scenarioSpeedFloorIsATeleopAffordanceNotAGlobalOne();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Drive scenarios passed\n");
