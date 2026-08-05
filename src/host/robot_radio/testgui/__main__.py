@@ -846,7 +846,13 @@ def _build_main_window():  # type: ignore[return]
     def _tour_execution_note(name: str) -> str:
         execution = tour_execution(name)
         if not getattr(execution, "sequential", False):
-            return ""
+            # Pipelined by default -- say so, and point at the control that
+            # changes it, so the operator can tell which path a press takes.
+            return (
+                " Pipelined by default (one-leg lookahead, never rests); "
+                "tick 'Rest-to-rest' to run it the way the square tour was "
+                "measured instead."
+            )
         return (
             f" Rest-to-rest: one Move in flight at a time with a "
             f"{execution.settle:.1f}s PASSIVE settle at every boundary "
@@ -896,6 +902,25 @@ def _build_main_window():  # type: ignore[return]
     stop_tour_btn.setEnabled(False)
     stop_tour_btn.setToolTip("Stop the currently running tour.")
     tour_layout.addWidget(stop_tour_btn)
+    # Rest-to-rest opt-in (OOP 2026-08-05). Sprint 134 proved the
+    # rest-to-rest execution on "Square" only; Tour 1 / Tour 2 stayed on the
+    # pipelined lookahead and got none of it. This box is how they reach the
+    # same path -- unchecked it changes nothing (both tours run exactly as
+    # they always have), and it never alters "Square", whose own execution is
+    # already sequential and measured good. Read at click time, so toggling
+    # it mid-tour affects the NEXT run, not the one in flight.
+    rest_to_rest_chk = QCheckBox("Rest-to-rest (align each corner)")
+    rest_to_rest_chk.setObjectName("tour_rest_to_rest_chk")
+    rest_to_rest_chk.setChecked(False)
+    rest_to_rest_chk.setToolTip(
+        "Run Tour 1 / Tour 2 the way sprint 134 proved the square tour: one "
+        "Move in flight at a time, with a 1.2s PASSIVE settle at every "
+        "segment boundary and 2.4 rad/s pivots (measured median 6.3 mm "
+        "closure, ticket 134-004). Unchecked, those two tours keep the "
+        "historical pipelined one-leg lookahead. 'Square' always runs "
+        "rest-to-rest either way."
+    )
+    tour_layout.addWidget(rest_to_rest_chk)
     tour_layout.addStretch()
     left_layout.addWidget(tour_row)
 
@@ -1842,6 +1867,20 @@ def _build_main_window():  # type: ignore[return]
             # arguments working unchanged.
             self._execution = execution
             self._stop = False
+            # --- per-segment truth, accumulated as the tour runs (OOP
+            # 2026-08-05). Every number below is derived from what
+            # ``run_tour()`` already hands its own ``on_leg``/``row_callback``
+            # hooks -- ``TourLegResult.heading_before``/``heading_after`` for
+            # angles, ``TLMFrame.pose`` (via the tour module's OWN
+            # ``_frame_pose_rad()``) for positions. There is deliberately no
+            # second measurement path: the closure this class reports at the
+            # end is ``run_tour()``'s, and the per-leg lines are its inputs.
+            self._leg_reports: list[dict] = []
+            self._latest_pose: "tuple[float, float, float] | None" = None  # [mm, mm, rad]
+            self._boundary_pose: "tuple[float, float, float] | None" = None  # [mm, mm, rad]
+            self._heading_origin: float | None = None  # [rad] heading at leg 1's enqueue
+            self._cumulative_command: float = 0.0  # [deg] commanded turn total so far
+            self._frame_pose = None  # bound in run() to planner.tour._frame_pose_rad
 
         def stop(self) -> None:
             """Request the tour abort at the next safe point (thread-safe).
@@ -1862,6 +1901,7 @@ def _build_main_window():  # type: ignore[return]
             from robot_radio.planner.heading import HeadingCorrector
             from robot_radio.planner.model import PlannerParams
             import math as _math
+            import time as _time
 
             try:
                 # testgui-motion-paths-dead-after-move-cutover fix (2026-07-22
@@ -1879,7 +1919,9 @@ def _build_main_window():  # type: ignore[return]
                 # press VISIBLY instead of silently, same as before) even
                 # though the happy path now runs through it every time.
                 try:
-                    from robot_radio.planner.tour import parse_tour, run_tour
+                    from robot_radio.planner.tour import (
+                        _frame_pose_rad, parse_tour, run_tour,
+                    )
                 except Exception as exc:  # noqa: BLE001 -- see comment above
                     self.log_line.emit(
                         f"[TOUR] {self._name}: tour geometry unavailable "
@@ -1919,6 +1961,18 @@ def _build_main_window():  # type: ignore[return]
                 params = PlannerParams()
                 heading = HeadingCorrector(params, robot_config=get_robot_config())
 
+                # Per-segment accounting -- reset here so a re-run of the
+                # same worker starts clean, and bind the tour module's own
+                # pose reader (see __init__'s note on the single measurement
+                # path).
+                self._frame_pose = _frame_pose_rad
+                self._leg_reports = []
+                self._latest_pose = None
+                self._boundary_pose = None
+                self._heading_origin = None
+                self._cumulative_command = 0.0
+                tour_start = _time.monotonic()
+
                 self._transport.suspend_telemetry_reader()
                 try:
                     result = run_tour(
@@ -1950,26 +2004,250 @@ def _build_main_window():  # type: ignore[return]
                             f"{_math.degrees(closure.heading_delta):.1f}deg", "")
                     else:
                         self.log_line.emit(f"[TOUR] {self._name} complete", "")
+
+                # Whole-tour summary. Emitted for a stopped tour too -- the
+                # legs that DID run are the ones worth reading when a tour
+                # ends early, and suppressing them there would hide exactly
+                # the run an operator most wants to look at.
+                self._emit_summary(len(legs), result.closure,
+                                   _time.monotonic() - tour_start)
             finally:
                 self.finished.emit()
 
         def _on_leg(self, index, total, leg, leg_result) -> None:
             """``run_tour()``'s per-leg narration hook — fires synchronously
-            on the worker thread as each leg completes."""
+            on the worker thread as each leg completes.
+
+            Reports THIS segment's own truth, not just that it retired: a
+            straight leg's achieved length and cross-track deviation, a turn
+            leg's achieved angle, error, and the cumulative heading residual
+            that turn leaves behind. That is the per-segment attribution the
+            bench scripts print (``src/tests/bench/planner_square_tour.py``'s
+            "per-leg length / per-turn angle / cumulative residual" block)
+            and it is what makes an imperfect closure diagnosable instead of
+            merely reported — a tour that closes 30 mm because ONE corner
+            under-turned looks nothing like one that bleeds 4 mm per leg,
+            and the closure number alone cannot tell them apart.
+
+            Angles come from ``TourLegResult.heading_before``/
+            ``heading_after`` — ``run_tour()``'s own ``HeadingCorrector``
+            readings, the same source it corrects against; positions come
+            from ``TLMFrame.pose`` via the tour module's own
+            ``_frame_pose_rad()``, the same field its closure uses.
+            """
+            import math as _math
+
+            from robot_radio.testgui.commands import unwrap_angle_toward
+
+            pose_before = self._boundary_pose
+            pose_after = self._latest_pose
+            self._boundary_pose = pose_after
+
+            heading_before = leg_result.heading_before  # [rad] absolute since boot
+            heading_after = leg_result.heading_after  # [rad] absolute since boot
+            if self._heading_origin is None:
+                self._heading_origin = heading_before
+
+            commanded = float(leg.value)  # [mm] signed, or [deg] signed
+            achieved = None
+            error = None
+            cross_track = None  # [mm] signed, distance legs only
+            residual = None  # [deg] signed, turn legs only
+            turned = None  # [deg] signed in-leg heading change, distance legs
+
+            if leg.kind == "turn":
+                self._cumulative_command += commanded
+                if heading_before is not None and heading_after is not None:
+                    achieved = unwrap_angle_toward(
+                        _math.degrees(heading_after - heading_before), commanded)
+                    error = achieved - commanded
+                if heading_after is not None and self._heading_origin is not None:
+                    swept = unwrap_angle_toward(
+                        _math.degrees(heading_after - self._heading_origin),
+                        self._cumulative_command)
+                    residual = swept - self._cumulative_command
+            else:
+                # `pose_before == pose_after` means no telemetry pose landed
+                # between this leg's own boundaries, so the pair measures
+                # nothing -- report it as unmeasured rather than as a 0 mm
+                # leg. It happens on leg 1, whose entry pose is seeded from
+                # the first frame of the run (see `_on_row()`); `_emit_
+                # summary()` re-bases that leg on `run_tour()`'s own closure
+                # start pose, which is read before leg 1 is ever sent.
+                measured = (pose_before is not None and pose_after is not None
+                            and pose_before != pose_after)
+                if measured:
+                    achieved, cross_track = self._project(pose_before, pose_after)
+                    error = achieved - commanded
+                if heading_before is not None and heading_after is not None:
+                    turned = unwrap_angle_toward(
+                        _math.degrees(heading_after - heading_before), 0.0)
+
+            self._leg_reports.append({
+                "index": index, "kind": leg.kind, "commanded": commanded,
+                "achieved": achieved, "error": error, "cross_track": cross_track,
+                "residual": residual, "turned": turned,
+                "pose_after": pose_after,
+                "outcome": leg_result.outcome.value,
+                "duration": leg_result.duration,
+            })
+
+            unit = "deg" if leg.kind == "turn" else "mm"
+            detail = f"cmd {commanded:+.1f}{unit}"
+            if achieved is None:
+                detail += "  ach n/a (no telemetry pose yet)"
+            else:
+                detail += f"  ach {achieved:+.1f}{unit}  err {error:+.2f}{unit}"
+                if leg.kind == "turn":
+                    if residual is not None:
+                        detail += f"  cum resid {residual:+.2f}deg"
+                else:
+                    detail += f"  xtrack {cross_track:+.1f}mm"
+                    if turned is not None:
+                        detail += f"  drift {turned:+.2f}deg"
+
             self.log_line.emit(
                 f"[TOUR] {self._name} leg {index + 1}/{total}: "
-                f"{leg.kind} {leg.value:g} -> {leg_result.outcome.value} "
-                f"({leg_result.tick_count} ticks, {leg_result.duration:.2f}s)",
+                f"{leg.kind} {detail} "
+                f"({leg_result.outcome.value}, {leg_result.duration:.2f}s, "
+                f"{leg_result.tick_count} ticks)",
                 "")
+
+        @staticmethod
+        def _project(entry_pose, exit_pose) -> "tuple[float, float]":
+            """Signed along-track travel and perpendicular (cross-track)
+            deviation [mm] between two poses, resolved in the heading the
+            robot ENTERED the leg with.
+
+            Along-track alone cannot tell a leg that ran long from one that
+            arced; the pair can. Both are what the playfield rule asks a
+            multi-segment run to report per leg.
+            """
+            import math as _math
+
+            dx = exit_pose[0] - entry_pose[0]  # [mm]
+            dy = exit_pose[1] - entry_pose[1]  # [mm]
+            entry = entry_pose[2]  # [rad]
+            return (dx * _math.cos(entry) + dy * _math.sin(entry),
+                    -dx * _math.sin(entry) + dy * _math.cos(entry))
+
+        def _emit_summary(self, total: int, closure, wall: float) -> None:
+            """Compact end-of-tour block: every segment's number in one
+            place, plus the whole-tour sweep and closure.
+
+            Deliberately a handful of lines, not one line per leg again —
+            the per-leg narration already streamed by as the tour ran; this
+            is the shape an operator scans afterwards to see WHICH segment
+            spent the error.
+            """
+            import math as _math
+
+            reports = self._leg_reports
+            if not reports:
+                return
+
+            # Re-base leg 1 on the tour's OWN start pose. `run_tour()` reads
+            # that pose just before leg 1 is sent and only publishes it at
+            # the end, so the streaming line for leg 1 had to make do with
+            # the first frame of the run -- which on a starved first leg is
+            # the SAME frame the leg ends on, and measures nothing. This is
+            # the correct basis, and it is the same field the closure below
+            # is computed from, so the two agree by construction.
+            #
+            # If leg 1's exit pose is still that same start pose, the leg has
+            # no measurable span at all and stays `None` -> "n/a". That is
+            # the honest reading, not a 0 mm leg: on the PIPELINED path leg
+            # 1's terminal ack can land within a couple of polls (measured:
+            # 0.05s / 2 ticks for a 345 mm leg), so its boundaries collapse
+            # and the travel is really spent inside the next leg's window.
+            # Printing "0.0 mm, err -345.0" there would invent a huge error
+            # the robot did not make. Rest-to-rest runs do not have this
+            # problem -- every boundary is a real rest.
+            first = reports[0]
+            start_pose = getattr(closure, "start_pose", None)
+            if (start_pose is not None and first["kind"] == "distance"
+                    and first["pose_after"] is not None
+                    and first["pose_after"] != start_pose):
+                achieved, cross_track = self._project(start_pose, first["pose_after"])
+                first["achieved"] = achieved
+                first["cross_track"] = cross_track
+                first["error"] = achieved - first["commanded"]
+
+            def _row(values, fmt) -> str:
+                return " ".join("  n/a" if v is None else format(v, fmt) for v in values)
+
+            def _command_note(values, fmt) -> str:
+                if len({round(v, 3) for v in values}) == 1:
+                    return f"cmd {format(values[0], fmt)} each"
+                return "cmd " + " ".join(format(v, fmt) for v in values)
+
+            name = self._name
+            self.log_line.emit(
+                f"[TOUR] {name} summary — {len(reports)}/{total} legs, {wall:.1f}s wall", "")
+
+            distances = [r for r in reports if r["kind"] == "distance"]
+            turns = [r for r in reports if r["kind"] == "turn"]
+
+            if distances:
+                self.log_line.emit(
+                    f"[TOUR]   leg length [mm]:  {_row([r['achieved'] for r in distances], '7.1f')}"
+                    f"   ({_command_note([r['commanded'] for r in distances], '.1f')};"
+                    f" err {_row([r['error'] for r in distances], '+.1f')})", "")
+                self.log_line.emit(
+                    f"[TOUR]   leg cross-track [mm]:  "
+                    f"{_row([r['cross_track'] for r in distances], '+7.1f')}", "")
+                if any(r["achieved"] is None for r in distances):
+                    self.log_line.emit(
+                        "[TOUR]   (n/a = no telemetry pose landed inside that leg's own "
+                        "boundaries — its travel is measured inside the next leg)", "")
+            if turns:
+                self.log_line.emit(
+                    f"[TOUR]   turn angle [deg]:  {_row([r['achieved'] for r in turns], '+7.1f')}"
+                    f"   ({_command_note([r['commanded'] for r in turns], '+.1f')};"
+                    f" err {_row([r['error'] for r in turns], '+.2f')})", "")
+                self.log_line.emit(
+                    f"[TOUR]   cumulative heading residual per corner [deg]:  "
+                    f"{_row([r['residual'] for r in turns], '+7.2f')}", "")
+                swept = [r for r in turns if r["residual"] is not None]
+                if swept:
+                    total_command = sum(r["commanded"] for r in turns)  # [deg]
+                    total_sweep = total_command + swept[-1]["residual"]  # [deg]
+                    self.log_line.emit(
+                        f"[TOUR]   heading sweep {total_sweep:+.1f}deg "
+                        f"(cmd {total_command:+.1f}deg, "
+                        f"err {swept[-1]['residual']:+.2f}deg)", "")
+
+            if closure is not None and closure.position_delta is not None:
+                start = closure.start_pose
+                end = closure.end_pose
+                self.log_line.emit(
+                    f"[TOUR]   closure {closure.position_delta:.1f}mm "
+                    f"(finish at {end[0] - start[0]:+.1f}, {end[1] - start[1]:+.1f}), "
+                    f"heading delta {_math.degrees(closure.heading_delta):+.1f}deg", "")
 
         def _on_row(self, tick_index, leg_index, leg, tick_result, frame) -> None:
             """``run_tour()``'s per-tick hook — forwards the frame the
             executor just drained to the SAME ``on_telemetry`` Qt-bridge
             path ``_reader_loop()`` normally feeds, so the canvas/avatar
             keeps tracking while ``_reader_loop()`` itself is suspended
-            (see this class's own docstring)."""
+            (see this class's own docstring).
+
+            Also keeps the freshest pose for ``_on_leg()``'s per-segment
+            reporting. The pose captured on the FIRST tick stands in as leg
+            1's own entry pose: ``run_tour()`` reads its closure start pose
+            just before sending leg 1 and does not expose it until the tour
+            ends, and one poll interval (~50 ms) into a leg is close enough
+            to that instant to report leg 1 on the same terms as every
+            later leg, which use a real boundary pose.
+            """
             if frame is None:
                 return
+            if self._frame_pose is not None:
+                pose = self._frame_pose(frame)
+                if pose is not None:
+                    self._latest_pose = pose
+                    if self._boundary_pose is None:
+                        self._boundary_pose = pose
             on_telemetry = self._transport.on_telemetry
             if on_telemetry is not None:
                 try:
@@ -2719,8 +2997,9 @@ def _build_main_window():  # type: ignore[return]
             ops_ctrl.set_tour_running(True)
             from PySide6.QtCore import QThread  # type: ignore[import-untyped]
 
-            worker = _TourRunner(transport, _state, name, list(steps),
-                                 tour_execution(name))
+            worker = _TourRunner(
+                transport, _state, name, list(steps),
+                tour_execution(name, rest_to_rest=rest_to_rest_chk.isChecked()))
             thread = QThread()
             worker.moveToThread(thread)
             # Marshal worker signals to the GUI thread via a main-thread bridge

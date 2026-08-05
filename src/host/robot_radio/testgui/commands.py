@@ -242,12 +242,43 @@ TOUR_EXECUTION: "dict[str, TourExecution]" = {
 }
 
 
-def tour_execution(name: str) -> "TourExecution | None":
+def tour_execution(name: str, rest_to_rest: bool = False) -> "TourExecution | None":
     """The ``TourExecution`` for tour *name*, defaulting to the historical
     pipelined execution for any tour without an explicit entry. Returns
     ``None`` only if ``planner.tour`` itself failed to import (the guard at
-    the top of this module), in which case there is no tour to run anyway."""
-    return TOUR_EXECUTION.get(name, PIPELINED_EXECUTION)
+    the top of this module), in which case there is no tour to run anyway.
+
+    ``rest_to_rest=True`` (the GUI's "Rest-to-rest (align each corner)"
+    checkbox) promotes a PIPELINED tour onto ``SQUARE_EXECUTION`` -- the
+    exact sequencing ticket 134-004 measured at median 6.3 mm closure
+    (one Move in flight at a time, a 1.2 s PASSIVE dwell at every boundary,
+    2.4 rad/s pivots). Sprint 134 only ever wired that path to "Square";
+    the flag is how Tour 1 / Tour 2 reach it too, without changing what
+    either tour does when the box is unchecked.
+
+    A tour whose OWN execution is already sequential ("Square") is returned
+    unchanged whatever the flag says: its execution is measured-good and is
+    not the checkbox's to alter.
+    """
+    execution = TOUR_EXECUTION.get(name, PIPELINED_EXECUTION)
+    if not rest_to_rest:
+        return execution
+    if getattr(execution, "sequential", False):
+        return execution
+    return SQUARE_EXECUTION if SQUARE_EXECUTION is not None else execution
+
+
+def unwrap_angle_toward(raw: float, target: float) -> float:  # [deg] both
+    """*raw* shifted by whole turns so it lands closest to *target*.
+
+    A tour's achieved turn is a difference of two absolute headings, so a
+    +360 leg reads as ~0 and a leg straddling the +/-180 seam reads with
+    the wrong sign. Both are resolved by snapping onto the whole-turn
+    branch nearest what was COMMANDED, which is the only branch that can
+    be meant: no tour leg turns more than half a revolution past its own
+    command.
+    """
+    return raw + 360.0 * round((target - raw) / 360.0)
 
 
 # ---------------------------------------------------------------------------
