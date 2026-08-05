@@ -55,14 +55,14 @@ class RadioTransport : public Transport {
   Radio& radio_;
 };
 
-#endif
+#endif  // HOST_BUILD
 
 constexpr uint16_t kMaxEnvelopeBytes =
     (msg::wire::kCommandEnvelopeMaxEncodedSize > msg::wire::kReplyEnvelopeMaxEncodedSize)
         ? msg::wire::kCommandEnvelopeMaxEncodedSize
-        : msg::wire::kReplyEnvelopeMaxEncodedSize;
+        : msg::wire::kReplyEnvelopeMaxEncodedSize;  // == 192
 
-constexpr uint16_t kMaxCrcPayloadBytes = kMaxEnvelopeBytes + 2;
+constexpr uint16_t kMaxCrcPayloadBytes = kMaxEnvelopeBytes + 2;  // == 194
 
 constexpr uint16_t kFramedMaxBytes = 200;
 static_assert(kFramedMaxBytes >= kMaxCrcPayloadBytes + kMaxCrcPayloadBytes / 254 + 1,
@@ -78,7 +78,7 @@ constexpr size_t maxVerbNameLength() {
   return maxLen;
 }
 
-constexpr uint16_t kMaxCommandPrefixBytes = static_cast<uint16_t>(maxVerbNameLength() + 1);
+constexpr uint16_t kMaxCommandPrefixBytes = static_cast<uint16_t>(maxVerbNameLength() + 1);  // name + ':'
 
 constexpr uint16_t kMaxLineBytes = kFramedMaxBytes + kMaxCommandPrefixBytes;
 
@@ -96,13 +96,13 @@ constexpr uint8_t kPumpMaxLines = 2 * kCmdRingDepth;
 class Comms {
  public:
   struct Status {
-    bool ready = false;
-    bool active = false;
+    bool ready = false;             // boot() finished; Moves are accepted
+    bool active = false;            // a Move is running
     bool wheelLeftConnected = false;
     bool wheelRightConnected = false;
     bool otosPresent = false;
-    bool wedged = false;
-    uint32_t flags = 0;
+    bool wedged = false;            // encoder stuck-position latch
+    uint32_t flags = 0;             // the full telemetry flags word
 
     uint8_t tlmMode = 1;
   };
@@ -120,12 +120,15 @@ class Comms {
   }
 
   enum class DbgActionKind : uint8_t { kNone, kMark, kPing, kWedge, kClear,
+                                       kVmin, kGain, kASteady, kPos, kOtos,
                                        kUnrecognized };
   struct DbgAction {
     DbgActionKind kind = DbgActionKind::kNone;
-    char text[64] = {};
-    uint8_t port = 0;
+    char text[64] = {};   // kMark: the full original data ("mark leg1a")
+    uint8_t port = 0;     // kWedge: 1 = left, 2 = right, 3 = both
     uint32_t duration = 0;  // [ms] kWedge auto-clear; 0 = latched
+    float value = 0.0f;
+    float value2 = 0.0f;
   };
 
   DbgAction takeDbgAction() {
@@ -186,11 +189,11 @@ class Comms {
 
   TlmAction tlmAction_ = TlmAction::kNone;
   static constexpr uint8_t kDbgRingDepth = 4;
-  DbgAction dbgRing_[kDbgRingDepth]{};
+  DbgAction dbgRing_[kDbgRingDepth]{};  // staged by dispatchLine(); drained by RobotLoop
   uint8_t dbgHead_ = 0;
   uint8_t dbgCount_ = 0;
   void pushDbgAction(const DbgAction& action) {
-    if (dbgCount_ >= kDbgRingDepth) return;
+    if (dbgCount_ >= kDbgRingDepth) return;  // drop-newest
     dbgRing_[(dbgHead_ + dbgCount_) % kDbgRingDepth] = action;
     ++dbgCount_;
   }
@@ -203,4 +206,4 @@ class Comms {
   uint8_t cmdCount_ = 0;
 };
 
-}
+}  // namespace App

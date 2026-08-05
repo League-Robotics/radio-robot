@@ -12,6 +12,14 @@ float clampf(float v, float lo, float hi) {
     if (v > hi) return hi;
     return v;
 }
+}  // namespace
+
+int8_t scaleToRegister(float scale)
+{
+    float raw = roundf((scale - 1.0f) / 0.001f);
+    if (raw >  127.0f) raw =  127.0f;
+    if (raw < -127.0f) raw = -127.0f;
+    return static_cast<int8_t>(raw);
 }
 
 Otos::~Otos() = default;
@@ -21,11 +29,10 @@ RealOtos::RealOtos(I2CBus& bus, const OtosConfig& config)
 {
 }
 
-
 void RealOtos::begin()
 {
     uint8_t id = readReg8(kRegProductId);
-    lastProbeId_ = id;
+    lastProbeId_ = id;   // captured for ODIAG bench triage
     initialized_ = (id == kExpectedProductId);
     connected_ = initialized_;
     if (!initialized_) return;
@@ -38,7 +45,6 @@ void RealOtos::begin()
     writeXYH(kRegPositionXl, 0, 0, 0);
 }
 
-
 PoseReading RealOtos::pose() const { return cachedPose_; }
 
 bool RealOtos::poseFresh() const { return poseFresh_; }
@@ -47,12 +53,10 @@ bool RealOtos::connected() const { return initialized_ && connected_; }
 
 bool RealOtos::present() const { return initialized_; }
 
-
 bool RealOtos::readDue(uint64_t nowUs) const
 {
     return !hasRead_ || (nowUs - lastReadUs_) >= kReadPeriod;
 }
-
 
 void RealOtos::setPose(float x, float y, float heading)
 {
@@ -62,15 +66,14 @@ void RealOtos::setPose(float x, float y, float heading)
     posePending_ = true;
 }
 
-
 void RealOtos::tick(uint64_t nowUs)
 {
-    if (!initialized_) return;
+    if (!initialized_) return;   // never detected at begin() -- no bus traffic
 
     if (posePending_) {
         applyPendingPose();
         posePending_ = false;
-        poseFresh_ = false;
+        poseFresh_ = false;   // no read performed this tick; pose() unchanged
         return;
     }
 
@@ -93,13 +96,13 @@ void RealOtos::tick(uint64_t nowUs)
         return;
     }
 
-    float xF = static_cast<float>(rx) * kPosMmPerLsb;  // [mm]
-    float yF = static_cast<float>(ry) * kPosMmPerLsb;  // [mm]
-    float hF = static_cast<float>(rh) * kHdgRadPerLsb;  // [rad]
+    float xF = static_cast<float>(rx) * kPosMmPerLsb;    // [mm]
+    float yF = static_cast<float>(ry) * kPosMmPerLsb;    // [mm]
+    float hF = static_cast<float>(rh) * kHdgRadPerLsb;   // [rad]
 
-    float vxF = static_cast<float>(rvx) * kPosMmPerLsb;  // [mm/s]
-    float vyF = static_cast<float>(rvy) * kPosMmPerLsb;  // [mm/s]
-    float whF = static_cast<float>(rvh) * kHdgRadPerLsb;  // [rad/s]
+    float vxF = static_cast<float>(rvx) * kPosMmPerLsb;    // [mm/s]
+    float vyF = static_cast<float>(rvy) * kPosMmPerLsb;    // [mm/s]
+    float whF = static_cast<float>(rvh) * kHdgRadPerLsb;   // [rad/s]
 
     float ang = -config_.offsetYaw;
     float c = cosf(ang);
@@ -114,13 +117,12 @@ void RealOtos::tick(uint64_t nowUs)
 
     cachedPose_.x = centreX;
     cachedPose_.y = centreY;
-    cachedPose_.heading = hF;
+    cachedPose_.heading = hF;   // heading takes no mounting offset
     cachedPose_.v_x = rotVx;
     cachedPose_.v_y = rotVy;
     cachedPose_.omega = whF;
     poseFresh_ = true;
 }
-
 
 void RealOtos::applyPendingPose()
 {
@@ -133,11 +135,10 @@ void RealOtos::applyPendingPose()
     float s = sinf(ang);
     float xF =  c * sensorX + s * sensorY;
     float yF = -s * sensorX + c * sensorY;
-    float hF = pendingHeading_;
+    float hF = pendingHeading_;   // heading takes no mounting offset
 
     writePoseMm(kRegPositionXl, xF, yF, hF);
 }
-
 
 void RealOtos::init()
 {
@@ -167,9 +168,9 @@ void RealOtos::getOffset(float& x, float& y, float& heading)
     int16_t rx = 0, ry = 0, rh = 0;
     readXYH(kRegOffsetXl, rx, ry, rh);
 
-    x = static_cast<float>(rx) * kPosMmPerLsb;  // [mm]
-    y = static_cast<float>(ry) * kPosMmPerLsb;  // [mm]
-    heading = static_cast<float>(rh) * kHdgRadPerLsb;  // [rad]
+    x = static_cast<float>(rx) * kPosMmPerLsb;       // [mm]
+    y = static_cast<float>(ry) * kPosMmPerLsb;       // [mm]
+    heading = static_cast<float>(rh) * kHdgRadPerLsb; // [rad]
 }
 
 void RealOtos::setSignalProcessConfig(uint8_t config)
@@ -204,16 +205,6 @@ void RealOtos::setAngularScalar(float scalar)
     writeReg8(kRegAngularScalar, static_cast<uint8_t>(clamped));
 }
 
-
-int8_t RealOtos::scaleToRegister(float scale)
-{
-    float raw = roundf((scale - 1.0f) / 0.001f);
-    if (raw >  127.0f) raw =  127.0f;
-    if (raw < -127.0f) raw = -127.0f;
-    return static_cast<int8_t>(raw);
-}
-
-
 void RealOtos::sensorToCentre(float sensorX, float sensorY, float sensorHeading,
                            float offsetX, float offsetY,
                            float& centreXOut, float& centreYOut)
@@ -235,7 +226,6 @@ void RealOtos::centreToSensor(float centreX, float centreY, float centreHeading,
     sensorXOut = centreX + (c * offsetX - s * offsetY);
     sensorYOut = centreY + (s * offsetX + c * offsetY);
 }
-
 
 void RealOtos::writeReg8(uint8_t reg, uint8_t val)
 {
@@ -319,4 +309,4 @@ void RealOtos::writePoseMm(uint8_t startReg, float xF, float yF, float hF)
              static_cast<int16_t>(rh));
 }
 
-}
+}  // namespace Devices

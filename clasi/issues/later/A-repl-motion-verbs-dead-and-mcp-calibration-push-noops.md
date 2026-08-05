@@ -5,6 +5,20 @@ priority: high
 
 # `rogo repl` raises on every motion verb, its `stop` is mislabeled a panic stop, and the MCP calibration push silently no-ops
 
+> **PARTIAL FIX 2026-08-05 (out-of-process rogo revival, branch
+> `worktree-rogo-revival`, commit cab5da42 — unmerged): sections 1 and 2
+> are DONE there.** `io/repl.py` rebuilt on the v5 surface — motion verbs
+> are `move_twist`/`move_wheels`/`wheels` with enqueue-ack checks and
+> completion-ack waits; `stop` says "planned -- queues behind the active
+> move"; `estop`/`halt` verbs exist and VERIFY the active flag cleared,
+> re-issuing up to 3x. `grep -rn "proto.twist\|envelope_pb2.Twist"
+> src/host` returns nothing on the branch. Pinned by
+> `src/tests/unit/test_repl_v5_verbs.py`. The same change added the rogo
+> daemon (`rogo serve`, holds the serial port open across clients) and
+> `RogoClient`. **Section 3 (the MCP connect-time calibration push
+> silently no-oping) is NOT addressed** — this issue stays open for that
+> half, plus on-stand bench verification of the rebuilt verbs.
+
 ## Description
 
 2026-08-02 post-130 review, **F4 (CRITICAL)**. Three defects in the tools our own

@@ -11,7 +11,7 @@ namespace App {
 namespace {
 
 constexpr uint32_t kSettle = 4;  // [ms] encoder-settle window, both motors
-constexpr uint32_t kClear = 4;  // [ms] post-duty-write clearance window
+constexpr uint32_t kClear = 4;   // [ms] post-duty-write clearance window
 
 constexpr uint32_t kWindows = 2 * kSettle + kClear;  // [ms]
 static_assert(kWindows <= RobotLoop::kCycle,
@@ -19,7 +19,7 @@ static_assert(kWindows <= RobotLoop::kCycle,
 
 constexpr uint32_t kPreamblePace = 10;  // [ms] boot-loop probe pacing
 
-constexpr float kPositionWireBound = 32000.0f;  // [mm]
+constexpr float kPositionWireBound = 32000.0f;       // [mm]
 constexpr float kPositionRebaselineMargin = 30000.0f;  // [mm]
 
 uint32_t packLine(const Devices::LineReading& reading) {
@@ -32,7 +32,7 @@ uint32_t packColor(const Devices::ColorReading& reading) {
          (((reading.b >> 8) & 0xFFu) << 16) | (((reading.c >> 8) & 0xFFu) << 24);
 }
 
-}
+}  // namespace
 
 RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
                       Devices::Motor& motorR, Devices::Otos& otos,
@@ -90,7 +90,6 @@ float RobotLoop::clampToPositionWireBound(float pos, bool* clamped) {
   return *clamped ? std::copysign(kPositionWireBound, pos) : pos;
 }
 
-
 void RobotLoop::routeCommand(const Cmd& cmd) {
   if (cmd.status != CmdStatus::kDecoded) return;
 
@@ -108,12 +107,44 @@ void RobotLoop::routeCommand(const Cmd& cmd) {
       handleEstop(cmd.env);
       break;
     case msg::CommandEnvelope::CmdKind::CONFIG:
-      tlm_.ack(cmd.env.corr_id, configurator_.apply(cmd.env));
+      tlm_.ack(cmd.env.corr_id,
+               static_cast<uint32_t>(configurator_.applyGroup(
+                   cmd.env.cmd.config.target, cmd.env.cmd.config.body_,
+                   cmd.env.cmd.config.body_count)));
+      break;
+    case msg::CommandEnvelope::CmdKind::GET_CONFIG:
+      handleGetConfig(cmd.env);
+      break;
+    case msg::CommandEnvelope::CmdKind::SET_FIELD:
+      tlm_.ack(cmd.env.corr_id,
+               static_cast<uint32_t>(configurator_.applyField(
+                   cmd.env.cmd.set_field.target,
+                   static_cast<uint16_t>(cmd.env.cmd.set_field.field),
+                   cmd.env.cmd.set_field.value)));
       break;
     case msg::CommandEnvelope::CmdKind::NONE:
     default:
       break;
   }
+}
+
+void RobotLoop::handleGetConfig(const msg::CommandEnvelope& env) {
+  const msg::ConfigGroupTarget target = env.cmd.get_config.target;
+
+  msg::ConfigSnapshot snapshot;
+  const msg::ErrCode result = configurator_.encodeSnapshot(target, snapshot);
+
+  msg::ReplyEnvelope reply;
+  reply.corr_id = env.corr_id;
+  if (result == msg::ErrCode::ERR_NONE) {
+    reply.body_kind = msg::ReplyEnvelope::BodyKind::CFG;
+    reply.body.cfg = snapshot;
+  } else {
+    reply.body_kind = msg::ReplyEnvelope::BodyKind::ERR;
+    reply.body.err.code = result;
+    reply.body.err.field = static_cast<uint32_t>(target);
+  }
+  comms_.sendReply(reply);
 }
 
 void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
@@ -146,7 +177,7 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
       m.threshold = move.stop.angle;
       break;
     default:
-      break;
+      break;  // unreachable: stop_kind validated above
   }
 
   if (move.velocity_kind == msg::Move::VelocityKind::WHEELS) {
@@ -167,6 +198,8 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
       return;
     }
   }
+
+  m.requestedThreshold = m.threshold;
 
   if (m.kind == Motion::Move::Kind::Angle) {
     const bool positive =
@@ -197,7 +230,7 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
 
 bool RobotLoop::alreadyAccepted(uint32_t id) const {
   if (id == 0) {
-    return false;
+    return false;  // "unset": every id-0 move is its own move
   }
   for (int i = 0; i < kAcceptedMoveIdCount; ++i) {
     if (acceptedMoveIds_[i] == id) {
@@ -227,7 +260,7 @@ void RobotLoop::handleWheels(const msg::CommandEnvelope& env) {
     return;
   }
 
-  planner_.estop();
+  planner_.estop();  // Drive takes over motion (one owner at a time)
   drive_.command(wheels.v_left, wheels.v_right, wheels.duration, wheels.id,
                  state_.time.cycleStart);
   tlm_.ack(env.corr_id, 0);
@@ -265,7 +298,7 @@ void RobotLoop::boot() {
     Cmd bootCmd;
     while (comms_.takeCommand(bootCmd)) rejectDuringBoot(bootCmd);
 
-    preamble_.step();
+    preamble_.step();  // one bounded probe action per pass
 
     Types::RobotState bootState;
     bootState.time.cycleStart = markTime();
@@ -275,7 +308,7 @@ void RobotLoop::boot() {
     tlm_.update(bootState, drive_);
     tlm_.emit(bootState.time.cycleStart);
 
-    sleeper_.sleepMillis(kPreamblePace);
+    sleeper_.sleepMillis(kPreamblePace);  // paces probes AND yields (radio RX)
   }
 
   comms_.sendBanner();
@@ -283,6 +316,11 @@ void RobotLoop::boot() {
   state_.health.ready = true;
 }
 
+void RobotLoop::zeroUnownedMotion() {
+  if (planner_.active() || drive_.owns()) return;
+  state_.wheelLeft.cmdVelocity = 0.0f;
+  state_.wheelRight.cmdVelocity = 0.0f;
+}
 
 void RobotLoop::publishWheel(Devices::Motor& motor,
                              Types::RobotState::Wheel& wheel,
@@ -384,7 +422,7 @@ void RobotLoop::publishMoveResult(const Motion::TickResult& moveResult) {
   tlm_.setLiveFlag(kFlagFaultShapingDisabled, state_.health.shapingDisabled);
 
   if (moveResult.completed) {
-    tlm_.ack(moveResult.moveId, 0);
+    tlm_.ack(moveResult.moveId, 0);  // timeout signaled by flag, not ack_err
   }
 }
 
@@ -392,15 +430,17 @@ void RobotLoop::cycle() {
   state_.time.cycleStart = markTime();  // [ms] pace anchor + wire `now`
   const uint64_t cycleStartUs = clock_.nowMicros();  // [us]
 
+  zeroUnownedMotion();
+
   drive_.tick(state_);
 
-  motorL_.requestSample();
+  motorL_.requestSample();  // brick latches ONE pending read per select
   runAndWait(kSettle, [&] {
     comms_.pump(state_.time.cycleStart);
   });
-  motorL_.tick(clock_.nowMicros());
+  motorL_.tick(clock_.nowMicros());  // collect L
 
-  runAndWait(kClear, [&] {
+  runAndWait(kClear, [&] {  // brick's post-duty-write clearance
     comms_.pump(state_.time.cycleStart);
   });
 
@@ -410,9 +450,9 @@ void RobotLoop::cycle() {
     Cmd cmd;
     while (comms_.takeCommand(cmd)) routeCommand(cmd);
   });
-  motorR_.tick(clock_.nowMicros());
+  motorR_.tick(clock_.nowMicros());  // collect R
 
-  publishWheels();
+  publishWheels();  // at the point of same-generation L/R coherence
 
   runAndWaitUntil(state_.time.cycleStart, kCycle, [&] {
     comms_.pump(state_.time.cycleStart);
@@ -420,10 +460,10 @@ void RobotLoop::cycle() {
     uint64_t nowUs = clock_.nowMicros();
 
     odom_.integrate(motorL_.position(), motorR_.position(), state_.wheelLeft.positionEpoch,
-                    state_.wheelRight.positionEpoch);
+                    state_.wheelRight.positionEpoch);  // before OTOS: FakeOtos reads it
     otos_.tick(nowUs);
     publishOtos();
-    const bool tickedLine = (cycleCount_ % 2) == 1;
+    const bool tickedLine = (cycleCount_ % 2) == 1;  // first cycle ticks line
     if (tickedLine) line_.tick(nowUs); else color_.tick(nowUs);
     publishLineColor(tickedLine);
     publishPose();
@@ -453,8 +493,15 @@ void RobotLoop::cycle() {
   });
 }
 
-
 #ifdef ROBOT_DEBUG
+void RobotLoop::captureTuningBaseline() {
+  if (dbgTuningBaselined_) return;
+  dbgBoundsBaseline_ = drive_.adaptationBounds();
+  dbgDutyPerSpeedBaseLeft_ = drive_.dutyPerSpeedLeft();
+  dbgDutyPerSpeedBaseRight_ = drive_.dutyPerSpeedRight();
+  dbgTuningBaselined_ = true;
+}
+
 void RobotLoop::applyDbgAction(uint32_t now) {
   if (dbgWedgeUntilL_ != 0 && dbgWedgeUntilL_ != UINT32_MAX &&
       static_cast<int32_t>(now - dbgWedgeUntilL_) >= 0) {
@@ -488,19 +535,71 @@ void RobotLoop::applyDbgAction(uint32_t now) {
                   static_cast<unsigned long>(action.duration));
       break;
     }
+    case Comms::DbgActionKind::kVmin: {
+      captureTuningBaseline();
+      drive_.setSpeedFloor(action.value);
+      const long milli = DBG_MILLI(action.value);
+      App::debugf("vmin %ld.%03ld applied", milli / 1000, milli % 1000);
+      break;
+    }
+    case Comms::DbgActionKind::kASteady: {
+      captureTuningBaseline();
+      drive_.setASteady(action.value);
+      const long milli = DBG_MILLI(action.value);
+      App::debugf("asteady %ld.%03ld applied", milli / 1000, milli % 1000);
+      break;
+    }
+    case Comms::DbgActionKind::kPos: {
+      captureTuningBaseline();
+      drive_.setPositionErrorMax(action.value);
+      const long milli = DBG_MILLI(action.value);
+      App::debugf("pos %ld.%03ld applied", milli / 1000, milli % 1000);
+      break;
+    }
+    case Comms::DbgActionKind::kGain: {
+      captureTuningBaseline();
+      drive_.setDutyPerSpeed(dbgDutyPerSpeedBaseLeft_ * action.value,
+                             dbgDutyPerSpeedBaseRight_ * action.value2);
+      const long milliLeft = DBG_MILLI(action.value);
+      const long milliRight = DBG_MILLI(action.value2);
+      App::debugf("gain L=%ld.%03ld R=%ld.%03ld applied",
+                  milliLeft / 1000, milliLeft % 1000,
+                  milliRight / 1000, milliRight % 1000);
+      break;
+    }
     case Comms::DbgActionKind::kClear:
       motorL_.setForcedWedge(false);
       motorR_.setForcedWedge(false);
       dbgWedgeUntilL_ = 0;
       dbgWedgeUntilR_ = 0;
-      App::debugf("clear");
+      if (dbgTuningBaselined_) {
+        drive_.setAdaptationBounds(dbgBoundsBaseline_);
+        drive_.setDutyPerSpeed(dbgDutyPerSpeedBaseLeft_,
+                               dbgDutyPerSpeedBaseRight_);
+        dbgTuningBaselined_ = false;
+        App::debugf("clear (tuning restored to boot)");
+      } else {
+        App::debugf("clear");
+      }
       break;
+    case Comms::DbgActionKind::kOtos: {
+      // begin() latches initialized_ once at boot, so a re-probe here is the
+      // only way to see the raw id or whether a later probe would succeed.
+      App::debugf("otos before: present=%d connected=%d probeId=0x%02X",
+                  otos_.present() ? 1 : 0, otos_.connected() ? 1 : 0,
+                  static_cast<unsigned>(otos_.lastProbeId()));
+      otos_.begin();
+      App::debugf("otos after: present=%d connected=%d probeId=0x%02X",
+                  otos_.present() ? 1 : 0, otos_.connected() ? 1 : 0,
+                  static_cast<unsigned>(otos_.lastProbeId()));
+      break;
+    }
     case Comms::DbgActionKind::kUnrecognized:
       App::debugf("unrecognized dbg: %s", action.text);
       break;
   }
   }
 }
-#endif
+#endif  // ROBOT_DEBUG
 
-}
+}  // namespace App

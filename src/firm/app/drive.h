@@ -2,6 +2,7 @@
 
 #include <cstdint>
 
+#include "config/robot.h"
 #include "devices/motor.h"
 #include "firm/types/robot_state.h"
 
@@ -19,7 +20,7 @@ class Drive {
     calibrated_ = left != 0.0f && right != 0.0f;
   }
 
-  float dutyPerSpeedLeft() const { return dutyPerSpeedLeft_; }  // [duty/(mm/s)]
+  float dutyPerSpeedLeft() const { return dutyPerSpeedLeft_; }    // [duty/(mm/s)]
   float dutyPerSpeedRight() const { return dutyPerSpeedRight_; }  // [duty/(mm/s)]
 
   void setWheelCorrection(float gainLeftAccel, float interceptLeftAccel,
@@ -30,35 +31,37 @@ class Drive {
   void setCrawlPulse(float crawlPulse) { crawlPulse_ = crawlPulse; }
 
   struct ControlGains {
-    float kp = 0.0f;  // [1] dimensionless: mm/s of PID output per mm/s of error
-    float ki = 0.0f;  // [1/s]
-    float iMax = 0.0f;  // [mm/s] integrator clamp; 0 disables integration
-    float kaff = 0.0f;  // [s] accel feedforward ~= the plant time constant
+    float kp = 0.0f;      // [1] dimensionless: mm/s of PID output per mm/s of error
+    float ki = 0.0f;      // [1/s]
+    float iMax = 0.0f;    // [mm/s] I-term output clamp; 0 disables the I term
+    float kaff = 0.0f;    // [s] accel feedforward ~= the plant time constant
     float pidMax = 0.0f;  // [mm/s]
   };
   void setControlGains(const ControlGains& gains) { gains_ = gains; }
   const ControlGains& controlGains() const { return gains_; }
 
   struct AdaptationBounds {
-    float vMin = 0.0f;  // [mm/s] speed floor (Open Question 2)
-    float biasMax = 0.0f;  // [mm/s] Stage C trim authority clamp
-    float tauAdapt = 0.0f;  // [s] Stage C adaptation time constant; <=0 disables
-    float aSteady = 0.0f;  // [mm/s^2] |a_cmd| below this counts as steady
+    float vMin = 0.0f;              // [mm/s] speed floor (Open Question 2)
+    float biasMax = 0.0f;           // [mm/s] Stage C trim authority clamp
+    float tauAdapt = 0.0f;          // [s] Stage C adaptation time constant; <=0 disables
+    float aSteady = 0.0f;           // [mm/s^2] |a_cmd| below this counts as steady
+    float posErrMax = 0.0f;         // [mm] Stage B position-error clamp; 0 = unclamped
     float deficitThreshold = 0.0f;  // [mm/s] sustained error magnitude that flags a deficit
-    float deficitWindow = 0.0f;  // [ms] how long the deficit condition must sustain
+    float deficitWindow = 0.0f;     // [ms] how long the deficit condition must sustain
   };
   void setAdaptationBounds(const AdaptationBounds& bounds) { bounds_ = bounds; }
   const AdaptationBounds& adaptationBounds() const { return bounds_; }
 
-  float biasLeft() const { return biasLeft_; }  // [mm/s] Stage C's adapted parameter
-  float biasRight() const { return biasRight_; }  // [mm/s]
-  float pidLeft() const { return lastPidLeft_; }  // [mm/s] last-computed Stage B output
+  void configure(const Config::Robot& config);
+
+  float biasLeft() const { return biasLeft_; }      // [mm/s] Stage C's adapted parameter
+  float biasRight() const { return biasRight_; }    // [mm/s]
+  float pidLeft() const { return lastPidLeft_; }    // [mm/s] last-computed Stage B output
   float pidRight() const { return lastPidRight_; }  // [mm/s]
   bool deficitLeft() const { return deficitLeft_; }
   bool deficitRight() const { return deficitRight_; }
 
   bool calibrated() const { return calibrated_; }
-
 
   void command(float vLeft, float vRight, float duration, uint32_t moveId,
                uint32_t now);  // [mm/s] [mm/s] [ms] -- now [ms]
@@ -71,12 +74,23 @@ class Drive {
 
   bool takeCompletion(uint32_t* moveId);
 
-
   void tick(const Types::RobotState& state);
+
+  void setPositionErrorMax(float posErrMax) {  // [mm]
+    bounds_.posErrMax = (posErrMax > 0.0f) ? posErrMax : 0.0f;
+  }
+
+  void setSpeedFloor(float vMin) {  // [mm/s]
+    bounds_.vMin = (vMin > 0.0f) ? vMin : 0.0f;
+  }
+
+  void setASteady(float aSteady) {  // [mm/s^2]
+    bounds_.aSteady = (aSteady > 0.0f) ? aSteady : 0.0f;
+  }
 
   void update(Types::RobotState& state, uint32_t now);  // [ms]
 
-  float targetLeft() const { return targetLeft_; }  // [mm/s] signed
+  float targetLeft() const { return targetLeft_; }    // [mm/s] signed
   float targetRight() const { return targetRight_; }  // [mm/s] signed
 
   float trackWidth() const { return trackWidth_; }  // [mm]
@@ -87,14 +101,28 @@ class Drive {
 
   float corrGain_[2][2] = {{1.0f, 1.0f}, {1.0f, 1.0f}};
   float corrIntercept_[2][2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
-  float lastSpeedLeft_ = 0.0f;  // [mm/s]
+  float lastSpeedLeft_ = 0.0f;   // [mm/s]
   float lastSpeedRight_ = 0.0f;  // [mm/s]
+
+  static constexpr float kAccelSmoothing = 0.35f;  // [1] first-order weight, per cycle
+  float previousTargetLeft_ = 0.0f;   // [mm/s] last cycle's published target
+  float previousTargetRight_ = 0.0f;  // [mm/s]
+  float cmdAccelLeft_ = 0.0f;         // [mm/s^2] smoothed
+  float cmdAccelRight_ = 0.0f;        // [mm/s^2]
 
   float crawlDuty(float duty, float& carry) const;
 
+  struct PositionRef {
+    float reference = 0.0f;  // [mm] integral of commanded speed since the anchor
+    float origin = 0.0f;     // [mm] Wheel::position when anchored
+    uint8_t epoch = 0;       // Wheel::positionEpoch when anchored
+    bool armed = false;
+  };
 
-  float fastPid(float& integral, float err, float aCmd, float dt,
-               bool steady) const;
+  float fastPid(float posError, float err, float aCmd) const;  // [mm] [mm/s] [mm/s^2]
+
+  float positionError(float speed, const Types::RobotState::Wheel& wheel,
+                      PositionRef& ref, float dt) const;  // [mm/s] [s] -> [mm]
 
   void adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
                 bool fresh, float dt) const;
@@ -110,15 +138,15 @@ class Drive {
   ControlGains gains_;
   AdaptationBounds bounds_;
 
-  float pidIntegralLeft_ = 0.0f;  // [mm/s] Stage B integrator state
-  float pidIntegralRight_ = 0.0f;  // [mm/s]
-  float lastPidLeft_ = 0.0f;  // [mm/s] observability: last-computed Stage B output
-  float lastPidRight_ = 0.0f;  // [mm/s]
+  mutable PositionRef posRefLeft_;
+  mutable PositionRef posRefRight_;
+  float lastPidLeft_ = 0.0f;       // [mm/s] observability: last-computed Stage B output
+  float lastPidRight_ = 0.0f;      // [mm/s]
 
-  float biasLeft_ = 0.0f;  // [mm/s] Stage C's ONE adapted parameter, per wheel
+  float biasLeft_ = 0.0f;   // [mm/s] Stage C's ONE adapted parameter, per wheel
   float biasRight_ = 0.0f;  // [mm/s]
 
-  uint32_t deficitSinceLeft_ = 0;  // [ms]
+  uint32_t deficitSinceLeft_ = 0;   // [ms]
   uint32_t deficitSinceRight_ = 0;  // [ms]
   bool deficitLeft_ = false;
   bool deficitRight_ = false;
@@ -129,7 +157,7 @@ class Drive {
   Devices::Motor& right_;
   float trackWidth_;  // [mm]
 
-  float targetLeft_ = 0.0f;  // [mm/s]
+  float targetLeft_ = 0.0f;   // [mm/s]
   float targetRight_ = 0.0f;  // [mm/s]
 
   bool commandActive_ = false;
@@ -138,15 +166,15 @@ class Drive {
   bool completionPending_ = false;
   uint32_t completedMoveId_ = 0;
 
-  float dutyPerSpeedLeft_ = 0.0f;  // [duty/(mm/s)]
+  float dutyPerSpeedLeft_ = 0.0f;   // [duty/(mm/s)]
   float dutyPerSpeedRight_ = 0.0f;  // [duty/(mm/s)]
   bool calibrated_ = false;
 
   float crawlPulse_ = 0.0f;  // [-1, 1] pulse amplitude; 0 = off
-  float crawlCarryLeft_ = 0.0f;
+  float crawlCarryLeft_ = 0.0f;   // Bresenham accumulators
   float crawlCarryRight_ = 0.0f;
 
-  float writtenLeft_ = 0.0f;  // [-1, 1]
+  float writtenLeft_ = 0.0f;   // [-1, 1]
   float writtenRight_ = 0.0f;  // [-1, 1]
 
   uint8_t stopEnforceCountdown_ = 0;
@@ -156,4 +184,4 @@ class Drive {
   static constexpr float kRestVelocity = 8.0f;  // [mm/s]
 };
 
-}
+}  // namespace App
