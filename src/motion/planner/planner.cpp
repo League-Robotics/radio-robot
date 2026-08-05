@@ -266,6 +266,14 @@ bool Planner::move(const Move& next, bool replace) {
   if (replace) {
     pendingCount_ = 0;
     active_.occupied = false;  // the replacement activates next tick()
+    // 134-006: a preemption abandons whatever chain the ledger was keeping
+    // -- the replacement is a new intent, not the next link -- so the
+    // replacement re-anchors to its own activation pose. Explicit now that
+    // the carry can legitimately outlive an empty queue (activateNext());
+    // before that it could only ever be false here, and the drop was an
+    // accident of the queue-occupancy proxy rather than a decision.
+    carryValid_ = false;
+    idleLatched_ = false;
   }
   const int total = (active_.occupied ? 1 : 0) + pendingCount_;
   if (total >= kQueueDepth) return false;
@@ -314,6 +322,13 @@ void Planner::estop() {
   // completion ack, exactly as it abandons any other active Move.
   lifecycle_ = MoveLifecycle::Idle;
   align_ = AlignState{};
+  // 134-006: and the ledger. A panic stop is the canonical "somebody else
+  // is in charge of the robot now" event, so whatever cumulative baseline
+  // was staged is void and the next Move re-anchors to its own pose. This
+  // used to fall out of activateNext()'s queue-occupancy proxy (estop()
+  // empties the queue); with the proxy gone it has to be said here.
+  carryValid_ = false;
+  idleLatched_ = false;
 }
 
 // Age the staged command by one tick. Called from the two places that
@@ -864,9 +879,70 @@ void Planner::activateNext(uint32_t now) {
   // each of the several exits from Aligning because activateNext() is on
   // every one of those paths -- completion, queue-drain, and replace().
   align_ = AlignState{};
-  carryValid_ = carryValid_ && pendingCount_ > 0;  // carry consumed below or dropped
   if (pendingCount_ == 0) {
+    // GOING IDLE (134-006). This used to be where the cumulative-intent
+    // carry died: `carryValid_ = carryValid_ && pendingCount_ > 0`, present
+    // since planner v1, read an empty queue as "something else may have
+    // moved the robot" and dropped the ledger. The INTENT was right -- a
+    // teleop nudge, an estop, or a shove between Moves does invalidate a
+    // staged baseline -- but queue occupancy is a false proxy for it: a
+    // caller that simply waits for each completion ack before enqueuing the
+    // next Move (planner_square_tour.py --sequential, and any GUI or script
+    // driven the same way) has an empty queue at EVERY corner, so the
+    // ledger was dropped at every corner and 134-001 was inert there.
+    // Measured on the same leg+turn, differing only in whether the next
+    // Move was queued before completion (docs/bench-reports/
+    // sprint-134-004-bench-acceptance-2026-08-05.md): carry live, -0.38 deg
+    // mean corner residual, 4/4 corners in tolerance; carry dropped,
+    // +1.22 deg, 2/4.
+    //
+    // So the carry is PRESERVED across the gap here, and the real condition
+    // -- did the heading move while nobody was driving? -- is tested at the
+    // next activation below, against this latch.
+    //
+    // Refreshed for as long as the planner is still commanding motion of
+    // its own: the post-completion ramp-out (drainToZero(), which this
+    // function's callers run immediately after it returns) is the previous
+    // Move ending, not an external disturbance, and latching before it
+    // finished would charge the planner's own drain to the robot's
+    // attacker. It freezes on the first tick with nothing staged; every
+    // heading change after that instant is somebody else's.
+    if (!idleLatched_ || cmdLeft_ != 0.0f || cmdRight_ != 0.0f) {
+      idleHeading_ = pose_.heading();
+      idleLatched_ = true;
+    }
     return;
+  }
+  // ACTIVATING OUT OF AN IDLE GAP (134-006): the carry survives only if the
+  // robot is still where the last Move left it. `pose_.heading()` is
+  // unwrapped (estimation.h) and so is idleHeading_ -- both are readings of
+  // the same continuous signal -- so this plain difference is the signed
+  // drift with no wrapping to get wrong, the same argument alignStep()
+  // makes for its own residual. Wrapping here would be actively unsafe: it
+  // would fold a multi-turn disturbance back onto a small number and call
+  // it undisturbed.
+  //
+  // The tolerance is landing.settleEpsilonAngular -- this robot's own
+  // "arrived at a heading" resolution (0.035 rad on tovez), already the
+  // yardstick for whether a heading reading is meaningfully different from
+  // its target. Deliberately NOT a new PlannerLimits field: that path is
+  // ~16 files (134-003 traced it) and this is not a new physical quantity.
+  //
+  // Fails closed by construction -- anything that is not a demonstrably
+  // undisturbed gap drops the carry, exactly as the old proxy did. estop()
+  // and a replace=true preemption clear carryValid_ at their own call
+  // sites; this covers the external shove.
+  //
+  // The pipelined path (a successor already queued when its predecessor
+  // completed) never sets idleLatched_, so it does not reach this check at
+  // all and behaves exactly as it did before 134-006 -- that arm measured
+  // better 3/3 in the same bench report and is not being touched.
+  if (idleLatched_) {
+    const float idleDrift = pose_.heading() - idleHeading_;  // [rad] signed
+    if (std::fabs(idleDrift) > limits_.landing.settleEpsilonAngular) {
+      carryValid_ = false;
+    }
+    idleLatched_ = false;
   }
   const Move next = pending_[0];
   for (int i = 1; i < pendingCount_; ++i) pending_[i - 1] = pending_[i];

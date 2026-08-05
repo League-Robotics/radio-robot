@@ -290,6 +290,132 @@ void testAngleChainWithoutRequestedIntentCarriesTheCommand() {
   CHECK_NEAR(heading, commanded + quarterTurn, 1e-5);
 }
 
+// 134-006, the two halves of "the ledger survives an idle queue". Both run
+// the SAME 80-then-90 chain testAngleChainRepaysRequestedIntentResidual()
+// above runs -- so the carried answer (180 deg, the shortfall repaid) and
+// the re-anchored answer are already established as distinguishable -- and
+// differ from it in exactly one way: the second Move is enqueued only AFTER
+// the first has completed, leaving the queue empty across the boundary.
+// That is how planner_square_tour.py --sequential drives, and how any
+// ack-then-enqueue caller (a GUI, a script) naturally does.
+//
+// The tolerance is set EXPLICITLY here. benchLimits() leaves
+// landing.settleEpsilonAngular at planner_types.h's in-struct 0.005 rad
+// default, which is not the value any robot runs (tovez bakes 0.035 rad,
+// src/firm/config/boot_config.cpp:180) -- a test that inherited it would be
+// checking a tolerance the firmware never uses.
+PlannerLimits idleGapLimits() {
+  PlannerLimits limits = benchLimits();
+  limits.landing.settleEpsilonAngular = 0.035f;  // [rad] tovez's own value
+  return limits;
+}
+
+// Half one: UNDISTURBED gap. The robot sits where the turn left it for two
+// seconds of idle ticks; the ledger must still be there when the next Move
+// arrives. Pre-134-006 this failed -- activateNext()'s
+// `carryValid_ && pendingCount_ > 0` dropped the carry the moment the queue
+// emptied, so the 10 deg shortfall became the new truth and was never
+// repaid.
+void testCarrySurvivesUndisturbedIdleGap() {
+  Planner planner(idleGapLimits());
+  PerfectPlant plant;
+  Types::RobotState state;
+  uint32_t now = 0;
+  const float quarterTurn = static_cast<float>(M_PI) * 0.5f;          // [rad]
+  const float commanded = 80.0f * static_cast<float>(M_PI) / 180.0f;  // [rad]
+
+  Move shortCommand = angleMove(60, commanded, 2.0f);
+  shortCommand.requestedThreshold = quarterTurn;  // asked 90, commands 80
+  CHECK(planner.move(shortCommand, false));
+  bool completed = false;
+  for (int i = 0; i < 800 && !completed; ++i) {
+    completed = cycle(planner, state, plant, now, kPeriod).completed;
+  }
+  CHECK(completed);
+
+  // The gap: queue empty, nothing enqueued, 40 ticks == 2 s of idle.
+  for (int i = 0; i < 40; ++i) {
+    CHECK(!cycle(planner, state, plant, now, kPeriod).completed);
+  }
+  const float headingAfterGap =
+      (plant.positionRight - plant.positionLeft) / 100.0f;
+  // The gap really was undisturbed -- otherwise the assertion below would
+  // pass for the wrong reason.
+  CHECK_NEAR(headingAfterGap, commanded, 1e-4);
+
+  Move repaying = angleMove(61, quarterTurn, 2.0f);
+  repaying.requestedThreshold = quarterTurn;  // asked 90, commands 90
+  CHECK(planner.move(repaying, false));
+  completed = false;
+  for (int i = 0; i < 800 && !completed; ++i) {
+    completed = cycle(planner, state, plant, now, kPeriod).completed;
+  }
+  CHECK(completed);
+  for (int i = 0; i < 10; ++i) cycle(planner, state, plant, now, kPeriod);
+
+  const float heading = (plant.positionRight - plant.positionLeft) / 100.0f;
+  // Carried: the second turn adopts the CUMULATIVE 90 deg baseline, finds
+  // itself 10 deg behind it, and turns 100 -- exactly the pipelined answer.
+  CHECK_NEAR(heading, 2.0f * quarterTurn, 1e-5);
+  // Guard the guard: the pre-134-006 dropped-carry answer (170 deg) must
+  // NOT pass.
+  CHECK(std::fabs(heading - (commanded + quarterTurn)) > 0.1f);
+}
+
+// Half two: DISTURBED gap -- the fail-closed half. Something turns the
+// robot while the queue is empty (teleop, a shove, a hand on the wheel),
+// so the staged baseline no longer describes where the robot is and the
+// next Move must re-anchor to its own activation heading, exactly as the
+// queue-occupancy proxy used to make it do unconditionally.
+void testCarryDropsWhenHeadingMovesDuringIdleGap() {
+  Planner planner(idleGapLimits());
+  PerfectPlant plant;
+  Types::RobotState state;
+  uint32_t now = 0;
+  const float quarterTurn = static_cast<float>(M_PI) * 0.5f;          // [rad]
+  const float commanded = 80.0f * static_cast<float>(M_PI) / 180.0f;  // [rad]
+  const float shove = 0.5f;  // [rad] ~28.6 deg, far past settleEpsilonAngular
+
+  Move shortCommand = angleMove(70, commanded, 2.0f);
+  shortCommand.requestedThreshold = quarterTurn;
+  CHECK(planner.move(shortCommand, false));
+  bool completed = false;
+  for (int i = 0; i < 800 && !completed; ++i) {
+    completed = cycle(planner, state, plant, now, kPeriod).completed;
+  }
+  CHECK(completed);
+
+  // Idle, then the disturbance, then more idle so the planner's pose
+  // actually integrates it before the next Move activates. Mirrored wheel
+  // travel, so the body path is untouched and only the heading moves.
+  for (int i = 0; i < 20; ++i) cycle(planner, state, plant, now, kPeriod);
+  plant.disturbHeading(shove, 100.0f);
+  for (int i = 0; i < 20; ++i) {
+    CHECK(!cycle(planner, state, plant, now, kPeriod).completed);
+  }
+  const float headingAfterGap =
+      (plant.positionRight - plant.positionLeft) / 100.0f;
+  CHECK_NEAR(headingAfterGap, commanded + shove, 1e-4);
+
+  Move repaying = angleMove(71, quarterTurn, 2.0f);
+  repaying.requestedThreshold = quarterTurn;
+  CHECK(planner.move(repaying, false));
+  completed = false;
+  for (int i = 0; i < 800 && !completed; ++i) {
+    completed = cycle(planner, state, plant, now, kPeriod).completed;
+  }
+  CHECK(completed);
+  for (int i = 0; i < 10; ++i) cycle(planner, state, plant, now, kPeriod);
+
+  const float heading = (plant.positionRight - plant.positionLeft) / 100.0f;
+  // Re-anchored: 90 deg from where the shove left it, NOT 90 deg from the
+  // ledger. A surviving carry would land at exactly 180 deg here (the
+  // cumulative target is independent of the shove), so the two answers are
+  // ~28.6 deg apart and this cannot pass for the carried reason.
+  CHECK_NEAR(heading, commanded + shove + quarterTurn, 1e-4);
+  CHECK(std::fabs(heading - 2.0f * quarterTurn) > 0.1f);
+}
+
 void testTimeoutReported() {
   // A distance the cruise can never cover before the timeout.
   Planner planner(benchLimits());
@@ -599,6 +725,8 @@ int main() {
   testOrthogonalChainExact();
   testAngleChainRepaysRequestedIntentResidual();
   testAngleChainWithoutRequestedIntentCarriesTheCommand();
+  testCarrySurvivesUndisturbedIdleGap();
+  testCarryDropsWhenHeadingMovesDuringIdleGap();
   testTimeoutReported();
   testStopFlushes();
   testReplacePreempts();

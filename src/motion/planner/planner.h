@@ -399,6 +399,16 @@ class Planner {
   float carryPath_ = 0.0f;     // [mm]
   float carryHeading_ = 0.0f;  // [rad]
 
+  // Idle-gap disturbance reference (134-006). The carry above used to be
+  // dropped whenever the queue happened to be empty at a hand-off, which
+  // used queue occupancy as a proxy for "nothing disturbed the robot" --
+  // false for every caller that waits for a completion ack before
+  // enqueuing the next Move. These two replace that proxy with the real
+  // condition: the heading the planner was left at when it went idle, and
+  // whether there is one to compare against. See activateNext().
+  float idleHeading_ = 0.0f;   // [rad] pose heading when the queue went empty
+  bool idleLatched_ = false;   // idleHeading_ holds an idle-transition reading
+
   bool ticked_ = false;  // tick() has run at least once
   bool shaperConfigured_ = false;  // applyShaperLimits() ever landed
 };
