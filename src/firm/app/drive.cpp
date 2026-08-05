@@ -290,10 +290,57 @@ float Drive::crawlDuty(float duty, float& carry) const {
 // special case, and a raw-zero wheel produced by vector cancellation
 // (part of an active, asymmetric command) also stays exactly zero rather
 // than being driven nonzero.
+//
+// 134-002 -- THE FLOOR IS A TELEOP AFFORDANCE, AND ONLY THAT. It engages
+// only while Drive itself owns motion (`owns()`, i.e. a live WHEELS
+// command); a planner-owned wheel pair reaches actuation exactly as
+// Motion::Planner shaped it. Boosting a sub-vMin pair is right for a
+// STANDING command below breakaway -- that is this whole function's
+// purpose, unchanged -- and wrong for a command that is small ON PURPOSE.
+// A profiled decelerating tail and a terminal alignment nudge are both
+// shaped small deliberately, and raising them to vMin hands the plant an
+// authority nobody asked for while destroying the terminal precision they
+// exist to deliver. Both of 2026-08-04's independent bench sessions hit
+// this (docs/bench-reports/motion-planning-lab-2026-08-04.md Section 5.3);
+// the turn-tuning session had to push `DBG vmin 0` to measure a turn at
+// all, and tovez.json's own `_v_min_note` prices the mechanism: at the
+// then-baked floor of 99.7 mm/s the sub-floor portions of a trapezoid's two
+// ramps integrated to ~+37 mm on a 450 mm move (+8.3%), and that note names
+// THIS gate as the right fix rather than re-lowering the floor further.
+// READ THAT NUMBER PRECISELY: it was measured through
+// velocity_profile_gate.py, which host-shapes its profile and pushes it as
+// WHEELS commands -- the teleop path, which this gate deliberately still
+// floors. It prices what a floor does to a decelerating ramp, which is the
+// same mechanism; it is NOT a run this change would have altered. What this
+// change fixes is the FIRMWARE-shaped ramp: Motion::Planner's own profile
+// tails and (134-003) its terminal alignment nudges. A host that shapes its
+// own ramp and pushes it as teleop is still floored, by construction and on
+// purpose -- Drive cannot tell that stream apart from a standing command,
+// and the host-side taper that owns that case is issue
+// `B-one-owner-per-constant-speed-floor-and-duty-per-speed.md`, out of
+// scope here. This resolves the deferral recorded as sprint 131 Design
+// Rationale Decision 4.
+// Gating on Drive's OWN ownership flag rather than on a planner query is
+// sprint 134 Design Rationale D2: App::RobotLoop::handleMove() already
+// calls takeover() before every planner Move, so the flag is exactly the
+// predicate wanted -- no new Drive->Planner dependency, and no new member.
+// Any future non-teleop owner opts out of the floor automatically, which
+// is the right default.
+//
+// DEADMAN EXPIRY -- decided explicitly rather than left to be rediscovered:
+// an EXPIRING command is NOT floored. update() clears commandActive_ the
+// moment a WHEELS command outlives its deadline, and tick() runs BEFORE
+// update() within a cycle (robot_loop.cpp), so the floor covers every cycle
+// the command was live and no cycle after it. A command on its way out is
+// allowed to reach zero rather than being boosted back up to vMin. This is
+// belt-and-braces in practice -- update() zeroes both targets at expiry, so
+// the `dominantMag <= 0.0f` guard below would pass that pair through
+// untouched either way -- but the ordering is stated, not assumed.
 void Drive::applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
                             float& speedRight) const {
   speedLeft = rawLeft;
   speedRight = rawRight;
+  if (!owns()) return;               // 134-002: teleop affordance only, see above
   if (bounds_.vMin <= 0.0f) return;  // uncalibrated: no-op, same as before
   const float dominantMag = std::max(std::fabs(rawLeft), std::fabs(rawRight));
   if (dominantMag <= 0.0f || dominantMag >= bounds_.vMin) return;
@@ -529,12 +576,19 @@ void Drive::tick(const Types::RobotState& state) {
   // means a genuine full stop (both raw wheel commands exactly 0.0f)
   // always yields exactly (0.0f, 0.0f), and a raw-zero wheel produced by
   // vector cancellation (part of an active, asymmetric command) also
-  // stays exactly zero. The planner does NOT get its own vMin awareness
-  // this ticket (deferred, sprint 131 Design Rationale Decision 4 -- review
-  // C1's terminal-taper mismatch waits on the same loaded-actuation-floor
-  // bench measurement as vMin/biasMax themselves). The result feeds the
-  // rest of tick() exactly where speedLeft/speedRight were read before
-  // this ticket -- Stage A's/Stage B's own commanded-zero guards
+  // stays exactly zero. 134-002 RESOLVES sprint 131 Design Rationale
+  // Decision 4, which this comment used to record as deferred ("the planner
+  // does NOT get its own vMin awareness this ticket"): the resolution is
+  // not that the planner learns about vMin, it is that the FLOOR learns
+  // whose command it is looking at. applySpeedFloor() now no-ops entirely
+  // unless Drive owns motion, so a planner-shaped pair -- a decelerating
+  // tail, a terminal alignment nudge -- reaches the stages below exactly as
+  // it was profiled, while a standing teleop command below breakaway is
+  // still boosted exactly as before. See applySpeedFloor()'s own doc
+  // comment for the measurement, the deadman-expiry decision, and why the
+  // gate reads Drive's own ownership flag instead of querying the planner.
+  // The result feeds the rest of tick() exactly where speedLeft/speedRight
+  // were read before 131-003 -- Stage A's/Stage B's own commanded-zero guards
   // (correctedCommand()'s `desired == 0.0f`, below, and the
   // `speedLeft == 0.0f` check ahead of fastPid()) therefore keep reading
   // the SAME post-floor value and so cannot disagree with each other by

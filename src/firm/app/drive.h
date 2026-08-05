@@ -118,9 +118,16 @@
 //      already-above-floor differential trim (Planner::applyHeadingHold(),
 //      the one reachable real-world case) untouched, because its dominant
 //      wheel already clears vMin. See tick()'s own doc comment (drive.cpp)
-//      for the full computation and sprint 131 Design Rationale Decision 4
-//      / its Revision for why the planner does not gain its own vMin
-//      awareness this ticket. A sustained large error
+//      for the full computation. 134-002: the floor is a TELEOP
+//      affordance and runs ONLY while Drive owns motion (owns(), below) --
+//      a planner-owned pair reaches actuation exactly as it was profiled,
+//      because a decelerating tail and a terminal alignment nudge are
+//      small ON PURPOSE and boosting them to vMin destroys the terminal
+//      authority they exist to deliver. That resolves sprint 131 Design
+//      Rationale Decision 4's deferral without the planner gaining any
+//      vMin awareness of its own; applySpeedFloor()'s own doc comment
+//      (drive.cpp) carries the bench measurement behind it and the
+//      deadman-expiry decision. A sustained large error
 //      while BOTH bias and the fast PID sit pinned at their configured
 //      authority raises a deficit-flag policy (deficitLeft()/Right()) --
 //      the robot runs slow, loudly, never silently. `Motion::Planner`
@@ -478,7 +485,9 @@ class Drive {
   void estop();
 
   // True while an armed command is running -- i.e. while Drive, not the
-  // planner, owns motion.
+  // planner, owns motion. Read by App::RobotLoop::zeroUnownedMotion() (this
+  // file's own header) and, since 134-002, by applySpeedFloor() itself --
+  // the speed floor is a teleop affordance and this is its gate.
   bool owns() const { return commandActive_; }
 
   // One-shot completion event for a command that reached its deadline; the
@@ -638,6 +647,8 @@ class Drive {
   // vMin; otherwise the pair passes through unchanged. A wheel raw-commanded
   // exactly 0.0f is exactly 0.0f afterward regardless of scaling
   // (`0 * scale == 0`), so "stop is stop" holds without a special case.
+  // 134-002: a complete no-op unless owns() -- the floor is a teleop
+  // affordance, never applied to a planner-shaped command.
   void applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
                        float& speedRight) const;
 
