@@ -204,6 +204,30 @@ message Move {
   uint32 id      = 8;  // echoed in this command's COMPLETION ack (enqueue ack echoes corr_id)
 }
 
+// GoTo -- 135-004 (sprint 135, "GO_TO navigator in the motion library"):
+// the wire arm that hands a world- or robot-frame point to Motion::
+// Navigator (135-003), which drives it to completion by repeatedly
+// re-solving a tangent arc against live OTOS pose and issuing internal,
+// replaceable `Move`s -- see App::RobotLoop::handleGoto() for the
+// acceptance gate (refuses while `!state.otos.connected`) and the
+// ownership rules (a GoTo takes over Drive exactly like Move does; MOVE/
+// WHEELS/ESTOP each cancel an active goto with no completion ack).
+//
+// `id` deliberately spelled/behaves like `Move.id` above (echoed in the
+// ONE completion ack this goto ends with) -- Motion::Navigator's own
+// internal per-segment Moves always carry `id == 0` (navigator.h's own
+// GotoTarget doc comment), so ticket 004's routing can tell an internal
+// segment apart from the wire-visible goto id without a second field.
+message GoTo {
+  float  x       = 1;  // [mm]
+  float  y       = 2;  // [mm]
+  uint32 frame   = 3;  // 0 = WORLD (OTOS/SEED frame), 1 = ROBOT (resolved once at acceptance)
+  float  speed   = 4;  // [mm/s] cruise; 0 = config default
+  float  arrive  = 5;  // [mm] arrival tolerance; 0 = config default
+  float  timeout = 6;  // [ms] REQUIRED whole-goto safety backstop; <=0 -> ERR_BADARG
+  uint32 id      = 8;  // echoed in the ONE completion ack (Done or Aborted)
+}
+
 // ConfigDelta -- DELETED (132-013, patch-surface retirement, the-
 // configuration-object.md). Carried config.proto's four curated
 // `*ConfigPatch` messages (drivetrain/motor/otos/estimator) through a
@@ -293,6 +317,18 @@ message CommandEnvelope {
     // that 249-byte figure (132-011's own flagged headroom concern);
     // "SET_FIELD" (9 bytes) stays under it, so this arm leaves that budget
     // unchanged.
+    //
+    // go_to(26) -- 135-004: the next fresh field number after set_field
+    // (25) -- CommandEnvelope's reserved list above (2, 3, 4, 5, 7 to 12,
+    // 14 to 18, 19, 20) covers every retired pre-102 arm; 1/6/13/21-25 are
+    // the currently-used numbers (corr_id/config/stop/move/wheels/estop/
+    // get_config/set_field); 26 is the first number that is neither.
+    // Spelled with an underscore (not `goto`, a C++ keyword) for the SAME
+    // load-bearing reason wheels/estop/get_config/set_field are:
+    // `WhichOneof("cmd").upper()` derives the wire verb
+    // (io/serial_conn.py/io/sim_config.py's own `_envelope_command_name()`),
+    // so this arm's name must uppercase to exactly `GO_TO`, matching
+    // commands.proto's own `GO_TO` verb.
     SetConfigGroup config     = 6;
     Stop           stop       = 13;
     Move           move       = 21;
@@ -300,6 +336,7 @@ message CommandEnvelope {
     Estop          estop      = 23;
     GetConfig      get_config = 24;
     SetConfigField set_field  = 25;
+    GoTo           go_to      = 26;
   }
 }
 

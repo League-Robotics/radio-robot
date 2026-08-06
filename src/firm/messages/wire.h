@@ -65,7 +65,7 @@ struct Result {
 // computes, including ticket 004's cycle_busy/cycle_period primary-frame
 // migration (194B largest, up from 185B pre-migration -- the whole reason
 // this budget needed recomputing in the first place).
-//   CommandEnvelope: config=148B, stop=8B, move=38B, wheels=24B, estop=3B, get_config=5B, set_field=16B (worst=config=148B) + non-oneof=6B => total=154B
+//   CommandEnvelope: config=148B, stop=8B, move=38B, wheels=24B, estop=3B, get_config=5B, set_field=16B, go_to=40B (worst=config=148B) + non-oneof=6B => total=154B
 //   ReplyEnvelope: ok=19B, err=10B, tlm=188B, cfg=150B (worst=tlm=188B) + non-oneof=4B => total=192B
 constexpr uint16_t kCommandEnvelopeMaxEncodedSize = 154;
 constexpr uint16_t kReplyEnvelopeMaxEncodedSize = 192;
@@ -121,6 +121,7 @@ Result decode(Drive& out, const uint8_t* buf, uint16_t len);
 Result decode(WheelControl& out, const uint8_t* buf, uint16_t len);
 Result decode(Planner& out, const uint8_t* buf, uint16_t len);
 Result decode(PlannerShaper& out, const uint8_t* buf, uint16_t len);
+Result decode(Navigator& out, const uint8_t* buf, uint16_t len);
 Result decode(Otos& out, const uint8_t* buf, uint16_t len);
 Result decode(Estimator& out, const uint8_t* buf, uint16_t len);
 
@@ -142,6 +143,7 @@ uint16_t encode(const Drive& in, uint8_t* buf, uint16_t cap);
 uint16_t encode(const WheelControl& in, uint8_t* buf, uint16_t cap);
 uint16_t encode(const Planner& in, uint8_t* buf, uint16_t cap);
 uint16_t encode(const PlannerShaper& in, uint8_t* buf, uint16_t cap);
+uint16_t encode(const Navigator& in, uint8_t* buf, uint16_t cap);
 uint16_t encode(const Otos& in, uint8_t* buf, uint16_t cap);
 uint16_t encode(const Estimator& in, uint8_t* buf, uint16_t cap);
 
@@ -165,6 +167,7 @@ Result setField(Drive& out, uint16_t fieldNumber, float value);
 Result setField(WheelControl& out, uint16_t fieldNumber, float value);
 Result setField(Planner& out, uint16_t fieldNumber, float value);
 Result setField(PlannerShaper& out, uint16_t fieldNumber, float value);
+Result setField(Navigator& out, uint16_t fieldNumber, float value);
 Result setField(Otos& out, uint16_t fieldNumber, float value);
 Result setField(Estimator& out, uint16_t fieldNumber, float value);
 

@@ -103,6 +103,17 @@
     "jerk_max": 1500.0,
     "yaw_jerk_max": 30.0
   },
+  "navigator": {
+    "speed": 150.0,
+    "max_wheel_step": 125.0,
+    "behind_angle": 1.5707963267948966,
+    "turn_first_angle": 0.8726646259971648,
+    "approach_radius": 0.0,
+    "approach_speed": 0.0,
+    "default_arrival_tolerance": 100.0,
+    "yaw_sign": 1.0,
+    "_navigator_note": "135-004: seeded from Motion::NavigatorLimits' own compile-time defaults (src/motion/navigator/arc_solver.h) -- same pattern as tovez.json's own navigator block (see that file's note for the full rationale). yaw_sign=1.0 (identity, unmeasured) pending this robot's own bench pass -- tovez.json's -1.0 is a tovez-specific measured fact (src/tests/bench/goto_otos.py's own YAW_SIGN), not assumed to transfer to a different drivetrain without its own measurement."
+  },
   "otos": {
     "offset_x": -51.5,
     "offset_y": 0.0,

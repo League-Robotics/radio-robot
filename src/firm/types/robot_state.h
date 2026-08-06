@@ -4,12 +4,18 @@
 
 namespace Types {
 
+// Mirrors telemetry.proto's DriveMode value set (kept dependency-free of
+// the generated message headers on purpose, per this header's own
+// isolation rule -- see that enum's own doc comment for the 135-004
+// rename of value 4 (GoTo -> Navigating, resolving a protoc enum-value-
+// scope collision with commands.proto's new GO_TO verb; wire-compatible,
+// since proto enums encode by number).
 enum class Mode : uint8_t {
   Idle = 0,
   Streaming = 1,
   Timed = 2,
   Distance = 3,
-  GoTo = 4,
+  Navigating = 4,
   Velocity = 5,
 };
 

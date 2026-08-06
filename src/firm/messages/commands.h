@@ -33,6 +33,7 @@ enum class Verb : uint8_t {
     SET_FIELD = 21,
     SEED = 22,
     POSE = 23,
+    GO_TO = 24,
 };
 
 // VerbEntry -- one row of the closed v5 command-name registry (124-001, sprint 124
@@ -46,7 +47,7 @@ struct VerbEntry {
     bool binary;
 };
 
-constexpr VerbEntry kVerbTable[23] = {
+constexpr VerbEntry kVerbTable[24] = {
     { Verb::HELLO, "HELLO", false },
     { Verb::PING, "PING", false },
     { Verb::ID, "ID", false },
@@ -70,8 +71,9 @@ constexpr VerbEntry kVerbTable[23] = {
     { Verb::SET_FIELD, "SET_FIELD", true },
     { Verb::SEED, "SEED", false },
     { Verb::POSE, "POSE", false },
+    { Verb::GO_TO, "GO_TO", true },
 };
-constexpr uint8_t kVerbCount = 23;
+constexpr uint8_t kVerbCount = 24;
 
 }  // namespace msg
 

@@ -116,12 +116,24 @@ class SimHarness {
         //     true -- see BootOverrides::wheelCorrection's own doc comment
         //     (app/boot_wiring.h) for the measured regression that made it
         //     an explicit override (133-005).
+        //   - navigatorYawSign (kIdentityNavigatorYawSign, below, 135-004):
+        //     Motion::NavigatorLimits::yawSign relates commanded Move::
+        //     omega to true-world CCW -- a REAL drivetrain quirk baked
+        //     per-robot (tovez.json bakes -1.0). TestSim::SimPlant/
+        //     WheelPlant reads commanded wheel velocities directly as its
+        //     own ground truth, with no independent reference to disagree
+        //     with, so it cannot represent this quirk at all -- baking a
+        //     nonzero-sign correction against it makes the closed loop
+        //     diverge instead of converge (measured directly deriving this
+        //     fix -- see BootOverrides::navigatorYawSign's own doc comment,
+        //     app/boot_wiring.h).
         graph_(App::composeRobot(plant_, clock_, sleeper_, serialLink_, radioLink_,
                                  tuningStore, "DEVICE:NEZHA2:sim:sim_harness:1",
                                  "ID:unknown",
                                  App::BootOverrides{&trackWidth, &kSimControlPeriod,
                                                     &kSimControlPeriod, &kIdentityOtosConfig,
-                                                    &kIdentityWheelCorrection})) {
+                                                    &kIdentityWheelCorrection,
+                                                    &kIdentityNavigatorYawSign})) {
     // SIM OVERRIDE: composeRobot() already installed App::Drive's
     // calibration via Configurator::loadBaked()+install() (boot through
     // the SAME path main.cpp uses), baking config_.drive.duty_per_speed_
@@ -240,6 +252,14 @@ class SimHarness {
   void injectWheels(float vLeft, float vRight, float duration,  // [mm/s] [mm/s] [ms]
                     uint32_t id = 0, uint32_t corrId = 0) {
     injectCommand(TestSupport::armorWheelsCommand(vLeft, vRight, duration, id, corrId));
+  }
+
+  // injectGoto() -- 135-004: arms Motion::Navigator via App::RobotLoop::
+  // handleGoto(). `frame`: 0 = WORLD (OTOS/SEED frame), 1 = ROBOT.
+  // `speed`/`arrive` <= 0 fall open to the config default.
+  void injectGoto(float x, float y, uint32_t frame, float speed, float arrive,  // [mm] [mm] [] [mm/s] [mm]
+                  float timeout, uint32_t id = 0, uint32_t corrId = 0) {  // [ms]
+    injectCommand(TestSupport::armorGotoCommand(x, y, frame, speed, arrive, timeout, id, corrId));
   }
 
   // motorConfig -- test-only readback of the Devices::MotorConfig last
@@ -386,6 +406,10 @@ class SimHarness {
   // Configurator::applyMotorConfigPatch() implements (130-005).
   App::Drive& drive() { return graph_.drive(); }
   Motion::Planner& planner() { return graph_.planner(); }
+  // navigator -- 135-004: Motion::Navigator's own observability
+  // (active()/replaceCount()/tickCount()), exposed the same way planner()
+  // already is.
+  Motion::Navigator& navigator() { return graph_.navigator(); }
 
   // configurator -- 132-006: App::Configurator now owns the one
   // Config::Robot instance (config()/loadBaked()/install(), configurator.h)
@@ -441,6 +465,14 @@ class SimHarness {
   // -- and, unlike the pre-133-005 arrangement, it stays identity no
   // matter what any robot JSON's wheel_gain_* is re-fitted to next.
   static constexpr Config::WheelCorrection kIdentityWheelCorrection{};
+
+  // See this constructor's own composeRobot() call comment above -- the
+  // sim's genuinely-justified navigatorYawSign override (135-004).
+  // Motion::NavigatorLimits::yawSign's own default member initializer
+  // (arc_solver.h) IS identity (+1.0, "no correction"), so a plain literal
+  // is exactly the value this override needs -- and it stays identity no
+  // matter what any robot JSON's yaw_sign is measured/baked to next.
+  static constexpr float kIdentityNavigatorYawSign = 1.0f;
 
   // Drives App::Preamble to done() via preamble_.step() calls issued
   // OURSELVES, advancing the fake Clock between each one -- a single

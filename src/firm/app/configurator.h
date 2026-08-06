@@ -47,6 +47,8 @@
 //   | OTOS          | yes   | `App::configureOtos()` (132-007/010)              | trap 3 CLOSED (132-010): `linear_scale`/`angular_scale` are converted through `Devices::scaleToRegister()` before reaching `setLinearScalar()`/`setAngularScalar()`, matching `RealOtos::begin()`'s own boot-time conversion -- a live push and a boot bake now agree on what a given multiplier means. PERSISTED IN FULL (132-013) -- offset_x/offset_y/offset_yaw/linear_scale/angular_scale mirror the old curated Otos live-tuning message's own 5 scale/offset fields exactly (its 6th field, `init`, was a fire-and-forget trigger with no Config::Robot-shaped successor and was never persisted either) |
 //   | ESTIMATOR     | yes   | -- (`ERR_UNIMPLEMENTED`, PERMANENT)               | trap 2 CLOSED (132-010) by making the dead end EXPLICIT rather than inventing a consumer: `App::StateEstimator` was deleted outright as dead code (sprint 128 ticket 016), and its one candidate successor -- `Motion::PoseTracker::blendHeading()` (`src/motion/planner/estimation.h`) -- had its only call site AND its own config fields (`PlannerLimits::headingOtosWeight`/`otosStaleness`) deleted outright by 130-009, in favor of a from-scratch fusion redesign tracked at `clasi/issues/later/estimator-v2-otos-fusion-sim-first.md`. Building a real consumer today would mean either resurrecting logic 130-009 deliberately retired, or building estimator-v2 itself -- both out of this ticket's scope (and the latter explicitly deferred by its own tracked issue). `Configurator` therefore holds NO estimator-shaped reference; `config_.estimator` still decodes correctly for read-back (`applyGroup()` never skips the decode for a live-classified target), but `install(ESTIMATOR)` returns `ERR_UNIMPLEMENTED` permanently until estimator-v2 gives it something real to call. NEVER PERSISTED (132-013, following the old curated Estimator live-tuning message's own explicit precedent -- "a reboot always reverts to the baked JSON default") -- unaffected by ESTIMATOR's own permanent ERR_UNIMPLEMENTED above; the two are independent facts that happen to agree |
 //
+//   | NAVIGATOR     | yes   | writes `config_.navigator`'s fields directly into the `Motion::NavigatorLimits` this class holds a reference to (135-004) | NOT a setter call -- `Motion::Navigator` holds its `NavigatorLimits` by const reference (navigator.h), so `tick()` sees a live push on its very next call with no re-apply step to invoke. `App::configureNavigator()` (app/boot_calibration.h) does the field-by-field copy, sourcing `trackWidth` from `config_.effectiveTrackWidth()` rather than a `config_.navigator` field (robot_config.proto's Navigator message deliberately has none). NOT persisted -- same "no old curated live-tuning message for this field set" reasoning DRIVE/PLANNER_SHAPER's own rows give |
+//
 // PERSISTENCE SCOPE (132-013, patch-surface retirement -- sprint.md Out of
 // Scope's own explicit ticket-013 acceptance criterion): the reshaped
 // `Config::TuningSnapshot` (config/persisted_tuning.h) persists exactly
@@ -116,6 +118,7 @@
 #include "devices/otos.h"
 #include "messages/envelope.h"
 #include "messages/robot_config.h"
+#include "motion/navigator/arc_solver.h"
 #include "motion/planner/planner.h"
 
 // Config::Robot -- the ONE owned configuration object (issue: the-
@@ -136,8 +139,14 @@ class Configurator {
   // All references are already-constructed modules; the composition root
   // owns construction and wiring order. tuningStore may be null (sim/test
   // roots): persistence disabled, everything else unchanged.
+  //
+  // navigatorLimits (135-004): the SAME Motion::NavigatorLimits object
+  // Motion::Navigator was constructed with a reference to (boot_wiring.h's
+  // RobotGraph) -- install(NAVIGATOR) writes straight into it, per this
+  // class's own re-appliability table NAVIGATOR row above.
   Configurator(Drive& drive, Devices::Motor& motorL, Devices::Motor& motorR,
                Devices::Otos& otos, Motion::Planner& planner,
+               Motion::NavigatorLimits& navigatorLimits,
                Config::TuningStore* tuningStore = nullptr);
 
   // reapplyPersistedTuning() -- main.cpp's own post-boot step
@@ -353,6 +362,7 @@ class Configurator {
   Devices::Motor& motorR_;
   Devices::Otos& otos_;
   Motion::Planner& planner_;
+  Motion::NavigatorLimits& navigatorLimits_;
 
   // Persisted live-tuning: per-group snapshot of config_'s own current
   // values for the persisted subset (config/persisted_tuning.h), plus the
@@ -377,7 +387,7 @@ class Configurator {
   // values in config_ at that point are C++ zero-initialization, not the
   // baked file.
   static constexpr size_t kGroupSourceSlots =
-      static_cast<size_t>(msg::ConfigGroupTarget::PLANNER_SHAPER) + 1;
+      static_cast<size_t>(msg::ConfigGroupTarget::NAVIGATOR) + 1;
   msg::ConfigSource groupSource_[kGroupSourceSlots] = {};
 };
 

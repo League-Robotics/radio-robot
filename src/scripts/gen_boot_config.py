@@ -736,6 +736,33 @@ def planner_config_for_config(cfg: dict) -> dict:
     }
 
 
+def navigator_config_for_config(cfg: dict) -> dict:
+    """Return a dict of every Motion::NavigatorLimits field this schema
+    carries (robot_config.proto's Navigator message, 135-004), read from
+    the robot JSON's `navigator` block. `track_width` is deliberately NOT
+    read/returned here -- NavigatorLimits::trackWidth is sourced from
+    Config::Robot::effectiveTrackWidth() at App::configureNavigator() time
+    (config/robot.h), not duplicated as a second, independently-tunable
+    copy of the trackwidth/rotational_slip pair Geometry already owns
+    (configuration-discipline.md: "one file, one truth").
+
+    All 8 REQUIRED, same fail-closed posture as every other group this
+    generator bakes -- a robot JSON missing the `navigator` block, or any
+    key inside it, fails codegen loudly rather than a robot silently
+    inheriting a C++ struct default it never actually configured.
+    """
+    return {
+        "speed": float(_require(cfg, "navigator", "speed")),
+        "maxWheelStep": float(_require(cfg, "navigator", "max_wheel_step")),
+        "behindAngle": float(_require(cfg, "navigator", "behind_angle")),
+        "turnFirstAngle": float(_require(cfg, "navigator", "turn_first_angle")),
+        "approachRadius": float(_require(cfg, "navigator", "approach_radius")),
+        "approachSpeed": float(_require(cfg, "navigator", "approach_speed")),
+        "defaultArrivalTolerance": float(_require(cfg, "navigator", "default_arrival_tolerance")),
+        "yawSign": float(_require(cfg, "navigator", "yaw_sign")),
+    }
+
+
 def profile_name_for_source(source_path: str) -> str:
     """The calibration-profile identifier `ID:` reports (sprint 124
     architecture Decision 4): the active robot JSON's own filename stem
@@ -801,6 +828,7 @@ def generate(cfg: dict, source_path: str) -> str:
         wheel_corr = wheel_correction_for_config(cfg)
         wheel_controller = wheel_controller_config_for_config(cfg)
         planner = planner_config_for_config(cfg)
+        navigator = navigator_config_for_config(cfg)
     except MissingRobotConfigKeyError as e:
         raise e.with_source(source_path) from e
 
@@ -1197,6 +1225,24 @@ msg::Estimator defaultEstimatorGroup() {{
     cfg.weight_heading_otos = {_f(estimator_heading_otos)};
     cfg.weight_omega_otos = {_f(estimator_omega_otos)};
     cfg.staleness = {_u32(estimator_staleness)};   // [ms]
+    return cfg;
+}}
+
+msg::Navigator defaultNavigatorGroup() {{
+    // navigator.* (navigator_config_for_config() above) -- Motion::
+    // NavigatorLimits' own configuration group (135-004). track_width is
+    // NOT baked here -- App::configureNavigator() (app/boot_calibration.cpp)
+    // sources it from Config::Robot::effectiveTrackWidth() instead, the
+    // SAME derived value Drive/Odometry/PlannerLimits already use.
+    msg::Navigator cfg;
+    cfg.speed = {_f(navigator["speed"])};                              // [mm/s]
+    cfg.max_wheel_step = {_f(navigator["maxWheelStep"])};              // [mm/s]
+    cfg.behind_angle = {_f(navigator["behindAngle"])};                 // [rad]
+    cfg.turn_first_angle = {_f(navigator["turnFirstAngle"])};          // [rad]
+    cfg.approach_radius = {_f(navigator["approachRadius"])};           // [mm]
+    cfg.approach_speed = {_f(navigator["approachSpeed"])};             // [mm/s]
+    cfg.default_arrival_tolerance = {_f(navigator["defaultArrivalTolerance"])};  // [mm]
+    cfg.yaw_sign = {_f(navigator["yawSign"])};
     return cfg;
 }}
 

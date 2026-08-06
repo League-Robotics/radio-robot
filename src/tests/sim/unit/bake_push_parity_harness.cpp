@@ -50,6 +50,7 @@
 #include "messages/envelope.h"
 #include "messages/robot_config.h"
 #include "messages/wire_runtime.h"
+#include "motion/navigator/arc_solver.h"
 #include "motion/planner/planner.h"
 #include "motion/planner/planner_types.h"
 
@@ -188,7 +189,8 @@ int main() {
   aDrive.setDutyPerSpeed(0.001182f, 0.001182f);  // tovez.json's own value
   Motion::PlannerLimits aLimits;
   Motion::Planner aPlanner(aLimits);
-  App::Configurator a(aDrive, aMotorL, aMotorR, aOtos, aPlanner, /*tuningStore=*/nullptr);
+  Motion::NavigatorLimits aNavigatorLimits;
+  App::Configurator a(aDrive, aMotorL, aMotorR, aOtos, aPlanner, aNavigatorLimits, /*tuningStore=*/nullptr);
 
   // tovez.json's own DRIVE/WHEEL_CONTROL/OTOS/PLANNER_SHAPER values
   // (data/robots/tovez.json, read 2026-08-04 -- field numbers per
@@ -217,7 +219,8 @@ int main() {
   bDrive.setDutyPerSpeed(0.00187325f, 0.00187325f);  // togov.json's own value -- boot-baked, see A's own comment above
   Motion::PlannerLimits bLimits;
   Motion::Planner bPlanner(bLimits);
-  App::Configurator b(bDrive, bMotorL, bMotorR, bOtos, bPlanner, /*tuningStore=*/nullptr);
+  Motion::NavigatorLimits bNavigatorLimits;
+  App::Configurator b(bDrive, bMotorL, bMotorR, bOtos, bPlanner, bNavigatorLimits, /*tuningStore=*/nullptr);
 
   beginScenario("B: baked from togov (seed -- different values than tovez)");
   checkEq(pushGroup(b, msg::ConfigGroupTarget::DRIVE,

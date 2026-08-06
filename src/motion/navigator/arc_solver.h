@@ -185,6 +185,31 @@ struct NavigatorLimits {
   // reached at zero distance from the target. Ignored when approachRadius
   // <= 0.
   float approachSpeed = 0.0f;
+
+  // [mm] fallback arrival tolerance a GotoTarget applies when its own
+  // `tolerance` field arrives <= 0 (navigator.h's GotoTarget doc comment,
+  // the fail-open convention every <=0 bound in this codebase uses) --
+  // ported from pathplan.planner.TERMINATION_TOLERANCE (the host's own
+  // provisional default) into config (135-004), matching this default's
+  // own prior value exactly (was a compile-time kNavDefaultArrivalTolerance
+  // constant, navigator.h; superseded here so every value the robot uses
+  // comes from the file, configuration-discipline.md).
+  float defaultArrivalTolerance = 100.0f;
+
+  // Sign relating commanded Move::omega to true-world CCW (135-004,
+  // "Landmine 4" -- see navigator.h's own NavigatorLimits::yawSign-area
+  // comment for the
+  // full derivation). +-1 only, dimensionless. +1.0 (default): no
+  // correction -- Move::omega already agrees with the convention
+  // Navigator's own world-frame bearing solve uses (every ctest/sim
+  // plant's own implicit convention, since none of them can independently
+  // model a real drivetrain's own commanded-omega-vs-world-CCW quirk).
+  // -1.0: this robot's commanded Move::omega is measured OPPOSITE
+  // true-world CCW (matches src/tests/bench/goto_otos.py's own
+  // `YAW_SIGN`) -- set per-robot from a real bench pass (ticket 006),
+  // never guessed. Not read by ArcSolver::solve() itself -- Navigator
+  // applies it at its own pose-building and Move-construction boundary.
+  float yawSign = 1.0f;
 };
 
 // One solve()'s result -- either an arc twist or a stop signal.

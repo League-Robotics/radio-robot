@@ -65,6 +65,7 @@
 #include "messages/robot_config.h"
 #include "messages/wire.h"
 #include "messages/wire_runtime.h"
+#include "motion/navigator/arc_solver.h"
 #include "motion/planner/planner.h"
 #include "motion/planner/planner_types.h"
 
@@ -185,7 +186,8 @@ int main() {
   App::Drive drive(motorL, motorR, /*trackWidth=*/128.0f);
   Motion::PlannerLimits limits;
   Motion::Planner planner(limits);
-  App::Configurator configurator(drive, motorL, motorR, otos, planner, /*tuningStore=*/nullptr);
+  Motion::NavigatorLimits navigatorLimits;
+  App::Configurator configurator(drive, motorL, motorR, otos, planner, navigatorLimits, /*tuningStore=*/nullptr);
 
   // --- DRIVE: push then get -------------------------------------------
 

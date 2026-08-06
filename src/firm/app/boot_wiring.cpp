@@ -93,10 +93,15 @@ RobotGraph::RobotGraph(Devices::I2CBus& bus, const Devices::Clock& clock, Device
       otos_(realOtos_),
 #endif
       planner_(bootValues_.plannerLimits),
+      // navigatorLimits_ default-constructs (arc_solver.h's own struct
+      // defaults); the real, baked values land via configurator_.install()
+      // below (App::configureNavigator()), same timing as PLANNER_SHAPER/
+      // DRIVE/OTOS -- see navigatorLimits_'s own doc comment (boot_wiring.h).
+      navigator_(navigatorLimits_, planner_),
       preamble_(armorL_, armorR_, otos_, color_, line_, clock),
-      configurator_(drive_, armorL_, armorR_, otos_, planner_, tuningStore),
+      configurator_(drive_, armorL_, armorR_, otos_, planner_, navigatorLimits_, tuningStore),
       robotLoop_(bus, armorL_, armorR_, otos_, color_, line_, comms_, tlm_, drive_, configurator_,
-                 odom_, planner_, preamble_, clock, sleeper),
+                 odom_, planner_, navigator_, preamble_, clock, sleeper),
       tuningStore_(tuningStore) {
   // Wires the bench/Sim-only DBG debug channel to this graph's own Comms --
   // a no-op call unless ROBOT_DEBUG is defined (app/debug.h's own compile
@@ -119,6 +124,20 @@ RobotGraph::RobotGraph(Devices::I2CBus& bus, const Devices::Clock& clock, Device
   // find out.
   configurator_.loadBaked(overrides.wheelCorrection);
   configurator_.install();
+
+  // 135-004: overrides.navigatorYawSign (nullptr on hardware -- main.cpp
+  // passes none, so a real robot still gets its measured sign from the
+  // file) is applied AFTER install() -- unlike wheelCorrection, there is
+  // no Configurator::loadBaked() parameter for a single NavigatorLimits
+  // field to ride in on; install() has already written navigatorLimits_
+  // from the baked config_.navigator by this point (App::
+  // configureNavigator()), so overwriting the one field here lands after
+  // it, not before, with the identical net effect. See BootOverrides::
+  // navigatorYawSign's own doc comment (boot_wiring.h) for why the sim
+  // needs it.
+  if (overrides.navigatorYawSign != nullptr) {
+    navigatorLimits_.yawSign = *overrides.navigatorYawSign;
+  }
 
   // 132-007: rotation calibration now installs through RobotLoop's own
   // configure(const Config::Robot&) (robot_loop.h) instead of the old

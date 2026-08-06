@@ -139,4 +139,17 @@ void configureOtos(Devices::Otos& otos, const Config::Robot& config) {
   otos.setOffset(config.otos.offset_x, config.otos.offset_y, config.otos.offset_yaw);
 }
 
+// configureNavigator -- see boot_calibration.h's own doc comment.
+void configureNavigator(Motion::NavigatorLimits& limits, const Config::Robot& config) {
+  limits.trackWidth = config.effectiveTrackWidth();  // [mm] scrub-corrected, matches Drive/Odometry/PlannerLimits
+  limits.speed = config.navigator.speed;
+  limits.maxWheelStep = config.navigator.max_wheel_step;
+  limits.behindAngle = config.navigator.behind_angle;
+  limits.turnFirstAngle = config.navigator.turn_first_angle;
+  limits.approachRadius = config.navigator.approach_radius;
+  limits.approachSpeed = config.navigator.approach_speed;
+  limits.defaultArrivalTolerance = config.navigator.default_arrival_tolerance;
+  limits.yawSign = config.navigator.yaw_sign;
+}
+
 }  // namespace App

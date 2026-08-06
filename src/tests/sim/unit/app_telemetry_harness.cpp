@@ -673,7 +673,7 @@ void scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase() {
   msg::Telemetry tlm;
   tlm.now = 2097151u;   // (max) -- sizing bound, not a hard wire limit
   tlm.seq = 127u;       // (max) -- sizing bound, not a hard wire limit
-  tlm.mode = msg::DriveMode::GO_TO;
+  tlm.mode = msg::DriveMode::NAVIGATING;  // 135-004: renamed from GO_TO (number 4 unchanged)
   tlm.flags = 2097151u;  // (max) -- 129-002 widened to cover bits 19/20 (kFlagFaultWheelFrozenLeft/Right)
   // EncoderReading/OtosReading/Pose2D/BodyTwist3: raw wire ints at their
   // own declared (abs_max) -- the RUNTIME engine's validateBounds()/

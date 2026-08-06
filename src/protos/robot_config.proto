@@ -294,6 +294,12 @@ enum ConfigGroupTarget {
   // own live target. See the PlannerShaper message's own header comment
   // below for the full rationale.
   PLANNER_SHAPER = 8;
+  // NAVIGATOR -- added 135-004 (sprint 135, "GO_TO navigator in the motion
+  // library"): Motion::NavigatorLimits (src/motion/navigator/arc_solver.h)
+  // sourced through the same runtime push path and bake path every other
+  // group already uses. See the Navigator message's own header comment
+  // below.
+  NAVIGATOR = 9;
 }
 
 // ConfigSource -- 133-006 (A-live-config-push-is-wiped-by-the-next-reconnect.md,
@@ -557,6 +563,40 @@ message PlannerShaper {
   float alpha_decel  = 4 [(min) = 0.0];  // [rad/s^2] angular decel-taper ceiling
   float jerk_max     = 5 [(min) = 0.0];  // [mm/s^3] linear jerk ceiling
   float yaw_jerk_max = 6 [(min) = 0.0];  // [rad/s^3] angular jerk ceiling
+}
+
+// Navigator -- 135-004: Motion::NavigatorLimits (src/motion/navigator/
+// arc_solver.h)'s own configuration group, following the Planner/
+// PlannerShaper pattern above exactly. Consumed by Motion::Navigator via
+// Configurator::install(NAVIGATOR) -- LIVE, matching PLANNER_SHAPER's own
+// re-appliability (Motion::Navigator holds its NavigatorLimits by
+// reference, per navigator.h's own design, so a live push here is visible
+// to the very next tick() with no setter call at all -- see App::
+// configureNavigator(), app/boot_calibration.h).
+//
+// `track_width` is deliberately NOT a field here -- NavigatorLimits::
+// trackWidth is sourced from Config::Robot::effectiveTrackWidth() (the
+// SAME scrub-corrected value Drive/Odometry/PlannerLimits already use),
+// not duplicated as a second, independently-tunable copy of one physical
+// fact (configuration-discipline.md: "one file, one truth").
+message Navigator {
+  float speed                      = 1 [(min) = 0.0];  // [mm/s] commanded forward body-frame cruise speed, far from target
+  float max_wheel_step             = 2 [(min) = 0.0];  // [mm/s] curvature slew-clamp budget, per solve
+  float behind_angle               = 3 [(min) = 0.0];  // [rad] target-behind guard cutoff
+  float turn_first_angle           = 4 [(min) = 0.0];  // [rad] pivot-first threshold
+  float approach_radius            = 5 [(min) = 0.0];  // [mm] near-target speed-taper radius; 0 = taper disabled
+  float approach_speed             = 6 [(min) = 0.0];  // [mm/s] taper floor speed, reached at zero distance
+  float default_arrival_tolerance  = 7 [(min) = 0.0];  // [mm] fallback when a goto's own tolerance is <= 0
+  // yaw_sign -- 135-004 "Landmine 4": relates commanded Move::omega to
+  // true-world CCW (Motion::NavigatorLimits::yawSign's own doc comment,
+  // navigator.h, has the full derivation). +1.0 (default): no correction.
+  // -1.0: this robot's commanded Move::omega is measured OPPOSITE
+  // true-world CCW (matches src/tests/bench/goto_otos.py's own YAW_SIGN)
+  // -- set from a real bench pass (ticket 006), never guessed. Left
+  // unbounded ((min)/(max) would both reject the other legal value) --
+  // the domain is exactly {-1.0, 1.0}, enforced by convention (this
+  // comment and ticket 006's bench measurement), not a schema bound.
+  float yaw_sign                   = 8;
 }
 
 // Otos -- SparkFun OTOS mounting lever-arm offset and chip scale

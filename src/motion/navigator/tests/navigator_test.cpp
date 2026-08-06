@@ -273,6 +273,71 @@ void testTargetBehindStopThenPivotThenArc() {
   CHECK(distance <= target2.tolerance + 5.0f);
 }
 
+// --- Landmine 2 (135-004): a pivot's own terminal fine-align (MoveLifecycle
+// ::Aligning) must not block the Navigator's next replace for ~2s --------
+//
+// defaultPlannerLimits() leaves landing.alignTol/alignMaxNudges at 0
+// (disabled) -- exactly why ticket 003's own
+// testTargetBehindStopThenPivotThenArc above never exercised this path
+// (per this ticket's own text: "it may not have exercised the real
+// Aligning path if its scripted RobotState never satisfied
+// alignApplies()"). This test explicitly enables it with tovez.json's own
+// tuned values (data/robots/tovez.json's planner.align_tol/
+// align_max_nudges) to prove the fix, not just assert it.
+void testPivotThenCruiseNotBlockedBehindAligning() {
+  Motion::PlannerLimits plannerLimits = defaultPlannerLimits();
+  plannerLimits.landing.alignTol = 0.017453f;  // [rad] ~1 deg, tovez.json's own value
+  plannerLimits.landing.alignMaxNudges = 6;
+
+  Planner planner(plannerLimits);
+  NavigatorLimits limits = defaultNavLimits();
+  Navigator nav(limits, planner);
+  IdealPlant plant;
+  plant.trackWidth = limits.trackWidth;
+  Types::RobotState state{};
+  uint32_t now = 0;
+
+  // Target behind the robot's heading (0, facing +x) -- forces a pivot.
+  // The robot starts at rest, so beginPivotSequence() issues the pivot
+  // directly (Pivoting phase) -- no Stopping phase to wait through first.
+  GotoTarget target;
+  target.id = 1;
+  target.x = -500.0f;
+  target.y = 0.0f;
+  target.tolerance = 20.0f;
+  nav.start(target);
+
+  int alignEnteredTick = -1;
+  int cruiseReplaceTick = -1;
+  for (int i = 0; i < 200 && cruiseReplaceTick < 0; ++i) {
+    if (alignEnteredTick < 0 && planner.lifecycle() == MoveLifecycle::Aligning) {
+      alignEnteredTick = i;
+    }
+    cycle(nav, state, plant, now, kPeriod);
+    // replaceCount() only ever increments from the CRUISE mustIssue block
+    // (navigator.cpp) -- the pivot's own issue is a different, uncounted
+    // event (navigator.h's own replaceCount() doc comment) -- so the first
+    // tick it goes nonzero is unambiguously the first cruise re-issue.
+    if (alignEnteredTick >= 0 && nav.replaceCount() > 0) {
+      cruiseReplaceTick = i;
+    }
+  }
+
+  CHECK(alignEnteredTick >= 0);   // the pivot genuinely landed into Aligning
+  CHECK(cruiseReplaceTick >= 0);  // the Navigator did replace with the cruise arc
+  const int ticksToReplace = cruiseReplaceTick - alignEnteredTick;
+  std::printf("  LANDMINE2_ALIGN_ENTERED_TICK=%d CRUISE_REPLACE_TICK=%d DELTA_TICKS=%d "
+              "(bound: <=3, i.e. <=%.0fms; Aligning's own settle-and-trim budget is ~2000ms)\n",
+              alignEnteredTick, cruiseReplaceTick, ticksToReplace,
+              3.0f * kPeriod);
+  // The whole point: the replace must land within a HANDFUL of cycles of
+  // Aligning beginning, not after Aligning's own ~2s settle-and-trim
+  // budget (up to alignMaxNudges nudges, each with its own settle window)
+  // has run its course.
+  CHECK(ticksToReplace >= 0);
+  CHECK(ticksToReplace <= 3);
+}
+
 // --- Small bearing, just under turnFirstAngle: no pivot, no oscillation -
 
 void testSmallBearingNoPivotNoOscillation() {
@@ -415,6 +480,99 @@ void testOtosDisconnectAbortsWithinWindow() {
   CHECK(disconnectedTicks <= 25);
 }
 
+// --- Landmine 4 (135-004): NavigatorLimits::yawSign converts worldPose's
+// own (true-world) omega convention to the wire's Move::omega convention,
+// matching goto_otos.py's own YAW_SIGN = -1.0 exactly -- see navigator.h's
+// own comment for the full derivation. Deliberately picks a raw heading
+// that is NEITHER 0 nor 90 deg: both degenerate cases numerically hide a
+// sign error that a generic heading exposes (0 deg: worldPose.heading ==
+// pose.heading trivially, since -0 == 0; 90 deg: cos(heading) == 0
+// trivially satisfies sin(A+B) == -sin(A-B) regardless of whether the
+// underlying transform is otherwise correct -- both traps were hit and
+// caught during this ticket's own derivation, see Completion Notes).
+void testYawSignMatchesGotoOtosConvention() {
+  Planner planner(defaultPlannerLimits());
+  NavigatorLimits limits = defaultNavLimits();
+  limits.yawSign = -1.0f;  // matches goto_otos.py's measured YAW_SIGN
+  Navigator nav(limits, planner);
+
+  Types::RobotState state{};
+  state.otos.present = true;
+  state.otos.connected = true;
+  // Raw, un-negated wire heading == true-world CCW convention (ticket 008
+  // settled this -- navigator.h's own OTOS sign convention comment).
+  state.otos.heading = static_cast<float>(30.0 * kPi / 180.0);  // 30 deg
+  state.otos.x = 0.0f;
+  state.otos.y = 0.0f;
+  state.otos.sampleTime = 1;
+
+  // Target chosen so goto_otos.py's OWN solve_arc() + YAW_SIGN formula --
+  // computed independently in Python, not re-derived here -- gives a
+  // KNOWN, non-trivial NEGATIVE wire omega for this exact (heading,
+  // target) pair: raw heading 30 deg, target bearing 50 deg (a 20 deg
+  // world-frame correction), distance 1000 mm:
+  //   error = 20 deg; omega_world = +0.10261 rad/s;
+  //   wire_omega = YAW_SIGN * omega_world = -0.10261 rad/s.
+  GotoTarget target;
+  target.id = 1;
+  target.x = 642.788f;   // 1000 * cos(50 deg)
+  target.y = 766.044f;   // 1000 * sin(50 deg)
+  target.tolerance = 20.0f;
+  nav.start(target);
+
+  // No plant: state.otos is held fixed on purpose (this checks Navigator's
+  // ONE-SHOT computation against an external reference, not closed-loop
+  // convergence -- see navigator.h's own comment on why NO plant, ideal
+  // or real-sim, can validate this sign choice via convergence alone).
+  // Time still advances so the Planner's own profiler ramps the staged
+  // Move up from rest.
+  uint32_t now = 0;
+  for (int i = 0; i < 10; ++i) {
+    state.time.cycleStart = now;
+    nav.tick(state);
+    now += static_cast<uint32_t>(kPeriod);
+  }
+
+  // wire Move::omega negative -> vRight < vLeft (shape.cpp's own
+  // decomposition: omega == (vRight - vLeft) / trackWidth) ->
+  // commandedRight() < commandedLeft(), with a clear margin so this is
+  // not a rounding-noise pass.
+  CHECK(planner.commandedRight() < planner.commandedLeft() - 1.0f);
+}
+
+// --- Per-goto cruise-speed override (135-004, wire parity with
+// envelope.proto's GoTo.speed) -- a nonzero GotoTarget::speed overrides
+// NavigatorLimits::speed for this goto's own cruise arc.
+void testPerGotoSpeedOverrideAppliesToCruise() {
+  Planner planner(defaultPlannerLimits());
+  NavigatorLimits limits = defaultNavLimits();
+  limits.speed = 150.0f;
+  Navigator nav(limits, planner);
+  IdealPlant plant;
+  plant.trackWidth = limits.trackWidth;
+  Types::RobotState state{};
+  uint32_t now = 0;
+
+  GotoTarget target;
+  target.id = 108;
+  target.x = 5000.0f;  // far ahead, exactly on-heading -- no pivot, clean cruise
+  target.y = 0.0f;
+  target.tolerance = 10.0f;
+  target.timeout = 0;
+  target.speed = 300.0f;  // override, well above limits.speed
+  nav.start(target);
+
+  // Enough ticks for the profiler to ramp to plateau (aMax=400mm/s^2 in
+  // defaultPlannerLimits() reaches 300mm/s in <1s; 3s is generous).
+  for (int i = 0; i < 60; ++i) cycle(nav, state, plant, now, kPeriod);
+
+  // Both wheels should be commanding well above the UN-overridden
+  // 150 mm/s config default -- proves the override actually reached
+  // ArcSolver::solve(), not just GotoTarget's own storage.
+  CHECK(planner.commandedLeft() > 250.0f);
+  CHECK(planner.commandedRight() > 250.0f);
+}
+
 // --- Exactly one completion ack per goto id -----------------------------
 
 void testExactlyOneCompletionAck() {
@@ -455,10 +613,13 @@ int main() {
   testMaterialChangeThrottleNotEveryTick();
   testHalfArcMandatoryRefreshFiresWithoutMaterialChange();
   testTargetBehindStopThenPivotThenArc();
+  testPivotThenCruiseNotBlockedBehindAligning();
   testSmallBearingNoPivotNoOscillation();
   testOtosStalenessSkipsResolve();
   testOtosDisconnectAbortsWithinWindow();
+  testYawSignMatchesGotoOtosConvention();
+  testPerGotoSpeedOverrideAppliesToCruise();
   testExactlyOneCompletionAck();
-  std::printf("PASS navigator_test (9 checks)\n");
+  std::printf("PASS navigator_test (12 checks)\n");
   return 0;
 }

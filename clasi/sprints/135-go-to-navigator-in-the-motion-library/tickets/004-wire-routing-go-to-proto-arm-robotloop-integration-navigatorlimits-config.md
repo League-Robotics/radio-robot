@@ -1,7 +1,7 @@
 ---
 id: '004'
 title: 'Wire + routing: GO_TO proto arm, RobotLoop integration, NavigatorLimits config'
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -271,37 +271,37 @@ Two touch points DO need edits:
 
 ## Acceptance Criteria
 
-- [ ] `GoTo` message + `CommandEnvelope.go_to = 26` added to
+- [x] `GoTo` message + `CommandEnvelope.go_to = 26` added to
       `envelope.proto`; `Verb.GO_TO = 24 [(binary) = true]` added to
       `commands.proto`; codegen re-run; `GO_TO` present in generated
       `kVerbTable[]` and `wire_commands.py`'s `VERBS`.
-- [ ] `ConfigGroupTarget.NAVIGATOR = 9` + `message Navigator` added to
+- [x] `ConfigGroupTarget.NAVIGATOR = 9` + `message Navigator` added to
       `robot_config.proto`, following the `Planner` message's pattern;
       `defaultNavigatorGroup()` added to `boot_config.cpp` and wired into
       the composition root; `data/robots/robot_config.schema.json`
       regenerated (not hand-edited) with a `navigator` block;
       `tovez.json` gains real tuned values.
-- [ ] `RobotLoop::handleGoto()` + `routeCommand()` GOTO case; goto
+- [x] `RobotLoop::handleGoto()` + `routeCommand()` GOTO case; goto
       rejected with a named `ErrCode` (not a new one) when
       `!state_.otos.connected`; `drive_.takeover()` called on acceptance.
-- [ ] `Navigator` ticks once per `cycle()`, before `planner_.tick()`.
-- [ ] Landmine 1 fixed: a sim/ctest scenario streaming several internal
+- [x] `Navigator` ticks once per `cycle()`, before `planner_.tick()`.
+- [x] Landmine 1 fixed: a sim/ctest scenario streaming several internal
       replacements shows ZERO spurious `ack(0)` entries in the ack ring,
       and exactly ONE completion ack per completed goto id.
-- [ ] Landmine 2 verified: a pivot-then-cruise scenario shows the
+- [x] Landmine 2 verified: a pivot-then-cruise scenario shows the
       Navigator's next replace is NOT blocked behind the Planner's ~2 s
       Aligning trim.
-- [ ] Landmine 3: documented at the pivot call site, not "fixed" (there
+- [x] Landmine 3: documented at the pivot call site, not "fixed" (there
       is nothing to fix — verify no rotation-calibration correction is
       applied to Navigator-issued pivots).
-- [ ] Landmine 4: a scenario with a known world-frame target bearing
+- [x] Landmine 4: a scenario with a known world-frame target bearing
       confirms the commanded `omega` sign matches `goto_otos.py`'s
       `YAW_SIGN = -1.0` convention.
-- [ ] MOVE/WHEELS/ESTOP each cancel an active goto with no completion
+- [x] MOVE/WHEELS/ESTOP each cancel an active goto with no completion
       ack; a GO_TO cancels active WHEELS teleop via `drive_.takeover()`;
       ESTOP clears the Navigator's target in the same cycle it clears
       the Planner's queue.
-- [ ] `src/sim/CMakeLists.txt` and every pytest file found by the
+- [x] `src/sim/CMakeLists.txt` and every pytest file found by the
       `grep -rln "planner.cpp" src/tests/sim/` re-derivation (this
       ticket's own fresh count, not sprint-planning's) updated with the
       two new navigator source files.
@@ -325,3 +325,172 @@ Two touch points DO need edits:
   ```
   uv run python -m pytest
   ```
+
+## Completion Notes
+
+### ErrCode choice for goto rejection
+
+`handleGoto()` uses `ERR_NOT_CONFIGURED` (8) for BOTH of its two reject
+paths: `!configured_` (the pre-existing composition-not-ready gate every
+other handler already uses) and `!state_.otos.connected` (this ticket's
+own new gate). No new `ErrCode` was added. `ERR_NOT_CONFIGURED` was the
+closest existing fit named in the ticket, and on review there wasn't a
+better alternative in the existing enum (`ERR_BADARG` is reserved for
+malformed/out-of-range wire fields — used here for `timeout <= 0`, which
+IS a genuinely separate malformed-argument case; `ERR_BUSY`/`ERR_FULL`
+don't apply to a precondition failure; there is no `ERR_NO_OTOS` or
+similar). The two `ERR_NOT_CONFIGURED` paths are reached via separate
+`if` blocks (not merged into one condition) so a future ticket that wants
+to split them onto distinct codes can do so without re-deriving the
+control flow.
+
+### Landmine 4 — NOT already handled by ticket 003's OTOS negation
+
+This was flagged in the ticket as worth resolving carefully rather than
+quickly, and it needed the careful treatment: ticket 003's existing
+single OTOS-heading negation (`planner.cpp`'s reconciliation, referenced
+in the ticket body) does **not** fully resolve the omega-sign question
+for the Navigator's own commanded `omega`. I verified this by direct
+numeric comparison (Python, non-degenerate angles) between "apply only
+ticket 003's existing negation" and `goto_otos.py`'s own proven
+`YAW_SIGN = -1.0` formula — they only coincidentally agreed at
+`raw_heading = 90°` (a degenerate angle where `cos(heading) = 0` trivially
+satisfies both) and disagreed in magnitude/sign elsewhere (e.g.
+`raw_heading = 0°`). A hardcoded `kNavYawSign = -1.0` constant was tried
+first and confirmed (by an actual build+run) to break
+`testConvergesFromRestAndSettles` in the standalone navigator ctest —
+proving the sign flip is not simply "always negate" but depends on
+context the test plants can't represent.
+
+The actual fix is `Motion::NavigatorLimits::yawSign` (`arc_solver.h`), a
+new configurable field (default `1.0`, identity) applied at exactly two
+points in `navigator.cpp`: building `worldPose.heading` from the OTOS
+pose before every `ArcSolver::solve()` call, and on the final
+`m.omega = limits_.yawSign * solution.omega` / pivot-omega assignment.
+Because the default is identity, every pre-existing navigator/planner
+test that never touches `yawSign` is byte-for-byte unaffected — zero
+regression risk. `tovez.json`'s baked `navigator.yaw_sign` is `-1.0`
+(measured, matching `goto_otos.py`); `tovez_nocal.json`/`togov.json`/
+`gopiv.json` bake `1.0` (unmeasured/identity).
+
+This surfaced a second, structural finding: baking the real hardware's
+`yaw_sign = -1.0` into the SAME robot JSON used for sim composition
+breaks `TestSim::SimPlant`'s closed-loop convergence, for the identical
+structural reason `TestNav::IdealPlant` can't represent the quirk either
+— both plants read the commanded wheel velocity directly as their own
+ground truth, so a sign flip that is physically real on hardware becomes
+a self-fighting oscillation in a plant with no independent physical
+truth to diverge against. Fixed with a 5th `BootOverrides` field,
+`navigatorYawSign` (`boot_wiring.h`/`.cpp`), following the exact
+precedent already set by `otosConfig`/`wheelCorrection`/`trackWidth`/
+`controlPeriod`+`actuationDelay`: a real robot passes `nullptr` (gets the
+baked, measured value); `TestSim::SimHarness` passes
+`&kIdentityNavigatorYawSign` (`1.0f`). Applied in `boot_wiring.cpp`'s
+constructor body immediately after `configurator_.install()` (install()
+is what writes `navigatorLimits_.yawSign` from the baked config in the
+first place, so the override has to land after it, not before).
+
+### Landmine 2 — also needed a real fix, not just verification
+
+The ticket allowed for "verify, and fix if needed." It needed the fix.
+`Navigator::tick()`'s `PivotPhase::Pivoting` branch originally waited on
+`moveResult.completed` alone to advance past the pivot. Because a pivot
+is a `Move::Kind::Angle`, it satisfies `alignApplies()`
+(`planner.cpp`'s terminal fine-align, ticket 134-003) and so
+`moveResult.completed` can stay false for up to ~2s while the Planner
+holds it in `MoveLifecycle::Aligning` for low-speed trim nudges — exactly
+the stall the ticket described. Fixed by also advancing on
+`planner_.lifecycle() == MoveLifecycle::Aligning`, which is available the
+moment the pivot has landed close enough (before the Aligning trim
+settles), letting the Navigator issue its `replace = true` cruise arc
+immediately — that `replace` call flushes the Aligning state on its own
+(`planner.cpp`'s existing replace semantics), so nothing is left stranded.
+Verified via a new navigator ctest, `testPivotThenCruiseNotBlockedBehindAligning`,
+using the REAL Aligning parameters (not a relaxed test double):
+`alignTol = 0.017453` rad, `alignMaxNudges = 6` — measured
+`DELTA_TICKS = 0` against a `<= 3` bound (i.e., the replace fires within
+the same handful of ticks it would without Aligning in the picture at
+all, not after a ~2s delay).
+
+### Landmine 3 — documented only, no fix (as expected)
+
+Confirmed by reading the call site: Navigator-issued pivots go through
+`Planner::move()` directly, never through `handleMove()`'s wire-command
+path, so the rotation-calibration pre-distortion
+(`robot_loop.cpp`, gated on `!state_.otos.present`) never runs for them
+regardless. This is safe specifically because `handleGoto()` gates goto
+acceptance on `state_.otos.connected` — a Navigator pivot only exists
+in a world where OTOS is present, which is exactly the branch this
+correction already skips on its own. A doc comment recording this
+reasoning was added at the pivot call site in `robot_loop.cpp` (ahead of
+the `if (m.kind == Motion::Move::Kind::Angle && !state_.otos.present)`
+block) so a future reader doesn't try to extend the correction to cover
+Navigator pivots.
+
+### Landmine 1 — spurious ack(0), fixed via mutual exclusion + boolean ack checks
+
+Fixed by construction, not by a suppression filter: `cycle()` now routes
+to EITHER `navigator_.tick(state_)` (when `navigator_.active()`) OR
+`planner_.tick(state_)`/`planner_.update(state_)`, never both in the
+same cycle. `publishGotoResult()` (new, mirrors `publishMoveResult()`'s
+shape) only calls `tlm_.ack()` when `navResult.completed` is the WHOLE
+goto completing (Navigator-internal segment replacements never reach
+`publishMoveResult()`'s unconditional per-segment ack path at all, since
+that path is only reached from the `else` branch). Verified in the new
+`test_app_robot_loop_goto_harness.cpp` basic end-to-end scenario using
+boolean "did this key ever appear in the ack ring" checks
+(`sawEnqueueAck`/`sawCompletionAck`), per the established
+`scenarioDuplicateIdSanityNoOp()` convention (the ack ring retains
+entries across several consecutive telemetry frames by design, so a
+raw per-cycle count double/triple-counts a single logical ack — a count
+is not the right check here, presence is).
+
+### Build-list re-derivation: 22 files, not the sprint-planning estimate
+
+`grep -rln "planner.cpp" src/tests/sim/` at ticket time returned 26 raw
+hits; 4 were comment-only references (no `_APP_SOURCES` list to touch),
+netting exactly **22** files whose `_APP_SOURCES` actually needed the two
+new navigator source-file entries plus a `src/motion/planner` include
+flag (`navigator.h`'s own bare `#include "planner.h"` needed it, same
+reason the standalone navigator ctest project already adds that include
+dir). This matches the sprint-planning-time floor of 22 exactly; it was
+still re-derived fresh per the ticket's instruction rather than assumed.
+`src/sim/CMakeLists.txt`'s `MOTION_SOURCES` got the same two files plus
+the same include dir. Five additional harness `.cpp` files (not pytest
+files — files with a direct, hand-written `App::Configurator`
+construction) needed a local `Motion::NavigatorLimits` added at 6
+construction call sites, an unanticipated but mechanical consequence of
+`Configurator`'s constructor gaining a 6th parameter.
+
+### Test results (final, clean run)
+
+- Standalone navigator ctest: 12/12 checks passing, including the 3 new
+  checks added this ticket (`testYawSignMatchesGotoOtosConvention`,
+  `testPerGotoSpeedOverrideAppliesToCruise`,
+  `testPivotThenCruiseNotBlockedBehindAligning`).
+- `arc_solver_test`: 17/17 (unchanged by this ticket, run to confirm no
+  regression from the `NavigatorLimits` field additions).
+- `planner_tests` (standalone): 8/8.
+- Full sim suite (`uv run python -m pytest`): **487 passed, 3 failed, 2
+  xfailed, 1 xpassed**. The 3 failures
+  (`test_motor_primitive.py::test_heading_encoder_and_otos_match_truth`,
+  `test_app_preamble.py::test_app_preamble_harness_compiles_and_passes`,
+  `test_devices_otos.py::test_devices_otos_harness_compiles_and_passes`)
+  are confirmed pre-existing and unrelated to this ticket's changes —
+  reproduced identically against a `git stash`-clean baseline (same
+  failure text before and after this ticket's diff), and two of the three
+  were already flagged pre-existing in ticket 008's own Completion Notes.
+  Zero new regressions; the new `test_app_robot_loop_goto.py` file (5
+  scenarios, collected as 1 pytest test) is included and passing.
+
+### Files touched
+
+See the diff on this branch (`sprint/135-go-to-navigator-in-the-motion-library`)
+for the complete list. Highest-signal files: `src/protos/envelope.proto`,
+`src/protos/commands.proto`, `src/protos/robot_config.proto`,
+`src/firm/app/robot_loop.{h,cpp}`, `src/firm/app/boot_wiring.{h,cpp}`,
+`src/firm/app/configurator.{h,cpp}`, `src/firm/app/boot_calibration.{h,cpp}`,
+`src/motion/navigator/navigator.{h,cpp}`, `src/motion/navigator/arc_solver.h`,
+`src/tests/sim/unit/test_app_robot_loop_goto_harness.cpp` (new),
+`src/tests/sim/unit/test_app_robot_loop_goto.py` (new),
+`data/robots/tovez.json`, `data/robots/{tovez_nocal,togov,gopiv}.json`.

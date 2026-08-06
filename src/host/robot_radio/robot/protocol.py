@@ -181,7 +181,11 @@ _DRIVE_MODE_CHAR = {
     telemetry_pb2.STREAMING: "S",
     telemetry_pb2.TIMED: "T",
     telemetry_pb2.DISTANCE: "D",
-    telemetry_pb2.GO_TO: "G",
+    # 135-004: DriveMode value 4 renamed GO_TO -> NAVIGATING (number
+    # unchanged) -- resolved a protoc enum-value-scope collision with
+    # commands.proto's new Verb.GO_TO. Display character unchanged ("G",
+    # for "going"/navigating).
+    telemetry_pb2.NAVIGATING: "G",
     telemetry_pb2.VELOCITY: "V",
 }
 

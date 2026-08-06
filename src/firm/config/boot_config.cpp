@@ -372,4 +372,22 @@ msg::Estimator defaultEstimatorGroup() {
     return cfg;
 }
 
+msg::Navigator defaultNavigatorGroup() {
+    // navigator.* (navigator_config_for_config() above) -- Motion::
+    // NavigatorLimits' own configuration group (135-004). track_width is
+    // NOT baked here -- App::configureNavigator() (app/boot_calibration.cpp)
+    // sources it from Config::Robot::effectiveTrackWidth() instead, the
+    // SAME derived value Drive/Odometry/PlannerLimits already use.
+    msg::Navigator cfg;
+    cfg.speed = 150.0f;                              // [mm/s]
+    cfg.max_wheel_step = 125.0f;              // [mm/s]
+    cfg.behind_angle = 1.570796f;                 // [rad]
+    cfg.turn_first_angle = 0.8726646f;          // [rad]
+    cfg.approach_radius = 0.0f;           // [mm]
+    cfg.approach_speed = 0.0f;             // [mm/s]
+    cfg.default_arrival_tolerance = 100.0f;  // [mm]
+    cfg.yaw_sign = -1.0f;
+    return cfg;
+}
+
 }  // namespace Config

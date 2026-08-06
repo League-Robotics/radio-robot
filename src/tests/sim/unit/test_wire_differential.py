@@ -134,9 +134,12 @@ def test_field_numbers_match_pb2_descriptors():
     # shorter than the SetConfigField message type it carries; see
     # envelope.proto's own set_field arm doc comment for the wire-budget
     # reasoning).
+    # `go_to` (26, 135-004: GoTo / App::RobotLoop::handleGoto()) is the next
+    # fresh arm after set_field, same load-bearing-name rule -- uppercases
+    # to commands.proto's GO_TO verb exactly.
     expected_cmd_numbers = {"config": 6, "stop": 13, "move": 21,
                             "wheels": 22, "estop": 23, "get_config": 24,
-                            "set_field": 25}
+                            "set_field": 25, "go_to": 26}
     actual_cmd_numbers = {
         f.name: f.number for f in pb_envelope.CommandEnvelope.DESCRIPTOR.oneofs_by_name["cmd"].fields
     }
@@ -269,7 +272,10 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
     # DriveMode relocated INTO telemetry.proto from the deleted planner.proto
     # (115-003 Decision 4) -- read from pb_telemetry now, not pb_planner
     # (which no longer exists).
-    expected_drive_mode = {"IDLE": 0, "STREAMING": 1, "TIMED": 2, "DISTANCE": 3, "GO_TO": 4, "VELOCITY": 5}
+    # 135-004: value 4 renamed GO_TO -> NAVIGATING (number unchanged) --
+    # resolves a protoc enum-value-scope collision with commands.proto's new
+    # Verb.GO_TO; see telemetry.proto's own DriveMode doc comment.
+    expected_drive_mode = {"IDLE": 0, "STREAMING": 1, "TIMED": 2, "DISTANCE": 3, "NAVIGATING": 4, "VELOCITY": 5}
     actual_drive_mode = {
         n: v.number for n, v in pb_telemetry.DESCRIPTOR.enum_types_by_name["DriveMode"].values_by_name.items()
     }
@@ -503,7 +509,7 @@ def test_direction_b_telemetry_full_shape(harness):
 
 
 @pytest.mark.parametrize("mode_value,mode_name", [(0, "IDLE"), (1, "STREAMING"), (2, "TIMED"), (3, "DISTANCE"),
-                                                   (4, "GO_TO"), (5, "VELOCITY")])
+                                                   (4, "NAVIGATING"), (5, "VELOCITY")])
 def test_direction_b_telemetry_every_drive_mode(harness, mode_value, mode_name):
     raw = encode_telemetry(harness, 32, mode=mode_value)
     reply = pb_envelope.ReplyEnvelope.FromString(raw)

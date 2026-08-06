@@ -151,13 +151,26 @@ import "common.proto";
 
 // Current drive mode -- relocated here from the deleted planner.proto
 // (115-003, gut S1); unchanged shape.
+//
+// Value 4 RENAMED (not renumbered), 135-004: was `GO_TO`, collided at
+// protoc's package-wide enum-VALUE scope (C++ scoping rules -- enum values
+// are siblings of their type, not children of it, robot_config.proto's own
+// ConfigGroupTarget NAMING NOTE has the same citation) with commands.proto's
+// new `Verb.GO_TO` -- a name this ticket's own GO_TO wire arm needs
+// load-bearing-exact (WhichOneof("cmd").upper() derivation). This value had
+// zero live producers or consumers at the time of the rename (grep-
+// confirmed: nothing ever set msg::DriveMode::GO_TO/Types::Mode::GoTo), so
+// the rename is wire-COMPATIBLE (proto enums encode by NUMBER, never by
+// name) and behavior-preserving. `Types::Mode::GoTo` (robot_state.h), the
+// C++ mirror this enum's own doc comment says it keeps parity with, is
+// renamed to `Navigating` in the same commit.
 enum DriveMode {
-  IDLE      = 0;
-  STREAMING = 1;
-  TIMED     = 2;
-  DISTANCE  = 3;
-  GO_TO     = 4;
-  VELOCITY  = 5;
+  IDLE       = 0;
+  STREAMING  = 1;
+  TIMED      = 2;
+  DISTANCE   = 3;
+  NAVIGATING = 4;
+  VELOCITY   = 5;
 }
 
 // One wheel's encoder sample -- position AND velocity together, stamped

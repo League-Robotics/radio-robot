@@ -41,7 +41,7 @@ BodyOffset bodyOffset(const Pose& pose, float targetX, float targetY) {
 
 void Navigator::start(const GotoTarget& target) {
   target_ = target;
-  if (target_.tolerance <= 0.0f) target_.tolerance = kNavDefaultArrivalTolerance;
+  if (target_.tolerance <= 0.0f) target_.tolerance = limits_.defaultArrivalTolerance;
 
   phase_ = Phase::Active;
   pivotPhase_ = PivotPhase::None;
@@ -146,9 +146,24 @@ NavResult Navigator::tick(Types::RobotState& state) {
 
   if (!haveSolvablePose) return result;
 
+  // True-world-frame pose for BEARING/ARC-SOLVE geometry (135-004,
+  // "Landmine 4" -- see NavigatorLimits::yawSign's own comment in
+  // navigator.h). `pose` above is deliberately kept in encoder-sign
+  // convention (it just served the SUC-005 dead-reckoning bookkeeping);
+  // `limits_.yawSign` (default +1.0) is a no-op here, leaving worldPose ==
+  // pose exactly -- ticket 003's original, unchanged behavior for every
+  // ctest/sim scenario. A robot configured with yawSign=-1.0 (measured,
+  // per-robot) instead recovers the raw OTOS/world value ArcSolver's
+  // tangent-arc geometry and the pivot bearing need. Valid in BOTH
+  // branches above (OTOS-connected and dead-reckoning), since
+  // `pose.heading` is uniformly encoder-sign convention in either case.
+  const Pose worldPose{pose.x, pose.y, limits_.yawSign * pose.heading};
+
   // --- Arrival (independent of allowSolve -- a stale-but-connected or
-  // dead-reckoned pose is still the best truth available this cycle). ---
-  const BodyOffset toTarget = bodyOffset(pose, target_.x, target_.y);
+  // dead-reckoned pose is still the best truth available this cycle).
+  // Rotation-invariant distance -- either pose gives the same answer;
+  // worldPose used here only for one consistent convention. ---
+  const BodyOffset toTarget = bodyOffset(worldPose, target_.x, target_.y);
   if (!frozen_ && toTarget.distance <= target_.tolerance) {
     frozen_ = true;
   }
@@ -175,13 +190,25 @@ NavResult Navigator::tick(Types::RobotState& state) {
   // to what the Planner just did, independent of allowSolve. ---
   if (pivotPhase_ == PivotPhase::StoppingForPivot) {
     if (moveResult.completed) {
-      issuePivotMove(pose);
+      issuePivotMove(worldPose);
       pivotPhase_ = PivotPhase::Pivoting;
     }
     return result;
   }
   if (pivotPhase_ == PivotPhase::Pivoting) {
-    if (moveResult.completed) {
+    // 135-004 "Landmine 2": do NOT wait for moveResult.completed alone --
+    // planner.cpp's own terminal fine-align (MoveLifecycle::Aligning) holds
+    // a LANDED Twist Angle Move open for up to ~2 s of low-speed trim
+    // nudges before moveResult.completed ever fires (planner_types.h's own
+    // MoveLifecycle::Aligning doc comment: "a Twist Angle Move whose
+    // profile has LANDED"). Aligning beginning IS the "landed" signal this
+    // sub-machine needs -- replacing the pivot with the outbound cruise
+    // arc now, one cycle later (not necessarily Aligning-settled), is the
+    // documented design intent (sprint.md Architecture): the NEXT cycle's
+    // replace=true issue flushes Aligning along with everything else it
+    // already flushes (planner.cpp's own move()/replace semantics), the
+    // same way it flushes any other in-flight Move.
+    if (moveResult.completed || planner_.lifecycle() == MoveLifecycle::Aligning) {
       pivotPhase_ = PivotPhase::None;
       hasIssued_ = false;  // force an unconditional re-issue once cruising resumes
       previousOmega_ = 0.0f;
@@ -194,12 +221,26 @@ NavResult Navigator::tick(Types::RobotState& state) {
   // --- Normal cruise: pivot-first check, then solve + material-change
   // throttle. ---
   if (std::fabs(toTarget.bearing) >= limits_.turnFirstAngle) {
-    beginPivotSequence(pose);
+    beginPivotSequence(worldPose);
     return result;
   }
 
-  const ArcSolution solution =
-      ArcSolver::solve(pose, Pose{target_.x, target_.y, 0.0f}, limits_, previousOmega_);
+  // Per-goto cruise-speed override (135-004, wire parity with
+  // envelope.proto's GoTo.speed) -- <= 0 falls open to the config
+  // default, matching every other <=0 bound in this codebase. A local
+  // copy, not a limits_ mutation: limits_ is `const NavigatorLimits&`
+  // (possibly shared/live-pushed) and this override is scoped to ONE
+  // goto, not a standing config change.
+  NavigatorLimits effectiveLimits = limits_;
+  if (target_.speed > 0.0f) effectiveLimits.speed = target_.speed;
+
+  // solve() is fed worldPose (true-world convention) and returns omega in
+  // that SAME convention -- previousOmega_/lastIssuedOmega_ stay in this
+  // native convention throughout (see NavigatorLimits::yawSign's own
+  // comment in navigator.h); only the
+  // Move::omega assigned below gets converted to the wire convention.
+  const ArcSolution solution = ArcSolver::solve(
+      worldPose, Pose{target_.x, target_.y, 0.0f}, effectiveLimits, previousOmega_);
   previousOmega_ = solution.omega;
 
   if (solution.stop) {
@@ -207,7 +248,7 @@ NavResult Navigator::tick(Types::RobotState& state) {
     // config -- the ordinary target-behind case is already caught by the
     // turnFirstAngle check above (behindAngle > turnFirstAngle in every
     // sane configuration). Handled the same way regardless, for safety.
-    beginPivotSequence(pose);
+    beginPivotSequence(worldPose);
     return result;
   }
 
@@ -237,8 +278,12 @@ NavResult Navigator::tick(Types::RobotState& state) {
     m.velocityKind = Move::VelocityKind::Twist;
     m.threshold = solution.arcLength;
     m.v_x = solution.v_x;
-    m.omega = solution.omega;
-    m.timeout = segmentTimeout(solution.arcLength, limits_.speed);
+    // yawSign: solution.omega is in worldPose's own convention (default
+    // +1.0 -- a no-op, matching ticket 003's original, unchanged
+    // behavior) -- this is the ONE point it converts to the wire's
+    // Move::omega convention. See NavigatorLimits::yawSign's own comment.
+    m.omega = limits_.yawSign * solution.omega;
+    m.timeout = segmentTimeout(solution.arcLength, effectiveLimits.speed);
     planner_.move(m, true);
 
     lastIssuedOmega_ = solution.omega;
@@ -251,7 +296,7 @@ NavResult Navigator::tick(Types::RobotState& state) {
   return result;
 }
 
-void Navigator::beginPivotSequence(const Pose& pose) {
+void Navigator::beginPivotSequence(const Pose& worldPose) {
   // SUC-004: never replace an in-flight arc with a pivot at speed (that
   // would ratio-lock hard-brake the reversing wheel) -- ramp to rest via
   // the ordinary planned-stop sequencing first, then pivot from rest.
@@ -259,15 +304,30 @@ void Navigator::beginPivotSequence(const Pose& pose) {
     planner_.plannedStop(0);
     pivotPhase_ = PivotPhase::StoppingForPivot;
   } else {
-    issuePivotMove(pose);
+    issuePivotMove(worldPose);
     pivotPhase_ = PivotPhase::Pivoting;
   }
 }
 
-void Navigator::issuePivotMove(const Pose& pose) {
+void Navigator::issuePivotMove(const Pose& worldPose) {
   // Recompute fresh -- time has passed (at minimum, the stop's own decel
   // ramp) since the bearing that triggered this sequence was measured.
-  const BodyOffset toTarget = bodyOffset(pose, target_.x, target_.y);
+  // `worldPose` (true-world convention, NOT tick()'s encoder-sign `pose`)
+  // -- see NavigatorLimits::yawSign's own comment in navigator.h.
+  //
+  // 135-004 "Landmine 3": this Move is issued straight into planner_.
+  // move() below, never through App::RobotLoop::handleMove() -- so it
+  // never sees that function's own per-direction rotation-calibration
+  // correction (robot_loop.cpp, "the per-direction rotation gain/offset
+  // is an OPEN-LOOP correction"). Correct on purpose, not a gap: that
+  // correction only ever matters with OTOS ABSENT (it pre-distorts an
+  // open-loop, scrub-limited wheel estimate; with OTOS present the loop
+  // already closes on optical truth and pre-distorting would make it
+  // stop at the wrong place), and a Navigator pivot only ever happens
+  // with OTOS CONNECTED (App::RobotLoop::handleGoto()'s own acceptance
+  // gate) -- exactly the condition under which the correction would
+  // already be a no-op if it were somehow reached. Do not add it here.
+  const BodyOffset toTarget = bodyOffset(worldPose, target_.x, target_.y);
   const float bearing = toTarget.bearing;
 
   Move m;
@@ -276,7 +336,10 @@ void Navigator::issuePivotMove(const Pose& pose) {
   m.velocityKind = Move::VelocityKind::Twist;
   m.threshold = std::fabs(bearing);
   m.v_x = 0.0f;
-  m.omega = std::copysign(pivotOmega(), bearing);
+  // yawSign: `bearing` is in worldPose's own convention -- see the
+  // cruise arc's own identical conversion above and NavigatorLimits::
+  // yawSign's own comment in navigator.h.
+  m.omega = limits_.yawSign * std::copysign(pivotOmega(), bearing);
   m.timeout = pivotTimeout(std::fabs(bearing));
   planner_.move(m, true);
 

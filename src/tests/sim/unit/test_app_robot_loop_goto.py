@@ -1,31 +1,34 @@
-"""Off-hardware acceptance proof for sprint 127 ticket 002 (SUC-002):
-verifies the ``Move.id`` dedup short-circuit ``App::RobotLoop::handleMove()``
-already ships (``alreadyAccepted()``/``recordAccepted()``/
-``acceptedMoveIds_``, ``src/firm/app/robot_loop.cpp`` ~216-258) against the
-four rules the source issue's own Verification section names
-(``clasi/sprints/127-host-side-path-planner-goto-and-path-following/issues/
-duplicate-move-enqueue-on-ack-loss-retry.md``): ordinary duplicate
-suppression, the ``Move.id == 0`` exemption, the window outliving
-completion, and ``ERR_FULL`` rejections not being recorded.
+"""Off-hardware acceptance proof for sprint 135 ticket 004 (SUC-001/SUC-002/
+SUC-003): App::RobotLoop::handleGoto()/routeCommand()'s GOTO case/cycle()'s
+Navigator-vs-Planner ownership dispatch, exercised end to end against the
+REAL App::RobotLoop graph (TestSim::SimHarness -- the same composeRobot()
+composition root main.cpp uses, baking data/robots/tovez.json's real
+navigator block).
 
-CHARACTERIZATION, NOT A FIX: ``test_app_robot_loop_dedup_harness.cpp``
-writes tests against EXISTING firmware behavior. It does not modify
-``src/firm/app/robot_loop.{h,cpp}``, any wire message, or any ``.proto``
-definition.
+This ticket's own "just proves the routing itself is correct" scope --
+ticket 005 owns the fuller system-level wire-codec test. Covers:
 
-Compiles the harness against the SAME full ``HOST_BUILD`` ``RobotLoop``
-dependency graph ``test_app_robot_loop_replace.py`` compiles for its own
-``scenarioDuplicateIdSanityNoOp()`` (``TestSim::SimHarness`` composes the
-real ``App::RobotLoop`` graph -- see ``sim_harness.h``'s own header) --
-this file's dedup short-circuit lives one layer above
-``Motion::Planner``, in ``App::RobotLoop::handleMove()`` itself, so it
-needs the whole graph, not a bare ``Motion::Planner``.
+  1. Basic end-to-end: GO_TO accepted, Navigator drives, exactly one
+     completion ack, ZERO spurious ack(0) entries (Landmine 1).
+  2. MOVE cancels an active goto -- no completion ack (preempted).
+  3. WHEELS cancels an active goto -- no completion ack.
+  4. GO_TO cancels active WHEELS teleop via drive_.takeover().
+  5. ESTOP clears the Navigator's target the SAME cycle it clears the
+     Planner's queue.
 
-Mirrors ``test_app_robot_loop_replace.py``'s shape: compile with the
-system C++ compiler, run the resulting binary, assert it exits 0.
-Collected under ``src/tests/sim/unit/`` -- already within
-``pyproject.toml``'s ``testpaths = ["src/tests/sim"]``, no configuration
-change needed.
+Landmine 2 (Aligning-phase stall) and Landmine 4 (omega sign) are covered
+by src/motion/navigator/tests/navigator_test.cpp's own ctest scenarios
+(testPivotThenCruiseNotBlockedBehindAligning/
+testYawSignMatchesGotoOtosConvention) -- cheaper to extend there, per this
+ticket's own Testing section, since neither needs the full RobotLoop wire
+graph this file's harness carries.
+
+Compiles test_app_robot_loop_goto_harness.cpp against the same full
+HOST_BUILD dependency graph test_sim_harness_configure.py/
+test_app_robot_loop_replace.py compile (SimHarness composes the real
+App::RobotLoop graph -- see sim_harness.h's own header).
+
+    uv run python -m pytest src/tests/sim/unit/test_app_robot_loop_goto.py -v -s
 """
 
 import pathlib
@@ -34,7 +37,7 @@ import sys
 
 import pytest
 
-# src/tests/sim/unit/test_app_robot_loop_dedup.py -> unit -> sim -> tests -> repo root
+# src/tests/sim/unit/test_app_robot_loop_goto.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _UNIT_DIR = pathlib.Path(__file__).resolve().parent
@@ -42,29 +45,21 @@ _SUPPORT_DIR = _UNIT_DIR.parent / "support"
 _PLANT_DIR = _UNIT_DIR.parent / "plant"
 _TESTS_SIM_DIR = _UNIT_DIR.parent  # src/tests/sim -- resolves "support/..."-qualified includes
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
-_MOTION_PLANNER_DIR = _REPO_ROOT / "src" / "motion" / "planner"  # resolves planner.h's own includes
+_MOTION_PLANNER_DIR = _REPO_ROOT / "src" / "motion" / "planner"  # resolves navigator.h's own "planner.h"
 
-_HARNESS_SRC = _UNIT_DIR / "test_app_robot_loop_dedup_harness.cpp"
+_HARNESS_SRC = _UNIT_DIR / "test_app_robot_loop_goto_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _BENCH_TEST_CONFIG_SRC = _SUPPORT_DIR / "bench_test_config.cpp"
 
-# Same full HOST_BUILD RobotLoop dependency graph test_app_robot_loop_replace.py
-# compiles for its own scenarioDuplicateIdSanityNoOp() -- see that file's
-# own comment for the source-by-source rationale. This whole harness needs
-# it (every scenario here drives TestSim::SimHarness, none drive a bare
-# Motion::Planner).
+# Same full HOST_BUILD RobotLoop dependency graph test_sim_harness_configure.py/
+# test_app_robot_loop_replace.py compile (SimHarness composes the real
+# App::RobotLoop graph -- see sim_harness.h's own header).
 _APP_SOURCES = [
     _SOURCE_DIR / "app" / "robot_loop.cpp",
     _SOURCE_DIR / "app" / "comms.cpp",
-    # debug.cpp (129-003): App::debugf()'s only implementation --
-    # TestSim::SimHarness's constructor always calls
-    # App::setDebugSink(&comms_) now (HOST_BUILD is defined below,
-    # so the real, non-stub setDebugSink()/debugf() are what this
-    # graph links), mirroring src/sim/CMakeLists.txt's own
-    # APP_SOURCES entry.
     _SOURCE_DIR / "app" / "debug.cpp",
     _SOURCE_DIR / "app" / "configurator.cpp",
     _SOURCE_DIR / "app" / "telemetry.cpp",
@@ -77,19 +72,9 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "drive.cpp",
     _REPO_ROOT / "src" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
-    # 130-002 -- the shared composition root (App::composeRobot()/
-    # RobotGraph) sim_harness.h now boots through, plus its
-    # Config::boot_config-reading calibration helpers (the "four-source-
-    # list trap" this ticket's own note calls out).
     _SOURCE_DIR / "app" / "boot_wiring.cpp",
     _SOURCE_DIR / "app" / "boot_calibration.cpp",
 ]
-# 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
-# entry here) is gone outright -- zero instantiations; App::Drive holds no
-# controller of its own (open-loop duty from calibrated speed, drive.h's
-# own header). See src/motion/DESIGN.md's "wheel control generations" note.
-# Kept as an empty list (rather than removed) so the `+ _MOTION_SOURCES`
-# concatenation below needs no edit if a future motion module belongs here.
 _MOTION_SOURCES = []
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
@@ -100,9 +85,6 @@ _DEVICE_SOURCES = [
 ]
 _CONFIG_SOURCES = [
     _SOURCE_DIR / "config" / "persisted_tuning.cpp",
-    # 130-002 -- both composition roots now bake the SAME robot-JSON
-    # calibration by default (unify-sim-and-robot-composition-roots.md
-    # work item 2).
     _SOURCE_DIR / "config" / "boot_config.cpp",
 ]
 _MESSAGE_SOURCES = [
@@ -141,17 +123,17 @@ def _all_sources():
     )
 
 
-def test_app_robot_loop_dedup_harness_compiles_and_passes(tmp_path):
-    """Compile the 127-002 Move.id dedup verification harness + its
-    dependency graph; assert every scenario (the four dedup rules) passes,
-    printing every measured queue-depth/ack number along the way."""
+def test_app_robot_loop_goto_harness_compiles_and_passes(tmp_path):
+    """Compile the 135-004 GO_TO/Navigator RobotLoop harness + its dependency
+    graph; assert every scenario passes (basic end-to-end + Landmine 1 +
+    the four ownership-cancellation scenarios)."""
     sources = _all_sources()
     for src in sources:
         assert src.is_file(), f"required source missing: {src}"
     assert _SOURCE_DIR.is_dir(), f"src/firm/ tree missing: {_SOURCE_DIR}"
 
     cxx = _find_cxx_compiler()
-    binary = tmp_path / "test_app_robot_loop_dedup_harness"
+    binary = tmp_path / "test_app_robot_loop_goto_harness"
 
     compile_result = subprocess.run(
         [
@@ -165,7 +147,7 @@ def test_app_robot_loop_dedup_harness_compiles_and_passes(tmp_path):
             "-I",
             str(_REPO_ROOT / "src"),
             "-I",
-            str(_REPO_ROOT / "src" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
+            str(_MOTION_PLANNER_DIR),  # 135-004: navigator.h's bare #include "planner.h"
             "-I",
             str(_SUPPORT_DIR),
             "-I",
@@ -174,8 +156,6 @@ def test_app_robot_loop_dedup_harness_compiles_and_passes(tmp_path):
             str(_TESTS_SIM_DIR),
             "-I",
             str(_INFRA_SIM_DIR),
-            "-I",
-            str(_MOTION_PLANNER_DIR),
             "-o",
             str(binary),
             *[str(src) for src in sources],
@@ -184,14 +164,14 @@ def test_app_robot_loop_dedup_harness_compiles_and_passes(tmp_path):
         text=True,
     )
     assert compile_result.returncode == 0, (
-        "test_app_robot_loop_dedup_harness.cpp / its dependencies failed to compile:\n"
+        "test_app_robot_loop_goto_harness.cpp / its dependencies failed to compile:\n"
         f"stdout:\n{compile_result.stdout}\nstderr:\n{compile_result.stderr}"
     )
 
     run_result = subprocess.run([str(binary)], capture_output=True, text=True)
     print(run_result.stdout)
     assert run_result.returncode == 0, (
-        "test_app_robot_loop_dedup_harness reported a scenario failure "
+        "test_app_robot_loop_goto_harness reported a scenario failure "
         f"(exit {run_result.returncode}):\n{run_result.stdout}\n{run_result.stderr}"
     )
 

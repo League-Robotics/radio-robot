@@ -53,6 +53,18 @@
 // because there are structurally two independent readers of the one raw
 // wire fact (Planner's pose_, and this file), not because the convention
 // itself is in question.
+//
+// This reconciled `pose` (encoder-sign convention) is the right frame for
+// exactly two things this file does: the arrival/frozen distance check
+// (rotation-invariant -- either convention gives the same distance) and
+// the SUC-005 dead-reckoning fallback (`lastGoodPose_`/`lastGoodWheelPose_`
+// difference against `state.pose`, which IS encoder-sign convention, by
+// construction -- Odometry's own accumulated heading). It is the WRONG
+// frame for a WORLD-frame bearing-to-target computation -- see ticket
+// 004's own "omega sign" comment on `NavigatorLimits::yawSign` below for
+// why, and for
+// `worldPose`, the second, separately-purposed pose this file builds for
+// exactly that computation.
 #pragma once
 
 #include <cstdint>
@@ -81,12 +93,88 @@ inline constexpr float kNavOmegaReplaceThreshold = 0.05f;      // [rad/s]
 inline constexpr float kNavArcLengthReplaceThreshold = 15.0f;  // [mm]
 inline constexpr float kNavRefreshFraction = 0.5f;             // [1]
 
+// --- Omega sign at the Navigator/Planner command boundary (135-004,
+// "Landmine 4") -----------------------------------------------------------
+//
+// Commanded Move::omega is opposite true-world CCW ON REAL HARDWARE --
+// measured, and reconciled on the host TODAY by every bench script's own
+// `YAW_SIGN = -1.0` (e.g. src/tests/bench/goto_otos.py:54, "commanded
+// omega is opposite to world CCW (measured)"; matches
+// src/motion/planner/planner.cpp:509-512's own comment naming the RIGHT
+// fix as "the body kinematics' omega sign", deliberately deferred --
+// Option B, out of scope this sprint, ticket 008's own "Scope" section).
+//
+// This is a SEPARATE fact from ticket 008's OTOS-mount sign (the
+// `pose`/`-state.otos.heading` reconciliation above): that one settles
+// how the OTOS chip's own mounted orientation relates to encoder-derived
+// heading; THIS one is about how the DRIVETRAIN's own commanded-omega
+// convention relates to true-world CCW, independent of OTOS entirely (it
+// is exactly as present on a robot with no OTOS at all -- goto_otos.py's
+// sibling scripts measure it via camera, not OTOS). Both are real,
+// both apply, and they compose by simple sequencing, not cancellation.
+//
+// `Motion::ArcSolver::solve()` (135-002) is pure geometry with no
+// knowledge of either quirk: fed a pose, it returns an omega in THAT
+// pose's own heading convention (arc_solver.h's own `ArcSolution::omega`
+// doc: "CCW-positive, Pose::heading's own sign convention"). Whether that
+// pose's heading should be RAW `state.otos.heading` (true-world) or the
+// encoder-sign `pose` above depends entirely on whether THIS robot's
+// drivetrain has the quirk -- a real, hardware-specific, physically-
+// measured fact this file cannot derive or assume, and which no firmware
+// simulator (IdealPlant/SimPlant alike) can expose either: both read
+// `Move`-commanded wheel velocities directly as their own ground truth,
+// so they are tautologically self-consistent with whichever convention
+// Navigator uses, by construction, regardless of what a REAL robot's
+// motors/encoders happen to do (verified directly: hardcoding this flip
+// unconditionally reproduces testConvergesFromRestAndSettles's own
+// failure against the ctest suite's IdealPlant -- there is no plant
+// model that can validate this sign choice in sim, only a real bench
+// pass, ticket 006, can).
+//
+// `NavigatorLimits::yawSign` (below) is therefore a CONFIGURABLE field,
+// following configuration-discipline.md exactly the way a per-direction
+// rotation-calibration gain already does elsewhere in this codebase: it
+// defaults to `+1.0` (no flip), which makes `worldPose.heading` (below)
+// equal `pose.heading` (encoder-sign) EXACTLY -- i.e. every existing
+// ctest/sim scenario that does not set it (every one as of this ticket)
+// is COMPLETELY UNCHANGED from ticket 003's original behavior, byte for
+// byte. A robot whose bench pass (ticket 006) measures the quirk sets
+// `yawSign = -1.0` in ITS OWN robot JSON `navigator` block (this ticket's
+// own NavigatorLimits config group), matching goto_otos.py's measured
+// `YAW_SIGN` for that same robot.
+//
+// `worldPose.heading = yawSign * pose.heading`: at `yawSign = +1` this is
+// `pose.heading` (encoder-sign, ticket 003's original convention,
+// unchanged). At `yawSign = -1` this is `-pose.heading` == raw, un-negated
+// `state.otos.heading` (ticket 008 settled that this raw wire value
+// tracks true-world CCW directly) -- exactly the pose goto_otos.py's own
+// `solve_arc()` feeds its identical tangent-arc formula. `solve()`'s
+// returned omega, and the pivot sub-machine's own bearing-sign omega, are
+// therefore in THAT SAME convention `worldPose.heading` used -- multiplying
+// by the SAME `yawSign`, at the ONE place each is assigned into a `Move`
+// handed to `planner_.move()`, converts back to Move::omega's own wire
+// convention (a no-op at `yawSign = +1`; goto_otos.py's own `YAW_SIGN`
+// conversion at `yawSign = -1`). This is the "one constant, one comment,
+// one flip" discipline ticket 008's own Completion Notes already applied
+// to ITS sign fix (`kOtosHardwareMountSign`) -- change the ONE config
+// value, not scattered call sites, if and when Option B (the deferred
+// kinematics fix) ever lands and makes this field obsolete.
+//
+// Internal bookkeeping that threads omega between successive solve()
+// calls (`previousOmega_`, `lastIssuedOmega_`) stays in solve()'s own
+// native (worldPose-relative) convention throughout, matching what
+// `solve()` itself expects back as `previousOmega` -- only the
+// `Move::omega` this file assigns for `planner_.move()` gets the flip.
+
 // Provisional default arrival tolerance when a GotoTarget arrives with
 // tolerance <= 0 (the fail-open convention every <=0 bound in this
 // codebase uses) -- ported from pathplan.planner.TERMINATION_TOLERANCE,
 // the host's own provisional default, pending the same future
-// measurement that constant's own docstring cites.
-inline constexpr float kNavDefaultArrivalTolerance = 100.0f;  // [mm]
+// measurement that constant's own docstring cites. MOVED into
+// NavigatorLimits::defaultArrivalTolerance (135-004, arc_solver.h) --
+// every value the robot uses comes from the file, configuration-
+// discipline.md; this compile-time constant is retired, not kept as a
+// second source of the same default.
 
 // Bounded window (SUC-005) a sustained state.otos.connected == false may
 // run before Navigator gives up and aborts the goto. No existing
@@ -128,13 +216,22 @@ struct GotoTarget {
   uint32_t id = 0;
   float x = 0.0f;          // [mm] world frame
   float y = 0.0f;          // [mm] world frame
-  // [mm] arrival tolerance. <= 0 -> kNavDefaultArrivalTolerance (fail-open,
-  // matching every other <=0 bound in this codebase).
+  // [mm] arrival tolerance. <= 0 -> NavigatorLimits::defaultArrivalTolerance
+  // (fail-open, matching every other <=0 bound in this codebase).
   float tolerance = 0.0f;
   // [ms] overall goto safety backstop, independent of the per-segment
   // Move timeouts below it. 0 = none (fail-open, matching Move::timeout's
   // own "0 = none" convention).
   uint32_t timeout = 0;
+  // [mm/s] cruise speed override for THIS goto only -- 135-004, wire
+  // parity with envelope.proto's GoTo.speed ("cruise; 0 = config
+  // default"). <= 0 -> NavigatorLimits::speed (the config default),
+  // fail-open matching every other <=0 bound in this codebase. Applies
+  // ONLY to the cruise arc's own commanded speed (ArcSolver::solve()'s
+  // `speed`/the segment timeout derived from it) -- deliberately NOT
+  // pivotOmega(), which this field's own wire doc names "cruise", a
+  // linear-motion concept distinct from pivot rotation rate.
+  float speed = 0.0f;
 };
 
 // Navigator's own per-cycle completion event -- TickResult's sibling, the
@@ -200,8 +297,13 @@ class Navigator {
 
   NavResult doneResult();
   NavResult abortResult();
-  void beginPivotSequence(const Pose& pose);
-  void issuePivotMove(const Pose& pose);
+  // `worldPose`: the TRUE-world-frame pose (see NavigatorLimits::yawSign's
+  // own comment
+  // above) -- NOT the encoder-sign `pose` local to tick(). Both functions
+  // compute a bearing via bodyOffset() and need the same true-world
+  // convention ArcSolver::solve() does.
+  void beginPivotSequence(const Pose& worldPose);
+  void issuePivotMove(const Pose& worldPose);
   float pivotOmega() const;                        // [rad/s]
   float segmentTimeout(float arcLength, float speed) const;  // [mm] [mm/s] -> [ms]
   float pivotTimeout(float bearingMagnitude) const;           // [rad] -> [ms]

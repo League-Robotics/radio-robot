@@ -614,4 +614,38 @@ std::string armorWheelsCommand(float vLeft, float vRight, float duration, uint32
   return armor(rawBuf, n, "WHEELS");
 }
 
+// Encodes CommandEnvelope field 26 (go_to, length-delimited oneof arm --
+// GoTo{x=1, y=2, frame=3, speed=4, arrive=5, timeout=6, id=8}), then
+// field 1 (corr_id) if nonzero. 135-004.
+size_t encodeGotoEnvelope(float x, float y, uint32_t frame, float speed, float arrive, float timeout,
+                           uint32_t id, uint32_t corrId, uint8_t* buf, size_t cap) {
+  size_t pos = 0;
+  if (!encodeVarintField(1, corrId, buf, cap, &pos)) return 0;
+
+  uint8_t scratch[48];
+  size_t scratchPos = 0;
+  if (!encodeFloatField(1, x, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeFloatField(2, y, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeVarintField(3, frame, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeFloatField(4, speed, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeFloatField(5, arrive, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeFloatField(6, timeout, scratch, sizeof(scratch), &scratchPos)) return 0;
+  if (!encodeVarintField(8, id, scratch, sizeof(scratch), &scratchPos)) return 0;
+
+  if (!WireRuntime::encodeTag(26, WireType::kLengthDelimited, buf, cap, &pos)) return 0;
+  if (!WireRuntime::encodeVarint(scratchPos, buf, cap, &pos)) return 0;
+  if (cap - pos < scratchPos) return 0;
+  std::memcpy(buf + pos, scratch, scratchPos);
+  pos += scratchPos;
+  return pos;
+}
+
+std::string armorGotoCommand(float x, float y, uint32_t frame, float speed, float arrive, float timeout,
+                              uint32_t id, uint32_t corrId) {
+  uint8_t rawBuf[64];
+  size_t n = encodeGotoEnvelope(x, y, frame, speed, arrive, timeout, id, corrId, rawBuf, sizeof(rawBuf));
+  if (n == 0) return std::string();
+  return armor(rawBuf, n, "GO_TO");
+}
+
 }  // namespace TestSupport

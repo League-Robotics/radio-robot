@@ -32,6 +32,11 @@ bool isLiveConfigurable(msg::ConfigGroupTarget target) {
       // table for why this was split OUT of PLANNER rather than left
       // boot-only alongside the rest of that group.
       return true;
+    case msg::ConfigGroupTarget::NAVIGATOR:
+      // 135-004: Motion::Navigator holds its NavigatorLimits by reference
+      // (no setter needed at all) -- see configurator.h's re-appliability
+      // table NAVIGATOR row.
+      return true;
     case msg::ConfigGroupTarget::GEOMETRY:
     case msg::ConfigGroupTarget::PLANNER:
     case msg::ConfigGroupTarget::CONFIG_GROUP_UNSPECIFIED:
@@ -61,12 +66,14 @@ msg::ConfigSource Configurator::configSource(msg::ConfigGroupTarget target) cons
 Configurator::Configurator(Drive& drive, Devices::Motor& motorL,
                            Devices::Motor& motorR, Devices::Otos& otos,
                            Motion::Planner& planner,
+                           Motion::NavigatorLimits& navigatorLimits,
                            Config::TuningStore* tuningStore)
     : drive_(drive),
       motorL_(motorL),
       motorR_(motorR),
       otos_(otos),
       planner_(planner),
+      navigatorLimits_(navigatorLimits),
       tuningStore_(tuningStore) {}
 
 // persistIfEligible() -- 132-013 (patch-surface retirement): called from
@@ -110,11 +117,13 @@ void Configurator::persistIfEligible(msg::ConfigGroupTarget target) {
     case msg::ConfigGroupTarget::GEOMETRY:
     case msg::ConfigGroupTarget::PLANNER:
     case msg::ConfigGroupTarget::PLANNER_SHAPER:
+    case msg::ConfigGroupTarget::NAVIGATOR:
     case msg::ConfigGroupTarget::CONFIG_GROUP_UNSPECIFIED:
       // Not in the persisted-tuning precedent set -- configurator.h's own
       // re-appliability table's PERSISTENCE SCOPE note. PLANNER_SHAPER
       // (132-017, live but never persisted) is here on purpose, same as
-      // DRIVE above -- see that row's own doc comment.
+      // DRIVE above -- see that row's own doc comment. NAVIGATOR (135-004)
+      // is the same shape again -- live, never persisted.
       return;
   }
 
@@ -192,6 +201,7 @@ void Configurator::loadBaked(const Config::WheelCorrection* wheelCorrectionOverr
   config_.plannerShaper = Config::defaultPlannerShaperGroup();
   config_.otos = Config::defaultOtosGroup();
   config_.estimator = Config::defaultEstimatorGroup();
+  config_.navigator = Config::defaultNavigatorGroup();
 
   // 133-005: the wheel-correction override, applied AFTER the bake so it
   // wins over whatever data/robots/*.json currently holds -- see this
@@ -285,6 +295,10 @@ void Configurator::install() {
 
   drive_.setDutyPerSpeed(config_.drive.duty_per_speed_left, config_.drive.duty_per_speed_right);
   drive_.configure(config_);
+
+  // 135-004: the SAME call install(NAVIGATOR) makes -- a live push and a
+  // boot bake share one code path, same precedent as PLANNER_SHAPER above.
+  App::configureNavigator(navigatorLimits_, config_);
 }
 
 // applyGroup() -- see configurator.h's own doc comment. Boot-only targets
@@ -354,6 +368,13 @@ msg::ErrCode Configurator::applyGroup(msg::ConfigGroupTarget target, const uint8
       config_.plannerShaper = decoded;
       break;
     }
+    case msg::ConfigGroupTarget::NAVIGATOR: {
+      msg::Navigator decoded;
+      const msg::wire::Result r = msg::wire::decode(decoded, wire, wireLen);
+      if (!r.ok) return r.code;
+      config_.navigator = decoded;
+      break;
+    }
     case msg::ConfigGroupTarget::GEOMETRY:
     case msg::ConfigGroupTarget::PLANNER:
     case msg::ConfigGroupTarget::CONFIG_GROUP_UNSPECIFIED:
@@ -411,6 +432,9 @@ msg::ErrCode Configurator::applyField(msg::ConfigGroupTarget target, uint16_t fi
       break;
     case msg::ConfigGroupTarget::PLANNER_SHAPER:
       r = msg::wire::setField(config_.plannerShaper, fieldNumber, value);
+      break;
+    case msg::ConfigGroupTarget::NAVIGATOR:
+      r = msg::wire::setField(config_.navigator, fieldNumber, value);
       break;
     case msg::ConfigGroupTarget::GEOMETRY:
     case msg::ConfigGroupTarget::PLANNER:
@@ -516,6 +540,14 @@ msg::ErrCode Configurator::install(msg::ConfigGroupTarget target) {
                                   config_.plannerShaper.jerk_max, config_.plannerShaper.yaw_jerk_max);
       return msg::ErrCode::ERR_NONE;
 
+    case msg::ConfigGroupTarget::NAVIGATOR:
+      // 135-004: writes straight into the NavigatorLimits Motion::Navigator
+      // already holds a reference to -- the SAME call install() (the
+      // no-arg boot fan-out, above) makes -- no setter, by construction
+      // (configurator.h's re-appliability table NAVIGATOR row).
+      App::configureNavigator(navigatorLimits_, config_);
+      return msg::ErrCode::ERR_NONE;
+
     case msg::ConfigGroupTarget::GEOMETRY:
     case msg::ConfigGroupTarget::PLANNER:
     case msg::ConfigGroupTarget::CONFIG_GROUP_UNSPECIFIED:
@@ -567,6 +599,9 @@ msg::ErrCode Configurator::encodeSnapshot(msg::ConfigGroupTarget target,
       break;
     case msg::ConfigGroupTarget::ESTIMATOR:
       len = msg::wire::encode(config_.estimator, out.body_, sizeof(out.body_));
+      break;
+    case msg::ConfigGroupTarget::NAVIGATOR:
+      len = msg::wire::encode(config_.navigator, out.body_, sizeof(out.body_));
       break;
     case msg::ConfigGroupTarget::CONFIG_GROUP_UNSPECIFIED:
     default:

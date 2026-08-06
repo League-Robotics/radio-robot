@@ -114,6 +114,19 @@ struct Move {
     // --- array / optional-string accessors ---
 };
 
+// GoTo
+struct GoTo {
+    float x = 0.0f;
+    float y = 0.0f;
+    uint32_t frame = 0;
+    float speed = 0.0f;
+    float arrive = 0.0f;
+    float timeout = 0.0f;
+    uint32_t id = 0;
+
+    // --- array / optional-string accessors ---
+};
+
 // CommandEnvelope
 struct CommandEnvelope {
     enum class CmdKind : uint8_t {
@@ -125,6 +138,7 @@ struct CommandEnvelope {
         ESTOP = 5,
         GET_CONFIG = 6,
         SET_FIELD = 7,
+        GO_TO = 8,
     };
     CmdKind cmd_kind = CmdKind::NONE;
     union {
@@ -135,6 +149,7 @@ struct CommandEnvelope {
         Estop estop;
         GetConfig get_config;
         SetConfigField set_field;
+        GoTo go_to;
     } cmd = {};
 
     uint32_t corr_id = 0;

@@ -136,5 +136,6 @@ msg::Planner defaultPlannerGroup();
 msg::PlannerShaper defaultPlannerShaperGroup();
 msg::Otos defaultOtosGroup();
 msg::Estimator defaultEstimatorGroup();
+msg::Navigator defaultNavigatorGroup();
 
 }
