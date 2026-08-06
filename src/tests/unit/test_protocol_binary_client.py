@@ -223,7 +223,10 @@ def test_from_pb2_bare_frame_decodes_zero_values_not_none():
         (telemetry_pb2.STREAMING, "S"),
         (telemetry_pb2.TIMED, "T"),
         (telemetry_pb2.DISTANCE, "D"),
-        (telemetry_pb2.GO_TO, "G"),
+        # 135-004: DriveMode value 4 renamed GO_TO -> NAVIGATING (number
+        # unchanged) to resolve a protoc enum-value package-scope collision
+        # with commands.proto's new Verb.GO_TO. Display character unchanged.
+        (telemetry_pb2.NAVIGATING, "G"),
         (telemetry_pb2.VELOCITY, "V"),  # 116-007: own dedicated char, no longer falls back to "I"
     ],
 )

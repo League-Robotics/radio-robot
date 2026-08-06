@@ -494,3 +494,60 @@ for the complete list. Highest-signal files: `src/protos/envelope.proto`,
 `src/tests/sim/unit/test_app_robot_loop_goto_harness.cpp` (new),
 `src/tests/sim/unit/test_app_robot_loop_goto.py` (new),
 `data/robots/tovez.json`, `data/robots/{tovez_nocal,togov,gopiv}.json`.
+
+### Closing pass: bare full-suite triage, two more fixes
+
+A follow-up bare `uv run python -m pytest` run (widest possible run,
+team-lead's own) came back **18 failed, 2068 passed, 3 skipped, 13
+xfailed, 1 xpassed in 861.46s** — wider than the 487/3-failure count
+recorded above because it also collected `src/tests/unit/` (already
+fixed on this branch — see the `M src/tests/unit/test_*.py` diffs, plus
+`clasi/issues/sprint-135-pre-existing-test-failures-need-triage.md` for
+the ones deliberately left deferred).
+
+- **Fixed**: `test_motor_primitive.py::test_heading_encoder_and_otos_match_truth`
+  — the exact same bug class ticket 008 already fixed once in
+  `src/tests/sim/plant/plant_harness.cpp`'s
+  `scenarioPivotHeadingSaneViaOdometry()`, just not yet applied to this
+  sibling test file. The real OTOS chip (and the sim's `OtosPlant`, per
+  ticket 008's settled convention) reports heading INVERTED relative to
+  ground truth/encoder heading — `src/motion/planner/planner.cpp:513`
+  reconciles this with exactly one firmware-side negation; see
+  `otos_plant.h`'s header comment for the full citation. Updated the
+  assertion from `abs(h["otos_h"] - h["true_h"]) < 1.0` to
+  `abs(h["otos_h"] - (-h["true_h"])) < 1.0`, with a comment citing both.
+  Verified standalone:
+  `uv run python -m pytest src/tests/sim/test_motor_primitive.py::test_heading_encoder_and_otos_match_truth -q`
+  → `1 passed`. This drops the bare-suite count from 18 to **17 failed**
+  (not independently re-run in full this session per instruction — only
+  this one test was re-verified).
+- **Fixed (unrelated, pre-existing, opportunistic)**:
+  `src/tests/bench/square_tour.py`'s `_set_effective_track()` crashed
+  with `AttributeError: 'RobotConfig' object has no attribute
+  'calibration'` — a stale attribute path from before the 132-017
+  `RobotConfig` group reshape (`rotational_slip` now lives under
+  `robot_config.geometry`, per `robot_config_generated.py`'s `Geometry`
+  model, not `robot_config.calibration`). Fixed the one attribute
+  access. Verified: `uv run python src/tests/bench/square_tour.py --sim`
+  → `PASS: square tour closed`, exit 0. `square_tour.py --sim` is now
+  the sprint's standard fast per-ticket smoke check (build once, run one
+  simulated tour, nonzero exit on failure) in place of running the full
+  bare pytest suite after every ticket — that full run is now reserved
+  for once at the end of the whole sprint.
+
+**Remaining 17 (after the fix above), all pre-existing/unrelated to this
+ticket, none re-investigated per instruction — full detail in
+`clasi/issues/sprint-135-pre-existing-test-failures-need-triage.md`**:
+7 `gen_boot_config` parity tests (`test_gen_boot_config_otos.py` x2,
+`test_gen_boot_config_planner.py` x2, `test_gen_boot_config_robot_groups.py`
+x3); 3 confirmed pre-existing/unrelated (`test_app_preamble.py`,
+`test_devices_otos.py` — ticket 008's own stash comparison —, and
+`test_calibration_kwargs.py` — stale snapshot predating this sprint,
+root-caused by team-lead); 7 testgui failures
+(`test_camera_combo.py` x2, `test_gui_button_acceptance.py` x3,
+`test_otos_calibration_convergence.py`, `test_tour_closure_gate.py`).
+The deferred-issues file already listed the `gen_boot_config` and
+testgui groups plus `test_devices_otos.py`/`test_calibration_kwargs.py`;
+`test_app_preamble.py` was added to it this session (it had only been
+named in this ticket's own "Test results" note above, not yet copied
+into the shared issue file).

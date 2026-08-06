@@ -52,6 +52,7 @@ import gen_messages  # noqa: E402  (path must be set up before this import)
 
 _ROBOT_CONFIG_GROUPS = (
     "Geometry", "Motors", "Drive", "WheelControl", "Planner", "PlannerShaper",
+    "Navigator",  # 135-004: NavigatorLimits config group
     "Otos", "Estimator",
 )
 _HOST_ONLY_GROUPS = ("Identity", "Connection", "Vision")

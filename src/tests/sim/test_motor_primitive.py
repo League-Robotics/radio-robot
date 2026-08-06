@@ -214,7 +214,10 @@ def test_distance_encoder_and_otos_match_truth():
 def test_heading_encoder_and_otos_match_truth():
     h = heading_probe(1.0, 2.0)
     assert abs(h["pose_h"] - h["true_h"]) < 1.0, h
-    assert abs(h["otos_h"] - h["true_h"]) < 1.0, h
+    # OTOS heading is hardware-mounted with its sign INVERTED relative to
+    # ground truth/encoder heading (135-008; see otos_plant.h's header
+    # comment and src/motion/planner/planner.cpp:513's own negation).
+    assert abs(h["otos_h"] - (-h["true_h"])) < 1.0, h
 
 
 if __name__ == "__main__":

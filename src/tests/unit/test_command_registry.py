@@ -88,9 +88,14 @@ _CPP_ROW_RE = re.compile(
 #             "SET_CONFIG_FIELD" (17 bytes) would push that past the ceiling,
 #             "SET_FIELD" (9 bytes) does not.
 _EXPECTED_CLEARTEXT = {"HELLO", "PING", "ID", "VER", "DEVICE", "PONG",
-                       "READY", "STATUS", "HELP", "DBG"}
+                       "READY", "STATUS", "HELP", "DBG",
+                       # Pre-existing gap, not sprint-135: SEED/POSE
+                       # (binary = false) were already live verbs this set
+                       # never picked up.
+                       "SEED", "POSE"}
 _EXPECTED_BINARY = {"MOVE", "CONFIG", "STOP", "WHEELS", "ESTOP", "TLM", "OK", "ERR",
-                    "GET_CONFIG", "CFG", "SET_FIELD"}
+                    "GET_CONFIG", "CFG", "SET_FIELD",
+                    "GO_TO"}  # 135-004: new binary verb, Verb.GO_TO = 24
 
 
 def _parse_cpp_verb_table(commands_h: str) -> list[tuple[str, bool]]:

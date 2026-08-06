@@ -91,7 +91,7 @@ def _set_effective_track(robot_config) -> None:
     which one each downstream use needs."""
     global PHYSICAL_TRACK, EFFECTIVE_TRACK, TURN_ARC
     PHYSICAL_TRACK = robot_config.trackwidth or TRACK
-    slip = getattr(robot_config.calibration, "rotational_slip", None) or 1.0
+    slip = getattr(robot_config.geometry, "rotational_slip", None) or 1.0
     EFFECTIVE_TRACK = PHYSICAL_TRACK / slip if slip > 0 else PHYSICAL_TRACK
     TURN_ARC = EFFECTIVE_TRACK * math.pi / 4.0
 LEG = 500.0            # [mm] default leg length; overridden by --leg

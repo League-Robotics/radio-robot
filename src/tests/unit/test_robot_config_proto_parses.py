@@ -231,6 +231,7 @@ def test_config_group_target_enum_has_one_value_per_robot_config_group(robot_con
         "WheelControl": "WHEEL_CONTROL",
         "Planner": "PLANNER",
         "PlannerShaper": "PLANNER_SHAPER",
+        "Navigator": "NAVIGATOR",  # 135-004: NavigatorLimits config group
         "Otos": "OTOS",
         "Estimator": "ESTIMATOR",
     }
