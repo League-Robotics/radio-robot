@@ -25,7 +25,7 @@ const char kDrivetrainType[] = "differential";
 // kRadioChannel — see boot_config.h's own doc comment. Baked from
 // connection.radio_channel (robot JSON), defaulting to 0 (the historical
 // hard-coded Radio::begin() value) when absent.
-const int kRadioChannel = 3;  // [nRF frequency band] private to tovez + the getez relay
+const int kRadioChannel = 3;  // [nRF frequency band]
 
 void defaultMotorConfigs(msg::MotorConfig* out) {
     // Velocity PID gains — baked from the robot JSON's motors.vel_* keys
