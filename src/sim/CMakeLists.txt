@@ -140,6 +140,12 @@ set(MOTION_SOURCES
     "${MOTION_DIR}/planner/shape.cpp"
     "${MOTION_DIR}/planner/estimation.cpp"
     "${MOTION_DIR}/planner/planner.cpp"
+    # Navigator integration (135-004): App::RobotLoop now calls Motion::
+    # Navigator (135-003), which itself calls Motion::ArcSolver (135-002)
+    # -- both become part of the actual firmware/sim image for the first
+    # time in this ticket.
+    "${MOTION_DIR}/navigator/arc_solver.cpp"
+    "${MOTION_DIR}/navigator/navigator.cpp"
 )
 set(DEVICE_SOURCES
     "${SOURCE_DIR}/devices/nezha_motor.cpp"
@@ -217,4 +223,14 @@ target_include_directories(firmware_host PRIVATE
     "${PLANT_DIR}"
     "${CMAKE_SOURCE_DIR}"
     "${REPO_ROOT}/src"
+    # "${MOTION_DIR}/planner" (135-004): navigator.h's own bare
+    # #include "planner.h" (matching planner.cpp's own sibling-file bare
+    # includes, e.g. "estimation.h"/"profile.h"/"shape.h", which resolve
+    # here for free via the compiler's implicit current-file-directory
+    # search -- planner.h does NOT get that for free from navigator.h,
+    # since the two files live in different directories) needs this
+    # directory ON the include path explicitly. Mirrors src/motion/
+    # navigator/CMakeLists.txt's own motion_planner_lib target, which
+    # already adds this same directory for the identical reason.
+    "${MOTION_DIR}/planner"
 )

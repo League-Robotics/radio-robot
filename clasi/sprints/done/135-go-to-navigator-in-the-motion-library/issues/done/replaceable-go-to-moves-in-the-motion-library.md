@@ -1,5 +1,14 @@
 ---
-status: pending
+status: done
+sprint: '135'
+tickets:
+- 135-001
+- 135-002
+- 135-003
+- 135-004
+- 135-005
+- 135-006
+- 135-007
 ---
 
 # Replaceable go-to moves in the motion library

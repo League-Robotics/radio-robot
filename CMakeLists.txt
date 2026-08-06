@@ -332,8 +332,8 @@ list(APPEND SOURCE_FILES ${CC_FILES})
 # root" override in codal.json, it is simply always there once populated.
 set(MOTION_SOURCE_DIR "src/motion")
 RECURSIVE_FIND_DIR(MOTION_INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}" "*.h")
-# (planner exclusion rationale: see the MOTION_SOURCE_FILES filter below)
-list(FILTER MOTION_INCLUDE_DIRS EXCLUDE REGEX "/planner/(tests|bench|py|build)")
+# (planner/navigator exclusion rationale: see the MOTION_SOURCE_FILES filter below)
+list(FILTER MOTION_INCLUDE_DIRS EXCLUDE REGEX "/(planner|navigator)/(tests|bench|py|build)")
 list(FILTER MOTION_INCLUDE_DIRS EXCLUDE REGEX "/build")
 list(APPEND INCLUDE_DIRS ${MOTION_INCLUDE_DIRS})
 list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}")
@@ -346,22 +346,30 @@ list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}")
 # said `#include "motion/...h"`.
 list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/src")
 RECURSIVE_FIND_FILE(MOTION_SOURCE_FILES "${PROJECT_SOURCE_DIR}/${MOTION_SOURCE_DIR}" "*.cpp")
-# src/motion/planner is the HOST-ONLY standalone planner tree (its own CMake
-# project with test executables that each define main(), a ctypes shared-lib
-# capi, and its own build/ directory full of CMake-generated feature-test
-# sources). None of it may link into the firmware image -- without this
-# filter the glob above would pull in duplicate main() definitions and
-# host-only code the ARM toolchain cannot build.
+# src/motion/planner and src/motion/navigator are HOST-ONLY standalone
+# trees (each its own CMake project, mirroring one another --
+# src/motion/navigator/CMakeLists.txt's own header comment -- with test
+# executables that each define main(), and (planner only) a ctypes
+# shared-lib capi). None of either tree's tests/bench/py/build subtree may
+# link into the firmware image -- without this filter the glob above would
+# pull in duplicate main() definitions and host-only code the ARM
+# toolchain cannot build.
 # Planner INTEGRATION (2026-07-26): the library core (profile/estimation/
 # wheel_pid/planner.cpp) now compiles INTO the firmware image -- only the
 # standalone project's own subtrees stay excluded (test mains, the ctypes
-# capi, bench/py tooling, and any nested build dir).
-list(FILTER MOTION_SOURCE_FILES EXCLUDE REGEX "/planner/(tests|bench|py|build)/")
+# capi, bench/py tooling, and any nested build dir). 135-006: navigator's
+# own tests/ subtree (arc_solver_test.cpp/navigator_test.cpp, each with
+# their own main(), added 135-002/135-003) was missing this same
+# exclusion -- caught by a real firmware `--build` link failure
+# ("multiple definition of `main'") while running this ticket's own stand
+# smoke test; folded into the SAME regex as planner's, since the two trees
+# are excluded for the identical reason.
+list(FILTER MOTION_SOURCE_FILES EXCLUDE REGEX "/(planner|navigator)/(tests|bench|py|build)/")
 list(FILTER MOTION_SOURCE_FILES EXCLUDE REGEX "/planner/capi\\.cpp")
 # Likewise any CMake build directory under src/motion (the standalone
-# motion_tests/planner builds configure in-tree): CMake's own generated
-# feature-test sources (CompilerId*.cpp etc.) must never be globbed into
-# the firmware image.
+# motion_tests/planner/navigator builds configure in-tree): CMake's own
+# generated feature-test sources (CompilerId*.cpp etc.) must never be
+# globbed into the firmware image.
 list(FILTER MOTION_SOURCE_FILES EXCLUDE REGEX "/build/")
 list(APPEND SOURCE_FILES ${MOTION_SOURCE_FILES})
 

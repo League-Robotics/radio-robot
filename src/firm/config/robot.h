@@ -73,6 +73,7 @@ struct Robot {
   msg::PlannerShaper plannerShaper;  // live: a_max/a_decel/alpha_max/alpha_decel/jerk_max/yaw_jerk_max (132-017 split)
   msg::Otos otos;
   msg::Estimator estimator;
+  msg::Navigator navigator;  // live: Motion::NavigatorLimits' own group (135-004)
 
   // effectiveTrackWidth -- physical separation corrected for SCRUB. Ports
   // App::effectiveTrackWidth()'s formula (boot_calibration.cpp:25-29)

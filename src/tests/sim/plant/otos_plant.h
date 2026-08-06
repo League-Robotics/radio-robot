@@ -30,6 +30,23 @@
 // uses offsetX=offsetY=offsetYaw=0 (identity mounting). A future scenario
 // wanting a non-identity mount would need to invert Otos::tick()'s own
 // transform first.
+//
+// Heading sign convention (135-008, sim-otos-heading-sign-diverges-from-
+// hardware-angle-moves-never-stop.md): heading_ above carries the SAME
+// sign as encoder-derived heading, by construction (it integrates the
+// identical midpoint-arc math App::Odometry uses -- see this file's own
+// header above). The REAL OTOS chip's heading does NOT: it is measurably
+// mounted with its sign INVERTED relative to encoder heading, which
+// src/motion/planner/planner.cpp:513 reconciles with exactly one negation
+// (`pose_.applyOtosHeading(-state.otos.heading, ...)`). For that single
+// firmware-side negation to reconcile sim and hardware IDENTICALLY, the
+// SIMULATED chip must report the hardware's inverted sign too -- so
+// TestSim::SimPlant's handleOtosRead() (sim_plant.cpp) negates this
+// class's own heading_/reportedHeading() via its own
+// kOtosHardwareMountSign constant before packing the wire register. This
+// class's x()/y()/heading()/reportedHeading() accessors themselves stay
+// in the encoder-sign convention described above -- the inversion is
+// applied ONLY at SimPlant's wire-packing boundary, never here.
 #pragma once
 
 #include <cstdint>

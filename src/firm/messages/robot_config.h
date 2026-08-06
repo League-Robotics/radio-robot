@@ -18,6 +18,7 @@ enum class ConfigGroupTarget : uint8_t {
     OTOS = 6,
     ESTIMATOR = 7,
     PLANNER_SHAPER = 8,
+    NAVIGATOR = 9,
 };
 
 enum class ConfigSource : uint8_t {
@@ -118,6 +119,20 @@ struct PlannerShaper {
     float alpha_decel = 0.0f;
     float jerk_max = 0.0f;
     float yaw_jerk_max = 0.0f;
+
+    // --- array / optional-string accessors ---
+};
+
+// Navigator
+struct Navigator {
+    float speed = 0.0f;
+    float max_wheel_step = 0.0f;
+    float behind_angle = 0.0f;
+    float turn_first_angle = 0.0f;
+    float approach_radius = 0.0f;
+    float approach_speed = 0.0f;
+    float default_arrival_tolerance = 0.0f;
+    float yaw_sign = 0.0f;
 
     // --- array / optional-string accessors ---
 };

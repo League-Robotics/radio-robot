@@ -28,6 +28,7 @@
 #include "devices/otos.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
+#include "motion/navigator/arc_solver.h"
 #include "motion/planner/planner.h"
 #include "motion/planner/planner_types.h"
 
@@ -140,5 +141,22 @@ void configurePlanner(Motion::Planner& planner, const Config::Robot& config);
 // applies to the baked value at boot, so a live push and a boot bake now
 // agree on what a given multiplier means.
 void configureOtos(Devices::Otos& otos, const Config::Robot& config);
+
+// configureNavigator -- 135-004: writes config.navigator's fields DIRECTLY
+// into `limits` -- not a setter call, because Motion::Navigator holds its
+// NavigatorLimits by const reference (navigator.h's own design: `tick()`
+// reads `limits_` fresh every call, so there is no "re-apply" step to
+// invoke at all -- a write here takes effect on the very next tick()).
+// `limits` is therefore RobotGraph's own owned Motion::NavigatorLimits
+// object (boot_wiring.h), the SAME one Motion::Navigator was constructed
+// with a reference to -- never a temporary.
+//
+// trackWidth is deliberately NOT copied from config.navigator (that
+// message has no such field, by design -- robot_config.proto's Navigator
+// message header comment): sourced from config.effectiveTrackWidth()
+// instead, the SAME scrub-corrected value Drive/Odometry/PlannerLimits
+// already use, so there is exactly one place trackwidth/rotational_slip
+// are combined, never a second copy that can drift from it.
+void configureNavigator(Motion::NavigatorLimits& limits, const Config::Robot& config);
 
 }  // namespace App

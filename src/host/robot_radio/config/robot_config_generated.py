@@ -142,6 +142,17 @@ class PlannerShaper(BaseModel):
     jerk_max: float = 0.0
     yaw_jerk_max: float = 0.0
 
+class Navigator(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    speed: float = 0.0
+    max_wheel_step: float = 0.0
+    behind_angle: float = 0.0
+    turn_first_angle: float = 0.0
+    approach_radius: float = 0.0
+    approach_speed: float = 0.0
+    default_arrival_tolerance: float = 0.0
+    yaw_sign: float = 0.0
+
 class Otos(BaseModel):
     model_config = ConfigDict(extra="forbid")
     offset_x: float = 0.0

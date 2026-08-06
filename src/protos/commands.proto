@@ -232,4 +232,17 @@ enum Verb {
   // together -- same cycle, same frame -- is the measurement. Cleartext so a
   // control loop can poll it without the binary codec.
   POSE       = 23 [(binary) = false];
+
+  // GO_TO -- 135-004 (sprint 135, "GO_TO navigator in the motion library"):
+  // hands CommandEnvelope.cmd.go_to (envelope.proto's GoTo{x, y, frame,
+  // speed, arrive, timeout, id}) to App::RobotLoop::handleGoto(), which
+  // arms Motion::Navigator (135-003) to drive the point to completion by
+  // repeatedly re-solving a tangent arc against live OTOS pose. Its arm
+  // name is load-bearing the SAME way move/wheels/estop/get_config/
+  // set_field's are (WhichOneof("cmd").upper() derives the wire prefix,
+  // io/serial_conn.py's/io/sim_config.py's own `_envelope_command_name()`)
+  // -- hence the underscore, so this verb uppercases to exactly GO_TO,
+  // matching CommandEnvelope's own `go_to` arm name exactly (never a bare
+  // "goto", a C++ keyword).
+  GO_TO      = 24 [(binary) = true];
 }

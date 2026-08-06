@@ -60,6 +60,7 @@
 #include "messages/robot_config.h"
 #include "messages/wire.h"
 #include "messages/wire_runtime.h"
+#include "motion/navigator/arc_solver.h"
 #include "motion/planner/planner.h"
 #include "motion/planner/planner_types.h"
 
@@ -229,7 +230,8 @@ int main() {
   App::Drive drive(motorL, motorR, /*trackWidth=*/128.0f);
   Motion::PlannerLimits limits;
   Motion::Planner planner(limits);
-  App::Configurator configurator(drive, motorL, motorR, otos, planner, /*tuningStore=*/nullptr);
+  Motion::NavigatorLimits navigatorLimits;
+  App::Configurator configurator(drive, motorL, motorR, otos, planner, navigatorLimits, /*tuningStore=*/nullptr);
 
   // --- 1. Before loadBaked(): UNSPECIFIED, which is the honest answer ----
 
@@ -423,7 +425,8 @@ int main() {
       "BAKED would be a fresh instance of the dishonesty this exists to "
       "remove (a robot running tuned values its read-back denies)");
   {
-    App::Configurator fresh(drive, motorL, motorR, otos, planner, /*tuningStore=*/nullptr);
+    Motion::NavigatorLimits freshNavigatorLimits;
+    App::Configurator fresh(drive, motorL, motorR, otos, planner, freshNavigatorLimits, /*tuningStore=*/nullptr);
     fresh.loadBaked();
 
     Config::TuningSnapshot snapshot;

@@ -36,6 +36,7 @@
 #include "devices/motor.h"
 #include "devices/otos.h"
 #include "firm/types/robot_state.h"
+#include "motion/navigator/navigator.h"
 #include "motion/odometry.h"
 #include "motion/planner/planner.h"
 
@@ -86,8 +87,9 @@ class RobotLoop {
             Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
             Comms& comms, Telemetry& tlm, Drive& drive,
             Configurator& configurator, Motion::Odometry& odom,
-            Motion::Planner& planner, Preamble& preamble,
-            const Devices::Clock& clock, Devices::Sleeper& sleeper);
+            Motion::Planner& planner, Motion::Navigator& navigator,
+            Preamble& preamble, const Devices::Clock& clock,
+            Devices::Sleeper& sleeper);
 
   [[noreturn]] void run();
 
@@ -179,6 +181,14 @@ class RobotLoop {
   void handleWheels(const msg::CommandEnvelope& env);
   void handleStop(const msg::CommandEnvelope& env);
   void handleEstop(const msg::CommandEnvelope& env);
+  // handleGoto() -- 135-004: arms Motion::Navigator with a world- or
+  // robot-frame target. Rejects with ERR_NOT_CONFIGURED (see this
+  // method's own .cpp doc comment for why that ErrCode, not a new one)
+  // while `!state_.otos.connected` -- SUC-005's own explicit gate, a goto
+  // with no OTOS fix to navigate on is refused outright, never
+  // accepted-then-immediately-aborted. Cancels active Drive teleop via
+  // drive_.takeover(), same as handleMove().
+  void handleGoto(const msg::CommandEnvelope& env);
 
   // handleGetConfig() -- 132-011: the CONFIG binary arm's read-back half.
   // Unlike every other case in routeCommand()'s switch, this one replies
@@ -235,6 +245,11 @@ class RobotLoop {
   void publishTiming(uint64_t cycleStartUs);  // [us] cycleBusy/cyclePeriod
   // Move-fault flags + completion ack (rides next frame).
   void publishMoveResult(const Motion::TickResult& moveResult);
+  // publishGotoResult() -- 135-004: NavResult's own counterpart, called
+  // instead of publishMoveResult() on a cycle a goto (not an ordinary
+  // Move) owns Drive -- cycle()'s own if/navigator_.active() branch, this
+  // file's Landmine-1 fix (see robot_loop.cpp's own doc comment on both).
+  void publishGotoResult(const Motion::NavResult& navResult);
 
 #ifdef ROBOT_DEBUG
   // DBG fault injection (system test) + 133-003's live tuning arms: apply
@@ -295,6 +310,7 @@ class RobotLoop {
   Configurator& configurator_;
   Motion::Odometry& odom_;
   Motion::Planner& planner_;
+  Motion::Navigator& navigator_;
   Preamble& preamble_;
   const Devices::Clock& clock_;
   Devices::Sleeper& sleeper_;

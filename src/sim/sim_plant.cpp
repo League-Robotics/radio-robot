@@ -39,6 +39,27 @@ constexpr uint8_t kOtosExpectedProductId = 0x5F;
 constexpr float kPosMmPerLsb = 0.305f;                              // [mm/LSB]
 constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);  // [rad/LSB]
 
+// Hardware-mounted OTOS heading sign (135-008,
+// sim-otos-heading-sign-diverges-from-hardware-angle-moves-never-stop.md,
+// Option A). OtosPlant's own (x, y, heading) accumulator carries the SAME
+// sign as encoder-derived heading -- it integrates via the identical
+// midpoint-arc math App::Odometry uses (otos_plant.h's own header comment).
+// The REAL chip does not: it is measurably mounted with its heading sign
+// INVERTED relative to encoder heading (+84.58deg optical vs. -82.45deg
+// encoder on one measured rotation -- planner.cpp:499-513's own comment),
+// and the firmware reconciles that at exactly one place,
+// planner.cpp:513 -- `pose_.applyOtosHeading(-state.otos.heading, ...)`.
+// That single negation is only correct if the OTOS heading it receives
+// already carries the hardware's inverted sign. So this constant makes the
+// SIMULATED chip report the SAME (inverted) sign the real chip does --
+// negated relative to OtosPlant's own internal accumulator -- so
+// planner.cpp:513's negation reconciles sim and hardware IDENTICALLY
+// (double negative = matches encoder sign, same as hardware). If and when
+// Option B (planner.cpp:509-512 -- fixing the body-kinematics omega sign at
+// its root) ever lands, planner.cpp:513's negation and this constant flip
+// together in the SAME change; see the issue file for the full analysis.
+constexpr float kOtosHardwareMountSign = -1.0f;
+
 // Color/line sensors -- source/devices/{color_sensor,line_sensor}.h. These
 // are never simulated devices (no plant models them); every transaction to
 // one of these wire addresses NAKs, matching the real bus's own behavior
@@ -206,7 +227,12 @@ int SimPlant::handleOtosRead(uint8_t* data, int len) {
     // drift/bias fault knob.
     int16_t rx = static_cast<int16_t>(std::lround(otos_.reportedX() / kPosMmPerLsb));
     int16_t ry = static_cast<int16_t>(std::lround(otos_.reportedY() / kPosMmPerLsb));
-    int16_t rh = static_cast<int16_t>(std::lround(otos_.reportedHeading() / kHdgRadPerLsb));
+    // kOtosHardwareMountSign (see this file's own comment above, and
+    // planner.cpp:513): the wire heading this simulated chip reports must
+    // carry the hardware's inverted sign, not OtosPlant's own internal
+    // encoder-sign accumulator.
+    int16_t rh = static_cast<int16_t>(
+        std::lround(kOtosHardwareMountSign * otos_.reportedHeading() / kHdgRadPerLsb));
     writeLeInt16(data + 0, rx);
     writeLeInt16(data + 2, ry);
     writeLeInt16(data + 4, rh);

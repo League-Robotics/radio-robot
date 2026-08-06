@@ -159,4 +159,16 @@ std::string armorMoveCommand(float v_left, float v_right,
                               float timeout, bool replace, uint32_t id,
                               uint32_t corrId = 0);
 
+// armorGotoCommand() -- 135-004: builds a complete armored CommandEnvelope{
+// go_to: GoTo{x=1, y=2, frame=3, speed=4, arrive=5, timeout=6, id=8}} line,
+// byte-for-byte what a real host would send, same convention every other
+// builder in this file uses. `frame`: 0 = WORLD (OTOS/SEED frame), 1 =
+// ROBOT (envelope.proto's own GoTo.frame doc comment). `speed`/`arrive`
+// <= 0 fall open to the config default (Motion::NavigatorLimits::speed/
+// defaultArrivalTolerance) -- pass 0.0f for either to exercise that path.
+// `timeout` is REQUIRED positive (App::RobotLoop::handleGoto() acks
+// ERR_BADARG otherwise, mirroring Move's own required timeout).
+std::string armorGotoCommand(float x, float y, uint32_t frame, float speed, float arrive,
+                              float timeout, uint32_t id, uint32_t corrId = 0);
+
 }  // namespace TestSupport

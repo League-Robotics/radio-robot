@@ -33,6 +33,9 @@
     "planner_shaper": {
       "$ref": "#/definitions/PlannerShaper"
     },
+    "navigator": {
+      "$ref": "#/definitions/Navigator"
+    },
     "otos": {
       "$ref": "#/definitions/Otos"
     },
@@ -365,6 +368,43 @@
         "yaw_jerk_max": {
           "type": "number",
           "minimum": 0.0
+        }
+      }
+    },
+    "Navigator": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "speed": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "max_wheel_step": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "behind_angle": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "turn_first_angle": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "approach_radius": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "approach_speed": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "default_arrival_tolerance": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "yaw_sign": {
+          "type": "number"
         }
       }
     },

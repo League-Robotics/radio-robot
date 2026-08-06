@@ -51,6 +51,8 @@ _APP_SOURCES = [
     _REPO_ROOT / "src" / "motion" / "planner" / "estimation.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "shape.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "planner.cpp",
+    _REPO_ROOT / "src" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
+    _REPO_ROOT / "src" / "motion" / "navigator" / "navigator.cpp",  # 135-004
     _SOURCE_DIR / "app" / "drive.cpp",
     _REPO_ROOT / "src" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
@@ -128,6 +130,8 @@ def test_rebaseline_pose_sanity(tmp_path):
             str(_SOURCE_DIR),
             "-I",
             str(_REPO_ROOT / "src"),
+            "-I",
+            str(_REPO_ROOT / "src" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
             "-I",
             str(_SUPPORT_DIR),
             "-I",

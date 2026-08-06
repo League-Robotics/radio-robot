@@ -38,6 +38,8 @@ _MOTION_SOURCES = [
     _REPO_ROOT / "src" / "motion" / "planner" / "estimation.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "shape.cpp",
     _REPO_ROOT / "src" / "motion" / "planner" / "planner.cpp",
+    _REPO_ROOT / "src" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
+    _REPO_ROOT / "src" / "motion" / "navigator" / "navigator.cpp",  # 135-004
 ]
 _CONFIG_SOURCES = [
     # Config::default*Group() -- loadBaked() reads every one of them.
@@ -104,6 +106,8 @@ def test_configurator_provenance(tmp_path):
             str(_SOURCE_DIR),
             "-I",
             str(_REPO_ROOT / "src"),
+            "-I",
+            str(_REPO_ROOT / "src" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
             "-o",
             str(binary),
             *[str(src) for src in sources],

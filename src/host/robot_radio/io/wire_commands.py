@@ -43,6 +43,7 @@ VERBS: tuple[VerbEntry, ...] = (
     VerbEntry("SET_FIELD", True),
     VerbEntry("SEED", False),
     VerbEntry("POSE", False),
+    VerbEntry("GO_TO", True),
 )
 
 VERB_BY_NAME: dict[str, VerbEntry] = {v.name: v for v in VERBS}

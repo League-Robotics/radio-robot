@@ -40,8 +40,8 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
                       Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
                       Comms& comms, Telemetry& tlm, Drive& drive,
                       Configurator& configurator, Motion::Odometry& odom,
-                      Motion::Planner& planner, Preamble& preamble,
-                      const Devices::Clock& clock,
+                      Motion::Planner& planner, Motion::Navigator& navigator,
+                      Preamble& preamble, const Devices::Clock& clock,
                       Devices::Sleeper& sleeper)
     : bus_(bus),
       motorL_(motorL),
@@ -55,6 +55,7 @@ RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
       configurator_(configurator),
       odom_(odom),
       planner_(planner),
+      navigator_(navigator),
       preamble_(preamble),
       clock_(clock),
       sleeper_(sleeper) {}
@@ -100,6 +101,9 @@ void RobotLoop::routeCommand(const Cmd& cmd) {
       break;
     case msg::CommandEnvelope::CmdKind::WHEELS:
       handleWheels(cmd.env);
+      break;
+    case msg::CommandEnvelope::CmdKind::GO_TO:
+      handleGoto(cmd.env);
       break;
     case msg::CommandEnvelope::CmdKind::STOP:
       handleStop(cmd.env);
@@ -207,6 +211,16 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
   // on the requested one. When the OTOS is measuring heading the loop is
   // closed on optical truth, and pre-distorting the target would just make it
   // stop at the wrong place -- accurately.
+  //
+  // 135-004 "Landmine 3": Motion::Navigator's own pivots (SUC-004) never
+  // reach this correction at all -- they are issued internally via
+  // Planner::move(), never through handleMove()/this wire-command path.
+  // This is correct, not an oversight: a Navigator pivot only ever
+  // happens with OTOS connected (handleGoto()'s own gate, above), exactly
+  // the condition under which this correction is already a no-op here.
+  // See Navigator::issuePivotMove() (navigator.cpp) for the pivot-side
+  // half of this same reasoning -- do not add this correction to that
+  // path.
   if (m.kind == Motion::Move::Kind::Angle && !state_.otos.present) {
     const bool positive =
         (m.velocityKind == Motion::Move::VelocityKind::Twist)
@@ -224,6 +238,11 @@ void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
     tlm_.ack(env.corr_id, 0);
     return;
   }
+
+  // 135-004 ownership rule: MOVE cancels an active goto -- no completion
+  // ack, preempted, not completed -- before proceeding. cancel() is a
+  // harmless no-op when no goto is active.
+  navigator_.cancel();
 
   drive_.takeover();
   const bool accepted = planner_.move(m, move.replace);
@@ -266,6 +285,11 @@ void RobotLoop::handleWheels(const msg::CommandEnvelope& env) {
     return;
   }
 
+  // 135-004 ownership rule: WHEELS cancels an active goto -- no completion
+  // ack, preempted, not completed. cancel() is a harmless no-op when no
+  // goto is active.
+  navigator_.cancel();
+
   planner_.estop();  // Drive takes over motion (one owner at a time)
   drive_.command(wheels.v_left, wheels.v_right, wheels.duration, wheels.id,
                  state_.time.cycleStart);
@@ -281,8 +305,82 @@ void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
 void RobotLoop::handleEstop(const msg::CommandEnvelope& env) {
   drive_.estop();
   planner_.estop();
+  // 135-004: clears the Navigator's own target in the SAME cycle it
+  // clears the Planner's queue -- no completion ack, no fault ack, just
+  // gone, matching ESTOP's existing "halt now, everywhere" contract
+  // (.claude/rules/playfield-testing.md's "Halting" section).
+  navigator_.cancel();
   state_.wheelLeft.cmdVelocity = 0.0f;
   state_.wheelRight.cmdVelocity = 0.0f;
+  tlm_.ack(env.corr_id, 0);
+}
+
+// handleGoto() -- 135-004. ErrCode choice (this ticket's own open
+// question, resolved here): ERR_NOT_CONFIGURED (8) for BOTH the
+// config-completeness gate (matching every other handler in this file)
+// AND the OTOS-disconnected gate. Surveyed every other existing ErrCode
+// first (envelope.proto:48-60) -- ERR_NOT_LIVE/ERR_BUSY are config-push-
+// specific (Configurator::applyGroup()/install(MOTORS)), ERR_UNIMPLEMENTED
+// means "no live consumer" (false here -- GO_TO has one), ERR_BADARG/
+// ERR_RANGE describe a malformed COMMAND, not an unmet ENVIRONMENTAL
+// precondition. ERR_NOT_CONFIGURED's own doc comment -- "composition root
+// refused MOVE -- config-completeness gate not yet satisfied" -- is a
+// stretch (OTOS connectivity is a runtime sensor fact, not boot-time
+// config completeness) but the closest existing fit in SPIRIT ("a
+// precondition for accepting this motion command is not satisfied"), and
+// reusing an existing code beats adding a new one for this ticket's
+// narrow need.
+//
+// ROBOT-frame resolution mirrors src/tests/bench/goto_otos.py's own
+// relative-target resolution EXACTLY (that script's `main()`, the
+// `relative` branch): world_x/y = otos.x/y + dx*cos(h) -+ dy*sin(h), using
+// RAW, un-negated state_.otos.heading -- a pure geometric transform
+// within the self-consistent OTOS/world frame (ticket 008 settled that
+// this raw wire value tracks true-world CCW directly), UNRELATED to
+// NavigatorLimits::yawSign (which only ever applies at the Navigator's
+// own omega/Move-command boundary, never here).
+void RobotLoop::handleGoto(const msg::CommandEnvelope& env) {
+  if (!configured_) {
+    tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
+    return;
+  }
+
+  const msg::GoTo& goTo = env.cmd.go_to;
+  if (goTo.timeout <= 0.0f) {
+    tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_BADARG));
+    return;
+  }
+
+  // SUC-005's own explicit gate: a goto with no OTOS fix to navigate on is
+  // refused outright, never accepted-then-immediately-aborted.
+  if (!state_.otos.connected) {
+    tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
+    return;
+  }
+
+  Motion::GotoTarget target;
+  target.id = goTo.id;
+  target.tolerance = goTo.arrive;
+  target.timeout = static_cast<uint32_t>(goTo.timeout);
+  target.speed = goTo.speed;
+  if (goTo.frame == 1) {  // ROBOT -- resolve to world ONCE, here, at acceptance
+    const float c = std::cos(state_.otos.heading);
+    const float s = std::sin(state_.otos.heading);
+    target.x = state_.otos.x + goTo.x * c - goTo.y * s;
+    target.y = state_.otos.y + goTo.x * s + goTo.y * c;
+  } else {  // WORLD (frame == 0, and fail-open for any other value)
+    target.x = goTo.x;
+    target.y = goTo.y;
+  }
+
+  // 135-004 ownership rule: GO_TO cancels active Drive teleop, the same
+  // call handleMove() already makes. Does NOT also planner_.estop(): the
+  // Navigator's own first replace=true issue (navigator.cpp's tick())
+  // flushes whatever the Planner was doing within one cycle, the same
+  // way any other Move(replace=true) already preempts an in-flight one --
+  // no separate clear needed here.
+  drive_.takeover();
+  navigator_.start(target);
   tlm_.ack(env.corr_id, 0);
 }
 
@@ -451,6 +549,38 @@ void RobotLoop::publishMoveResult(const Motion::TickResult& moveResult) {
   }
 }
 
+// publishGotoResult() -- 135-004, NavResult's own counterpart to
+// publishMoveResult() above, called instead of it on a cycle a goto owns
+// Drive (cycle()'s own if/navigator_.active() branch). Mirrors both of
+// publishMoveResult()'s fault computations exactly, computed every cycle
+// (not just on completion) so neither flag can linger stale from an
+// earlier, unrelated ordinary Move for this goto's entire duration:
+// shapingDisabled reads planner_.active() directly (still meaningful --
+// Navigator's own internal segment Moves ARE ordinary Planner Moves);
+// moveTimeout mirrors NavResult's own completed/fault pair the same
+// "timeout signaled by flag, not ack_err" way an ordinary Move's own
+// completed/timedOut pair already does -- NavResult carries no err code
+// of its own (just Done vs Aborted), and reusing this EXISTING flag bit
+// for "this motion ended via a safety backstop, not a clean arrival"
+// avoids a new wire flag bit this ticket's own scope does not call for.
+//
+// Landmine 1 fix: this is the ONLY place a goto's completion reaches
+// tlm_.ack() -- the internal TickResult Navigator consumes every cycle
+// (inside its own tick(), navigator.cpp) never reaches this function or
+// publishMoveResult() at all, so an internal segment's own completion
+// (id == 0, every cycle a replace lands) can never fire a spurious ack(0).
+void RobotLoop::publishGotoResult(const Motion::NavResult& navResult) {
+  state_.health.moveTimeout = navResult.completed && navResult.fault;
+  state_.health.shapingDisabled = planner_.active() && !planner_.shaperConfigured();
+
+  tlm_.setLiveFlag(kFlagFaultMoveTimeout, state_.health.moveTimeout);
+  tlm_.setLiveFlag(kFlagFaultShapingDisabled, state_.health.shapingDisabled);
+
+  if (navResult.completed) {
+    tlm_.ack(navResult.id, 0);
+  }
+}
+
 void RobotLoop::cycle() {
   state_.time.cycleStart = markTime();  // [ms] pace anchor + wire `now`
   const uint64_t cycleStartUs = clock_.nowMicros();  // [us]
@@ -512,11 +642,25 @@ void RobotLoop::cycle() {
 
     comms_.sendTlmReply(tlmAction);
 
-    const Motion::TickResult moveResult = planner_.tick(state_);
-    planner_.update(state_);
+    // 135-004: exactly ONE of Navigator or the Planner may call
+    // planner_.tick()/update() this cycle -- navigator.h's own "one
+    // owner" doc comment (Navigator::tick() calls both ITSELF,
+    // internally). navigator_.active() is Navigator's own "does a goto
+    // currently own Drive" signal, already correct by this point in the
+    // schedule: handleGoto()/navigator_.start() (if a GO_TO arrived this
+    // cycle) already ran inside routeCommand(), earlier in cycle(), and
+    // navigator_.cancel() (if a MOVE/WHEELS/ESTOP preempted a goto
+    // instead) ran there too.
+    if (navigator_.active()) {
+      const Motion::NavResult navResult = navigator_.tick(state_);
+      publishGotoResult(navResult);
+    } else {
+      const Motion::TickResult moveResult = planner_.tick(state_);
+      planner_.update(state_);
+      publishMoveResult(moveResult);
+    }
     drive_.update(state_, state_.time.cycleStart);
     ackDriveCompletion();
-    publishMoveResult(moveResult);
   });
 }
 

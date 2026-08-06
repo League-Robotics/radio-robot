@@ -51,7 +51,17 @@ def speeds() -> list[float]:
 
 def sendVerified(proto, v, moveId) -> bool:
     """Command both wheels at v; return once the enqueue ack confirms it
-    landed. The DAPLink bridge drops ~20% of inbound packets."""
+    landed. The retry loop below exists for genuine, if modest, inbound
+    loss: ticket 135-001's measurement (2026-08-05, direct serial to
+    tovez, /dev/cu.usbmodem2121102) found 0% loss at a steady 20Hz/200-cmd
+    rate and only showed loss (~22-32%, run to run) under an unpaced
+    back-to-back burst (500+ cmd/s, far above any real bench-script rate)
+    -- with the firmware's own command-ring-full fault bit staying clear
+    throughout, so that burst loss is not firmware backpressure either.
+    See `src/tests/bench/command_loss_bench.py`'s own module docstring and
+    this sprint's ticket 001 Completion Notes for the full breakdown; this
+    SUPERSEDES the previously-cited, unsourced "DAPLink bridge drops ~20%
+    of inbound packets" figure."""
     for _ in range(5):
         corr = proto.wheels(v_left=v, v_right=v, duration=HOLD_MS,
                             move_id=moveId)

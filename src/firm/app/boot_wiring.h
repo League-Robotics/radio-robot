@@ -73,6 +73,7 @@
 #include "devices/motor_armor.h"
 #include "devices/nezha_motor.h"
 #include "devices/otos.h"
+#include "motion/navigator/navigator.h"
 #include "motion/odometry.h"
 #include "motion/planner/planner.h"
 
@@ -146,6 +147,36 @@ struct BootOverrides {
   // sim_harness_configure_harness.cpp asserts the sim end of it, so the
   // next composition-root refactor breaks a test instead of a tour.
   const Config::WheelCorrection* wheelCorrection = nullptr;
+
+  // navigatorYawSign -- the FIFTH genuinely-justified override (135-004),
+  // the exact same shape of argument as otosConfig/wheelCorrection above:
+  // a real robot's measured hardware quirk baked into the active robot
+  // JSON has no counterpart to correct in a plant that cannot represent
+  // the quirk at all.
+  //
+  // Motion::NavigatorLimits::yawSign (src/motion/navigator/arc_solver.h)
+  // relates commanded Move::omega to true-world CCW -- a REAL drivetrain
+  // fact (measured, e.g. src/tests/bench/goto_otos.py's own YAW_SIGN),
+  // baked per-robot (data/robots/tovez.json bakes -1.0 for tovez). Every
+  // sim plant this composition root can construct (TestSim::SimPlant/
+  // WheelPlant here, TestNav::IdealPlant in the standalone navigator
+  // ctest) reads commanded wheel velocities directly as its own ground
+  // truth, with no independent, camera-equivalent reference to disagree
+  // with -- structurally, not by omission, the same way OtosPlant cannot
+  // represent a real chip's mounting lever-arm error. Baking a nonzero-
+  // sign correction against such a plant does not compensate for a
+  // quirk the plant doesn't have; it makes Navigator's own commanded
+  // omega WRONG relative to that plant's one self-consistent convention,
+  // and the closed loop diverges instead of converging (measured
+  // directly while deriving this fix -- see navigator.h's own
+  // NavigatorLimits::yawSign doc comment for the full derivation).
+  //
+  // Identity (+1.0) is therefore the only correct value here, for the
+  // same structural reason identity is the only correct wheelCorrection
+  // for TestSim::WheelPlant. The hardware path is untouched -- main.cpp
+  // passes no override, so a real robot still gets its measured sign
+  // from the file.
+  const float* navigatorYawSign = nullptr;
 };
 
 // RobotGraph -- owns the WHOLE App::/Motion:: object graph: both drive
@@ -206,6 +237,7 @@ class RobotGraph {
   Drive& drive() { return drive_; }
   Motion::Odometry& odometry() { return odom_; }
   Motion::Planner& planner() { return planner_; }
+  Motion::Navigator& navigator() { return navigator_; }
   Configurator& configurator() { return configurator_; }
   RobotLoop& robotLoop() { return robotLoop_; }
   const RobotLoop& robotLoop() const { return robotLoop_; }
@@ -302,6 +334,20 @@ class RobotGraph {
   Devices::Otos& otos_;
 
   Motion::Planner planner_;
+
+  // navigatorLimits_/navigator_ (135-004): declared AFTER planner_ (navigator_
+  // holds a Planner& to it) and BEFORE configurator_/robotLoop_ (both need
+  // references into these). navigatorLimits_ starts default-constructed
+  // (NavigatorLimits' own struct defaults, arc_solver.h) -- the REAL,
+  // robot-JSON-baked values land via App::configureNavigator(), called from
+  // configurator_.install() at the end of this constructor's body, exactly
+  // like every other live group's boot-time fan-out (configurator.cpp's own
+  // install()). Motion::Navigator holds navigatorLimits_ by const
+  // reference (navigator.h's own design) so that later write is visible to
+  // the very next tick() with no separate re-apply step.
+  Motion::NavigatorLimits navigatorLimits_;
+  Motion::Navigator navigator_;
+
   Preamble preamble_;
   Configurator configurator_;
   RobotLoop robotLoop_;

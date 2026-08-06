@@ -122,6 +122,17 @@
     "jerk_max": 1500.0,
     "yaw_jerk_max": 30.0
   },
+  "navigator": {
+    "speed": 150.0,
+    "max_wheel_step": 125.0,
+    "behind_angle": 1.5707963267948966,
+    "turn_first_angle": 0.8726646259971648,
+    "approach_radius": 0.0,
+    "approach_speed": 0.0,
+    "default_arrival_tolerance": 100.0,
+    "yaw_sign": -1.0,
+    "_navigator_note": "135-004: seeded from Motion::NavigatorLimits' own compile-time defaults (src/motion/navigator/arc_solver.h, tickets 002/003) -- speed/max_wheel_step/behind_angle/turn_first_angle/approach_radius/approach_speed/default_arrival_tolerance are the SAME values that struct already shipped with, now sourced from this file instead of a C++ default (configuration-discipline.md). approach_radius/approach_speed=0 leaves the near-target speed taper disabled, matching every existing ctest/bench script. track_width is deliberately NOT a key here -- NavigatorLimits::trackWidth is derived from this file's own geometry.trackwidth/rotational_slip (Config::Robot::effectiveTrackWidth()), never a second, independently-tunable copy of the same physical fact. yaw_sign=-1.0 is NOT a placeholder: it is src/tests/bench/goto_otos.py's own measured YAW_SIGN (\"commanded omega is opposite to world CCW (measured)\", and the same figure otos_scale_run.py/turn_accuracy.py/otos_drift.py/goto_world.py independently agree on for this robot) -- see NavigatorLimits::yawSign's own doc comment (navigator.h) for the full derivation of why Motion::Navigator needs this correction and why no sim/ctest plant can validate it. Ticket 006's own bench pass is the re-verification of this SAME already-measured fact against the new GO_TO wire arm, not a fresh discovery."
+  },
   "otos": {
     "offset_x": -47.7,
     "offset_y": 3.5,
