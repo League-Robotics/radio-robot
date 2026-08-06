@@ -3,7 +3,55 @@ status: pending
 filed: 2026-07-27
 filed_by: team-lead (stakeholder directive)
 tickets: []
+superseded_by:
+  - '135-002'
+  - '135-003'
+  - '135-006'
+  - '135-007'
 ---
+
+> **SUPERSEDED (2026-08-06, sprint 135 ticket 007).** Sprint 135's
+> `Motion::Navigator` (ticket 003, `src/motion/navigator/navigator.cpp`)
+> reads `state.otos.{x,y,heading}` on EVERY internal tick (50 ms) while a
+> `GO_TO` is active — including mid-motion, the exact regime this issue's
+> stakeholder directive said to stop integrating OTOS in ("we are not
+> going to try to integrate the optical flow odometer while we are
+> moving"). This is a deliberate, documented design decision (sprint.md's
+> own Architecture Overview, "Navigation policy" responsibility; Open
+> Questions item 6 of this very issue — "Does anything still need OTOS
+> mid-motion?" — is answered YES, definitively, by this sprint), not an
+> oversight: closed-loop point-target navigation cannot steer a live arc
+> toward a target without a fresh pose every cycle while moving, so
+> "sample only at rest" and "drive a continuously re-solving GO_TO" are
+> mutually exclusive, and this sprint chose the latter.
+>
+> Hardware-verified, not just designed: ticket 006's bench pass on `tovez`
+> (direct serial) ran a forward `GO_TO`, a target-behind `GO_TO`
+> (stop-then-pivot-then-arc), and a mid-goto replacement, all completing
+> cleanly with correct encoder motion and clean ack-ring behavior — the
+> pivot phase's own stop condition explicitly reads OTOS heading
+> mid-motion (ticket 006 Completion Notes, "Target-behind GO_TO" section:
+> "per `Motion::Navigator`'s design, the pivot's own stop condition reads
+> OTOS heading"). The stand's own OTOS-frozen limitation (wheels off the
+> ground never translate/rotate the chassis) meant the pivot-to-arc PHASE
+> TRANSITION specifically was not observed that session, but the
+> mid-motion OTOS READ path itself was exercised and behaved correctly
+> throughout every scenario run.
+>
+> This issue's own concerns (bus/loop-timing cost, measurement quality,
+> "corrections matter at leg boundaries") were about `Motion::Planner`'s
+> pre-existing continuous OTOS fusion into `Motion::StateEstimator`
+> (`src/motion/state_estimator.h`) — that fusion path is UNCHANGED by
+> sprint 135 and this issue's analysis of it is not wrong, merely
+> superseded in scope: `Motion::Navigator` reads `state.otos` directly for
+> its own arc-solving (bypassing `StateEstimator` entirely, per
+> sprint.md's own Out of Scope: "no change to how `Motion::Planner`'s
+> internal pose estimate is computed"), a second, independent OTOS
+> consumer this issue never anticipated. Kept here for its per-module
+> history of the ORIGINAL fusion-path concern; do not resurrect the
+> "stop integrating while moving" directive against `Motion::Navigator`
+> without a new decision that reconciles it with closed-loop goto
+> navigation.
 
 # Sample the OTOS only at rest — stop integrating optical flow during motion
 

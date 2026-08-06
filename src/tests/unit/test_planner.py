@@ -1,171 +1,100 @@
-"""src/tests/unit/test_planner.py -- ticket 127-006.
+"""src/tests/unit/test_planner.py -- ticket 127-006 originally; reshaped
+135-007.
 
 Pure, synthetic-input unit tests for ``robot_radio.pathplan.planner`` --
-the throttled-replacement decision, the give-up/termination logic, the
-``Move.id`` allocator, and ``gotoRobot()``'s composition through
-``gotoWorld()`` (design issue T5). No hardware, no sim binary, no camera
-daemon, no serial port -- the full end-to-end control loop (telemetry in,
-``move_twist()`` out) is exercised separately at the sim tier
-(``src/tests/sim/test_pathplan_goto_convergence.py``, real ``SimLoop``),
-per this ticket's own Testing section.
+the give-up/termination logic, the id allocator, the ack-verified
+``GO_TO`` send/retry machinery, and ``gotoWorld()``/``gotoRobot()``/
+``followPath()`` as thin ``GO_TO`` senders. No hardware, no sim binary, no
+camera daemon, no serial port -- the full end-to-end loop against a REAL
+firmware ``Motion::Navigator`` is exercised separately at the sim tier
+(``src/tests/sim/test_pathplan_goto_convergence.py``, real ``SimLoop``).
+
+History (135-007): before this ticket, ``gotoWorld()``/``gotoRobot()`` ran
+their own arc-solving/replace-throttling loop and this file tested that
+loop directly -- ``_shouldReplace()`` (the material-change throttle),
+``ProgressCheck`` (the liveness backstop), ``_moveTimeoutFor()``
+(per-move timeout derivation), ``_targetBehindReason()`` (the host-side
+target-behind guard's own give-up message), and ``_sendVerifiedTwist()``
+(the ``move_twist()`` ack-retry sender). All of those are DELETED
+alongside the functions/classes they served -- ``Motion::Navigator`` now
+owns material-change throttling, liveness, per-move timeouts, and
+bearing/pivot handling entirely firmware-side (ctest-covered by
+`src/motion/navigator/tests/navigator_test.cpp`, tickets 002-003) -- and
+this file's own coverage of them is deleted, not left red, per the
+ticket's own instruction. What survives, tests the SAME thing it always
+did (give-up is explicit and reachable; the id allocator is strictly
+monotonic; a frame drain dispatches correctly; the geofence is checked
+inside the time-advance window; an ack-verified send retries correctly on
+loss/ERR_FULL/a non-retryable NACK); what is NEW covers
+``gotoWorld()``/``gotoRobot()`` sending a ``GO_TO`` directly and waiting
+for its one completion ack, and ``followPath()`` streaming
+``pursuitTarget()``'s picks as ``GO_TO`` commands on a throttled cadence.
 
 Covers (ticket acceptance criteria):
-  1. ``gotoRobot()`` composes through ``gotoWorld()`` -- exactly one
-     control-loop implementation, confirmed by mocking ``gotoWorld()``
-     and checking it is called exactly once with the correctly
-     world-transformed target.
-  2. Throttled replacement: ``_shouldReplace()`` sends materially
-     different solutions and suppresses unchanged ones; a synthetic
-     multi-cycle sequence shows fewer sends than "send every cycle
-     unconditionally".
-  3. The termination-tolerance/give-up constant
-     (``TERMINATION_TOLERANCE``) is isolated at one PROVISIONAL,
-     commented site.
-  4. Give-up is explicit and reachable: ``_giveUpReason()`` (iteration
-     and timeout caps) and ``_targetBehindReason()`` (the solver's
-     target-behind guard) both always report WHY.
-  5. ``MoveIdAllocator`` is strictly monotonic, never emits 0.
-  6. ``_advance()`` checks the geofence INSIDE its own time-advance
+  1. Give-up is explicit and reachable: ``_giveUpReason()`` (iteration and
+     timeout caps) always reports WHY.
+  2. ``MoveIdAllocator`` is strictly monotonic, never emits 0 -- now the
+     shared id source for BOTH Move.id and GoTo.id.
+  3. ``_advance()`` checks the geofence INSIDE its own time-advance
      window, not between segments.
-  7. ``followPath()`` (out-of-process, 2026-07-30, this IS ticket 008's own
-     algorithm): a straight multi-waypoint run reaches every waypoint via
-     pass-through and succeeds at the terminal one; a target that is
-     permanently behind and NEVER sent anything still terminates cleanly
-     via ``GiveUpLimits`` (not a bearing-snapshot verdict -- two earlier
-     approaches that used one were tried and rejected, see the module-level
-     comment above ``followPath()``'s own solve call); a target that goes
-     behind AFTER a real send exists gets that same last-known-good arc
-     RESENT while genuinely stalled, rather than leaving the vehicle idle
-     for the rest of the give-up budget (the measured regression that fix
-     addresses). ``_lookaheadFloorFor()``'s own derivation is locked
-     against regression.
+  4. ``_readFrames()`` dispatches to whichever backend proto._conn
+     exposes.
+  5. ``_sendVerifiedGoTo()`` -- ack verification and retry for the
+     ``GO_TO`` send, including the non-retryable-NACK and
+     exhausted-retries cases.
+  6. ``gotoWorld()``/``gotoRobot()`` send ONE ``GO_TO`` (frame WORLD/ROBOT
+     respectively) with ack-verified retry, then wait for the single
+     completion ack -- covering success, an aborted goto, a never-acked
+     enqueue, and a give-up while waiting; ``gotoRobot()`` needs no
+     pre-existing ``WorldPose`` fix (the firmware resolves the robot-frame
+     offset itself).
+  7. ``followPath()``: a straight multi-waypoint run reaches every
+     waypoint and succeeds at the terminal one; ``GiveUpLimits`` fires
+     explicitly for a genuinely stalled robot; every cycle sends a fresh
+     ``GO_TO`` unconditionally (no throttle -- see ``planner.py``'s own
+     module-level comment above ``_lookaheadFor()`` for the measured
+     reason a wall-clock send throttle was tried and reverted).
 """
 
 from __future__ import annotations
 
 import dataclasses
-import math
 import time
 
 import pytest
 
 from robot_radio.nav.pose import Pose
-from robot_radio.pathplan.solver import ArcSolution, SolverLimits
 from robot_radio.pathplan.world_pose import WorldPose
-from robot_radio.robot.protocol import AckEntry, EncoderReading, TLMFrame
+from robot_radio.robot.protocol import (
+    GOTO_FRAME_ROBOT,
+    GOTO_FRAME_WORLD,
+    AckEntry,
+    EncoderReading,
+    TLMFrame,
+)
 
-import robot_radio.pathplan.planner as planner_mod
 from robot_radio.pathplan.planner import (
-    TERMINATION_TOLERANCE,
     AckRetry,
     FollowPathResult,
     GiveUpLimits,
     GotoResult,
     MoveIdAllocator,
     MoveRejected,
-    ProgressCheck,
-    ReplaceThreshold,
     _advance,
     _ERR_FULL,
     _giveUpReason,
     _lookaheadFor,
-    _moveTimeoutFor,
     _readFrames,
     _recordAcks,
-    _sendVerifiedTwist,
-    _shouldReplace,
-    _targetBehindReason,
+    _sendVerifiedGoTo,
     followPath,
     gotoRobot,
     gotoWorld,
 )
 
 
-def _solution(omega: float, arcLength: float, stop: bool = False) -> ArcSolution:
-    return ArcSolution(v_x=150.0, omega=omega, arcLength=arcLength, stop=stop)
-
-
 # ---------------------------------------------------------------------------
-# 1. TERMINATION_TOLERANCE is the one, isolated, provisional constant.
-# ---------------------------------------------------------------------------
-
-
-def test_termination_tolerance_is_provisional_and_positive():
-    # Locks the constant's existence/positivity as a regression check --
-    # the "isolated at one named, commented site" property is structural
-    # (there is exactly one definition, in this module) and is checked by
-    # code inspection/grep per the ticket's own acceptance criterion, not
-    # re-derived as a runtime assertion here.
-    assert TERMINATION_TOLERANCE > 0.0
-    # Chosen from the design issue's actuation-delay analysis (>=100 mm
-    # carrot distance at ~150 ms actuation delay) -- not an arbitrary guess.
-    assert TERMINATION_TOLERANCE == 100.0
-
-
-# ---------------------------------------------------------------------------
-# 2. Throttled replacement -- _shouldReplace().
-# ---------------------------------------------------------------------------
-
-
-def test_should_replace_true_on_first_solve():
-    assert _shouldReplace(None, _solution(0.1, 200.0), 0.05, 15.0) is True
-
-
-def test_should_replace_false_when_unchanged():
-    lastSent = _solution(0.1, 200.0)
-    candidate = _solution(0.1, 200.0)
-    assert _shouldReplace(lastSent, candidate, 0.05, 15.0) is False
-
-
-def test_should_replace_false_when_change_below_both_thresholds():
-    lastSent = _solution(0.10, 200.0)
-    candidate = _solution(0.12, 205.0)  # +0.02 rad/s, +5 mm -- both under threshold
-    assert _shouldReplace(lastSent, candidate, 0.05, 15.0) is False
-
-
-def test_should_replace_true_when_omega_changes_beyond_threshold():
-    lastSent = _solution(0.10, 200.0)
-    candidate = _solution(0.20, 200.0)  # +0.10 rad/s > 0.05 threshold
-    assert _shouldReplace(lastSent, candidate, 0.05, 15.0) is True
-
-
-def test_should_replace_true_when_arc_length_changes_beyond_threshold():
-    lastSent = _solution(0.10, 200.0)
-    candidate = _solution(0.10, 220.0)  # +20 mm > 15 mm threshold
-    assert _shouldReplace(lastSent, candidate, 0.05, 15.0) is True
-
-
-def test_replacement_rate_drops_when_solution_is_not_moving_materially():
-    """The ticket's own acceptance criterion, directly: a sequence with
-    several materially-unchanged cycles sends far fewer replacements than
-    sending unconditionally on every cycle."""
-    sequence = [
-        _solution(0.30, 500.0),   # 1: first solve -- always sent
-        _solution(0.30, 500.0),   # 2: identical -- suppressed
-        _solution(0.30, 498.0),   # 3: tiny drift -- suppressed
-        _solution(0.30, 495.0),   # 4: tiny drift -- suppressed
-        _solution(0.05, 300.0),   # 5: real change -- sent
-        _solution(0.05, 299.0),   # 6: tiny drift -- suppressed
-        _solution(0.05, 298.0),   # 7: tiny drift -- suppressed
-        _solution(0.00, 100.0),   # 8: real change -- sent
-    ]
-    omegaThreshold, arcLengthThreshold = 0.05, 15.0
-
-    throttledSends = 0
-    lastSent = None
-    for candidate in sequence:
-        if _shouldReplace(lastSent, candidate, omegaThreshold, arcLengthThreshold):
-            throttledSends += 1
-            lastSent = candidate
-
-    unconditionalSends = len(sequence)  # "send every cycle" baseline
-
-    assert throttledSends == 3
-    assert throttledSends < unconditionalSends
-
-
-# ---------------------------------------------------------------------------
-# 3. Termination/give-up logic -- _giveUpReason() / _targetBehindReason().
+# 1. Termination/give-up logic -- _giveUpReason().
 # ---------------------------------------------------------------------------
 
 
@@ -197,15 +126,9 @@ def test_give_up_reason_is_never_silent():
     assert isinstance(reason, str)
 
 
-def test_target_behind_reason_reports_the_bearing_explicitly():
-    reason = _targetBehindReason(math.radians(150.0))
-    assert "behind" in reason
-    assert "150.0" in reason
-    assert "out of scope" in reason
-
-
 # ---------------------------------------------------------------------------
-# 4. MoveIdAllocator -- strictly monotonic, never 0.
+# 2. MoveIdAllocator -- strictly monotonic, never 0. Shared by Move.id and
+#    GoTo.id alike since 135-007; behavior/API unchanged.
 # ---------------------------------------------------------------------------
 
 
@@ -237,63 +160,7 @@ def test_move_id_allocator_never_emits_zero():
 
 
 # ---------------------------------------------------------------------------
-# 5. gotoRobot() composes through gotoWorld() -- one implementation.
-# ---------------------------------------------------------------------------
-
-
-def _tlmFrame(x_mm: float, y_mm: float, heading_cdeg: float) -> TLMFrame:
-    """A synthetic, hand-decoded TLMFrame at REST (zero twist, so
-    WorldPose's frame-age extrapolation is a no-op regardless of real
-    wall-clock elapsed time -- deterministic, matches
-    test_world_pose.py's own convention)."""
-    return TLMFrame(
-        t=1000, pose=(x_mm, y_mm, heading_cdeg), twist=(0, 0), recvTime=time.monotonic(),
-        enc_left=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
-        enc_right=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
-    )
-
-
-def test_goto_robot_composes_through_goto_world(monkeypatch):
-    worldPose = WorldPose()
-    # Current world pose: (100 cm, 50 cm), heading +90 deg (east=0, CCW+).
-    worldPose.ingest(_tlmFrame(x_mm=1000.0, y_mm=500.0, heading_cdeg=9000.0))
-
-    captured = {}
-
-    def _fakeGotoWorld(proto, wp, x, y, theta=None, **kwargs):
-        captured["proto"] = proto
-        captured["worldPose"] = wp
-        captured["x"] = x
-        captured["y"] = y
-        captured["theta"] = theta
-        captured["kwargs"] = kwargs
-        return GotoResult(success=True, reason="stub", finalPose=None, iterations=0, sent=0)
-
-    monkeypatch.setattr(planner_mod, "gotoWorld", _fakeGotoWorld)
-
-    sentinelProto = object()
-    sentinelLimits = object()
-    result = gotoRobot(sentinelProto, worldPose, x=10.0, y=0.0, limits=sentinelLimits)
-
-    assert result.success is True  # the stub's own result, proving gotoRobot returned it verbatim
-    assert captured["proto"] is sentinelProto
-    assert captured["worldPose"] is worldPose
-    # Robot-frame (10, 0) rotated by +90 deg heading and translated by
-    # (100, 50) -> (100, 60) -- hand-verified tangent-circle-free rotation.
-    assert math.isclose(captured["x"], 100.0, abs_tol=1e-9)
-    assert math.isclose(captured["y"], 60.0, abs_tol=1e-9)
-    assert captured["theta"] is None
-    assert captured["kwargs"]["limits"] is sentinelLimits
-
-
-def test_goto_robot_raises_without_a_world_pose_yet():
-    worldPose = WorldPose()  # never ingest()-ed -- no current pose
-    with pytest.raises(RuntimeError):
-        gotoRobot(object(), worldPose, x=10.0, y=0.0, limits=object())
-
-
-# ---------------------------------------------------------------------------
-# 6. _readFrames() dispatches to whichever backend proto._conn exposes.
+# 3. _readFrames() dispatches to whichever backend proto._conn exposes.
 # ---------------------------------------------------------------------------
 
 
@@ -344,7 +211,7 @@ def test_read_frames_falls_back_to_the_protocol_level_reader():
 
 
 # ---------------------------------------------------------------------------
-# 7. _advance() checks the geofence INSIDE its own time-advance window.
+# 4. _advance() checks the geofence INSIDE its own time-advance window.
 # ---------------------------------------------------------------------------
 
 
@@ -389,55 +256,21 @@ def test_advance_never_checks_a_none_geofence():
 
 
 # ---------------------------------------------------------------------------
-# 8. OOP fix (2026-07-30): _moveTimeoutFor() -- per-move timeout derivation.
-# ---------------------------------------------------------------------------
-
-
-def test_move_timeout_scales_with_arc_length():
-    short = _moveTimeoutFor(arcLength=100.0, speed=150.0)
-    long = _moveTimeoutFor(arcLength=2000.0, speed=150.0)
-    assert long > short
-
-
-def test_move_timeout_has_a_floor_for_a_tiny_move():
-    # A near-zero arcLength still gets a floor big enough to cover an
-    # actual accel/decel ramp and one ack round trip, never ~0ms.
-    timeout = _moveTimeoutFor(arcLength=1.0, speed=150.0)
-    assert timeout >= 3000.0
-
-
-def test_move_timeout_is_capped_for_a_huge_arc_length():
-    # A pathological/huge arcLength (e.g. an unreachable, far-off-field
-    # solve) must not be able to request an enormous timeout that would
-    # itself blow past this loop's own give-up budget.
-    timeout = _moveTimeoutFor(arcLength=1_000_000.0, speed=150.0)
-    assert timeout == planner_mod._MOVE_TIMEOUT_CAP
-
-
-def test_move_timeout_guards_against_zero_speed():
-    # A misconfigured/zero speed must not raise ZeroDivisionError.
-    timeout = _moveTimeoutFor(arcLength=250.0, speed=0.0)
-    assert timeout > 0.0
-
-
-# ---------------------------------------------------------------------------
-# 9. OOP fix: _sendVerifiedTwist() -- ack verification and retry.
+# 5. _sendVerifiedGoTo() -- ack verification and retry, the GO_TO analogue
+#    of the deleted move_twist()-era _sendVerifiedTwist().
 # ---------------------------------------------------------------------------
 
 
 class _FakeAckFrame:
-    """The minimal frame shape `_sendVerifiedTwist()`/`_recordAcks()` need
-    -- just `.acks`, no pose/encoder fields (this test drives the ack
-    state machine in isolation from `WorldPose`/pose tracking, which
-    `test_progress_check_forces_resend_when_robot_is_stalled()` below
-    covers separately via full `TLMFrame`s)."""
+    """The minimal frame shape `_sendVerifiedGoTo()`/`_recordAcks()` need
+    -- just `.acks`, no pose/encoder fields."""
 
     def __init__(self, acks):
         self.acks = acks
 
 
 class _NullWorldPose:
-    """A no-op stand-in for `WorldPose` -- `_sendVerifiedTwist()` calls
+    """A no-op stand-in for `WorldPose` -- `_sendVerifiedGoTo()` calls
     `.ingest()` on every frame it drains; these tests don't care about
     pose tracking, only about the ack state machine."""
 
@@ -446,14 +279,14 @@ class _NullWorldPose:
 
 
 class _AckScheduleProto:
-    """Fakes `NezhaProtocol` for `_sendVerifiedTwist()` tests: each
-    `move_twist()` call is one "attempt" (1-based); `ackByAttempt` maps
-    attempt number -> `(ok, err_code)` to hand back (as an `AckEntry`
-    matching that attempt's own assigned corr_id) on every subsequent
+    """Fakes `NezhaProtocol` for `_sendVerifiedGoTo()` tests: each
+    `go_to()` call is one "attempt" (1-based); `ackByAttempt` maps attempt
+    number -> `(ok, err_code)` to hand back (as an `AckEntry` matching
+    that attempt's own assigned corr_id) on every subsequent
     `read_pending_binary_tlm_frames()` poll, until superseded by the next
-    attempt's own send. An attempt number absent from `ackByAttempt`
-    never acks at all within its window -- exercises the retry-on-no-ack
-    path distinctly from the retry-on-ERR_FULL path."""
+    attempt's own send. An attempt number absent from `ackByAttempt` never
+    acks at all within its window -- exercises the retry-on-no-ack path
+    distinctly from the retry-on-ERR_FULL path."""
 
     _conn = None
 
@@ -462,11 +295,11 @@ class _AckScheduleProto:
         self._attempt = 0
         self._nextCorr = 100
         self._currentCorr = None
-        self.moveIds = []
+        self.gotoIds = []
 
-    def move_twist(self, *, move_id, **kwargs):
+    def go_to(self, x, y, *, frame, speed, arrive, timeout, goto_id):
         self._attempt += 1
-        self.moveIds.append(move_id)
+        self.gotoIds.append(goto_id)
         self._currentCorr = self._nextCorr
         self._nextCorr += 1
         return self._currentCorr
@@ -479,43 +312,44 @@ class _AckScheduleProto:
         return [_FakeAckFrame([AckEntry(corr_id=self._currentCorr, ok=ok, err_code=errCode)])]
 
 
-def _verify(proto, *, moveId=1, maxAttempts=4, ackTimeout=0.03, cyclePeriod=0.01):
+def _verify(proto, *, gotoId=1, maxAttempts=4, ackTimeout=0.03, cyclePeriod=0.01):
     ackSeen: "dict[int, object]" = {}
-    return _sendVerifiedTwist(
-        proto, _NullWorldPose(), None, ackSeen, moveId=moveId,
-        kwargs=dict(v_x=150.0, v_y=0.0, omega=0.0, stop_distance=250.0, timeout=3000.0),
+    return _sendVerifiedGoTo(
+        proto, _NullWorldPose(), None, ackSeen, gotoId=gotoId,
+        x=300.0, y=0.0, frame=GOTO_FRAME_WORLD, speed=150.0, arrive=0.0, timeout=3000.0,
         cyclePeriod=cyclePeriod, ackRetry=AckRetry(maxAttempts=maxAttempts, ackTimeout=ackTimeout))
 
 
-def test_send_verified_twist_acked_on_first_attempt():
+def test_send_verified_go_to_acked_on_first_attempt():
     proto = _AckScheduleProto({1: (True, 0)})
     acked, attempts = _verify(proto)
     assert acked is True
     assert attempts == 1
-    assert proto.moveIds == [1]  # exactly one wire attempt -- no retry needed
+    assert proto.gotoIds == [1]  # exactly one wire attempt -- no retry needed
 
 
-def test_send_verified_twist_retries_on_lost_ack_reusing_the_same_move_id():
+def test_send_verified_go_to_retries_on_lost_ack_reusing_the_same_goto_id():
     # Attempt 1 never acks at all (simulates a dropped inbound packet);
     # attempt 2 acks ok.
     proto = _AckScheduleProto({2: (True, 0)})
-    acked, attempts = _verify(proto, moveId=7)
+    acked, attempts = _verify(proto, gotoId=7)
     assert acked is True
     assert attempts == 2
-    # Both wire attempts of ONE logical send reuse the SAME Move.id -- the
-    # firmware's dedup ring is what makes that retry idempotent
-    # (RobotLoop::handleMove()'s own documented contract).
-    assert proto.moveIds == [7, 7]
+    # Both wire attempts of ONE logical send reuse the SAME GoTo.id -- see
+    # _sendVerifiedGoTo()'s own docstring for why that is still correct
+    # even though (unlike Move.id) there is no firmware dedup ring behind
+    # it: a retry just restarts navigation toward the identical target.
+    assert proto.gotoIds == [7, 7]
 
 
-def test_send_verified_twist_retries_on_err_full():
+def test_send_verified_go_to_retries_on_err_full():
     proto = _AckScheduleProto({1: (False, _ERR_FULL), 2: (True, 0)})
     acked, attempts = _verify(proto)
     assert acked is True
     assert attempts == 2
 
 
-def test_send_verified_twist_raises_on_non_retryable_err():
+def test_send_verified_go_to_raises_on_non_retryable_err():
     _ERR_BADARG = 2  # envelope.proto ErrCode.ERR_BADARG
     proto = _AckScheduleProto({1: (False, _ERR_BADARG)})
     with pytest.raises(MoveRejected):
@@ -523,15 +357,15 @@ def test_send_verified_twist_raises_on_non_retryable_err():
     # A non-retryable NACK fails LOUDLY on the first bad ack -- it must
     # not burn the rest of the retry budget on a command that can never
     # succeed.
-    assert proto.moveIds == [1]
+    assert proto.gotoIds == [1]
 
 
-def test_send_verified_twist_exhausts_retries_and_reports_unacked():
+def test_send_verified_go_to_exhausts_retries_and_reports_unacked():
     proto = _AckScheduleProto({})  # never acks at all
     acked, attempts = _verify(proto, maxAttempts=3)
     assert acked is False
     assert attempts == 3
-    assert proto.moveIds == [1, 1, 1]  # every retry of ONE send reuses the id
+    assert proto.gotoIds == [1, 1, 1]  # every retry of ONE send reuses the id
 
 
 def test_record_acks_folds_every_frame_ring_into_the_shared_dict():
@@ -546,99 +380,232 @@ def test_record_acks_folds_every_frame_ring_into_the_shared_dict():
 
 
 # ---------------------------------------------------------------------------
-# 10. OOP fix: gotoWorld() integration -- ProgressCheck forces a resend
-#     when the robot is stalled even though every send is acked ok.
+# 6. gotoWorld()/gotoRobot() -- thin GO_TO senders (135-007).
 # ---------------------------------------------------------------------------
 
 
-class _StallFakeProto:
-    """A `NezhaProtocol`-shaped fake for `gotoWorld()` integration tests:
-    the world pose it reports NEVER MOVES (simulating a stalled/deadband
-    move, or a genuinely stuck robot) while every `move_twist()` send is
-    acked OK immediately -- isolating `ProgressCheck`'s own forced-resend
-    behavior from `AckRetry`'s (covered directly above). This is the
-    exact shape of the OOP ticket's own measured failure: commands land
-    and ack fine, the robot just never moves, and the old throttle-only
-    loop sent exactly once over 264 iterations because the (unmoving)
-    solution never looked "materially different" from the last one sent.
-    """
+def _tlmFrame(x_mm: float, y_mm: float, heading_cdeg: float, acks=()) -> TLMFrame:
+    """A synthetic, hand-decoded TLMFrame at REST (zero twist, so
+    WorldPose's frame-age extrapolation is a no-op regardless of real
+    wall-clock elapsed time -- deterministic)."""
+    return TLMFrame(
+        t=1000, pose=(x_mm, y_mm, heading_cdeg), twist=(0, 0), recvTime=time.monotonic(),
+        enc_left=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
+        enc_right=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
+        acks=list(acks))
 
-    _conn = None  # no connection-level reader -- _readFrames() falls back to this object's own
 
-    def __init__(self, x_mm: float, y_mm: float, heading_cdeg: float):
+class _GotoFakeProto:
+    """`NezhaProtocol`-shaped fake for `gotoWorld()`/`gotoRobot()`
+    integration tests. Records every `go_to()` call; hands back an
+    ENQUEUE ack on the read immediately following each call (unless
+    `ackEnqueue` is False, simulating a lost enqueue ack entirely that
+    never recovers), and -- keyed on whatever `goto_id` the call under
+    test actually used, captured from the call itself rather than
+    hardcoded test-side -- a single COMPLETION ack after
+    `completeAfterReads` more reads (`None` means never, for a
+    give-up-while-waiting test)."""
+
+    _conn = None
+
+    def __init__(self, *, ackEnqueue: bool = True, completeAfterReads: "int | None" = 2,
+                 completeOk: bool = True, completeErrCode: int = 0,
+                 x_mm: float = 0.0, y_mm: float = 0.0, heading_cdeg: float = 0.0):
+        self._ackEnqueue = ackEnqueue
+        self._completeAfterReads = completeAfterReads
+        self._completeOk = completeOk
+        self._completeErrCode = completeErrCode
         self._x_mm = x_mm
         self._y_mm = y_mm
         self._heading_cdeg = heading_cdeg
-        self._nextCorr = 1
-        self._pendingAck = None
-        self.moveIds: "list[int]" = []
+        # Starts far above any goto_id these tests allocate (small,
+        # MoveIdAllocator-default-start values) -- corr_id and goto_id are
+        # DIFFERENT key spaces on the real wire (envelope corr_id vs.
+        # GoTo.id), and this fake must not let them collide numerically or
+        # it will conflate an enqueue ack with a completion ack.
+        self._nextCorr = 1000
+        self._readsSinceLastCall = 0
+        self._pendingEnqueueAck = None
+        self._gotoId: "int | None" = None
+        self.calls: "list[dict]" = []
+        self.estopCount = 0
 
-    def move_twist(self, *, move_id, **kwargs):
+    def go_to(self, x, y, *, frame, speed, arrive, timeout, goto_id):
+        self.calls.append(dict(x=x, y=y, frame=frame, speed=speed, arrive=arrive,
+                               timeout=timeout, goto_id=goto_id))
         corr = self._nextCorr
         self._nextCorr += 1
-        self.moveIds.append(move_id)
-        self._pendingAck = AckEntry(corr_id=corr, ok=True, err_code=0)
+        self._gotoId = goto_id
+        self._readsSinceLastCall = 0
+        if self._ackEnqueue:
+            self._pendingEnqueueAck = AckEntry(corr_id=corr, ok=True, err_code=0)
         return corr
 
     def read_pending_binary_tlm_frames(self):
+        self._readsSinceLastCall += 1
         acks = []
-        if self._pendingAck is not None:
-            acks = [self._pendingAck]
-            self._pendingAck = None
-        return [TLMFrame(
-            t=1000, pose=(self._x_mm, self._y_mm, self._heading_cdeg), twist=(0, 0),
-            recvTime=time.monotonic(),
-            enc_left=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
-            enc_right=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
-            acks=acks)]
+        if self._pendingEnqueueAck is not None:
+            acks.append(self._pendingEnqueueAck)
+            self._pendingEnqueueAck = None
+        if (self._completeAfterReads is not None and self._gotoId is not None
+                and self._readsSinceLastCall >= self._completeAfterReads):
+            acks.append(AckEntry(corr_id=self._gotoId, ok=self._completeOk,
+                                 err_code=self._completeErrCode))
+            self._gotoId = None  # fire exactly once
+        return [_tlmFrame(self._x_mm, self._y_mm, self._heading_cdeg, acks=acks)]
 
     def estop(self):
-        pass
+        self.estopCount += 1
 
 
-def test_progress_check_forces_resend_when_robot_is_stalled():
+def test_goto_world_sends_go_to_with_world_frame_and_scaled_mm():
     worldPose = WorldPose()
-    proto = _StallFakeProto(x_mm=0.0, y_mm=0.0, heading_cdeg=0.0)
-    limits = SolverLimits(trackWidth=120.0, speed=150.0)
-    # A target far enough away that TERMINATION_TOLERANCE is never met
-    # (the robot never moves in this fake), so the loop runs until
-    # giveUp.giveUpTimeout -- short here so the test stays fast.
-    giveUp = GiveUpLimits(maxIterations=100_000, giveUpTimeout=0.25)
-    progress = ProgressCheck(window=0.05, threshold=20.0)
-    ackRetry = AckRetry(maxAttempts=1, ackTimeout=0.02)
+    proto = _GotoFakeProto(completeAfterReads=1)
+    result = gotoWorld(proto, worldPose, x=30.0, y=5.0, cyclePeriod=0.01)
+    assert result.success is True
+    assert len(proto.calls) == 1
+    call = proto.calls[0]
+    assert call["frame"] == GOTO_FRAME_WORLD
+    assert call["x"] == pytest.approx(300.0)  # 30 cm -> 300 mm
+    assert call["y"] == pytest.approx(50.0)   # 5 cm -> 50 mm
 
-    result = gotoWorld(
-        proto, worldPose, x=100.0, y=0.0,  # [cm] -- 1000 mm straight ahead
-        limits=limits, geofence=None, tolerance=50.0,
-        giveUp=giveUp, progress=progress, ackRetry=ackRetry, cyclePeriod=0.01)
 
+def test_goto_robot_sends_go_to_with_robot_frame_unrotated():
+    """gotoRobot() no longer transforms x/y itself -- unlike its
+    pre-135-007 form, the (x, y) offset reaches the wire EXACTLY as given
+    (only scaled cm -> mm), with frame=ROBOT telling the firmware to
+    resolve it against the robot's own live pose at acceptance."""
+    worldPose = WorldPose()  # deliberately NEVER ingest()-ed -- see the test below
+    proto = _GotoFakeProto(completeAfterReads=1)
+    result = gotoRobot(proto, worldPose, x=40.0, y=-10.0, cyclePeriod=0.01)
+    assert result.success is True
+    call = proto.calls[0]
+    assert call["frame"] == GOTO_FRAME_ROBOT
+    assert call["x"] == pytest.approx(400.0)
+    assert call["y"] == pytest.approx(-100.0)
+
+
+def test_goto_robot_works_without_any_prior_world_pose():
+    """The pre-135-007 gotoRobot() raised RuntimeError without a seeded
+    WorldPose (it needed a current pose to compose the robot-frame offset
+    itself). That requirement is gone: the FIRMWARE resolves the offset
+    now, using its own live OTOS pose, so gotoRobot() needs nothing from
+    WorldPose to send its GO_TO."""
+    worldPose = WorldPose()
+    assert worldPose.worldPose() is None  # confirm: genuinely unseeded
+    proto = _GotoFakeProto(completeAfterReads=1)
+    result = gotoRobot(proto, worldPose, x=10.0, y=0.0, cyclePeriod=0.01)
+    assert result.success is True
+
+
+def test_goto_world_reports_failure_on_an_aborted_completion_ack():
+    worldPose = WorldPose()
+    proto = _GotoFakeProto(completeAfterReads=1, completeOk=False, completeErrCode=9)
+    result = gotoWorld(proto, worldPose, x=30.0, y=0.0, cyclePeriod=0.01)
     assert result.success is False
-    # Every send WAS acked -- this is purely a liveness stall, not a link
-    # problem, and the result must say so distinctly.
-    assert result.unacked == 0
-    assert "did not converge" in result.reason
-    # The throttle alone (unchanged solution every cycle, since the pose
-    # never moves) would have sent exactly once -- ProgressCheck must have
-    # forced at least one more.
-    assert result.forcedResends >= 1
-    assert result.sent >= 2
-    # Every logical send -- throttle-triggered OR forced -- drew a FRESH
-    # Move.id (never reused across DIFFERENT logical sends; only WITHIN
-    # one send's own ack-loss retries, covered separately above).
-    assert len(set(proto.moveIds)) == len(proto.moveIds)
+    assert "aborted" in result.reason
+    assert "9" in result.reason
+    assert result.unacked == 0  # the ENQUEUE was fine -- the GOTO itself aborted
+
+
+def test_goto_world_reports_unacked_when_enqueue_never_lands():
+    worldPose = WorldPose()
+    proto = _GotoFakeProto(ackEnqueue=False)
+    ackRetry = AckRetry(maxAttempts=2, ackTimeout=0.02)
+    result = gotoWorld(proto, worldPose, x=30.0, y=0.0, cyclePeriod=0.01, ackRetry=ackRetry)
+    assert result.success is False
+    assert result.unacked == 1
+    assert result.sent == 1
+    assert "link/command loss" in result.reason
+    # Never even reached the completion-ack wait -- no send was possible.
+    assert result.iterations == 0
+
+
+def test_goto_world_gives_up_waiting_for_a_completion_ack_that_never_arrives():
+    worldPose = WorldPose()
+    proto = _GotoFakeProto(completeAfterReads=None)  # enqueue acks fine; completion never comes
+    giveUp = GiveUpLimits(maxIterations=100_000, giveUpTimeout=0.1)
+    result = gotoWorld(proto, worldPose, x=30.0, y=0.0, cyclePeriod=0.01, giveUp=giveUp)
+    assert result.success is False
+    assert "gave up after" in result.reason
+    assert "no completion ack" in result.reason
+    assert result.unacked == 0  # the enqueue itself was fine
+
+
+def test_goto_world_estops_on_every_exit():
+    worldPose = WorldPose()
+    # Success case.
+    proto = _GotoFakeProto(completeAfterReads=1)
+    gotoWorld(proto, worldPose, x=30.0, y=0.0, cyclePeriod=0.01)
+    assert proto.estopCount == 1
+
+    # Give-up case.
+    proto2 = _GotoFakeProto(completeAfterReads=None)
+    giveUp = GiveUpLimits(maxIterations=100_000, giveUpTimeout=0.05)
+    gotoWorld(proto2, WorldPose(), x=30.0, y=0.0, cyclePeriod=0.01, giveUp=giveUp)
+    assert proto2.estopCount == 1
+
+
+class _NackingGoToProto:
+    """`go_to()` always NACKs with a non-retryable ErrCode -- exercises
+    MoveRejected propagation out of gotoWorld() (through _gotoAndWait()'s
+    own finally block)."""
+
+    _conn = None
+
+    def __init__(self):
+        self._nextCorr = 1
+        self.estopCount = 0
+
+    def go_to(self, x, y, *, frame, speed, arrive, timeout, goto_id):
+        corr = self._nextCorr
+        self._nextCorr += 1
+        self._pendingCorr = corr
+        return corr
+
+    def read_pending_binary_tlm_frames(self):
+        acks = [AckEntry(corr_id=self._pendingCorr, ok=False, err_code=2)]  # ERR_BADARG
+        self._pendingCorr = None
+        return [_tlmFrame(0.0, 0.0, 0.0, acks=acks)]
+
+    def estop(self):
+        self.estopCount += 1
+
+
+def test_goto_world_raises_move_rejected_and_still_estops():
+    proto = _NackingGoToProto()
+    with pytest.raises(MoveRejected):
+        gotoWorld(proto, WorldPose(), x=30.0, y=0.0, cyclePeriod=0.01,
+                 ackRetry=AckRetry(maxAttempts=2, ackTimeout=0.02))
+    assert proto.estopCount == 1  # the halt still ran despite the exception
+
+
+def test_goto_world_derives_the_wire_timeout_from_give_up_timeout():
+    proto = _GotoFakeProto(completeAfterReads=1)
+    giveUp = GiveUpLimits(maxIterations=200, giveUpTimeout=12.5)
+    gotoWorld(proto, WorldPose(), x=1.0, y=0.0, cyclePeriod=0.01, giveUp=giveUp)
+    assert proto.calls[0]["timeout"] == pytest.approx(12500.0)
+
+
+def test_goto_world_shares_one_allocator_across_sequential_calls():
+    allocator = MoveIdAllocator(start=5)
+    proto1 = _GotoFakeProto(completeAfterReads=1)
+    gotoWorld(proto1, WorldPose(), x=1.0, y=0.0, cyclePeriod=0.01, moveIds=allocator)
+    proto2 = _GotoFakeProto(completeAfterReads=1)
+    gotoWorld(proto2, WorldPose(), x=2.0, y=0.0, cyclePeriod=0.01, moveIds=allocator)
+    assert proto1.calls[0]["goto_id"] == 5
+    assert proto2.calls[0]["goto_id"] == 6  # strictly greater -- one shared id space
 
 
 # ---------------------------------------------------------------------------
-# 11. followPath() -- lookahead-circle path follower (out-of-process,
-#     2026-07-31). The target geometry (solver.pursuitTarget()) is unit-
-#     tested standalone in test_solver.py; these tests exercise followPath()
-#     ITSELF -- the ingest/target/solve ordering, the end-of-path arrival
-#     test, and what happens when the target-behind guard fires: nothing is
-#     sent, and if that persists the path is ABANDONED rather than driven on
-#     a stale command. See the module-level comment above followPath()'s own
-#     solve call (planner.py) for the three REJECTED approaches this design
-#     replaced -- including the stale re-send that produced the 2026-07-30
-#     playfield runaway.
+# 7. followPath() -- streams pursuitTarget()'s picks as GO_TO commands
+#    (135-007). The target geometry itself (solver.pursuitTarget()) is
+#    unit-tested standalone in test_solver.py; these tests exercise
+#    followPath() ITSELF -- the ingest/target/send ordering, the
+#    end-of-path arrival test, GiveUpLimits, and the unconditional
+#    every-cycle send (no throttle -- see planner.py's own module-level
+#    comment above _lookaheadFor() for the measured reason a wall-clock
+#    send throttle was tried here first and reverted).
 # ---------------------------------------------------------------------------
 
 
@@ -658,18 +625,14 @@ def test_lookahead_derivation():
 def test_follow_path_result_has_waypoints_reached_field():
     fieldNames = {f.name for f in dataclasses.fields(FollowPathResult)}
     assert fieldNames == {"success", "reason", "finalPose", "iterations", "sent",
-                          "waypointsReached", "retries", "forcedResends", "unacked"}
+                          "waypointsReached", "retries", "unacked"}
 
 
-class _MovingFakeProto:
-    """`NezhaProtocol`-shaped fake for `followPath()` integration tests: the
-    world pose it reports advances in a STRAIGHT LINE (+x) by `stepMm`
-    every `read_pending_binary_tlm_frames()` call, simulating a robot that
-    tracks a commanded on-heading (omega=0) twist perfectly. Enough to
-    exercise `followPath()`'s own ingest/target/solve loop, ack
-    bookkeeping, and end-of-path arrival test end to end without real
-    differential-drive kinematics -- the target geometry itself is already
-    covered standalone by test_solver.py's own `pursuitTarget()` tests."""
+class _MovingFakeGoToProto:
+    """`NezhaProtocol`-shaped fake for `followPath()` integration tests:
+    the world pose it reports advances in a STRAIGHT LINE (+x) by
+    `stepMm` every `read_pending_binary_tlm_frames()` call, simulating a
+    robot that tracks a commanded on-heading target perfectly."""
 
     _conn = None
 
@@ -678,13 +641,14 @@ class _MovingFakeProto:
         self._stepMm = stepMm
         self._nextCorr = 1
         self._pendingAck = None
-        self.moveIds: "list[int]" = []
+        self.calls: "list[dict]" = []
         self.estopped = False
 
-    def move_twist(self, *, move_id, **kwargs):
+    def go_to(self, x, y, *, frame, speed, arrive, timeout, goto_id):
+        self.calls.append(dict(x=x, y=y, frame=frame, speed=speed, arrive=arrive,
+                               timeout=timeout, goto_id=goto_id))
         corr = self._nextCorr
         self._nextCorr += 1
-        self.moveIds.append(move_id)
         self._pendingAck = AckEntry(corr_id=corr, ok=True, err_code=0)
         return corr
 
@@ -694,12 +658,7 @@ class _MovingFakeProto:
         if self._pendingAck is not None:
             acks = [self._pendingAck]
             self._pendingAck = None
-        return [TLMFrame(
-            t=1000, pose=(self._x_mm, 0.0, 0), twist=(0, 0),
-            recvTime=time.monotonic(),
-            enc_left=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
-            enc_right=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
-            acks=acks)]
+        return [_tlmFrame(self._x_mm, 0.0, 0, acks=acks)]
 
     def estop(self):
         self.estopped = True
@@ -707,13 +666,12 @@ class _MovingFakeProto:
 
 def test_follow_path_straight_line_reaches_every_waypoint():
     worldPose = WorldPose()
-    proto = _MovingFakeProto(stepMm=5.0)
-    limits = SolverLimits(trackWidth=120.0, speed=150.0)
+    proto = _MovingFakeGoToProto(stepMm=5.0)
     waypoints = [Pose(x=_cm(mm), y=0.0, heading=0.0) for mm in (30.0, 60.0, 90.0, 120.0)]
     crossed: "list[int]" = []
 
     result = followPath(
-        proto, worldPose, waypoints, limits, geofence=None, tolerance=12.0,
+        proto, worldPose, waypoints, speed=150.0, geofence=None, tolerance=12.0,
         giveUp=GiveUpLimits(maxIterations=500, giveUpTimeout=5.0), cyclePeriod=0.01,
         onWaypoint=lambda index, pose: crossed.append(index))
 
@@ -721,118 +679,99 @@ def test_follow_path_straight_line_reaches_every_waypoint():
     assert result.waypointsReached == len(waypoints)
     # Every waypoint crossed EXACTLY once, in strictly increasing order --
     # the follower's own ordering guarantee (ingest pose -> pick a target
-    # from the monotone path projection -> solve, never solve-then-project).
+    # from the monotone path projection -> send, never solve-then-project).
     assert crossed == list(range(len(waypoints)))
+    # Every GO_TO sent this run carried the WORLD frame -- followPath()
+    # always streams world-frame targets, regardless of the path's own
+    # provenance.
+    assert all(call["frame"] == GOTO_FRAME_WORLD for call in proto.calls)
     # estop(), never the planned stop() -- this loop's own finally block,
     # run on every return.
     assert proto.estopped is True
 
 
-def test_follow_path_gives_up_via_giveup_limits_when_never_sent_anything():
-    """When the target-behind guard fires and NO previous solution exists
-    to fall back on (a robot that never managed a single real send), this
-    loop sends nothing at all, every cycle, forever -- so it must still
-    terminate via `GiveUpLimits`, never via a bearing-snapshot verdict (two
-    earlier approaches used one and were rejected; see the module-level
-    comment above `followPath()`'s own solve call in planner.py). A
-    stationary robot (`_StallFakeProto`, reused from the ProgressCheck
-    tests above) facing WEST (heading 180 deg) with both waypoints due
-    EAST never moves, so the path projection never advances either. With
-    `_MAX_UNSOLVABLE_CYCLES` raised above the iteration budget, this
-    isolates the GiveUpLimits path from the abandon path (below)."""
+def test_follow_path_sends_every_cycle_with_no_throttle():
+    """135-007's own measured correction: followPath() sends a fresh
+    GO_TO on EVERY cycle, unconditionally -- an earlier design throttled
+    sends to a 0.5s wall-clock interval (matching ticket 005's own
+    sim-tested EXTERNAL-mode streaming cadence) and was MEASURED to cause
+    repeated spurious stop-then-pivot-then-arc cycles on square_tour.py's
+    own tight fillets (Motion::Navigator's bearing-to-target check runs
+    every internal tick against a target that had gone stale). This test
+    locks the current (correct) behavior: one logical send per iteration,
+    every iteration, each with a fresh id -- not throttled to fewer sends
+    than cycles run."""
     worldPose = WorldPose()
-    proto = _StallFakeProto(x_mm=0.0, y_mm=0.0, heading_cdeg=18000.0)  # facing west
-    limits = SolverLimits(trackWidth=120.0, speed=150.0)
-    waypoints = [Pose(x=_cm(50.0), y=0.0, heading=0.0), Pose(x=_cm(100.0), y=0.0, heading=0.0)]
-    giveUp = GiveUpLimits(maxIterations=20, giveUpTimeout=5.0)
+    proto = _MovingFakeGoToProto(stepMm=5.0)
+    waypoints = [Pose(x=_cm(mm), y=0.0, heading=0.0) for mm in (30.0, 60.0, 90.0, 120.0)]
 
-    monkeypatched = planner_mod._MAX_UNSOLVABLE_CYCLES
-    planner_mod._MAX_UNSOLVABLE_CYCLES = 10_000
-    try:
-        result = followPath(proto, worldPose, waypoints, limits, geofence=None,
-                            tolerance=12.0, giveUp=giveUp, cyclePeriod=0.01)
-    finally:
-        planner_mod._MAX_UNSOLVABLE_CYCLES = monkeypatched
+    result = followPath(
+        proto, worldPose, waypoints, speed=150.0, geofence=None, tolerance=12.0,
+        giveUp=GiveUpLimits(maxIterations=500, giveUpTimeout=5.0), cyclePeriod=0.01)
 
-    assert result.success is False
-    assert "gave up after" in result.reason
-    assert "no move was ever sent" in result.reason
-    assert result.sent == 0
-    # The projection never advances (the robot never moves) -- reachedIndex
-    # stays at its initial sentinel the whole call.
-    assert result.waypointsReached == 0
+    assert result.success is True
+    assert result.sent == result.iterations  # one send per iteration, no throttle
+    assert result.sent > 1
+    assert len(proto.calls) == result.sent
+    # Every logical send drew a FRESH id -- followPath() never reuses a
+    # goto_id across DIFFERENT streamed targets (only WITHIN one send's
+    # own ack-loss retries, covered separately in section 5 above).
+    ids = [call["goto_id"] for call in proto.calls]
+    assert len(set(ids)) == len(ids)
 
 
-class _BehindAfterFakeProto:
-    """`NezhaProtocol`-shaped fake for the "resend the last-known-good arc"
-    recovery test: reports heading EAST (0 deg) for the first
-    `switchAfter` telemetry reads -- long enough for `followPath()` to
-    solve and send a real arc toward an east-facing target -- then reports
-    heading WEST (180 deg) forever after, so the SAME target becomes
-    permanently behind. Position is held fixed throughout (this test only
-    cares whether a resend happens, not whether the path is completed)."""
+class _StationaryFakeGoToProto:
+    """`NezhaProtocol`-shaped fake: reports a FIXED world pose forever (a
+    stalled/deadband robot, or a target the fake never actually reaches)
+    while every `go_to()` send is acked OK immediately -- for exercising
+    `GiveUpLimits` when arrival is never reached despite every send
+    landing cleanly."""
 
     _conn = None
 
-    def __init__(self, switchAfter: int = 2) -> None:
-        self._reads = 0
-        self._switchAfter = switchAfter
+    def __init__(self, x_mm: float = 0.0, y_mm: float = 0.0, heading_cdeg: float = 0.0):
+        self._x_mm = x_mm
+        self._y_mm = y_mm
+        self._heading_cdeg = heading_cdeg
         self._nextCorr = 1
         self._pendingAck = None
-        self.moveIds: "list[int]" = []
+        self.calls: "list[dict]" = []
 
-    def move_twist(self, *, move_id, **kwargs):
+    def go_to(self, x, y, *, frame, speed, arrive, timeout, goto_id):
+        self.calls.append(dict(x=x, y=y, frame=frame, speed=speed, arrive=arrive,
+                               timeout=timeout, goto_id=goto_id))
         corr = self._nextCorr
         self._nextCorr += 1
-        self.moveIds.append(move_id)
         self._pendingAck = AckEntry(corr_id=corr, ok=True, err_code=0)
         return corr
 
     def read_pending_binary_tlm_frames(self):
-        self._reads += 1
-        headingCdeg = 0.0 if self._reads <= self._switchAfter else 18000.0
         acks = []
         if self._pendingAck is not None:
             acks = [self._pendingAck]
             self._pendingAck = None
-        return [TLMFrame(
-            t=1000, pose=(0.0, 0.0, headingCdeg), twist=(0, 0),
-            recvTime=time.monotonic(),
-            enc_left=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
-            enc_right=EncoderReading(position=0.0, velocity=0.0, age=0, position_epoch=0),
-            acks=acks)]
+        return [_tlmFrame(self._x_mm, self._y_mm, self._heading_cdeg, acks=acks)]
 
     def estop(self):
         pass
 
 
-def test_follow_path_abandons_rather_than_driving_on_a_stale_command():
-    """The 2026-07-30 playfield runaway, as a unit test.
-
-    `_BehindAfterFakeProto` lets `followPath()` solve and send one real arc
-    while the robot still faces EAST, then flips the reported heading WEST
-    forever, so the target is permanently behind. The OLD behaviour was to
-    let `ProgressCheck` re-send that first, now-stale arc every time the
-    robot stalled -- which on hardware drove it ~920 mm in a straight line
-    into the geofence, and in the sim reproduction accounted for 743 of 754
-    solve cycles. The loop must now ABANDON instead: no forced resend, and
-    an explicit reason saying so."""
+def test_follow_path_gives_up_via_giveup_limits_for_a_stalled_robot():
+    """A robot whose position never advances (every send acked ok, but
+    nothing ever moves) must still terminate via GiveUpLimits, with an
+    explicit reason -- never an infinite loop. UNLIKE the pre-135-007
+    version of this test, sends DO happen here (there is no more
+    target-behind guard to suppress them, and every cycle sends
+    unconditionally) -- what never happens is arrival."""
     worldPose = WorldPose()
-    proto = _BehindAfterFakeProto(switchAfter=2)
-    limits = SolverLimits(trackWidth=120.0, speed=150.0)
+    proto = _StationaryFakeGoToProto(x_mm=0.0, y_mm=0.0)
     waypoints = [Pose(x=_cm(500.0), y=0.0, heading=0.0), Pose(x=_cm(1000.0), y=0.0, heading=0.0)]
-    giveUp = GiveUpLimits(maxIterations=600, giveUpTimeout=3.0)
-    progress = ProgressCheck(window=0.05, threshold=1000.0)  # position never changes -> stalls fast
+    giveUp = GiveUpLimits(maxIterations=50, giveUpTimeout=5.0)
 
-    result = followPath(proto, worldPose, waypoints, limits, geofence=None,
-                        tolerance=12.0, giveUp=giveUp, progress=progress, cyclePeriod=0.001)
+    result = followPath(proto, worldPose, waypoints, speed=150.0, geofence=None,
+                        tolerance=12.0, giveUp=giveUp, cyclePeriod=0.01)
 
     assert result.success is False
-    assert "abandoned the path" in result.reason
-    assert "stale command" in result.reason
-    # It gave up well inside the iteration budget -- i.e. it stopped as soon
-    # as it could not solve, rather than riding out the whole budget.
-    assert result.iterations < giveUp.maxIterations
-    # And it never re-sent the stale arc.
-    assert result.forcedResends == 0
-    assert len(set(proto.moveIds)) == len(proto.moveIds)  # every send still gets a fresh id
+    assert "gave up after" in result.reason
+    assert result.sent > 0  # sends happened -- the robot simply never arrived
+    assert result.waypointsReached == 0  # the projection never advances either

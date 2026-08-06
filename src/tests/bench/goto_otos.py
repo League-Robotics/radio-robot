@@ -101,7 +101,6 @@ class Robot:
     def __init__(self, port: str):
         from robot_radio.io.serial_conn import SerialConnection
         from robot_radio.robot.protocol import NezhaProtocol
-        from robot_radio.robot.pb2 import envelope_pb2
         # mode=None -- auto-detect direct-USB vs. relay from the connecting
         # device's own boot banner (SerialConnection.connect()'s "3a/3b"
         # classify). The old hardcoded mode="relay" forced the relay
@@ -115,7 +114,6 @@ class Robot:
         self.conn = SerialConnection(port=port, mode=None)
         self.conn.connect()
         self.p = NezhaProtocol(self.conn)
-        self._envelope_pb2 = envelope_pb2
         self._id = int(time.time()) % 500000 + 100000
         self.conn.send_cleartext("TLM:ON")
         time.sleep(0.4)
@@ -160,32 +158,26 @@ class Robot:
                   arrive: float = 0.0,   # [mm] 0 = NavigatorLimits::defaultArrivalTolerance
                   timeout: float = 45000.0,  # [ms] REQUIRED whole-goto backstop
                   ) -> tuple[int, int]:
-        """Send ONE GO_TO directly via the raw command plane
-        (``CommandEnvelope.go_to``, envelope.proto arm 26).
+        """Send ONE GO_TO via ``NezhaProtocol.go_to()`` (135-007).
 
-        135-006 TEMPORARY DUPLICATION: ``NezhaProtocol`` has no ``go_to()``
-        method yet as of this ticket -- 135-007 (still open at the time this
-        was written; check ``clasi/sprints/135-.../tickets/`` before copying
-        this pattern elsewhere) adds the proper host wrapper mirroring
-        ``move_twist()``/``move_wheels()``. Until then this method builds
-        and fires the envelope itself, the exact same way ``move_twist()``
-        does one layer up (``self._conn.send_envelope_fast(envelope)``) --
-        delete this method and call ``self.p.go_to(...)`` once 135-007
-        lands.
+        135-006 introduced this method as a TEMPORARY DUPLICATION (building
+        and firing the ``CommandEnvelope.go_to`` envelope itself, since
+        ``NezhaProtocol`` had no ``go_to()`` wrapper yet); 135-007 added that
+        wrapper (mirroring ``move_twist()``/``move_wheels()``), so this
+        method is now a thin pass-through -- kept only so this script's own
+        `goto()` call site and its ``(corr_id, goto_id)`` return shape
+        (needed to match the later COMPLETION ack) do not need to change.
 
         Returns ``(corr_id, goto_id)``: ``corr_id`` is the envelope id
-        ``send_envelope_fast()`` auto-assigns, which the ENQUEUE ack
-        (``Telemetry.acks``) echoes; ``goto_id`` is this call's own explicit
-        ``GoTo.id``, echoed by the single COMPLETION ack when the goto ends
-        (Done or Aborted) -- two distinct keys, exactly like
+        ``go_to()`` auto-assigns via ``send_envelope_fast()``, which the
+        ENQUEUE ack (``Telemetry.acks``) echoes; ``goto_id`` is this call's
+        own explicit ``GoTo.id``, echoed by the single COMPLETION ack when
+        the goto ends (Done or Aborted) -- two distinct keys, exactly like
         ``move_twist()``'s ``corr_id`` vs. its ``move_id``.
         """
         goto_id = self._next_id()
-        envelope = self._envelope_pb2.CommandEnvelope(
-            go_to=self._envelope_pb2.GoTo(
-                x=x, y=y, frame=frame, speed=speed, arrive=arrive,
-                timeout=timeout, id=goto_id))
-        corr_id = self.conn.send_envelope_fast(envelope)
+        corr_id = self.p.go_to(x, y, frame=frame, speed=speed, arrive=arrive,
+                               timeout=timeout, goto_id=goto_id)
         return corr_id, goto_id
 
     def halt(self) -> None:

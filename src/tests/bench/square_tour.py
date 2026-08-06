@@ -1160,44 +1160,61 @@ def reportSegmentFixes(tour: "Tour", log: dict) -> None:
 # event for an interior waypoint to measure overshoot/stall against at
 # all -- the whole point of pass-through is that the robot never stops
 # converging on any of them. `pathplan.planner.followPath()`'s own
-# `GotoResult`-shaped return (`success`, `reason`, `iterations`, `sent`,
-# `retries`, `forcedResends`, `unacked`) is the replacement diagnostic
-# surface -- see `runGotoTour()` below.
+# `FollowPathResult`-shaped return (`success`, `reason`, `iterations`,
+# `sent`, `retries`, `unacked`, `waypointsReached` -- `forcedResends` was
+# dropped 135-007 alongside the `ProgressCheck` liveness backstop it
+# reported on, now superseded by the firmware's own bounded GO_TO
+# timeout) is the replacement diagnostic surface -- see `runGotoTour()`
+# below.
 
 # --- rounded-square geometry (out-of-process, 2026-07-30) -----------------
 #
 # `gotoSquareWaypoints()` used to emit the square's four SHARP vertices.
-# From one vertex, the next is 90 deg off the current heading, so EVERY
-# corner hits `solveArcToPoint()`'s target-behind guard
-# (`SolverLimits.behindAngle`, default 90 deg) -- the guard exists so the
-# solver never emits a near-infinite-curvature arc, and a square's own
-# corners are exactly that degenerate case. The fix is geometric, not a
-# guard change: round each corner into a quarter-circle fillet and sample
-# it finely enough that the bearing to the NEXT waypoint never gets
-# anywhere near 90 deg.
+# From one vertex, the next is 90 deg off the current heading -- originally
+# a problem because EVERY corner hit the host-side `solveArcToPoint()`'s
+# target-behind guard (`SolverLimits.behindAngle`, default 90 deg) under
+# the pre-127-007 one-`gotoWorld()`-call-per-waypoint model. That specific
+# failure mode is long gone -- `followPath()`'s pursuit-based traversal
+# (127-007) steers at a lookahead-circle point ALONG the path, never at a
+# raw waypoint, so a sharp vertex no longer risks an aborted "target
+# behind" guard at all; and as of 135-007 a large bearing change is
+# handled gracefully firmware-side anyway (`Motion::Navigator`'s
+# stop-then-pivot-then-arc sequencing, SUC-004). The rounding survives
+# regardless, for a DIFFERENT and still-current reason: smooth, continuous
+# cornering reads as a "square with rounded corners" and avoids a
+# needless stop-and-pivot at every vertex, which sharp corners would
+# trigger under `Motion::Navigator`'s own `turnFirstAngle` policy.
 #
 # CORNER_RADIUS is bounded on both sides -- derived, not guessed:
 #
 #   FLOOR (drivable): entering the fillet from a straight leg means the
 #   commanded omega has to move from 0 toward the fillet's own
-#   steady-state value, omega = CRUISE / r, without the solver's own
-#   curvature slew limit (`solver.MAX_WHEEL_STEP` = 250 mm/s PER SOLVE at
-#   the outer loop's ~10 Hz, converted to an omega-step budget via
-#   `trackWidth == PHYSICAL_TRACK`) itself rounding the fillet's entry off
-#   the intended tangent-circle shape:
+#   steady-state value, omega = CRUISE / r, without the arc solver's own
+#   curvature slew limit itself rounding the fillet's entry off the
+#   intended tangent-circle shape. Single-arc solving moved firmware-side
+#   135-007 (`Motion::ArcSolver`, `src/motion/navigator/arc_solver.h`) --
+#   this floor now mirrors THAT solver's own default budget
+#   (`kArcSolverMaxWheelStepDefault = 125.0 mm/s per 50 ms internal solve`,
+#   ctest-locked by `arc_solver_test.cpp`'s `testMaxWheelStepDerivation()`)
+#   rather than the deleted host-side `solver.MAX_WHEEL_STEP` (250 mm/s per
+#   100 ms host solve) it replaces -- `_ARC_SOLVER_MAX_WHEEL_STEP` below is
+#   a manually-synced mirror of that C++ constant (no shared header to
+#   import it from a Python bench script); keep the two in sync by hand if
+#   `arc_solver.h`'s own derivation ever changes:
 #
-#     omegaStepBudget = 2 * MAX_WHEEL_STEP / PHYSICAL_TRACK   [rad/s per solve]
+#     omegaStepBudget = 2 * _ARC_SOLVER_MAX_WHEEL_STEP / PHYSICAL_TRACK   [rad/s per solve]
 #     radiusFloor      = CRUISE / omegaStepBudget
-#                      = CRUISE * PHYSICAL_TRACK / (2 * MAX_WHEEL_STEP)
+#                      = CRUISE * PHYSICAL_TRACK / (2 * _ARC_SOLVER_MAX_WHEEL_STEP)
 #
 #   For this robot (CRUISE=150 mm/s, PHYSICAL_TRACK=128 mm,
-#   MAX_WHEEL_STEP=250 mm/s) that is 150*128/500 ~= 38.4 mm -- the radius
-#   at which the fillet's steady-state omega equals a SINGLE solve's
-#   clamp step. `gotoSquareWaypoints()` recomputes this floor at call time
-#   from the ACTUAL `PHYSICAL_TRACK`/`CRUISE` (set from the active robot
-#   config by `_set_effective_track()`), rather than baking in this one
-#   robot's numbers, and raises rather than silently emitting an
-#   undrivable path if a caller's `legLength` forces the radius below it.
+#   _ARC_SOLVER_MAX_WHEEL_STEP=125 mm/s) that is 150*128/250 ~= 76.8 mm --
+#   the radius at which the fillet's steady-state omega equals a SINGLE
+#   internal solve's clamp step. `gotoSquareWaypoints()` recomputes this
+#   floor at call time from the ACTUAL `PHYSICAL_TRACK`/`CRUISE` (set from
+#   the active robot config by `_set_effective_track()`), rather than
+#   baking in this one robot's numbers, and raises rather than silently
+#   emitting an undrivable path if a caller's `legLength` forces the
+#   radius below it.
 #
 #   CEILING (recognisably a square): the playfield run this fix targets
 #   used a 250 mm leg (the smallest leg this script drives -- see --leg's
@@ -1205,11 +1222,30 @@ def reportSegmentFixes(tour: "Tour", log: dict) -> None:
 #   half of every edge (`leg - 2*r >= leg/2`) genuinely straight, so the
 #   path still reads as a square with rounded corners, not a circle.
 #
-# TARGET_CORNER_RADIUS = 90 mm sits comfortably above the 38.4 mm floor
-# (2.3x margin) for the sim-default 500 mm leg; `gotoSquareWaypoints()`
-# clamps it down to `legLength / 4` whenever that ceiling is tighter (the
-# 250 mm playfield case -> clamped to 62.5 mm, still >= the floor).
+# TARGET_CORNER_RADIUS = 90 mm sits above the 76.8 mm floor (1.17x margin,
+# narrower than the pre-135-007 2.3x -- the firmware's own arc solver
+# clamps at a shorter 50 ms period than the deleted host solver's 100 ms,
+# which raises the floor for the SAME PHYSICAL_TRACK/CRUISE) for the
+# sim-default 500 mm leg; `gotoSquareWaypoints()` clamps it down to
+# `legLength / 4` whenever that ceiling is tighter. NOTE (135-007,
+# discovered while fixing this derivation, not exercised or fixed by this
+# ticket): the 250 mm playfield case this whole comment block was written
+# for clamps to a 62.5 mm radius, now BELOW the 76.8 mm floor --
+# `gotoSquareWaypoints(legLength=250.0, ...)` raises `ValueError` where it
+# used to succeed. Playfield goto-mode runs are out of scope this session
+# regardless (sprint 135's own Decision 3: hardware constrained to direct
+# serial, no camera) -- flagged here, and in this ticket's own Completion
+# Notes, as a real follow-up rather than silently left claiming a margin
+# that no longer holds.
 TARGET_CORNER_RADIUS = 90.0  # [mm] preferred corner radius; see derivation above
+
+# Manually-synced mirror of Motion::kArcSolverMaxWheelStepDefault
+# (src/motion/navigator/arc_solver.h, sprint 135 ticket 002) -- the arc
+# solver's own curvature-slew-clamp budget, ctest-locked at 125.0 by
+# arc_solver_test.cpp's testMaxWheelStepDerivation(). No shared header
+# exists to import this from a Python bench script; if arc_solver.h's own
+# derivation ever changes, update this value to match.
+_ARC_SOLVER_MAX_WHEEL_STEP = 125.0  # [mm/s] per 50 ms internal solve
 
 # Each fillet is sampled into CORNER_SEGMENTS_PER_CORNER equal hops of
 # (90 / CORNER_SEGMENTS_PER_CORNER) deg apiece. For points equally spaced
@@ -1237,11 +1273,16 @@ CORNER_SEGMENTS_PER_CORNER = 3
 # path, even though it no longer has to fit under every interior chord.
 #
 # Arrival tolerance for THIS dense waypoint sequence -- deliberately
-# smaller than, and decoupled from, `pathplan.planner.TERMINATION_TOLERANCE`
-# (100 mm, left UNCHANGED -- it is provisional pending ticket 007's own
-# actuation-floor measurement, not this fix's to touch). That default is
-# sized for a single far-off goal (keep a >=100 mm carrot ahead of a
-# ~150 ms-lag outer loop); every waypoint here is already close by design
+# smaller than, and decoupled from, `followPath()`'s own default terminal-
+# waypoint tolerance (`pathplan.planner._DEFAULT_PATH_ARRIVAL_TOLERANCE`,
+# 100 mm -- 135-007 renamed this from the deleted host-loop constant
+# `TERMINATION_TOLERANCE`, which no longer exists now that `gotoWorld()`/
+# `gotoRobot()`'s own arrival is judged by the firmware's completion ack,
+# not a host-side distance check; `followPath()`'s terminal-waypoint test
+# is still host-side and unchanged, so the same 100 mm number and the same
+# derivation below still apply). That default is sized for a single
+# far-off goal (keep a >=100 mm carrot ahead of a ~150 ms-lag outer loop);
+# every waypoint here is already close by design
 # (see CORNER_SEGMENTS_PER_CORNER above), so the risk runs the OTHER way --
 # this ticket's own stated trap: a tolerance at or above spacing makes the
 # loop "arrive" at a waypoint it never actually approached and skip ahead,
@@ -1343,11 +1384,10 @@ def gotoSquareWaypoints(startPose, legLength: float) -> "list[tuple[object, bool
       = 3) and the first one is only half that off the inbound straight.
     """
     from robot_radio.nav.pose import Pose
-    from robot_radio.pathplan.solver import MAX_WHEEL_STEP
     from robot_radio.pathplan.world_pose import Transform2
 
     radiusMm = min(TARGET_CORNER_RADIUS, legLength / 4.0)
-    radiusFloorMm = CRUISE * PHYSICAL_TRACK / (2.0 * MAX_WHEEL_STEP)
+    radiusFloorMm = CRUISE * PHYSICAL_TRACK / (2.0 * _ARC_SOLVER_MAX_WHEEL_STEP)
     if radiusMm < radiusFloorMm:
         raise ValueError(
             f"gotoSquareWaypoints: leg {legLength:.0f} mm forces a corner "
@@ -1557,7 +1597,6 @@ def runGotoTour(backend: "_Backend", args) -> int:
     invocations)."""
     from robot_radio.field import captureFixWithRetry
     from robot_radio.pathplan.planner import GiveUpLimits, MoveIdAllocator, followPath
-    from robot_radio.pathplan.solver import SolverLimits
     from robot_radio.pathplan.world_pose import WorldPose
 
     proto = backend.proto
@@ -1626,7 +1665,6 @@ def runGotoTour(backend: "_Backend", args) -> int:
     # (see gotoSquareWaypoints()'s own docstring).
     waypoints = gotoSquareWaypoints(startPose, args.leg)
     targetPoses = [w for w, _isVertex in waypoints]
-    limits = SolverLimits(trackWidth=PHYSICAL_TRACK, speed=CRUISE)
     # Budget covers the WHOLE path now, not one waypoint -- previously each
     # of the 4 corners got its own 400-iteration/30s budget under the old
     # per-corner gotoWorld() loop (summed: ~1600 iterations/120s across the
@@ -1682,7 +1720,7 @@ def runGotoTour(backend: "_Backend", args) -> int:
                   if geofence is not None and isVertex else None)
         fixes.append(dict(label=waypointLabels[index], pose=pose, camera=camera))
 
-    pathResult = followPath(proto, worldPose, targetPoses, limits, geofence=geofence,
+    pathResult = followPath(proto, worldPose, targetPoses, speed=CRUISE, geofence=geofence,
                             tolerance=tolerance, giveUp=giveUp, moveIds=allocator,
                             onWaypoint=onWaypoint)
 
@@ -1691,8 +1729,7 @@ def runGotoTour(backend: "_Backend", args) -> int:
           f"reason={pathResult.reason!r}")
     print(f"  waypointsReached={pathResult.waypointsReached}/{len(waypoints)} "
           f"iterations={pathResult.iterations} sent={pathResult.sent} "
-          f"retries={pathResult.retries} forcedResends={pathResult.forcedResends} "
-          f"unacked={pathResult.unacked}")
+          f"retries={pathResult.retries} unacked={pathResult.unacked}")
 
     divergence = worldPose.encoderOtosDivergence()
     if divergence is not None:
@@ -1747,8 +1784,16 @@ def runActuationFloorMeasurement(backend: "_Backend", args) -> int:
     Distance-stopped and Angle-stopped `move_twist()` moves, camera-fixing
     immediately before and after each (at rest), to find the smallest
     commanded distance/angle that still reliably produces close-to-
-    commanded motion -- the real actuation floor `planner.
-    TERMINATION_TOLERANCE` is provisional pending.
+    commanded motion -- the real actuation floor a goto's own arrival
+    tolerance should never sit below.
+
+    135-007 note: this measurement originally fed `planner.
+    TERMINATION_TOLERANCE`, the host loop's own provisional arrival
+    tolerance. That constant is deleted -- arrival tolerance for a `GO_TO`
+    is now entirely firmware-side (`NavigatorLimits::
+    defaultArrivalTolerance`, the `navigator` config group in
+    `data/robots/*.json`) -- so this raw actuation-floor data now informs
+    THAT config value instead, not a Python constant in this repo.
 
     NOT run by this ticket's own pass: the robot was on the STAND
     (wheels unloaded) for this pass, and an unloaded-wheel floor would be
@@ -1757,11 +1802,11 @@ def runActuationFloorMeasurement(backend: "_Backend", args) -> int:
     silently substituting a bench measurement.
 
     Prints raw (commanded, measured) pairs for both distance and angle
-    and stops WITHOUT auto-selecting a floor value or writing it into
-    `planner.py` -- picking the actual floor from this raw data, and
-    updating `TERMINATION_TOLERANCE` with it, is a judgment call for
-    whoever reviews the data once it exists (this ticket's own acceptance
-    wording: "raw data, not just the final number")."""
+    and stops WITHOUT auto-selecting a floor value or pushing/baking it
+    anywhere -- picking the actual floor from this raw data, and updating
+    `NavigatorLimits::defaultArrivalTolerance` with it, is a judgment call
+    for whoever reviews the data once it exists (this ticket's own
+    acceptance wording: "raw data, not just the final number")."""
     geofence = getattr(backend, "geofence", None)
     if geofence is None:
         raise SystemExit(
@@ -1843,8 +1888,9 @@ def runActuationFloorMeasurement(backend: "_Backend", args) -> int:
     print("\nraw data (commanded, measured):")
     print(f"  distance: {results['distance']}")
     print(f"  angle: {results['angle']}")
-    print("\nNOT auto-selecting a floor value or writing planner.py's "
-          "TERMINATION_TOLERANCE -- see this function's own docstring.")
+    print("\nNOT auto-selecting a floor value or pushing/baking "
+          "NavigatorLimits::defaultArrivalTolerance -- see this function's "
+          "own docstring.")
     return 0
 
 

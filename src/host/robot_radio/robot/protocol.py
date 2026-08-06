@@ -1106,6 +1106,14 @@ def _build_move_stop_kwargs(*, stop_time: float | None, stop_distance: float | N
     return {key: float(value)}
 
 
+# GoTo.frame (envelope.proto) -- 0=WORLD (OTOS/SEED frame), 1=ROBOT (resolved
+# once, firmware-side, at acceptance). Matches App::RobotLoop::handleGoto()'s
+# own goTo.frame check and src/tests/bench/goto_otos.py's own
+# FRAME_WORLD/FRAME_ROBOT exactly -- see NezhaProtocol.go_to() below.
+GOTO_FRAME_WORLD = 0
+GOTO_FRAME_ROBOT = 1
+
+
 # ---------------------------------------------------------------------------
 # NezhaProtocol
 # ---------------------------------------------------------------------------
@@ -1791,6 +1799,93 @@ class NezhaProtocol:
         envelope = envelope_pb2.CommandEnvelope(
             wheels=envelope_pb2.Wheels(v_left=v_left, v_right=v_right,
                                        duration=duration, id=move_id))
+        return self._conn.send_envelope_fast(envelope)
+
+    # ------------------------------------------------------------------
+    # GO_TO / point-target navigation (135-004/135-007)
+    # ------------------------------------------------------------------
+
+    def go_to(self, x: float, y: float, *, frame: int,
+              speed: float = 0.0,    # [mm/s] 0 = NavigatorLimits::speed config default
+              arrive: float = 0.0,   # [mm] 0 = NavigatorLimits::defaultArrivalTolerance
+              timeout: float,         # [ms]
+              goto_id: int = 0) -> int:
+        """Enqueue a bounded point-target GO_TO
+        (``CommandEnvelope{go_to: GoTo{x, y, frame, speed, arrive, timeout,
+        id}}``, envelope.proto arm 26, wire verb ``GO_TO``) -- hands
+        ``Motion::Navigator`` (135-002/003) a world- or robot-frame target
+        to drive to completion on its own, re-solving a tangent arc against
+        live OTOS pose every internal cycle and issuing internal,
+        replaceable Moves. Supersedes the host's own arc-solving/
+        replace-throttling loop that used to live in
+        ``pathplan.solver.solveArcToPoint()``/``pathplan.planner.
+        ReplaceThreshold`` (both deleted 135-007) -- see
+        ``pathplan.planner.gotoWorld()``/``gotoRobot()``/``followPath()``
+        for the thin senders built on this method.
+
+        Unrelated to the pre-104 ``go_to`` arm this file's own module
+        docstring lists among 104-002's pruned pre-P4 methods (line ~45
+        above) -- that was a different, long-retired wire arm from the
+        ASCII-command era; this is a fresh method for the protocol-v5
+        ``GO_TO`` verb (135-004), reusing the name because it is the right
+        name, not a resurrection.
+
+        x/y: [mm] target position. Interpreted per ``frame``:
+            ``GOTO_FRAME_WORLD`` (0) is the world/OTOS/SEED frame;
+            ``GOTO_FRAME_ROBOT`` (1) is the robot's own current body frame
+            (+x forward, +y left) at the moment this command is ACCEPTED --
+            resolved to world coordinates ONCE, firmware-side
+            (``App::RobotLoop::handleGoto()``), so the target does not
+            chase the robot as it turns.
+        speed: [mm/s] cruise-speed override; ``0.0`` (the default) falls
+            open to the robot's own configured ``NavigatorLimits::speed``
+            (configuration-discipline: every value the robot uses comes
+            from this call or from the one robot config file, never a host
+            constant).
+        arrive: [mm] arrival-tolerance override; ``0.0`` falls open to
+            ``NavigatorLimits::defaultArrivalTolerance``.
+        timeout: [ms] REQUIRED whole-goto safety backstop (envelope.proto:
+            "<=0 -> ERR_BADARG") -- fires (a fault-flagged completion ack)
+            if the target is never reached, e.g. an OTOS disconnect
+            outlasting ``Motion::Navigator``'s own bounded dead-reckoning
+            window (SUC-005). Validated host-side (``ValueError`` for a
+            non-positive value) to avoid a wasted wire round trip for a
+            command the firmware would reject anyway.
+        goto_id: echoed in the ONE completion ack this goto ends with (Done
+            or Aborted) -- distinct from the ENQUEUE ack, which echoes this
+            envelope's own ``corr_id`` as usual, exactly like
+            ``move_twist()``'s ``move_id`` vs. its own ``corr_id``. The
+            default ``0`` is fine for a caller that does not need to match
+            the completion ack.
+
+        Fire-and-poll, the same shape as ``move_twist()``/``move_wheels()``
+        (103-009 Decision 2's "telemetry-only return path"): this call
+        writes the bytes and returns immediately. Returns the corr_id
+        assigned to this command -- pass it to ``wait_for_ack()`` to
+        confirm the firmware accepted it, or watch the ack ring directly
+        for a later entry keyed on ``goto_id``. Raises ``ConnectionError``
+        if not connected; raises ``ValueError`` for a non-positive
+        ``timeout``.
+
+        Unlike ``move_twist()``/``move_wheels()``, there is no id-keyed
+        acceptance/dedup ring on the firmware side for GO_TO
+        (``RobotLoop::handleGoto()`` has none -- verified directly against
+        ``src/firm/app/robot_loop.cpp``, 135-007): every GO_TO, retried or
+        genuinely new, calls ``Motion::Navigator::start()`` and (re)starts
+        navigation toward whatever target it carries. A RETRY of a lost
+        enqueue ack is still safe to resend with the SAME ``goto_id`` (it
+        carries the identical x/y/frame, so a redundant restart is
+        harmless), but a caller streaming a SEQUENCE of genuinely different
+        targets must allocate a FRESH ``goto_id`` for each one -- see
+        ``pathplan.planner.MoveIdAllocator`` for the shared monotonic
+        source that already guarantees this for every wire sender in that
+        module.
+        """
+        if timeout <= 0:
+            raise ValueError(f"go_to(): timeout must be > 0, got {timeout!r}")
+        envelope = envelope_pb2.CommandEnvelope(
+            go_to=envelope_pb2.GoTo(x=x, y=y, frame=frame, speed=speed,
+                                    arrive=arrive, timeout=timeout, id=goto_id))
         return self._conn.send_envelope_fast(envelope)
 
     def estop(self) -> int:
