@@ -407,10 +407,17 @@ def main() -> int:
     moves = tour(args.omega, cruise=args.cruise)
     next_enqueue = 0
     inflight = 0
-    # corr_id -> (move_id, send_time, retries). Over the RADIO RELAY ~20%
-    # of inbound lines are dropped (DAPLink bridge, radio_bench_gate.py's
-    # own documented budget), and a lost enqueue would otherwise pin
-    # `inflight` forever: unacked sends are RETRIED with a fresh corr_id.
+    # corr_id -> (move_id, send_time, retries). MEASURED (ticket 135-001,
+    # 2026-08-05, tovez): the RADIO RELAY lost 3.5% of inbound enqueues at
+    # a steady 20Hz/200-cmd rate (0% on direct serial at the same rate),
+    # with the firmware's own command-ring-full fault bit clear throughout
+    # -- i.e. genuine link loss, not firmware backpressure. See
+    # `src/tests/bench/command_loss_bench.py`'s own module docstring and
+    # this sprint's ticket 001 Completion Notes for the full breakdown;
+    # this SUPERSEDES the previously-cited, unsourced "~20% of inbound
+    # lines are dropped (DAPLink bridge...)" figure. Real, nonzero loss
+    # remains, so a lost enqueue would otherwise pin `inflight` forever:
+    # unacked sends are RETRIED with a fresh corr_id.
     # A retry after a lost *ack* (rather than a lost command) would
     # double-enqueue that move -- accepted as rare-by-construction: the ack
     # ring rides EVERY telemetry frame, so an ack only vanishes if all

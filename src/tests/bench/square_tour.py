@@ -642,9 +642,16 @@ class Tour:
 
     def sendVerified(self, vL: float, vR: float, durationMs: float, moveId: int) -> bool:
         """Send one WHEELS segment and confirm the firmware acked it,
-        retrying up to 4 times (the DAPLink inbound-loss workaround the
-        tagged tour already needed -- ~20% of inbound command packets are
-        dropped by the USB->UART bridge before they reach the nRF).
+        retrying up to 4 times -- genuine, if modest, inbound loss is why
+        the retry loop exists. MEASURED (ticket 135-001, 2026-08-05,
+        tovez): 0% loss on direct serial and 3.5% over the radio relay at a
+        steady 20Hz/200-cmd rate, with the firmware's own command-ring-full
+        fault bit clear throughout on both transports (genuine link loss,
+        not firmware backpressure) -- see
+        `src/tests/bench/command_loss_bench.py`'s own module docstring and
+        this sprint's ticket 001 Completion Notes for the full breakdown.
+        This SUPERSEDES the previously-cited, unsourced "~20% of inbound
+        command packets... dropped by the USB->UART bridge" figure.
 
         Ack matching scans the frames `advance()` already drained, not a
         second `wait_for_ack()` drain: on a single-consumer telemetry queue
