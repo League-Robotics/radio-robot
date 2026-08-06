@@ -361,10 +361,24 @@ void scenarioPivotHeadingSaneViaOdometry() {
   // Sanity cross-check (NOT the primary assertion -- Decision 3's own
   // "will always agree closely, by design" consequence): the plant's own
   // OTOS pose derives from the SAME two wheel positions via the SAME
-  // BodyKinematics::forward() call, so it should land close to Odometry's
-  // independently-integrated heading.
-  checkFloatEq(last.otosHeading, last.odomTheta,
-               "OtosPlant's simulated heading tracks Odometry's own heading closely (same wheel positions, same kinematics)",
+  // BodyKinematics::forward() call, so its MAGNITUDE should land close to
+  // Odometry's independently-integrated heading.
+  //
+  // SIGN (135-008, sim-otos-heading-sign-diverges-from-hardware-angle-
+  // moves-never-stop.md): `otos` here is a real Devices::Otos decoding
+  // bytes straight off SimPlant's wire (runScenario() above), with no
+  // planner-side reconciliation applied -- unlike state.otos.heading as
+  // the planner sees it. SimPlant's handleOtosRead() (sim_plant.cpp,
+  // kOtosHardwareMountSign) now packs that wire register with the
+  // hardware's actual mounted sign, INVERTED relative to OtosPlant's own
+  // internal (encoder-sign) accumulator, matching what a real chip
+  // reports (planner.cpp:513's own negation exists to reconcile exactly
+  // this). So this decoded otosHeading is expected to be the NEGATION of
+  // odomTheta, not a match -- the pre-135-008 identity assumption this
+  // comment used to encode was the very bug that ticket fixed.
+  checkFloatEq(last.otosHeading, -last.odomTheta,
+               "OtosPlant's simulated heading (as decoded off SimPlant's wire) carries the "
+               "hardware-mounted sign -- the NEGATION of Odometry's own heading",
                0.05f);
 }
 
