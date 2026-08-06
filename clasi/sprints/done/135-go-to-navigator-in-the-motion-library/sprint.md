@@ -1,7 +1,7 @@
 ---
 id: '135'
 title: Go-To Navigator in the Motion Library
-status: planning-docs
+status: closed
 branch: sprint/135-go-to-navigator-in-the-motion-library
 worktree: false
 use-cases:
