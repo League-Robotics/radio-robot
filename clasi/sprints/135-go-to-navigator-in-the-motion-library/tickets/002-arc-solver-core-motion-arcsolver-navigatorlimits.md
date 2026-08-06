@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Arc-solver core (Motion::ArcSolver, NavigatorLimits)
-status: open
+status: done
 use-cases:
 - SUC-001
 - SUC-002
@@ -118,28 +118,28 @@ don't assume, re-verify at ticket time since the tree moves:**
 
 ## Acceptance Criteria
 
-- [ ] `Motion::ArcSolver` (`src/motion/navigator/arc_solver.{h,cpp}`)
+- [x] `Motion::ArcSolver` (`src/motion/navigator/arc_solver.{h,cpp}`)
       exposes a `solve(pose, target, limits, previousOmega)`-shaped
       function returning an `ArcSolution` (curvature/arc length/cruise
       v_x/omega/a `stop` flag) — the same conceptual surface as
       `solver.py`'s `solveArcToPoint`/`ArcSolution`.
-- [ ] The curvature slew clamp (`solver.py`'s `_clampOmegaStep`) is
+- [x] The curvature slew clamp (`solver.py`'s `_clampOmegaStep`) is
       ported: `omega` never steps between successive calls, only ramps,
       bounded by `NavigatorLimits`.
-- [ ] The target-behind guard is ported: a target whose body-frame bearing
+- [x] The target-behind guard is ported: a target whose body-frame bearing
       magnitude approaches ~180° returns `ArcSolution.stop = true` rather
       than an extreme, physically-unrealizable arc.
-- [ ] `NavigatorLimits` is defined as a plain, motion-owned struct (no
+- [x] `NavigatorLimits` is defined as a plain, motion-owned struct (no
       wire types), covering behind-angle, TURN_FIRST-equivalent pivot
       threshold, omega slew rate, and approach-taper parameters.
-- [ ] A standalone ctest exists and is wired into a real `ctest` target
+- [x] A standalone ctest exists and is wired into a real `ctest` target
       (per the build-list decision above) mirroring `solver.py`'s own test
       surface closely enough to be a parity check, not just a smoke test —
       same representative poses/targets, comparable tolerances.
-- [ ] `git diff` at completion shows zero changes to
+- [x] `git diff` at completion shows zero changes to
       `src/motion/planner/planner_types.h` or any other `planner/` file —
       `ArcSolver` is purely additive and standalone.
-- [ ] Root `CMakeLists.txt` is NOT edited (per touch-point #1 above); if a
+- [x] Root `CMakeLists.txt` is NOT edited (per touch-point #1 above); if a
       change there seemed necessary, that's flagged and explained in
       Completion Notes rather than silently made.
 
@@ -165,3 +165,100 @@ don't assume, re-verify at ticket time since the tree moves:**
   cmake --build src/motion/build --target motion_tests
   ctest --test-dir src/motion/build --output-on-failure
   ```
+
+## Completion Notes
+
+**Files added** (all new, nothing else touched):
+- `src/motion/navigator/arc_solver.h` — `Motion::Pose`, `Motion::
+  NavigatorLimits`, `Motion::ArcSolution`, `Motion::ArcSolver::solve()`.
+- `src/motion/navigator/arc_solver.cpp` — the implementation.
+- `src/motion/navigator/CMakeLists.txt` — the standalone build (see below).
+- `src/motion/navigator/tests/arc_solver_test.cpp` — the parity ctest.
+
+**Build-list decision (Open Question 2): a new sibling
+`src/motion/navigator/CMakeLists.txt`**, mirroring `planner/CMakeLists.txt`'s
+own standalone-project pattern (`project(motion_navigator CXX)`, a static
+`navigator` library, a `NAVIGATOR_TESTS` foreach loop, a `navigator_tests`
+custom target running `ctest`). Chosen over folding `arc_solver.cpp` into
+`src/motion/CMakeLists.txt`'s existing `motion_tests` target because
+**ticket 003's `Motion::Navigator`**, the very next file to land in this same
+directory, depends on `Motion::Planner::move()`/`TickResult` — a dependency
+`motion_tests` deliberately does NOT carry (`src/motion/DESIGN.md` §4:
+"Separate from, and does not depend on, `planner/`'s own CMake project").
+Putting `navigator/` in its own standalone project now means ticket 003 can
+add that `Motion::Planner` dependency (e.g. `add_subdirectory` on
+`planner/`, or linking its sources directly the way `planner/`'s own
+`pose_ownership_test` target already does for `odometry.cpp`/
+`body_kinematics.cpp`) without disturbing `motion_tests`' own narrower,
+already-documented scope. THIS ticket's own `arc_solver.cpp` has zero
+dependency on `Motion::Planner` or `Types::RobotState` — no `src/firm`
+include root was needed, unlike `planner/CMakeLists.txt`'s own (which adds
+`src/firm` for the one sanctioned `types/robot_state.h` include).
+**Ticket 003: add `navigator.{h,cpp}` next to `arc_solver.cpp` in this same
+`src/motion/navigator/CMakeLists.txt` project`, adding whatever `Motion::
+Planner` linkage it needs.**
+
+**`maxWheelStep` default re-derived, not copied.** `solver.py`'s own
+`MAX_WHEEL_STEP = 250.0 mm/s` is derived against the HOST planner loop's
+100 ms re-solve cadence (`_SLEW_ACCEL * _SOLVE_PERIOD = 2500.0 * 0.1`). This
+port's caller (`Motion::Navigator`, ticket 003) re-solves on the
+**firmware's own 50 ms cycle** instead (sprint 135 `sprint.md` Solution:
+"re-solving a tangent arc every 50 ms cycle"; confirmed against
+`App::RobotLoop::kCycle = 50` in `src/firm/app/robot_loop.h`). Re-deriving
+against the loop that actually spends the budget — exactly the warning
+`solver.py`'s own docstring gives for its `_SOLVE_PERIOD` constant — gives
+`kArcSolverMaxWheelStepDefault = 2500.0 * 0.05 = 125.0 mm/s` per solve, not
+`250.0`. Both the constants and the full derivation prose live in
+`arc_solver.h` (not `arc_solver.cpp`) so they are publicly visible to the
+parity ctest, matching how `solver.py`'s own `MAX_WHEEL_STEP` is a public,
+importable module constant its own `test_max_wheel_step_derivation` locks
+against.
+
+**`NavigatorLimits` fields beyond what `solve()` itself reads.** Per the
+ticket body, `NavigatorLimits` also carries `turnFirstAngle` (goto_otos.py's
+`TURN_FIRST`, ~50°) and `approachRadius`/`approachSpeed` (near-target speed
+taper) even though `ArcSolver::solve()` does not consult `turnFirstAngle` at
+all (that is `Motion::Navigator`'s own pivot-policy decision, ticket 003) —
+both live on this one struct because `NavigatorLimits` is a single
+configuration group (one robot-JSON block, one bake path, ticket 004) even
+though only part of it feeds this ticket's own pure-geometry `solve()`. The
+approach-speed taper IS applied inside `solve()` itself (it only scales the
+commanded `v_x`/`omega` proportionally along the same tangent-circle
+geometry, so it stays "geometry-adjacent" pure math, not navigation policy)
+— `approachRadius <= 0` disables it (fail-open, matching `PlannerLimits`'
+own `<= 0` convention), so every caller that never sets it gets the
+untapered constant `speed` exactly as `solver.py`'s own behavior.
+
+**Ctest coverage (17 checks, `arc_solver_test`, all green):** on-heading
+target (zero curvature), the 90°-offset hand-computed tangent-circle
+half-turn, a symmetric 30°-left/right pair, the target-behind guard at
+directly-behind/120°/80° (stop vs. no-stop on both sides of the 90°
+cutoff), the zero-distance degenerate case, the curvature slew clamp (a
+single clamped step, a multi-step ramp converging in the exact number of
+steps the budget predicts, and an abrupt-reversal clamp), purity (same
+inputs → same outputs), target-final-heading-ignored, the `maxWheelStep`
+derivation lock, and the default `behindAngle`/`turnFirstAngle` values.
+`pursuitTarget()`'s own test surface was NOT ported — it stays host-side
+unchanged, out of this ticket's scope per sprint 135's Out of Scope
+section. The "`ArcSolution` cannot express an Angle stop" criterion is
+enforced as a **compile-time** structured-binding decomposition (`const
+auto& [v_x, omega, arcLength, stop, bearing] = solution;`) rather than
+Python's runtime `dataclasses.fields()` introspection — C++ has no direct
+equivalent, and the structured binding is arguably a stronger guard since a
+future 6th field breaks the *build*, not just a test run.
+
+**Verification run:**
+```
+cmake -S src/motion/navigator -B src/motion/navigator/build
+cmake --build src/motion/navigator/build --target navigator_tests
+# 100% tests passed, 1/1 (arc_solver_test, 17 checks)
+
+cmake -S src/motion/planner -B src/motion/planner/build
+cmake --build src/motion/planner/build --target planner_tests
+# 100% tests passed, 8/8 -- unchanged, confirming zero disturbance to planner/
+```
+`git diff --stat -- src/motion/planner/` and `git diff --stat -- CMakeLists.txt`
+both report no changes. `git status --short -- src/motion/navigator/` shows
+exactly the four files listed above (the `build/` directories under both
+`src/motion/navigator/` and `src/motion/planner/` are covered by the
+repo-wide `build` gitignore rule and are not staged).
