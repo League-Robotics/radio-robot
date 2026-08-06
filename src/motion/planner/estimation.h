@@ -73,9 +73,29 @@ class PoseTracker {
   // shortest-way wrapped.
   void blendHeading(float otosHeading, float weight);  // [rad]
 
+  // Hand the tracker this cycle's OTOS heading. While the chip is connected,
+  // heading() reports the OTOS's own heading instead of the wheel-integrated
+  // one -- which is the whole point: wheel heading is scrub-limited and is
+  // what makes open-loop turns inaccurate.
+  //
+  // `fresh` and `connected` are DIFFERENT questions and conflating them
+  // breaks this badly. The chip is read every 20ms, so `fresh` is false on
+  // most control cycles; treating that as "no OTOS" makes the source flip
+  // every cycle, re-seeding constantly, so no rotation ever accumulates.
+  // Only `connected` going false is a real loss.
+  //
+  // Accumulates DELTAS, because the chip reports wrapped [-pi, pi] while
+  // heading() is unwrapped and every caller depends on that continuity.
+  // Seeds from the current wheel heading on the first sample and hands the
+  // accumulated value back to the wheel path on loss, so neither transition
+  // is a discontinuity.
+  void applyOtosHeading(float otosHeading, bool fresh, bool connected);  // [rad]
+
+  bool otosDriven() const { return otosActive_; }
+
   float x() const { return x_; }              // [mm]
   float y() const { return y_; }              // [mm]
-  float heading() const { return heading_; }  // [rad] unwrapped
+  float heading() const { return otosActive_ ? otosHeading_ : heading_; }  // [rad] unwrapped
   float pathLength() const { return pathLength_; }  // [mm] unsigned
 
   // Does NOT touch lastLeftEpoch_/lastRightEpoch_ (131-004) -- see
@@ -94,6 +114,10 @@ class PoseTracker {
   float lastLeft_ = 0.0f;      // [mm]
   float lastRight_ = 0.0f;     // [mm]
   bool seeded_ = false;
+
+  bool otosActive_ = false;
+  float otosHeading_ = 0.0f;      // [rad] unwrapped, OTOS-driven
+  float lastOtosSample_ = 0.0f;   // [rad] wrapped, previous chip reading
 
   // 131-004: mirrors Motion::Odometry's own lastLeftEpoch_/lastRightEpoch_
   // (odometry.h) -- initialized to 0 to match a fresh

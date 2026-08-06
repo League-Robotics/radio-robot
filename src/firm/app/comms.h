@@ -105,6 +105,13 @@ class Comms {
     uint32_t flags = 0;             // the full telemetry flags word
 
     uint8_t tlmMode = 1;
+
+    int32_t otosX = 0;        // [mm]
+    int32_t otosY = 0;        // [mm]
+    int32_t otosHeading = 0;  // [mrad]
+    int32_t encX = 0;         // [mm]
+    int32_t encY = 0;         // [mm]
+    int32_t encHeading = 0;   // [mrad]
   };
 
   void setStatus(const Status& status) { status_ = status; }
@@ -117,6 +124,22 @@ class Comms {
     const TlmAction action = tlmAction_;
     tlmAction_ = TlmAction::kNone;
     return action;
+  }
+
+  // An external world fix waiting for the loop to install it. Staged here
+  // because Comms cannot reach the OTOS or the odometry itself.
+  struct SeedRequest {
+    bool pending = false;
+    float x = 0.0f;        // [mm]
+    float y = 0.0f;        // [mm]
+    float heading = 0.0f;  // [rad]
+    Transport* reply = nullptr;
+  };
+
+  SeedRequest takeSeed() {
+    const SeedRequest seed = seed_;
+    seed_ = SeedRequest{};
+    return seed;
   }
 
   enum class DbgActionKind : uint8_t { kNone, kMark, kPing, kWedge, kClear,
@@ -177,6 +200,8 @@ class Comms {
   void dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& out, uint32_t now);  // [ms]
 
   void dispatchCleartext(msg::Verb verb, Transport& t, uint32_t now);  // [ms]
+  void stageSeed(const uint8_t* data, uint16_t len, Transport& t);
+  void sendPose(Transport& t);
 
   void decodeBinaryFrame(const uint8_t* command, size_t commandLen, const uint8_t* data, uint16_t dataLen, Cmd& out);
 
@@ -188,6 +213,7 @@ class Comms {
   Status status_{};
 
   TlmAction tlmAction_ = TlmAction::kNone;
+  SeedRequest seed_{};  // staged by dispatchLine(); drained by RobotLoop
   static constexpr uint8_t kDbgRingDepth = 4;
   DbgAction dbgRing_[kDbgRingDepth]{};  // staged by dispatchLine(); drained by RobotLoop
   uint8_t dbgHead_ = 0;

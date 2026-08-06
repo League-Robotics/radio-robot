@@ -42,6 +42,15 @@ void RealOtos::begin()
     setLinearScalar(static_cast<float>(scaleToRegister(config_.linearScale)));
     setAngularScalar(static_cast<float>(scaleToRegister(config_.angularScale)));
 
+    // Zero the chip's offset register on EVERY boot. The lever arm is applied
+    // in software (sensorToCentre()); leaving a stale arm in the chip too
+    // double-corrects. This cannot be left to setOffset(), because the chip is
+    // never power-cycled by an nRF reset -- it keeps whatever offset an
+    // earlier session wrote, so a boot that never calls configureOtos() would
+    // silently inherit it. Measured 2026-08-05: a pure pivot traced a 42.7mm
+    // circle instead of holding the centre still.
+    writePoseMm(kRegOffsetXl, 0.0f, 0.0f, 0.0f);
+
     writeXYH(kRegPositionXl, 0, 0, 0);
 }
 
@@ -156,21 +165,35 @@ void RealOtos::resetTracking()
 
 void RealOtos::setOffset(float x, float y, float heading)
 {
+    // The lever arm is applied HERE, in software, by sensorToCentre() on every
+    // read and centreToSensor() on every seed. The chip's own offset register
+    // is deliberately held at ZERO.
+    //
+    // Applying it in both places double-corrects. Measured 2026-08-05: with a
+    // 47.8mm configured arm written to the chip AND subtracted in software, a
+    // pure in-place pivot made the reported centre trace a circle of radius
+    // 41.8mm instead of holding still (the camera, whose tag is registered at
+    // the centre of rotation, held it to 8.1mm through the same pivot). That
+    // was the dominant term in every OTOS-vs-camera disagreement, and it hid
+    // whenever a run happened to end on its starting heading.
+    //
+    // This also updates config_, which the previous version did not: a live
+    // offset push wrote the chip and left the software transform on the boot
+    // value, so the two silently disagreed.
+    config_.offsetX = x;
+    config_.offsetY = y;
+    config_.offsetYaw = heading;
     if (!initialized_) return;
-    writePoseMm(kRegOffsetXl, x, y, heading);
+    writePoseMm(kRegOffsetXl, 0.0f, 0.0f, 0.0f);
 }
 
 void RealOtos::getOffset(float& x, float& y, float& heading)
 {
-    x = 0.0f; y = 0.0f; heading = 0.0f;
-    if (!initialized_) return;
-
-    int16_t rx = 0, ry = 0, rh = 0;
-    readXYH(kRegOffsetXl, rx, ry, rh);
-
-    x = static_cast<float>(rx) * kPosMmPerLsb;       // [mm]
-    y = static_cast<float>(ry) * kPosMmPerLsb;       // [mm]
-    heading = static_cast<float>(rh) * kHdgRadPerLsb; // [rad]
+    // The EFFECTIVE lever arm, which lives in config_ -- not the chip's own
+    // offset register, which setOffset() holds at zero on purpose.
+    x = config_.offsetX;             // [mm]
+    y = config_.offsetY;             // [mm]
+    heading = config_.offsetYaw;     // [rad]
 }
 
 void RealOtos::setSignalProcessConfig(uint8_t config)

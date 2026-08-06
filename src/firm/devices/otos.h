@@ -29,6 +29,10 @@ class Otos {
   // no ACK. Distinguishes "wrong device" from "nothing there" at diagnosis.
   virtual uint8_t lastProbeId() const { return 0; }
 
+  // Seed the chip's world pose (robot CENTRE, lever arm applied by the impl).
+  // Default no-op: a fake synthesizes its pose and has nothing to seed.
+  virtual void setPose(float x, float y, float heading) {}  // [mm] [mm] [rad]
+
   virtual void setLinearScalar(float scalar) = 0;
   virtual void setAngularScalar(float scalar) = 0;
   virtual void setOffset(float x, float y, float heading) = 0;     // [mm] [mm] [rad]
@@ -59,7 +63,7 @@ class RealOtos : public Otos {
 
   void tick(uint64_t nowUs) override;  // [us]
 
-  void setPose(float x, float y, float heading);  // [mm] [mm] [rad]
+  void setPose(float x, float y, float heading) override;  // [mm] [mm] [rad]
 
   void resetTracking();  // OR — reset Kalman tracking
 

@@ -228,6 +228,7 @@ class RobotLoop {
   void publishWheels();               // both wheels + wedge/clamp health
   void publishOtos();
   void publishLineColor(bool tickedLine);
+  void applySeed();
   void publishPose();
   void publishHealth();
   void ackDriveCompletion();

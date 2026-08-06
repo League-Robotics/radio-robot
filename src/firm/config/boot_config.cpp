@@ -25,7 +25,7 @@ const char kDrivetrainType[] = "differential";
 // kRadioChannel — see boot_config.h's own doc comment. Baked from
 // connection.radio_channel (robot JSON), defaulting to 0 (the historical
 // hard-coded Radio::begin() value) when absent.
-const int kRadioChannel = 0;  // [nRF frequency band]
+const int kRadioChannel = 3;  // [nRF frequency band] private to tovez + the getez relay
 
 void defaultMotorConfigs(msg::MotorConfig* out) {
     // Velocity PID gains — baked from the robot JSON's motors.vel_* keys
@@ -124,7 +124,7 @@ OtosBootConfig defaultOtosBootConfig() {
     cfg.offsetX = -47.7f;        // [mm]
     cfg.offsetY = 3.5f;        // [mm]
     cfg.offsetYaw = 0.0f;    // [rad]
-    cfg.linearScale = 1.0275f;
+    cfg.linearScale = 1.0188f;
     cfg.angularScale = 0.987f;
     return cfg;
 }
@@ -357,7 +357,7 @@ msg::Otos defaultOtosGroup() {
     cfg.offset_x = -47.7f;          // [mm]
     cfg.offset_y = 3.5f;          // [mm]
     cfg.offset_yaw = 0.0f;      // [rad]
-    cfg.linear_scale = 1.0275f;
+    cfg.linear_scale = 1.0188f;
     cfg.angular_scale = 0.987f;
     return cfg;
 }
