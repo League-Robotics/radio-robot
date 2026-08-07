@@ -833,9 +833,15 @@ def scenario_config_mid_move(proto: NezhaProtocol, result: Result) -> None:
     result.record("config-mid-move: Move enqueue ack ok", ack_move is not None and ack_move.ok,
                   f"ack={ack_move}")
 
+    # Sprint 132-012 deleted NezhaProtocol.config(**{"pid.kp": ...}) in favour
+    # of the schema-addressed set_config_field(target, field_name, value),
+    # which returns its AckEntry directly rather than a corr_id to wait on.
+    # This scenario still called the deleted method and died on an
+    # AttributeError before reaching any of its own assertions.
+    from robot_radio.robot.pb2 import robot_config_pb2 as pb
+
     _watch(proto, 0.3)
-    corr_cfg = proto.config(**{"pid.kp": 0.0025})
-    ack_cfg = proto.wait_for_ack(corr_cfg, timeout=ACK_TIMEOUT)
+    ack_cfg = proto.set_config_field(pb.WHEEL_CONTROL, "pid_kp", 0.0025)
     result.record("config-mid-move: CONFIG patch ack ok (not ERR_UNIMPLEMENTED)",
                   ack_cfg is not None and ack_cfg.ok, f"ack={ack_cfg}")
 
@@ -846,8 +852,7 @@ def scenario_config_mid_move(proto: NezhaProtocol, result: Result) -> None:
 
     # Restore the default kp before continuing (sprint 115 checklist
     # precedent -- don't leave the robot detuned for later scripts).
-    restore_corr = proto.config(**{"pid.kp": 0.002})
-    restore_ack = proto.wait_for_ack(restore_corr, timeout=ACK_TIMEOUT)
+    restore_ack = proto.set_config_field(pb.WHEEL_CONTROL, "pid_kp", 0.002)
     result.record("config-mid-move: restored default pid.kp=0.002",
                   restore_ack is not None and restore_ack.ok, f"ack={restore_ack}")
 
