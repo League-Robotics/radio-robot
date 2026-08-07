@@ -364,8 +364,14 @@ void scenarioErrFullNotRecorded() {
               "the 6th move is rejected with ERR_FULL -- the queue was genuinely full");
 
   // Let all five fill moves run to completion and drain (5 * 300ms = 1500ms;
-  // run comfortably longer).
-  sim.step(40);  // 40 * 50ms = 2.0s
+  // run comfortably longer). The step COUNT is derived from the loop period,
+  // never hardcoded: a fixed count silently under-runs whenever kCycle
+  // changes, and this exact scenario has now been bitten twice that way
+  // (130-007 widening kEachStopTime for 40 -> 50, and a hardcoded "40 steps
+  // = 2.0s" that became 1.28s -- less than the 1.5s these moves need -- when
+  // kCycle came down 50 -> 32 on 2026-08-07).
+  constexpr uint32_t kDrainWindow = 2000;  // [ms]
+  sim.step(static_cast<int>(kDrainWindow / App::RobotLoop::kCycle) + 1);
   (void)sim.drainTelemetry();
   checkTrue(!sim.planner().active(), "the planner is idle -- all five fill moves completed and drained");
   checkUintEq(static_cast<uint32_t>(queueDepth(sim.planner())), 0u, "queue is fully drained");

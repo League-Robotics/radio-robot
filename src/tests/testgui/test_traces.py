@@ -249,11 +249,20 @@ def test_camera_trace_grows_in_step_with_ground_truth(transport: SimTransport) -
     # far the robot travelled before the first ~5 Hz truth poll landed. The
     # meaningful assertion is growth (+x) and negligible lateral drift across
     # every sample, not proximity of the first sample to the origin.
+    # Wait for the MOTION, not for a sample count that is assumed to imply
+    # it. The sim advances one App::RobotLoop::kCycle of sim time per tick,
+    # so how far the robot travels inside a fixed wall-clock window scales
+    # with the loop period: when kCycle went 50ms -> 32ms on 2026-08-07 the
+    # same three samples covered 6.8mm instead of clearing the 1.0cm bound
+    # below, and this assertion failed on test pacing rather than on the
+    # trace behaviour it exists to defend. Still bounded by _WAIT_TIMEOUT_S.
+    assert _wait_until(
+        lambda: len(model.camera) >= 3
+        and model.camera[-1][0] > model.camera[0][0] + 1.0
+    ), f"camera trace did not move forward in x: {model.camera}"
+
     first_x, first_y = model.camera[0]
     last_x, last_y = model.camera[-1]
-    assert last_x > first_x + 1.0, (
-        f"camera trace did not move forward in x: {model.camera}"
-    )
     assert all(abs(y) < 5.0 for _x, y in model.camera), (
         f"camera trace drifted laterally during a straight drive: {model.camera}"
     )

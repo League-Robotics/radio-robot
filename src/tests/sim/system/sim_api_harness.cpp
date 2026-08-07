@@ -357,7 +357,7 @@ void scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic() {
 // ===========================================================================
 
 void scenarioVirtualCycleTimingDiagnostic() {
-  beginScenario("timing: virtual-cycle schedule makes exactly 4 sleepMillis() calls per cycle; "
+  beginScenario("timing: virtual-cycle schedule makes exactly 3 sleepMillis() calls per cycle; "
                 "the trailing call targets kCycle directly (131-005 absolute-deadline pacing)");
 
   TestSim::SimHarness sim;
@@ -383,18 +383,23 @@ void scenarioVirtualCycleTimingDiagnostic() {
   // computes a fixed budget of its own, so there is no local mirror of it
   // to duplicate here any more.
   constexpr uint32_t kSettle = 4;  // [ms] mirrors robot_loop.cpp's own kSettle
-  constexpr uint32_t kClear = 4;   // [ms] mirrors robot_loop.cpp's own kClear
-  constexpr uint32_t kCycle = 50;  // [ms] mirrors robot_loop.cpp's own RobotLoop::kCycle
+  // kCycle is read from the production constant, NOT re-declared as a local
+  // literal. It used to be duplicated here as `50` alongside a `kClear = 4`
+  // that no longer exists, and both silently went stale when the schedule
+  // changed on 2026-08-07 (kCycle 50 -> 32, and the post-duty-write kClear
+  // window deleted as measured-dead padding) -- the scenario then failed
+  // reporting a schedule defect that was really its own stale mirror.
+  constexpr uint32_t kCycle = App::RobotLoop::kCycle;  // [ms]
 
-  checkTrue(sleepCount == 4,
-            "exactly 4 Sleeper::sleepMillis() calls per cycle() (3 runAndWait blocks + the "
-            "trailing runAndWaitUntil() block)");
+  checkTrue(sleepCount == 3,
+            "exactly 3 Sleeper::sleepMillis() calls per cycle() (2 runAndWait settle blocks + "
+            "the trailing runAndWaitUntil() block)");
   checkTrue(lastSleepMillis == kCycle,
-            "the trailing block's own sleepMillis() call requests kCycle=50ms under THIS "
+            "the trailing block's own sleepMillis() call requests the full kCycle under THIS "
             "harness's fake clock -- see this scenario's own file-header 131-005 REWRITE note: "
-            "SimHarness's SimClock/SimSleeper pair never advances BETWEEN a cycle's own four "
+            "SimHarness's SimClock/SimSleeper pair never advances BETWEEN a cycle's own "
             "pacing blocks, so the absolute deadline (cycleStart+kCycle) always reads ZERO "
-            "elapsed at the trailing block regardless of the three earlier blocks' own "
+            "elapsed at the trailing block regardless of the earlier blocks' own "
             "requested sleeps -- a property of this fake clock, not of the fix. "
             "app_robot_loop_pacing_harness.cpp's own injected-jitter test is where the actual "
             "convergence-to-kCycle claim is proven");
@@ -406,7 +411,7 @@ void scenarioVirtualCycleTimingDiagnostic() {
       "deadline; see this scenario's own REWRITE note for why lastSleepMillis==kCycle here "
       "rather than the old kCycle-kWindows)\n",
       sleepCount, static_cast<unsigned>(lastSleepMillis), yieldCount,
-      static_cast<unsigned>(kSettle), static_cast<unsigned>(kClear), static_cast<unsigned>(kCycle));
+      static_cast<unsigned>(kSettle), static_cast<unsigned>(kCycle));
 }
 
 // ===========================================================================

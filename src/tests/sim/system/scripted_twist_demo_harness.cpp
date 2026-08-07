@@ -328,7 +328,16 @@ int main() {
   // of both the 12-cycle window and the ~3mm/s convergence bound.
   // ===========================================================================
   constexpr uint32_t kStopCorrId = 2;
-  constexpr int kStopCycles = 12;
+  // The window is a DURATION, not a cycle count. What the ~3mm/s bound below
+  // was derived against is how far a ~0.23s first-order plant decays in
+  // ~600ms; a hardcoded "12 cycles" delivered that only while kCycle was
+  // 50ms, and silently became 384ms (~1.7 tau instead of ~2.6) when kCycle
+  // went to 32 on 2026-08-07 -- at which point the plant genuinely had not
+  // decayed far enough and the scenario failed on physics it never meant to
+  // change.
+  constexpr uint32_t kStopWindow = 600;  // [ms]
+  const int kStopCycles =
+      static_cast<int>((kStopWindow + App::RobotLoop::kCycle - 1) / App::RobotLoop::kCycle);
   // Open-loop era (stakeholder 2026-07-27, no wheel PID): STOP cuts duty
   // to zero and the plant COASTS on its own time constant -- there is no
   // controller actively braking to a small residual any more. The bound

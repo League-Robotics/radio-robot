@@ -931,7 +931,14 @@ void scenarioFifthPendingRejectedErrFullQueueUnchanged() {
   std::vector<int> completionOrder;  // index into kIds, in the order each completion ack was FIRST seen
   std::vector<DecodedLine> lateFrames;
   bool seen[5] = {false, false, false, false, false};
-  constexpr int kMaxCycles = 260;
+  // Budget enough cycles for all five queued Moves to run to completion,
+  // DERIVED from their own stop time and the loop period rather than
+  // hardcoded. The literal 260 was 13s at kCycle=50 against 5 x 2s of work;
+  // at kCycle=32 the same count is only 8.3s, so the 5th Move had not
+  // completed when the scan gave up and the scenario reported a queue defect
+  // that was really a test budget that stopped covering the work.
+  const int kMaxCycles =
+      static_cast<int>(5.0f * kStopTimeMs * 1.3f / static_cast<float>(App::RobotLoop::kCycle));
   for (int i = 0; i < kMaxCycles && completionOrder.size() < 5; ++i) {
     sim.step(1);
     std::vector<DecodedLine> cycleFrames = onlyTelemetry(sim.drainTelemetry());

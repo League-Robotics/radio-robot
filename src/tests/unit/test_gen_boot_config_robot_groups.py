@@ -206,11 +206,22 @@ def test_default_planner_group_matches_tovez_json():
     ShaperBootConfig's former declaration site) -- NOT the same fields as
     this split, see PlannerShaper's own header comment for the
     distinction."""
-    content = gbc.generate(_tovez_cfg(), "data/robots/tovez.json")
+    cfg = _tovez_cfg()
+    content = gbc.generate(cfg, "data/robots/tovez.json")
 
     assert "cfg.v_max = 400.0f;" in content
-    assert "cfg.control_period = 50.0f;" in content
-    assert "cfg.actuation_delay = 50.0f;" in content
+    # control_period/actuation_delay are read FROM tovez.json rather than
+    # frozen as literals here. Both are "= App::RobotLoop::kCycle" by
+    # construction (see robot_loop.h's kCycle doc comment), so they move
+    # every time the loop period does -- they were 40, then 50, and became
+    # 32 on 2026-08-07, and a hardcoded literal turns each of those
+    # legitimate changes into a spurious generator failure. This is the fix
+    # clasi/issues/later/B-gen-boot-config-parity-tests-encode-superseded-
+    # literals.md proposes for this whole family: assert the generator
+    # faithfully emits what the JSON says, which is the property this test
+    # actually defends.
+    assert f"cfg.control_period = {gbc._f(cfg['planner']['control_period'])};" in content
+    assert f"cfg.actuation_delay = {gbc._f(cfg['planner']['actuation_delay'])};" in content
     # tovez.json's own planner.heading_hold_gain is 0.0 (130-011 zeroed the
     # limit-cycle-prone gain) -- NOT the stale 2.0 the three pre-existing
     # test_gen_boot_config_planner.py failures still expect.

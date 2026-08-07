@@ -761,20 +761,30 @@ void scenarioMeasuredCadenceReport() {
   moving.command.moveActive = true;
   telemetry.update(moving, testDrive());
 
-  const uint32_t kStep = 3;  // [ms] fine-grained relative to kPrimaryPeriod=40
+  const uint32_t kStep = 3;  // [ms] fine-grained relative to kPrimaryPeriod
   const uint32_t kEndTime = 10000;
   for (uint32_t now = 0; now <= kEndTime; now += kStep) {
     telemetry.emit(now);
   }
 
+  // The target is DERIVED from App::kPrimaryPeriod, never a hardcoded Hz.
+  // This scenario drives emit() directly off a scripted clock with no loop
+  // gating it, so the realized cadence is simply 1000/kPrimaryPeriod. The
+  // bound used to be a literal "15..35 Hz around 25 Hz" written when
+  // kPrimaryPeriod was 40ms; when it became 25ms on 2026-08-07 (so every
+  // 32ms cycle still clears the emit floor -- see telemetry.h's own comment)
+  // the realized 40 Hz blew the stale ceiling and the scenario failed on a
+  // constant it was never meant to pin.
+  const double targetHz = 1000.0 / static_cast<double>(App::kPrimaryPeriod);
   double primaryHz = static_cast<double>(telemetry.primaryEmitCount()) / (static_cast<double>(kEndTime) / 1000.0);
-  std::printf("  measured: primary %.2f Hz while MOVING (target ~25 Hz/40 ms) over %u ms\n", primaryHz,
-              static_cast<unsigned>(kEndTime));
+  std::printf("  measured: primary %.2f Hz while MOVING (target ~%.1f Hz/%u ms) over %u ms\n", primaryHz,
+              targetHz, static_cast<unsigned>(App::kPrimaryPeriod), static_cast<unsigned>(kEndTime));
 
-  // Not required to HIT 25 Hz exactly (ticket's own acceptance criterion)
-  // -- only sane and in the right neighborhood for a deterministic
-  // scripted-clock host test.
-  checkTrue(primaryHz > 15.0 && primaryHz < 35.0, "measured primary Hz is in a sane neighborhood of the 25 Hz target");
+  // Not required to HIT the target exactly (ticket's own acceptance
+  // criterion) -- only sane and in the right neighborhood for a
+  // deterministic scripted-clock host test.
+  checkTrue(primaryHz > targetHz * 0.6 && primaryHz < targetHz * 1.4,
+            "measured primary Hz is in a sane neighborhood of the kPrimaryPeriod-derived target");
 
   // The other half of the contract: once the robot parks, the link goes
   // QUIET -- and (issue Part 1 item 6, report-on-change deleted outright)

@@ -101,11 +101,20 @@ void scenarioPoseSanityAcrossRebaselineMarginAndSoak() {
   constexpr float kWheelsDuration = 200000.0f;  // [ms] -- ample hold window for the whole run
   sim.injectWheels(kSpeed, kSpeed, kWheelsDuration, /*id=*/1, /*corrId=*/1);
 
-  // 36,000mm / 400mm/s == 90s == 1800 cycles @ 50ms -- comfortably past the
-  // 30,000mm margin, so the "no discontinuity anywhere past 30m" soak
-  // requirement is genuinely exercised across many post-boundary cycles,
-  // not just the single triggering one.
-  constexpr int kRunCycles = 1800;
+  // Run 36,000mm at kSpeed -- comfortably past the 30,000mm margin, so the
+  // "no discontinuity anywhere past 30m" soak requirement is genuinely
+  // exercised across many post-boundary cycles, not just the single
+  // triggering one.
+  //
+  // The cycle COUNT is derived from the loop period, never hardcoded: what
+  // this scenario needs is a DISTANCE, and a fixed count silently stops
+  // delivering it whenever kCycle changes. The literal 1800 here was
+  // "90s @ 50ms"; at kCycle=32 the same 1800 cycles is 57.6s == 23,040mm,
+  // short of the 30,000mm margin, so the run never crossed the boundary it
+  // exists to test and the scenario failed on its own setup check.
+  constexpr float kRunDistance = 36000.0f;                      // [mm]
+  constexpr float kCyclePeriod = App::RobotLoop::kCycle * 0.001f;  // [s]
+  const int kRunCycles = static_cast<int>(kRunDistance / (kSpeed * kCyclePeriod)) + 1;
 
   const Types::RobotState* state = &sim.robotLoop().state();
   float prevX = state->pose.x;

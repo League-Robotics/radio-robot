@@ -105,15 +105,25 @@ void checkTrue(bool condition, const std::string& what) {
 // turning" is never in doubt.
 constexpr float kTeleopSpeed = 150.0f;
 
-// [ms] one WHEELS command's bounded lifetime. App::RobotLoop::kCycle is
-// 50ms, so this expires after ~10 cycles -- long enough that the plant is
-// genuinely in motion when it does.
+// Steps needed to cover a wall-clock duration at the CURRENT loop period.
+//
+// Never hardcode a cycle count in this file. kCycle has moved three times
+// (40 -> 50 -> 32) and every hardcoded count silently changed what it
+// covered: "12 cycles" was 600ms of a 500ms command at kCycle=50 and became
+// 384ms at kCycle=32, so the command had NOT expired when the scenario
+// asserted that it had -- the harness reported a runaway that was really
+// just a test that stopped waiting long enough.
+constexpr int cyclesFor(uint32_t duration) {  // [ms]
+  return static_cast<int>((duration + App::RobotLoop::kCycle - 1) / App::RobotLoop::kCycle);
+}
+
+// [ms] one WHEELS command's bounded lifetime -- long enough that the plant
+// is genuinely in motion when it expires.
 constexpr float kWheelsDuration = 500.0f;
 
 // Cycles to run after expiry with the host SILENT -- no further command of
-// any kind. 6 seconds at 50ms; the vevov capture ended, still moving, well
-// inside this window.
-constexpr int kSilentTailCycles = 120;
+// any kind. The vevov capture ended, still moving, well inside this window.
+constexpr int kSilentTailCycles = cyclesFor(6000);  // 6s
 
 // [mm] residual travel allowed across a stretch of cycles that must be
 // motionless. The plant is a first-order lag, so a settle window is given
@@ -145,7 +155,10 @@ void scenarioSilentHostAfterExpiryHoldsZeroOnEveryCycle() {
   const float startX = sim.trueX();  // [mm]
   int ownedCycles = 0;
   int nonzeroCycles = 0;
-  for (int i = 0; i < 12; ++i) {
+  // Cover the command's WHOLE bounded lifetime plus margin -- derived, so
+  // the phase still outlasts the command at any kCycle.
+  const int kCommandPhaseCycles = cyclesFor(static_cast<uint32_t>(kWheelsDuration)) + 4;
+  for (int i = 0; i < kCommandPhaseCycles; ++i) {
     sim.step(1);
     if (sim.drive().owns()) ++ownedCycles;
     if (sim.driveTargetVelLeft() != 0.0f && sim.driveTargetVelRight() != 0.0f) ++nonzeroCycles;
@@ -188,10 +201,10 @@ void scenarioSilentHostAfterExpiryHoldsZeroOnEveryCycle() {
   // in: travel stops and STAYS stopped. Sampled after a settle window (the
   // plant is a first-order lag; coasting to rest is legitimate) and then
   // held across a long motionless stretch.
-  sim.step(40);  // 2s settle
+  sim.step(cyclesFor(2000));  // 2s settle
   const float settledX = sim.trueX();  // [mm]
   const float settledY = sim.trueY();  // [mm]
-  sim.step(80);                        // 4s of nothing whatsoever
+  sim.step(cyclesFor(4000));           // 4s of nothing whatsoever
   const float drift = std::hypot(sim.trueX() - settledX, sim.trueY() - settledY);  // [mm]
   checkTrue(drift < kMotionlessTolerance,
             "the robot stays stopped through 4s of host silence (measured " +
@@ -289,9 +302,10 @@ void scenarioArbitrationStepNeverWritesNonzero() {
     sim.injectWheels(speed, speed, kWheelsDuration, /*id=*/static_cast<uint32_t>(leg + 1),
                      /*corrId=*/static_cast<uint32_t>(leg + 1));
 
-    // 12 cycles covers the command; 30 more are the unowned tail before the
-    // next leg arms.
-    for (int i = 0; i < 42; ++i) {
+    // Cover the command, then an unowned tail of the same length again
+    // before the next leg arms -- both derived from the loop period.
+    const int kLegCycles = cyclesFor(static_cast<uint32_t>(kWheelsDuration)) + cyclesFor(1500);
+    for (int i = 0; i < kLegCycles; ++i) {
       sim.step(1);
       const float left = sim.driveTargetVelLeft();    // [mm/s]
       const float right = sim.driveTargetVelRight();  // [mm/s]
