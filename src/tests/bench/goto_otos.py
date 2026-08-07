@@ -146,12 +146,43 @@ class Robot:
                 return p
         return None
 
-    def seed(self, x: float, y: float, heading: float) -> bool:
+    def seed(self, x: float, y: float, heading: float,  # [mm] [mm] [rad]
+             timeout: float = 5.0) -> bool:              # [s]
+        """SEED the OTOS world pose, verified against FRESH telemetry.
+
+        Two bugs fixed here, both measured on the playfield 2026-08-06:
+
+        1. HEADING MUST BE WRAPPED to [-pi, pi]. ``Devices::Otos::setPose()``
+           rotates the configured lever arm (tovez ``otos.offset_x`` =
+           -47.7mm) by whatever heading it is handed, so an out-of-range
+           angle rotates that correction the wrong way and lands the
+           POSITION seed up to ~2x the lever arm off. The camera can
+           legitimately report an unwrapped yaw -- a raw -5.94995 rad
+           camera yaw put x 91mm wrong while y was fine.
+
+        2. THE READ-BACK MUST WAIT FOR A FRESH FRAME. The old check slept
+           0.5s then took whatever ``drain_binary_tlm()`` returned, which is
+           a backlog that can predate the seed -- producing false "seed did
+           not read back" aborts on a seed that actually landed. Draining
+           FIRST, then waiting for a frame that shows the seeded pose, fixes
+           it. The ``POSE`` verb is NOT an alternative: its reply is
+           unreliable while binary telemetry streams (returns empty).
+        """
+        heading = math.atan2(math.sin(heading), math.cos(heading))
+        self.conn.drain_binary_tlm()          # discard everything pre-seed
         self.conn.send_cleartext(f"SEED:{x:.1f},{y:.1f},{heading:.5f}",
-                                 read_timeout=900)
-        time.sleep(0.5)
-        got = self.pose_blocking()
-        return got is not None and math.hypot(got[0] - x, got[1] - y) < 25.0
+                                 read_timeout=1500)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for env in self.conn.drain_binary_tlm():
+                t = getattr(env, "tlm", None)
+                if t is None or not (t.flags & 0x02):   # no OTOS -> no pose
+                    continue
+                if math.hypot(float(t.otos.x) - x,
+                              float(t.otos.y) - y) < 25.0:
+                    return True
+            time.sleep(0.08)
+        return False
 
     def goto_wire(self, x: float, y: float, frame: int, *,
                   speed: float = 0.0,    # [mm/s] 0 = NavigatorLimits::speed config default
