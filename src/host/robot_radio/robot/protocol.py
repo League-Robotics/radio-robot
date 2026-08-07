@@ -314,6 +314,11 @@ _FLAG_OTOS_CONNECTED = 1 << 1
 _FLAG_ACTIVE = 1 << 2
 _FLAG_CONN_LEFT = 1 << 3
 _FLAG_CONN_RIGHT = 1 << 4
+# Bit 5 / bit 11 pair with LINE_PRESENT / COLOR_PRESENT below: Present
+# means a reading is on the wire, Fresh means it was re-read on that
+# cycle. The firmware samples only ONE perception leaf per cycle, so the
+# other sensor's value is up to one alternation stale but still sent.
+_FLAG_LINE_FRESH = 1 << 5
 # bit 5 -- RESERVED (124-008: formerly _FLAG_ACK_FRESH, deleted with the
 # single "freshest ack" scalar slot it gated).
 _FLAG_FAULT_I2C_SAFETY_NET = 1 << 6
@@ -340,6 +345,8 @@ _FLAG_FAULT_WHEEL_FROZEN_RIGHT = 1 << 20
 # own kFlagFaultWheelDeficitLeft/Right doc comment.
 _FLAG_FAULT_WHEEL_DEFICIT_LEFT = 1 << 21
 _FLAG_FAULT_WHEEL_DEFICIT_RIGHT = 1 << 22
+# NOT bit 11 -- that is _FLAG_EVENT_BOOT_READY above.
+_FLAG_COLOR_FRESH = 1 << 23
 
 
 def _unpack_channels4(word: "int | None") -> "tuple[int, int, int, int] | None":
@@ -523,8 +530,8 @@ class TLMFrame:
     cmd_vel: tuple[int, int] | None = None      # (left, right) COMMANDED per-wheel velocity (PID setpoint) mm/s -- permanent gap, TelemetrySecondary only
     twist: tuple[int, int] | None = None        # (v, omega_mrad)
     otos: tuple[int, int, int] | None = None    # (x, y, heading) [mm, mm, cdeg] — raw OTOS pose; valid iff otos_present
-    line: tuple[int, int, int, int] | None = None   # (ch1, ch2, ch3, ch4); valid iff line_present
-    color: tuple[int, int, int, int] | None = None  # (r, g, b, c); valid iff color_present
+    line: tuple[int, int, int, int] | None = None   # (ch1, ch2, ch3, ch4); valid iff line_present, just-sampled iff line_fresh
+    color: tuple[int, int, int, int] | None = None  # (r, g, b, c); valid iff color_present, just-sampled iff color_fresh
     ekf_rej: int | None = None                   # cumulative EKF gate rejection count -- permanent binary-decode gap
     wedge: tuple[int, int] | None = None         # (left, right) wedge-latch state, 0/1 each -- permanent binary-decode gap
     encpose: tuple[int, int, int] | None = None  # (x, y, heading) [mm, mm, cdeg] -- permanent binary-decode gap
@@ -659,6 +666,24 @@ class TLMFrame:
     @property
     def color_present(self) -> bool:
         return self._flag(_FLAG_COLOR_PRESENT)
+
+    @property
+    def line_fresh(self) -> bool:
+        """``line`` was re-read on THIS cycle (vs. carried over).
+
+        ``line_present`` says the value is meaningful; this says it is
+        brand new. The firmware ticks line and colour on alternate cycles,
+        so exactly one of ``line_fresh``/``color_fresh`` is set per frame
+        and the other reading is up to one alternation old. Most consumers
+        want ``line_present`` -- reach for this only when a sample must be
+        just-measured (e.g. edge timing off the line sensor).
+        """
+        return self._flag(_FLAG_LINE_FRESH)
+
+    @property
+    def color_fresh(self) -> bool:
+        """``color`` was re-read on THIS cycle -- see ``line_fresh``."""
+        return self._flag(_FLAG_COLOR_FRESH)
 
     @classmethod
     def from_pb2(cls, telemetry: "telemetry_pb2.Telemetry") -> "TLMFrame":

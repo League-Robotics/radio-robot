@@ -94,7 +94,14 @@ def test_app_telemetry_harness_compiles_and_passes(tmp_path):
         f"stdout:\n{compile_result.stdout}\nstderr:\n{compile_result.stderr}"
     )
 
-    run_result = subprocess.run([str(binary)], capture_output=True, text=True)
+    # errors="replace": the harness prints packed sensor words and can emit
+    # a byte that is not valid UTF-8. With strict decoding that raises a
+    # UnicodeDecodeError from subprocess itself, which REPLACES the
+    # harness's own PASS/FAIL report with a decode traceback -- a real
+    # assertion failure then shows up as an encoding bug and the actual
+    # message is lost. Decode leniently so failures stay readable.
+    run_result = subprocess.run([str(binary)], capture_output=True, text=True,
+                                errors="replace")
     assert run_result.returncode == 0, (
         "app_telemetry_harness reported a scenario failure "
         f"(exit {run_result.returncode}):\n{run_result.stdout}\n{run_result.stderr}"

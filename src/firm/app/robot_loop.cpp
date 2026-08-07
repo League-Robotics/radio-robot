@@ -504,6 +504,18 @@ void RobotLoop::publishOtos() {
   state_.otos.sampleTime = static_cast<uint32_t>(otos_.sampleTime() / 1000);  // [us] -> [ms]
 }
 
+bool RobotLoop::tickLineColor(uint64_t nowUs) {
+  // Odd cycles read the line sensor, even cycles the colour sensor, so each
+  // lands at kCycle/2 for one I2C transaction per cycle between them.
+  const bool tickedLine = (cycleCount_ % 2) == 1;
+  if (tickedLine) {
+    line_.tick(nowUs);
+  } else {
+    color_.tick(nowUs);
+  }
+  return tickedLine;
+}
+
 void RobotLoop::publishLineColor(bool tickedLine) {
   const bool lineFresh = tickedLine && line_.readingFresh();
   const bool colorFresh = !tickedLine && color_.readingFresh();
@@ -512,6 +524,18 @@ void RobotLoop::publishLineColor(bool tickedLine) {
   state_.perception.colorFresh = colorFresh;
   if (lineFresh) state_.perception.line = packLine(line_.reading());
   if (colorFresh) state_.perception.color = packColor(color_.reading());
+
+  // Validity LATCHES on the first reading and only drops when the leaf
+  // itself reports the device gone -- it deliberately does NOT track
+  // per-cycle freshness. Only one leaf is read per cycle, so tying validity
+  // to freshness took the other sensor off the wire entirely on every
+  // alternate cycle, and any consumer sampling at that cadence could see one
+  // of them never (measured on tovez 2026-08-07 when the telemetry emit
+  // floor aliased with this parity: `line_present 93, color_present 0`).
+  // A value up to one alternation old is worth far more than no value, and
+  // `*Fresh` above is there for anyone who needs to tell the difference.
+  state_.perception.lineValid = (state_.perception.lineValid || lineFresh) && line_.connected();
+  state_.perception.colorValid = (state_.perception.colorValid || colorFresh) && color_.connected();
 }
 
 void RobotLoop::applySeed() {
@@ -648,9 +672,7 @@ void RobotLoop::cycle() {
                     state_.wheelRight.positionEpoch);  // before OTOS: FakeOtos reads it
     otos_.tick(nowUs);
     publishOtos();
-    const bool tickedLine = (cycleCount_ % 2) == 1;  // first cycle ticks line
-    if (tickedLine) line_.tick(nowUs); else color_.tick(nowUs);
-    publishLineColor(tickedLine);
+    publishLineColor(tickLineColor(nowUs));
     publishPose();
     publishHealth();
     publishTiming(cycleStartUs);

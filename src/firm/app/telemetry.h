@@ -16,6 +16,12 @@ constexpr uint32_t kFlagOtosConnected = 1u << 1;
 constexpr uint32_t kFlagActive = 1u << 2;
 constexpr uint32_t kFlagConnLeft = 1u << 3;
 constexpr uint32_t kFlagConnRight = 1u << 4;
+// Bit 5 pairs with kFlagLinePresent (13) / kFlagColorPresent (14): the
+// Present bits say a reading is on the wire at all, these say it was
+// re-read on THIS cycle. Only one perception leaf is sampled per cycle, so
+// without the split the untouched sensor would have to be dropped from the
+// frame rather than allowed to go one alternation stale.
+constexpr uint32_t kFlagLineFresh = 1u << 5;
 constexpr uint32_t kFlagFaultI2CSafetyNet = 1u << 6;
 constexpr uint32_t kFlagFaultWedgeLatch = 1u << 7;
 constexpr uint32_t kFlagFaultI2CNak = 1u << 8;
@@ -32,22 +38,29 @@ constexpr uint32_t kFlagFaultWheelFrozenLeft = 1u << 19;
 constexpr uint32_t kFlagFaultWheelFrozenRight = 1u << 20;
 constexpr uint32_t kFlagFaultWheelDeficitLeft = 1u << 21;
 constexpr uint32_t kFlagFaultWheelDeficitRight = 1u << 22;
+// NOT bit 11: that is protocol v4's kFlagEventBootReady, which this firmware
+// no longer SETS but which docs/protocol-v4.md still documents and host
+// protocol.py still declares -- reusing it would have silently aliased colour
+// freshness onto a boot-ready read. Bit 5 IS genuinely free (v4's deleted
+// kFlagAckFresh, docs/protocol-v5.md §8.2); 23 is the first bit no protocol
+// generation has ever assigned.
+constexpr uint32_t kFlagColorFresh = 1u << 23;  // see kFlagLineFresh (bit 5)
 
 // [ms] primary-frame emit floor, deliberately BELOW App::RobotLoop::kCycle
 // (32) so every cycle clears it and telemetry stays ONE FRAME PER CYCLE
 // (~31 fps). It was 40 against the old 50 ms kCycle for exactly the same
 // reason -- the value tracks kCycle down, it is not an independent rate.
 //
-// ONE FRAME PER CYCLE IS A CORRECTNESS REQUIREMENT, NOT A PREFERENCE.
-// robot_loop.cpp's pace block alternates which perception leaf it ticks by
-// cycle parity (line on odd cycles, color on even). If the emit floor is
-// longer than one cycle, the emit cadence ALIASES with that parity and
-// telemetry samples the same phase forever. Measured on tovez 2026-08-07 at
+// A NOTE ON THE PERCEPTION ALTERNATION, now defused. robot_loop.cpp's pace
+// block ticks only ONE perception leaf per cycle (line on odd cycles, colour
+// on even). Publishing was once gated on that same per-cycle freshness, so
+// an emit floor longer than one cycle ALIASED with the parity and one sensor
+// vanished from the wire entirely -- measured on tovez 2026-08-07 at
 // kPrimaryPeriod=40/kCycle=32: `line_present 93, color_present 0` over 93
-// idle frames -- the colour sensor vanished from the wire completely. Any
-// future change that lets this exceed kCycle must first decouple perception
-// reporting from emit parity (report the CACHED reading with its own age,
-// rather than a per-cycle freshness flag).
+// idle frames. Both readings now ride EVERY frame, with validity latched and
+// a separate kFlagLineFresh/kFlagColorFresh saying which was re-read this
+// cycle, so the emit rate no longer decides whether a sensor is reportable.
+// The rate is now a pure sample-rate choice, which is what it should be.
 //
 // KNOWN, MEASURED COST -- read before raising the frame rate further. The
 // nRF link is HALF DUPLEX, so outbound airtime eats the window in which the

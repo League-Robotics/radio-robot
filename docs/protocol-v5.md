@@ -858,16 +858,20 @@ Bits 0-4 and 6-16 are **unchanged from protocol v4** (`kFlagOtosPresent`,
 `kFlagFaultI2CSafetyNet`, `kFlagFaultWedgeLatch`, `kFlagFaultI2CNak`,
 `kFlagFaultCommsMalformed`, `kFlagEventDeadmanExpired` (orphaned,
 unchanged), `kFlagEventBootReady`, `kFlagEventConfigApplied`,
-`kFlagLinePresent`, `kFlagColorPresent`, `kFlagFaultMoveTimeout`,
+`kFlagLinePresent`/`kFlagColorPresent` (semantics WIDENED 2026-08-07 —
+latched validity, not per-cycle freshness; see bits 5/23 below),
+`kFlagFaultMoveTimeout`,
 `kFlagFaultShapingDisabled`) — see
 [`docs/protocol-v4.md`](protocol-v4.md) §8.2 for their full descriptions.
 Two bits change:
 
 | Bit | Constant | Meaning |
 |---|---|---|
-| 5 | *(reserved)* | **DELETED** — was `kFlagAckFresh` (protocol v4); deleted along with the scalar ack slot it gated (§7.1). Reading this bit is meaningless now. |
+| 5 | `kFlagLineFresh` | **REUSED, 2026-08-07.** Was `kFlagAckFresh` (protocol v4), deleted with the scalar ack slot it gated (§7.1); the bit is now the line sensor's per-cycle freshness. `kFlagLinePresent` (13) says `line` is meaningful; this says it was *re-read on this cycle*. The firmware ticks the line and colour leaves on alternate cycles, so exactly one of bits 5/23 is set per frame and the other sensor's value is up to one alternation stale — but **both readings ride every frame**. Most consumers want the Present bit; reach for Fresh only when a sample must be just-measured. |
 | 17 | `kFlagFaultPositionClamped` | **NEW.** A wheel's position was clamped to `EncoderReading.position`'s own `(abs_max)` at the encode step rather than allowed to wrap (§5's rebaseline policy, defensive fallback). Not the expected path — `RobotLoop`'s own per-cycle rebaseline trigger (2000 mm margin) should prevent this in normal operation; purely observable evidence the fallback engaged. |
-| 18-31 | — | reserved |
+| 23 | `kFlagColorFresh` | **NEW, 2026-08-07.** The colour sensor's per-cycle freshness — the bit-5 pair described above. Deliberately NOT bit 11: that is v4's `kFlagEventBootReady`, which current firmware never sets but which `docs/protocol-v4.md` still documents and host `protocol.py` still declares, so reusing it would have aliased colour freshness onto a boot-ready read. |
+| 18-22 | — | wheel frozen/deficit faults (see `app/telemetry.h`) |
+| 24-31 | — | reserved |
 
 ### 8.3 Measured sizes
 

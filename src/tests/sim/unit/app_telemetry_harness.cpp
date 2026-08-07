@@ -253,8 +253,10 @@ void scenarioUpdateProjectsWholeStateInOneCall() {
 
   state.perception.line = 0x04030201u;
   state.perception.lineFresh = true;
+  state.perception.lineValid = true;
   state.perception.color = 0x0A090807u;
   state.perception.colorFresh = true;
+  state.perception.colorValid = true;
 
   telemetry.update(state, testDrive());
   telemetry.ack(7, 0);
@@ -272,9 +274,14 @@ void scenarioUpdateProjectsWholeStateInOneCall() {
   expected.now = kNow;
   expected.seq = 0;
   expected.mode = msg::DriveMode::VELOCITY;
+  // Present comes from perception.*Valid, Fresh from perception.*Fresh --
+  // this scenario stages both true for both sensors, so all four bits ride
+  // the frame. (Production alternates the Fresh pair; that shape is covered
+  // by scenarioParkedRobotWithAlternatingFreshLineColorStaysSilent().)
   expected.flags = App::kFlagOtosPresent | App::kFlagOtosConnected | App::kFlagActive |
                     App::kFlagConnLeft | App::kFlagConnRight |
-                    App::kFlagLinePresent | App::kFlagColorPresent;
+                    App::kFlagLinePresent | App::kFlagColorPresent |
+                    App::kFlagLineFresh | App::kFlagColorFresh;
   expected.enc_left = {msg::EncoderReading::packPosition(12.5f), msg::EncoderReading::packVelocity(100.0f),
                         /*age=*/111, /*position_epoch=*/0};
   expected.enc_right = {msg::EncoderReading::packPosition(-3.25f), msg::EncoderReading::packVelocity(-50.0f),
@@ -1189,7 +1196,9 @@ void scenarioSetModeControlsUnsolicitedStreamInOffAndOn() {
 //     the untouched leaf's fresh flag stays false" -- exactly one of
 //     {line, color} fresh per cycle, never both, never neither) -- must
 //     still emit ZERO frames. The pre-125-002 design could not pass this:
-//     kFlagLinePresent/kFlagColorPresent toggling every cycle meant flags_
+//     kFlagLinePresent/kFlagColorPresent toggling every cycle (they no
+//     longer do -- validity latches and only kFlagLineFresh/kFlagColorFresh
+//     alternate, 2026-08-07) meant flags_
 //     never held still for kBootStableCycles, so report-on-change never
 //     armed -- and HAD it armed, that same toggling would have defeated
 //     idle silence and streamed at 25 Hz forever (issue's own "Why"
@@ -1223,29 +1232,40 @@ void scenarioParkedRobotWithAlternatingFreshLineColorStaysSilent() {
     // simplified stand-in.
     state.perception.lineFresh = tickedLine;
     state.perception.colorFresh = !tickedLine;
+    // Validity is LATCHED in production once a leaf has ever read (see
+    // RobotLoop::publishLineColor) -- both sensors stay on the wire and only
+    // the Fresh bits alternate. Mirror that here, or this scenario would be
+    // exercising a shape the loop cannot produce.
+    state.perception.lineValid = true;
+    state.perception.colorValid = true;
     state.perception.line = tickedLine ? 0xAABBCCDDu : 0u;
     state.perception.color = !tickedLine ? 0x11223344u : 0u;
     telemetry.update(state, testDrive());
 
-    if (telemetry.flags() & App::kFlagLinePresent) {
+    // The FRESH bits are the ones that alternate now; Present is latched.
+    if (telemetry.flags() & App::kFlagLineFresh) {
       sawLineBitSet = true;
     } else {
       sawLineBitClear = true;
     }
-    if (telemetry.flags() & App::kFlagColorPresent) {
+    if (telemetry.flags() & App::kFlagColorFresh) {
       sawColorBitSet = true;
     } else {
       sawColorBitClear = true;
     }
+    checkTrue((telemetry.flags() & App::kFlagLinePresent) != 0 &&
+                  (telemetry.flags() & App::kFlagColorPresent) != 0,
+              "both sensors stay PRESENT on every cycle -- the alternation moves the Fresh bits "
+              "only, so neither reading is ever dropped from the frame");
 
     telemetry.emit(now, /*force=*/false);
     tickedLine = !tickedLine;
   }
 
   checkTrue(sawLineBitSet && sawLineBitClear,
-            "sanity: kFlagLinePresent genuinely toggled across cycles -- this scenario really exercises "
+            "sanity: kFlagLineFresh genuinely toggled across cycles -- this scenario really exercises "
             "the alternation, not a simplified stand-in");
-  checkTrue(sawColorBitSet && sawColorBitClear, "sanity: kFlagColorPresent genuinely toggled across cycles");
+  checkTrue(sawColorBitSet && sawColorBitClear, "sanity: kFlagColorFresh genuinely toggled across cycles");
   checkU64Eq(telemetry.primaryEmitCount(), 0,
              "issue Part 8 #2: a parked robot with fresh-alternating line/color sensors emits ZERO frames -- "
              "the structural defect the old design could not pass");

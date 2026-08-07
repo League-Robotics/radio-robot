@@ -276,6 +276,15 @@ class RobotLoop {
                     uint8_t& positionEpoch, bool& clamped);
   void publishWheels();               // both wheels + wedge/clamp health
   void publishOtos();
+
+  // Ticks exactly ONE perception leaf and returns which: true = line was
+  // read this cycle, false = colour was. Neither is worth an I2C
+  // transaction every cycle, so they alternate and each lands at kCycle/2.
+  // The alternation rule lives here rather than inline in cycle() -- cycle()
+  // reads as a schedule, and which leaf's turn it is belongs to this pair,
+  // not to the schedule.
+  bool tickLineColor(uint64_t nowUs);  // [us]
+
   void publishLineColor(bool tickedLine);
   void applySeed();
   void publishPose();

@@ -65,6 +65,8 @@ void Telemetry::update(const Types::RobotState& state, const Drive& drive) {
 
   if (state.perception.lineFresh) frame_.line = state.perception.line;
   if (state.perception.colorFresh) frame_.color = state.perception.color;
+  // frame_ keeps the last value for the leaf that was NOT sampled this
+  // cycle; the Present/Fresh flag pair below is what tells them apart.
 
   frame_.cycleBusy = state.time.cycleBusy;
   frame_.cyclePeriod = state.time.cyclePeriod;
@@ -85,8 +87,10 @@ void Telemetry::update(const Types::RobotState& state, const Drive& drive) {
   setFlag(kFlagFaultCommandsDropped, state.health.commandsDroppedCount > 0);
   setFlag(kFlagOtosPresent, state.otos.present);
   setFlag(kFlagOtosConnected, state.otos.connected);
-  setFlag(kFlagLinePresent, state.perception.lineFresh);
-  setFlag(kFlagColorPresent, state.perception.colorFresh);
+  setFlag(kFlagLinePresent, state.perception.lineValid);
+  setFlag(kFlagColorPresent, state.perception.colorValid);
+  setFlag(kFlagLineFresh, state.perception.lineFresh);
+  setFlag(kFlagColorFresh, state.perception.colorFresh);
   setFlag(kFlagFaultPositionClamped, state.health.positionClamped);
   setFlag(kFlagFaultWheelFrozenLeft, state.health.wheelFrozenLeft);
   setFlag(kFlagFaultWheelFrozenRight, state.health.wheelFrozenRight);

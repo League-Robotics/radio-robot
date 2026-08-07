@@ -53,10 +53,20 @@ struct RobotState {
   } otos;
 
   struct Perception {
+    // The pace block reads only ONE of these leaves per cycle (line on odd
+    // cycles, colour on even), so on any given cycle exactly one reading is
+    // new. Both stay published regardless: `*Valid` says a reading exists
+    // and is worth sending, `*Fresh` says it was refreshed THIS cycle.
+    // Splitting the two is what lets the untouched sensor go stale on the
+    // wire rather than disappear from it -- a consumer that only wants
+    // just-sampled data still has `*Fresh`, and one that wants the latest
+    // known value (the common case) has it every frame.
     uint32_t line = 0;
     uint32_t color = 0;
-    bool lineFresh = false;
-    bool colorFresh = false;
+    bool lineValid = false;   // a reading has been obtained; `line` is meaningful
+    bool colorValid = false;  // a reading has been obtained; `color` is meaningful
+    bool lineFresh = false;   // `line` was re-read on THIS cycle
+    bool colorFresh = false;  // `color` was re-read on THIS cycle
   } perception;
 
   struct Pose {
