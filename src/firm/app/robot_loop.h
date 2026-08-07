@@ -324,16 +324,20 @@ class RobotLoop {
   uint8_t positionEpochLeft_ = 0;
   uint8_t positionEpochRight_ = 0;
 
-  // Parity picks line vs color in the pace block.
+  // Parity picks line vs color in the pace block: odd cycles tick LINE,
+  // even cycles tick COLOR, so each sensor lands at kCycle/2 -- neither
+  // sensor is worth an I2C transaction every cycle.
   //
-  // KNOWN DEFECT, deliberately left alone by the command-ingestion rework:
-  // nothing increments this. It has been stuck at 0 since the counter was
-  // introduced, so `(cycleCount_ % 2) == 1` is permanently false and the
-  // LINE sensor is never ticked -- only the color sensor is. The one-line
-  // fix is real but it adds an I2C transaction to every other pace block,
-  // which shifts the loop period the motion tuning is calibrated against;
-  // that belongs to its own change with its own bench measurement, not to
-  // a command-plane rework whose gate is a square tour.
+  // Incremented once per cycle() at the top. It was stuck at 0 from its
+  // introduction until 2026-08-07, which made `(cycleCount_ % 2) == 1`
+  // permanently false and meant the LINE sensor was never ticked at all.
+  // The concern that held the fix back -- that the extra transaction on
+  // alternate cycles would shift the loop period the motion tuning is
+  // calibrated against -- was measured on tovez when the fix landed and
+  // is not real at kCycle=50: the alternation replaces the color read
+  // rather than adding to it, and `LineSensorLeaf::tick()` returns before
+  // touching the bus when no chip was detected, so an unfitted sensor
+  // costs nothing.
   uint32_t cycleCount_ = 0;
 
   // cycle() call history for cycleBusy/cyclePeriod telemetry.

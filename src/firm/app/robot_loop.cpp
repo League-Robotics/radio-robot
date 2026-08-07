@@ -604,6 +604,7 @@ void RobotLoop::publishGotoResult(const Motion::NavResult& navResult) {
 void RobotLoop::cycle() {
   state_.time.cycleStart = markTime();  // [ms] pace anchor + wire `now`
   const uint64_t cycleStartUs = clock_.nowMicros();  // [us]
+  ++cycleCount_;  // drives the line/color alternation in the pace block below
 
   zeroUnownedMotion();
 
