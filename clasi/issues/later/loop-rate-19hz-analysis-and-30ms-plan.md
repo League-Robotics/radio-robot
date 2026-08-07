@@ -131,3 +131,73 @@ if the loop speeds up: `PlannerLimits.controlPeriod` is already a
 parameter (50 ms default), and the discrete-exact profiler re-derives
 everything from dt — no planner rework needed at 30 ms beyond passing
 the new period.
+
+## 5. MEASURED on tovez, 2026-08-07 (throwaway experiment, nothing committed)
+
+Everything above §5 was analysis. These are hardware measurements from
+a detached worktree, telemetry `cycle_period`/`cycle_busy` over direct
+serial, idle and driving (both wheels 120 mm/s). Firmware reverted and
+tovez restored to baseline afterwards.
+
+**Method for measuring the floor: set `kCycle` BELOW it.** The trailing
+`sleepUntil()` finds `remaining == 0`, yields, and the delivered period
+becomes the loop's true work time. No estimation needed.
+
+| variant | kSettle | kClear | `requestEncoder` preClear | kCycle | period median | busy median |
+|---|---|---|---|---|---|---|
+| baseline | 4 | 4 | 4000 | 50 | 50.00 | 21.27 / 22.27 drv |
+| A | 4 | 4 | **0** | 50 | 50.00 | 21.27 / 22.26 drv |
+| B (floor probe) | 4 | 4 | 0 | 20 | **22.22** | 21.95 |
+| C | 4 | 4 | 0 | 32 | 32.00 (max 32.04) | 21.27 / 23.27 p95 |
+| D | **0** | **0** | 0 | 20 | 20.00 | **17.26** |
+| E | 4 | **0** | 0 | 20 | 20.00 | **17.27** |
+| F (floor probe) | 4 | 0 | 0 | 12 | **17.70** | 17.62 |
+
+### Three findings
+
+1. **`requestEncoder`'s `preClear=4000` is dead weight.** Removing it
+   (A vs baseline) changed nothing — period, busy, and encoder integrity
+   all identical. It is provably redundant by construction too: `lastEnd`
+   is PER-DEVICE (`devices_[idx].lastEnd`), and whichever 0x10 write
+   preceded the select already set `readyAt = lastEnd + 4000` via its own
+   `postClear`. `preClear` recomputes the same value; the `max()` is a
+   no-op. Its `postClear=4000` IS load-bearing — it is the only thing
+   making the paired `collectEncoder()` (which passes `0/0`) honour the
+   select→read settle.
+
+2. **The two 4 ms `kSettle` windows cost zero wall-clock; the 4 ms
+   `kClear` window is pure padding worth 4.7 ms/cycle.** D vs E isolates
+   it exactly: keeping both settles (E, 17.27) is indistinguishable from
+   zeroing them (D, 17.26), because their wait simply reappears inside
+   `waitForClearance`'s `fiber_sleep` — the settles are where that
+   mandatory wait gets spent *usefully* (comms pump). `kClear` is
+   different: the next 0x10 op after the duty write is next cycle's
+   encoder select, 20-50 ms later, long past any clearance deadline. The
+   window guards nothing.
+
+3. **131-005's absolute-deadline pacer is confirmed on hardware** —
+   first time. 50.00 ms median, min 49.97, max 50.06 (the 130-011 era
+   delivered ~54 ms). At `kCycle=32` it holds 32.00 with max 32.04.
+
+### The numbers that answer "what is the maximum loop rate"
+
+- **Irreducible bus wait: 8 ms/cycle** (2 × 4 ms encoder select→read
+  settle, one per motor). Not removable without restructuring.
+- **Floor as shipped: 22.2 ms** (~45 Hz) median, ~28 ms worst case.
+- **Floor with `kClear` removed: 17.7 ms** (~57 Hz) median, ~30 ms worst.
+- **Safe `kCycle` today: 32 ms.** Verified rock-solid. With `kClear`
+  removed, ~30 ms has comfortable margin. Either is a 1.6x rate
+  increase over the current 50 ms.
+- The tail, not the median, is what binds — worst-case cycles run
+  ~28-30 ms in every configuration.
+- Going below ~17 ms requires overlapping the OTOS transaction with a
+  motor settle window (legal — deadlines are per-device). That is what
+  `clasi/issues/spike-i2c-bus-owning-fiber.md` would buy, ~4 ms.
+
+Encoder integrity (position advancing, nonzero velocity) held in EVERY
+variant, including F where the duty-write throttle was down to 7 ms.
+Note the health flags are useless as a signal here: `kFlagFaultI2CSafetyNet`
+(bit 6) and `kFlagFaultWedgeLatch` (bit 7) are already latched at boot on
+a good robot, and only a boolean (`count > 0`) is on the wire, not the
+count — so a violated window cannot be read off a flag. It has to be
+checked functionally.
