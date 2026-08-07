@@ -421,7 +421,27 @@ void RobotLoop::boot() {
 }
 
 void RobotLoop::zeroUnownedMotion() {
-  if (planner_.active() || drive_.owns()) return;
+  // navigator_.active() is LOAD-BEARING here, not belt-and-braces.
+  //
+  // Measured on the playfield 2026-08-06: forward motion under GO_TO was a
+  // sawtooth, wheel velocity collapsing from cruise to ~40% and back ~15
+  // times in 2.2s (src/tests/bench/output/goto_trace.png). This guard was
+  // the cause.
+  //
+  // Motion::Navigator drives by replacing the in-flight Move every few
+  // cycles (planner_.move(..., replace=true)). `Planner::move()` clears
+  // `active_.occupied` immediately and only re-activates on the planner's
+  // NEXT tick() -- and Navigator::tick() (which owns that call) runs at the
+  // END of cycle(). So for the whole top half of every replace cycle
+  // `planner_.active()` is false while a goto is very much still running.
+  //
+  // Without the navigator_ term this function then zeroed both cmdVelocity
+  // fields, and drive_.tick() -- two statements later in cycle() -- actuated
+  // that zero. One full 50 ms cycle of commanded stop on EVERY replace.
+  //
+  // The guard's actual contract is "zero the wheels when NOBODY owns
+  // motion." Sprint 135 added a third owner and did not tell this function.
+  if (planner_.active() || drive_.owns() || navigator_.active()) return;
   state_.wheelLeft.cmdVelocity = 0.0f;
   state_.wheelRight.cmdVelocity = 0.0f;
 }
