@@ -114,9 +114,12 @@ Flow of one cycle, at orientation altitude:
    `RobotState` and emits the ONE primary TLM frame through Comms — there
    is no second/secondary frame any more (`msg::TelemetrySecondary` is
    deleted, sprint 124 ticket 009).
-5. **Pace** — a final `runAndWait` paces the cycle to `kCycle` = 20 ms
-   (~50 Hz), matching `Telemetry::kPrimaryPeriod` so every cycle emits a
-   primary frame.
+5. **Pace** — the final block paces the cycle to an ABSOLUTE end-of-cycle
+   deadline of `kCycle` = 32 ms (~31 Hz), which sits above
+   `Telemetry::kPrimaryPeriod` (25 ms) so every cycle emits one primary
+   frame. That one-frame-per-cycle property is load-bearing: the pace
+   block alternates line/colour by cycle parity, so a longer emit floor
+   aliases with it and one sensor stops being reported (`app/telemetry.h`).
 
 Boot is a separate loop: `App::Preamble` steps per-device detection (one
 bounded probe per pass) while telemetry frames report detection status;

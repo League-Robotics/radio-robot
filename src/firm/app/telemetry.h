@@ -33,7 +33,49 @@ constexpr uint32_t kFlagFaultWheelFrozenRight = 1u << 20;
 constexpr uint32_t kFlagFaultWheelDeficitLeft = 1u << 21;
 constexpr uint32_t kFlagFaultWheelDeficitRight = 1u << 22;
 
-constexpr uint32_t kPrimaryPeriod = 40;  // [ms] floor; robot_loop.cpp's kCycle (50ms) exceeds it every cycle
+// [ms] primary-frame emit floor, deliberately BELOW App::RobotLoop::kCycle
+// (32) so every cycle clears it and telemetry stays ONE FRAME PER CYCLE
+// (~31 fps). It was 40 against the old 50 ms kCycle for exactly the same
+// reason -- the value tracks kCycle down, it is not an independent rate.
+//
+// ONE FRAME PER CYCLE IS A CORRECTNESS REQUIREMENT, NOT A PREFERENCE.
+// robot_loop.cpp's pace block alternates which perception leaf it ticks by
+// cycle parity (line on odd cycles, color on even). If the emit floor is
+// longer than one cycle, the emit cadence ALIASES with that parity and
+// telemetry samples the same phase forever. Measured on tovez 2026-08-07 at
+// kPrimaryPeriod=40/kCycle=32: `line_present 93, color_present 0` over 93
+// idle frames -- the colour sensor vanished from the wire completely. Any
+// future change that lets this exceed kCycle must first decouple perception
+// reporting from emit parity (report the CACHED reading with its own age,
+// rather than a per-cycle freshness flag).
+//
+// KNOWN, MEASURED COST -- read before raising the frame rate further. The
+// nRF link is HALF DUPLEX, so outbound airtime eats the window in which the
+// robot can hear the host. Over the getez relay (channel 3, 2026-08-07):
+//
+//   kPrimaryPeriod   telemetry   radio_bench_gate   move_wheels   0x0A repro
+//   25 (this)        31.4 fps    30/35              command LOST  8/10
+//   40               15.8 fps    31/35              ok            9/10
+//
+// The loss is INBOUND (host->robot commands), not outbound: outbound is
+// 99.2% ok with zero unparseable and zero CRC mismatches at BOTH rates, and
+// the lost move_wheels was proven to be the command itself, not its ack --
+// the encoders never moved (338,358 before and after). Acks are already
+// redundant against frame loss (kAckRepeats below: every ack rides three
+// consecutive frames), so a dropped telemetry frame cannot lose one.
+//
+// Halving the emit rate DOES buy back that inbound reliability, and it was
+// tried -- but it is a blunt workaround pointed at the wrong direction, and
+// it breaks the perception alternation above. The real fix is inbound
+// reliability (sequence + NACK + retransmit-from-N, host->robot; the COBS
+// framing and CRC needed for it already exist) -- see clasi/issues/
+// inbound-command-loss-needs-retransmit-not-a-slower-telemetry-stream.md.
+// Until that lands, the relay path carries a known inbound-loss risk that
+// pre-dates this constant (clasi/issues/later/radio-bench-gate-fault-latch-
+// check-contradicts-inbound-loss-budget.md, sprint 128's own 31/35 run).
+// USB is unaffected -- 31 fps is ~2400 B/s, ~21% of the link, and every
+// move_protocol_bench scenario passes over it.
+constexpr uint32_t kPrimaryPeriod = 25;
 
 constexpr uint8_t kAckRingDepth = 12;
 

@@ -852,22 +852,45 @@ bounded helpers; none of them run their own timing loop.
 then sleeps until at least `gap` has elapsed since its own mark. Each block
 anchors to its *own* mark rather than a shared cycle-start mark, so a slow
 body degrades gracefully — its sleep shrinks toward (never below) 1ms
-instead of stacking on top of an unrelated deadline. The schedule has four
-such blocks: left-motor settle, post-duty clearance, right-motor settle,
-and a final perception+odometry+pace block. The four gaps
-(`kSettle`, `kClear`, `kSettle`, `kPace`) are sized so their sum equals the
-whole-cycle target `kCycle` (40ms / ~25Hz — 118: restored from a fictional
-20ms/~50Hz that `kSettle=kClear=0` had been faking, see §1's "118 (loop
-schedule truth)" note) — `kPace` is *derived* as
-`kCycle` minus the other three, not a second independent `kCycle`-sized
-sleep, specifically so the schedule's total holds even under a
-zero-real-time-cost virtual clock (anchoring the final block to the cycle
-start instead of its own mark was a diagnosed defect: it double-counted the
-first three blocks' time against the target). `kCycle` matches
-`Telemetry::kPrimaryPeriod` by construction (115-005: primary period now
-EQUALS the cycle period — every loop iteration emits a frame, closing
-`kcycle-kprimaryperiod-mismatch.md`) so the primary-frame throttle and the
-loop's own pace agree.
+instead of stacking on top of an unrelated deadline. The schedule has three
+such blocks: left-motor settle, right-motor settle, and a final
+perception+odometry+pace block. The two settle gaps are `kSettle` each;
+the final block does not take a gap at all — since 131-005 it targets an
+ABSOLUTE end-of-cycle deadline (`cycleStart + kCycle`), so whatever the
+earlier blocks' own jitter and rounding already spent is absorbed into
+this one final wait rather than compounding across all of them. (The
+older scheme, where every block computed its wait as a gap from its own
+entry mark and `kPace` was derived as `kCycle` minus the rest, is the
+diagnosed defect that produced a rock-stable 54ms delivered period at a
+50ms nominal.)
+
+There used to be a fourth block, a post-duty clearance gap (`kClear`)
+between the two motors. It was removed 2026-08-07 as measured-dead
+padding: the next transaction to the motor controller after a duty write
+is the NEXT cycle's encoder select, tens of ms later and long past any
+clearance deadline, so the window guarded nothing while costing 4.7ms
+every cycle. The two `kSettle` windows stay, but note they are not what
+makes the loop wait — `Devices::I2CBus::waitForClearance()` enforces the
+brick's select→read settle from `requestSample()`'s own `postClear`
+regardless, so zeroing `kSettle` measures identical wall-clock. The
+windows exist so that mandatory wait is spent running the comms pump
+instead of sleeping.
+
+`kCycle` is 32ms (~31Hz). `Telemetry::kPrimaryPeriod` (25ms) sits
+deliberately below it so every cycle emits exactly one primary frame
+(115-005's invariant, closing `kcycle-kprimaryperiod-mismatch.md`). That
+is now a correctness requirement, not just a tidy property: the pace
+block alternates line/colour by cycle parity, so an emit floor longer
+than one cycle aliases with that parity and one sensor disappears from
+the wire entirely (measured: `color_present 0` at a 40ms floor).
+
+The cost is measured and known: the nRF link is half duplex, so the
+faster outbound stream shrinks the window in which the robot can HEAR
+the host, and inbound commands start going missing over the relay
+(30/35 on `radio_bench_gate` vs 31/35 at half the rate). The loss is
+inbound only — outbound is 99.2% clean at both rates. The fix belongs
+inbound (sequence + NACK + retransmit), not in the telemetry rate; see
+`app/telemetry.h`'s comment and the linked issue.
 
 **Command dispatch.** `processMessage` reads the `Cmd` populated (or not)
 by this cycle's single `Comms::pump()` call and switches on `cmd_kind`:

@@ -11,12 +11,25 @@ namespace App {
 
 namespace {
 
+// The brick's mandatory encoder select->read settle, one window per motor.
+// This wait is NOT optional and NOT avoidable by deleting the window:
+// Devices::I2CBus::waitForClearance() enforces the same clearance from
+// requestSample()'s postClear, so zeroing kSettle measures identical
+// wall-clock (verified on tovez 2026-08-07) while losing the comms pump
+// that runs inside the window. Spending the mandatory wait usefully is the
+// entire point of the window.
 constexpr uint32_t kSettle = 4;  // [ms] encoder-settle window, both motors
-constexpr uint32_t kClear = 4;   // [ms] post-duty-write clearance window
 
-constexpr uint32_t kWindows = 2 * kSettle + kClear;  // [ms]
+// There is deliberately no post-duty-write window. One used to sit between
+// the two motors (kClear = 4 ms) on the theory that the brick needed
+// clearance after a duty write. It does -- but the next 0x10 transaction
+// after that write is the NEXT cycle's encoder select, tens of ms away and
+// far past the deadline, so the window guarded nothing and simply padded
+// every cycle. Removed 2026-08-07 after measuring it: busy dropped 21.9 ->
+// 17.3 ms with no change to encoder integrity.
+constexpr uint32_t kWindows = 2 * kSettle;  // [ms]
 static_assert(kWindows <= RobotLoop::kCycle,
-              "kSettle+kClear+kSettle must fit inside the kCycle budget");
+              "both kSettle windows must fit inside the kCycle budget");
 
 constexpr uint32_t kPreamblePace = 10;  // [ms] boot-loop probe pacing
 
@@ -615,10 +628,6 @@ void RobotLoop::cycle() {
     comms_.pump(state_.time.cycleStart);
   });
   motorL_.tick(clock_.nowMicros());  // collect L
-
-  runAndWait(kClear, [&] {  // brick's post-duty-write clearance
-    comms_.pump(state_.time.cycleStart);
-  });
 
   motorR_.requestSample();
   runAndWait(kSettle, [&] {

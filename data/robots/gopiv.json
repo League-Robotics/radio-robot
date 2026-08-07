@@ -79,8 +79,8 @@
   "planner": {
     "v_max": 400.0,
     "omega_max": 3.0,
-    "control_period": 50.0,
-    "actuation_delay": 50.0,
+    "control_period": 32.0,
+    "actuation_delay": 32.0,
     "settle_rest_velocity": 10.0,
     "settle_rest_omega": 0.16,
     "settle_epsilon_linear": 4.0,
@@ -88,7 +88,8 @@
     "heading_hold_gain": 0.0,
     "decel_plan_fraction": 0.4,
     "align_tol": 0.0,
-    "align_max_nudges": 0
+    "align_max_nudges": 0,
+    "_timing_note": "control_period/actuation_delay are '= App::RobotLoop::kCycle' by construction; both moved 50.0 -> 32.0 with kCycle on 2026-08-07. See data/robots/tovez.json's own planner._timing_note for the measurements and the full history."
   },
   "planner_shaper": {
     "a_max": 300.0,

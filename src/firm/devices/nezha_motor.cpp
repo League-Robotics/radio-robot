@@ -221,7 +221,12 @@ void NezhaMotor::writeRawDuty(float duty)
         return;
     }
 
-    static constexpr uint64_t kMinWriteIntervalUs = 45000;  // [us] kCycle(50ms) - 5ms jitter margin
+    // [us] App::RobotLoop::kCycle (32 ms) - 5 ms jitter margin. HAND-SYNCED:
+    // devices/ may not include app/ headers (src/firm/DESIGN.md's devices-
+    // isolation invariant), so this literal must be updated whenever kCycle
+    // is -- see kCycle's own doc comment, which lists this as one of the
+    // values that moves with it.
+    static constexpr uint64_t kMinWriteIntervalUs = 27000;
     bool stopping = (pct == 0);
     uint64_t now = lastTickUs_;  // [us] this tick's timestamp (see file-header note)
     if (!stopping && (now - lastWriteTimeUs_) < kMinWriteIntervalUs) {
@@ -294,8 +299,16 @@ void NezhaMotor::requestSample()
 void NezhaMotor::requestEncoder()
 {
     uint8_t cmd[8] = { 0xFF, 0xF9, static_cast<uint8_t>(config_.port), 0x00, 0x46, 0x00, 0xF5, 0x00 };
+    // postClear is load-bearing: it is the ONLY thing that makes the paired
+    // collectEncoder() (which passes 0/0) honour the brick's select->read
+    // settle. preClear is deliberately 0 -- it was 4000 and was measured to
+    // be dead weight (tovez, 2026-08-07). Devices::I2CBus tracks lastEnd
+    // PER-DEVICE, so whichever 0x10 write preceded this select already set
+    // readyAt = its own lastEnd + 4000 via its postClear; a preClear here
+    // recomputes that same deadline and the max() is a no-op. Traffic to
+    // any other address (OTOS, line, color) cannot shorten it.
     int writeResult = bus_.write(static_cast<uint16_t>(kNezhaDeviceAddr << 1), cmd, 8, false,
-                                 /*preClear=*/4000, /*postClear=*/4000);
+                                 /*preClear=*/0, /*postClear=*/4000);
     pendingEncRequestOk_ = (writeResult == kOk);
 }
 

@@ -176,8 +176,8 @@ PlannerBootConfig defaultPlannerLimits() {
     cfg.jerkMax = 1500.0f;        // [mm/s^3]
     cfg.yawJerkMax = 30.0f;  // [rad/s^3]
 
-    cfg.controlPeriod = 50.0f;    // [ms]
-    cfg.actuationDelay = 50.0f;  // [ms]
+    cfg.controlPeriod = 32.0f;    // [ms]
+    cfg.actuationDelay = 32.0f;  // [ms]
 
     cfg.settleRestVelocity = 10.0f;    // [mm/s]
     cfg.settleRestOmega = 0.16f;          // [rad/s]
@@ -314,8 +314,8 @@ msg::Planner defaultPlannerGroup() {
     msg::Planner cfg;
     cfg.v_max = 400.0f;                          // [mm/s]
     cfg.omega_max = 3.0f;                  // [rad/s]
-    cfg.control_period = 50.0f;        // [ms]
-    cfg.actuation_delay = 50.0f;      // [ms]
+    cfg.control_period = 32.0f;        // [ms]
+    cfg.actuation_delay = 32.0f;      // [ms]
     cfg.settle_rest_velocity = 10.0f;    // [mm/s]
     cfg.settle_rest_omega = 0.16f;          // [rad/s]
     cfg.settle_epsilon_linear = 4.0f;  // [mm]

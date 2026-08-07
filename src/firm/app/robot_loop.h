@@ -72,11 +72,50 @@ class RobotLoop {
   // into this one final wait instead of compounding across all four (see
   // robot_loop.cpp's own runAndWaitUntil()/cycle() call site). Proven
   // self-correcting under injected jitter in a host-build unit test
-  // (app_robot_loop_pacing_harness.cpp) -- the PHYSICAL robot's own
-  // delivered period is NOT re-measured by that ticket (`tovez` unreachable
-  // that sprint); re-running `src/tests/bench/planner_square_tour.py` once
-  // the bench is available again is an open follow-up, not yet done.
-  static constexpr uint32_t kCycle = 50;  // [ms] (~20 Hz)
+  // (app_robot_loop_pacing_harness.cpp).
+  //
+  // 131-005's open hardware follow-up is now CLOSED (2026-08-07, tovez,
+  // direct serial): delivered cycle_period reads 50.00 ms median, min
+  // 49.97, max 50.06 -- the 54 ms of the 130-011 generation is gone and
+  // delivered really does equal nominal. The pacer works.
+  //
+  // 50 -> 32 (2026-08-07, out of process): the loop was paced far slower
+  // than its own work needs. Measured on tovez by setting kCycle BELOW
+  // the floor, so the trailing sleepUntil() yields and the delivered
+  // period becomes the loop's true work time:
+  //
+  //   as shipped (kClear=4)   floor 22.2 ms median, ~28 ms worst
+  //   with kClear removed     floor 17.7 ms median, ~28 ms worst
+  //
+  // The mandatory part is 8 ms/cycle: two 4 ms encoder select->read
+  // settles, one per motor, which the Nezha brick requires. Those are the
+  // kSettle windows and they cost NOTHING in wall clock -- zeroing them
+  // measured identical to keeping them, because the same wait simply
+  // reappears inside Devices::I2CBus::waitForClearance()'s fiber_sleep.
+  // The windows are where that mandatory wait gets spent USEFULLY (the
+  // comms pump runs inside them); waitForClearance just sleeps.
+  //
+  // What was NOT mandatory was the third window, kClear (post-duty-write,
+  // 4 ms): the next 0x10 transaction after a duty write is the NEXT
+  // cycle's encoder select, tens of ms later and long past any clearance
+  // deadline, so it guarded nothing. Removed here, worth 4.7 ms/cycle.
+  //
+  // Why 32 and not the 17.7 ms floor: the TAIL binds, not the median.
+  // Worst-case cycles run ~28 ms in every configuration measured, so 32
+  // keeps delivered == nominal by construction (the invariant the whole
+  // 130-011/131-005 history above exists to protect, and which
+  // control_period == kCycle depends on) instead of buying a faster
+  // median at the price of an occasionally-stretched cycle. Verified at
+  // exactly this period on tovez: 32.00 ms median, max 32.04.
+  //
+  // Everything that must move WITH this constant: Telemetry::
+  // kPrimaryPeriod (telemetry.h), Devices::NezhaMotor's
+  // kMinWriteIntervalUs (nezha_motor.cpp -- a hand-synced literal, since
+  // devices/ may not include app/ headers), and every robot JSON's
+  // planner.control_period AND planner.actuation_delay, which are both
+  // "= kCycle" by construction (actuation_delay because a command staged
+  // this cycle lands on the wheels the next one).
+  static constexpr uint32_t kCycle = 32;  // [ms] (~31 Hz)
 
   // All references are already-constructed modules; the composition root
   // (main.cpp or a harness) owns construction and wiring order. The

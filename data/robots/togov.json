@@ -79,8 +79,8 @@
   "planner": {
     "v_max": 400.0,
     "omega_max": 3.0,
-    "control_period": 50.0,
-    "actuation_delay": 50.0,
+    "control_period": 32.0,
+    "actuation_delay": 32.0,
     "settle_rest_velocity": 10.0,
     "settle_rest_omega": 0.16,
     "settle_epsilon_linear": 4.0,
@@ -93,7 +93,8 @@
     "_plant_gain": 1370.0,
     "_plant_tau": 0.23,
     "_uncalibrated": true,
-    "_domain_note": "129-009 (config consolidation): togov (mecanum) has NO Motion::Planner plant ID of its own yet -- values are copied from tovez.json's differential-drive plant measurement (2026-07-26, gain ~1370 mm/s per duty, tau ~230ms) purely to stay schema-complete (REQUIRED block, same posture as this file's own control._sprint_114_note precedent for a_max/a_decel/... above), NOT a claim that they are correct for this drivetrain. _uncalibrated=true flags that. Replace with togov's own plant ID (square_tour_sim.py tourLimits()-style sweep) before trusting this block for tuning/regression comparisons. See tovez.json's own planner block for the full field-by-field provenance these values were copied from."
+    "_domain_note": "129-009 (config consolidation): togov (mecanum) has NO Motion::Planner plant ID of its own yet -- values are copied from tovez.json's differential-drive plant measurement (2026-07-26, gain ~1370 mm/s per duty, tau ~230ms) purely to stay schema-complete (REQUIRED block, same posture as this file's own control._sprint_114_note precedent for a_max/a_decel/... above), NOT a claim that they are correct for this drivetrain. _uncalibrated=true flags that. Replace with togov's own plant ID (square_tour_sim.py tourLimits()-style sweep) before trusting this block for tuning/regression comparisons. See tovez.json's own planner block for the full field-by-field provenance these values were copied from.",
+    "_timing_note": "control_period/actuation_delay are '= App::RobotLoop::kCycle' by construction; both moved 50.0 -> 32.0 with kCycle on 2026-08-07. See data/robots/tovez.json's own planner._timing_note for the measurements and the full history."
   },
   "planner_shaper": {
     "a_max": 300.0,

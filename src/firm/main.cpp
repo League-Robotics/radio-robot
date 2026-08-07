@@ -78,13 +78,15 @@ void versionTag(char* out, size_t cap) {
 // completes and before the first control cycle: the LED matrix driver
 // refreshes continuously off its own timer, and the loop's own motion
 // tuning assumes those cycles are not being spent elsewhere. The loop
-// targets App::RobotLoop::kCycle (50 ms) as an ABSOLUTE end-of-cycle
+// targets App::RobotLoop::kCycle (32 ms) as an ABSOLUTE end-of-cycle
 // deadline (131-005) -- previously this comment said "a measured ~47 ms
 // budget" (the 40ms-nominal generation's own baked, empirically-measured
 // number); that framing is retired along with the defect it described
 // (130-011 later found the SAME kind of gap re-open at the 50ms nominal,
 // a rock-stable 54ms delivered period -- see robot_loop.h's kCycle doc
-// comment for the full history). Boot is the one window where the
+// comment for the full history, the 2026-08-07 hardware measurement that
+// finally confirmed the pacer delivers nominal, and the measured floor
+// that let kCycle come down 50 -> 32). Boot is the one window where the
 // display's cost is free, regardless of what the post-boot budget is.
 void showBootIdentity() {
   // Pixel values are BRIGHTNESS 0..255, not booleans -- a 1 here renders
