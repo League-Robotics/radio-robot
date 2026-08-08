@@ -288,6 +288,66 @@ def accumulate(frame: TLMFrame, pose, perception, fmap: FieldMap, channel_y) -> 
 
 
 # --------------------------------------------------------------------------
+# Parallax calibration
+# --------------------------------------------------------------------------
+
+# Ground truth, from the AprilCam playfield map (`get_playfield`). Positions
+# in cm, A1-centred. These are surveyed, not guessed, so they are what the
+# camera and the finished map are both scored against.
+RECTS = {  # 5 x 4 cm colour patches
+    "purple":  (-35.0,  24.0),
+    "black":   (  0.0,  24.0),
+    "orange":  ( 35.0,  24.0),
+    "green":   ( 35.0, -24.0),
+    "magenta": (  0.0, -24.0),
+    "blue":    (-35.0, -24.0),
+}
+SMALL_DOTS = {"green": (0.0, 30.0), "yellow": (0.0, -30.0),
+              "red": (50.0, 0.0), "blue": (-50.0, 0.0)}
+
+
+def solve_parallax(observations):
+    """Least-squares fit of  measured = c + k * (true - c).
+
+    Tag 100 rides 12cm above the field, so the camera projects it OUTWARD
+    from the optical axis. For a pinhole camera looking straight down that
+    is a pure radial scaling k = H/(H-h) about the axis -- but ONLY about
+    the axis. Assuming the axis sits exactly over the field origin, as a
+    single global divisor does, turns any real camera offset into a
+    direction-dependent position error that warps the map rather than
+    shifting it.
+
+    So solve for the axis (cx, cy) AND the scale k together. Four surveyed
+    dots give 8 equations for 3 unknowns. Linear in (k, cx*(1-k), cy*(1-k)):
+
+        mx = k*tx + cx*(1-k)   ->   mx = k*tx + ax
+        my = k*ty + cy*(1-k)   ->   my = k*ty + ay
+
+    Returns (k, cx, cy, residual_cm).
+    """
+    A, b = [], []
+    for (tx, ty), (mx, my) in observations:
+        A.append([tx, 1.0, 0.0]); b.append(mx)
+        A.append([ty, 0.0, 1.0]); b.append(my)
+    sol, *_ = np.linalg.lstsq(np.array(A), np.array(b), rcond=None)
+    k, ax, ay = float(sol[0]), float(sol[1]), float(sol[2])
+    if abs(1.0 - k) < 1e-9:
+        cx = cy = 0.0
+    else:
+        cx, cy = ax / (1.0 - k), ay / (1.0 - k)
+    resid = []
+    for (tx, ty), (mx, my) in observations:
+        px, py = k * tx + ax, k * ty + ay
+        resid.append(math.hypot(px - mx, py - my))
+    return k, cx, cy, float(np.mean(resid))
+
+
+def undo_parallax(x, y, k, cx, cy):
+    """Map a camera reading of the ELEVATED tag back to the field plane."""
+    return (cx + (x - cx) / k, cy + (y - cy) / k)
+
+
+# --------------------------------------------------------------------------
 # Driving
 # --------------------------------------------------------------------------
 
@@ -331,7 +391,7 @@ def raster(x_span, y_span, pitch):  # [cm] [cm] [cm]
     return pts
 
 
-def collect_during(bot, fmap, perception, channel_y, seconds, fence, inflation_note):
+def collect_during(bot, fmap, perception, channel_y, seconds, fence):
     """Drain telemetry into the map, enforcing the fence INSIDE the move.
 
     Sensor values and pose are taken from the SAME frame. Reading pose
@@ -358,6 +418,66 @@ def collect_during(bot, fmap, perception, channel_y, seconds, fence, inflation_n
             break
         time.sleep(0.02)
     return hits, breached
+
+
+def calibrate_from_dots(bot, dc, speed, out_path):
+    """Drive to each surveyed orange dot, fix at rest, solve the parallax.
+
+    Driven rather than hand-placed so all four observations share one pose
+    convention and one settle discipline. The robot's own arrival error does
+    not matter: the fit uses the CAMERA reading against the DOT's surveyed
+    position, and the camera sees where the robot actually stopped.
+
+    That is only true if the robot really is on the dot, so each leg is
+    re-driven from a fresh camera fix and the arrival residual is reported --
+    a dot the robot missed by 5cm would otherwise quietly bias the fit.
+    """
+    from goto_otos import FRAME_WORLD
+
+    obs = []
+    for name in ("NW", "NE", "SE", "SW"):
+        tx, ty = DOTS[name]
+        fix = camera_fix(lambda: read_tag(dc))
+        if fix is None:
+            print(f"  {name}: camera lost tag 100")
+            return None
+        if not bot.seed(fix[0] * 10.0, fix[1] * 10.0, wrap(fix[2])):
+            print(f"  {name}: re-seed did not read back")
+            return None
+        bot.goto_wire(tx * 10.0, ty * 10.0, FRAME_WORLD, speed=speed, timeout=40000.0)
+        time.sleep(1.0)
+        deadline = time.time() + 35.0
+        while time.time() < deadline:
+            frames = [getattr(e, "tlm", None) for e in bot.conn.drain_binary_tlm()]
+            frames = [f for f in frames if f is not None]
+            if frames and not (frames[-1].flags & 0x04):   # kFlagActive clear
+                break
+            time.sleep(0.1)
+        halt_verified(bot)
+        time.sleep(0.8)                                     # settle: fix AT REST
+        fix = camera_fix(lambda: read_tag(dc), samples=11)
+        if fix is None:
+            print(f"  {name}: camera lost tag 100 at rest")
+            return None
+        obs.append(((tx, ty), (fix[0], fix[1])))
+        print(f"  {name}: truth=({tx:+6.1f},{ty:+6.1f})  camera=({fix[0]:+6.1f},{fix[1]:+6.1f})")
+
+    k, cx, cy, resid = solve_parallax(obs)
+    print(f"\nsolved: k={k:.4f}  optical axis=({cx:+.2f},{cy:+.2f})cm  "
+          f"mean residual={resid:.2f}cm")
+    if resid > 2.0:
+        print("  WARNING: residual > 2cm -- the robot probably did not land on the "
+              "dots, or the model does not fit. Do NOT trust this map's absolute "
+              "positions until this is understood.")
+    cal = {"k": k, "cx": cx, "cy": cy, "residual_cm": resid,
+           "observations": [{"truth": list(t), "camera": list(m)} for t, m in obs],
+           "note": ("measured = c + k*(true - c). Apply undo_parallax() to every "
+                    "camera reading of tag 100. Re-run whenever the tag mount "
+                    "height or the camera moves.")}
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(json.dumps(cal, indent=2) + "\n")
+    print(f"wrote {out_path}")
+    return cal
 
 
 # --------------------------------------------------------------------------
@@ -437,9 +557,16 @@ def main() -> int:
     ap.add_argument("--y-span", type=float, default=30.0, help="[cm] +/- from centre")
     ap.add_argument("--reseed-every", type=float, default=100.0,
                     help="[cm] of travel between camera re-fixes")
+    ap.add_argument("--calibrate-dots", action="store_true",
+                    help="drive to all four surveyed orange dots, solve the "
+                         "parallax model (scale AND optical-axis offset), save "
+                         "it, and exit. Run this before the first map, and "
+                         "again whenever the tag mount or camera moves.")
     ap.add_argument("--calibrate-only", action="store_true",
-                    help="park on a surveyed dot, report the tag-height "
-                         "inflation factor, and exit without driving")
+                    help="single-point check: park on a dot and report the "
+                         "radial ratio only (assumes the axis is over the "
+                         "origin -- --calibrate-dots is the real one)")
+    ap.add_argument("--calibration", default="field_parallax.json")
     ap.add_argument("--replay", help="render an existing .npz and exit -- no robot needed")
     ap.add_argument("--out", default="field_map")
     args = ap.parse_args()
@@ -457,25 +584,51 @@ def main() -> int:
     print("  NOTE: channel_y order is UNVERIFIED -- a reversed array mirrors the map")
 
     dc = connect_camera()
+    cal_path = OUT / args.calibration
 
-    factor, detail = calibrate_tag_height(dc)
-    if factor is None:
-        print(f"CALIBRATION FAILED: {detail}")
-        return 2
-    print(f"\ntag-height calibration: {detail}")
-    if abs(factor - 1.0) < 0.03:
-        print("  -> daemon already corrects the elevated tag; using inflation 1.0")
-        inflation = 1.0
-    else:
-        print(f"  -> camera still overstates the radius; dividing by {factor:.4f}")
-        inflation = factor
     if args.calibrate_only:
+        factor, detail = calibrate_tag_height(dc)
+        if factor is None:
+            print(f"CALIBRATION FAILED: {detail}")
+            return 2
+        print(f"\nsingle-point ratio: {detail}")
+        print("  NOTE: this assumes the camera's optical axis is exactly over "
+              "the field origin. If it is not, one global divisor warps the map "
+              "direction-dependently instead of shifting it. Use "
+              "--calibrate-dots for the real fit.")
         return 0
 
     sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
     from goto_otos import FRAME_WORLD, Robot
 
     bot = Robot(args.port)
+
+    if args.calibrate_dots:
+        try:
+            cal = calibrate_from_dots(bot, dc, args.speed, cal_path)
+        finally:
+            halt_verified(bot)
+            bot.close()
+        return 0 if cal else 2
+
+    if not cal_path.exists():
+        print(f"no parallax calibration at {cal_path} -- run --calibrate-dots first.\n"
+              "Refusing to map with an uncalibrated elevated tag: at 12cm of tag "
+              "height that is several cm of position error at the field edge, "
+              "which is larger than the features being mapped.")
+        bot.close()
+        return 2
+    cal = json.loads(cal_path.read_text())
+    K, CX, CY = cal["k"], cal["cx"], cal["cy"]
+    print(f"\nparallax calibration: k={K:.4f} axis=({CX:+.2f},{CY:+.2f})cm "
+          f"residual={cal['residual_cm']:.2f}cm")
+
+    def fix_corrected():
+        raw = read_tag(dc)
+        if raw is None:
+            return None
+        x, y = undo_parallax(raw[0], raw[1], K, CX, CY)
+        return (x, y, raw[2])
     fmap = FieldMap()
     fence = (X_LIM - FENCE_MARGIN, Y_LIM - FENCE_MARGIN)
     waypoints = raster(args.x_span, args.y_span, args.pitch)
@@ -486,7 +639,7 @@ def main() -> int:
     last = None
     try:
         for i, (tx, ty) in enumerate(waypoints):
-            fix = camera_fix(lambda: read_tag(dc, inflation=inflation))
+            fix = camera_fix(fix_corrected)
             if fix is None:
                 print("  camera lost tag 100 -- halting")
                 break
@@ -500,8 +653,7 @@ def main() -> int:
             bot.goto_wire(tx * 10.0, ty * 10.0, FRAME_WORLD,
                           speed=args.speed, timeout=40000.0)
             hits, breach = collect_during(bot, fmap, perception, channel_y,
-                                          seconds=25.0, fence=fence,
-                                          inflation_note=inflation)
+                                          seconds=25.0, fence=fence)
             if breach:
                 print(f"  GEOFENCE breach at ({breach[0]:+.1f},{breach[1]:+.1f})cm -- halting")
                 halt_verified(bot)

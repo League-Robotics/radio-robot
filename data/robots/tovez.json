@@ -184,7 +184,7 @@
     "line_array": {
       "x": 96.0,
       "_offsets_note": "Lateral offsets from the centre line, Lego stud pitch 8 mm: inner pair at +/-8 mm (one hole), outer pair at +/-32 mm (four holes). The outer pair was described as '14 off' AND as '32 mm'; 14 studs is 112 mm and 14 mm is not a hole multiple, so the explicit 32 mm is used. 32 mm = 4 studs exactly, which is self-consistent.",
-      "_channel_order_note": "UNVERIFIED -- this is the one number here that can silently MIRROR the whole map, so it is called out rather than assumed quietly. The mapping from telemetry channel index (ch1..ch4) to physical lateral position has never been measured. Listed below left-to-right in body frame (y descending). If the array is wired the other way the produced map is flipped about the centre line and still looks entirely plausible. Verify by translating the robot laterally across a known edge and watching which channel breaks first, then fix this list.",
+      "_channel_order_note": "VERIFIED 2026-08-08 (stakeholder): sensor 1 is the LEFT-most, sensor 4 the RIGHT-most. Body frame y is left-positive, so channel_y descends left-to-right as listed. This was previously unverified and called out as the one input that could silently MIRROR the whole map -- it is now confirmed to be correct as written.",
       "channel_y": [
         32.0,
         8.0,
