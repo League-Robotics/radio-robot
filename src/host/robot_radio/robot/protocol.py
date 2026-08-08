@@ -1935,6 +1935,37 @@ class NezhaProtocol:
         envelope = envelope_pb2.CommandEnvelope(estop=envelope_pb2.Estop())
         return self._conn.send_envelope_fast(envelope)
 
+    def calibrate_imu(self, samples: int = 0) -> int:
+        """Re-run the OTOS gyro bias calibration, robot PARKED
+        (``CommandEnvelope{calibrate: Calibrate{samples}}``, wire verb
+        ``CALIBRATE``).
+
+        The firmware refuses with ``ERR_BUSY`` unless both wheels are
+        encoder-still and nothing is commanding velocity that cycle, and
+        with ``ERR_NOT_CONFIGURED`` if no OTOS is present -- park (estop)
+        and confirm stillness before calling. Tracking and the seeded pose
+        SURVIVE: this recalibrates bias only, unlike a reboot.
+
+        Exists because the chip otherwise calibrates exactly once, at
+        boot, and a robot that boots while being handled drives the whole
+        session with a poisoned heading (measured on tovez 2026-08-08:
+        +1.44 deg/s standstill drift after a mid-battery-swap boot; a
+        still recalibration restored -0.006 deg/s).
+
+        ``samples``: gyro samples to average, 1..255; 0 = firmware default
+        (255, ~612ms of required stillness).
+
+        Fire-and-poll like ``estop()``: returns the corr_id; the outcome
+        (``err`` 0 on success) rides the ack ring (``wait_for_ack()``).
+        On the radio relay, inbound commands are DROPPED outright --
+        resend until the ack arrives.
+        """
+        if not 0 <= samples <= 255:
+            raise ValueError(f"samples must be 0..255, got {samples}")
+        envelope = envelope_pb2.CommandEnvelope(
+            calibrate=envelope_pb2.Calibrate(samples=samples))
+        return self._conn.send_envelope_fast(envelope)
+
     def stop(self, *, move_id: int = 0) -> int:
         """Enqueue a PLANNED stop (``CommandEnvelope{stop: Stop{id}}``, wire
         verb ``STOP``): "come to a stop when you reach THIS point in the

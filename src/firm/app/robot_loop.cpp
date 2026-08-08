@@ -36,6 +36,11 @@ constexpr uint32_t kPreamblePace = 10;  // [ms] boot-loop probe pacing
 constexpr float kPositionWireBound = 32000.0f;       // [mm]
 constexpr float kPositionRebaselineMargin = 30000.0f;  // [mm]
 
+// [mm/s] a wheel reading at or below this counts as "still" for CALIBRATE's
+// parked precondition. Encoder velocity at true rest reads ~0; this only
+// needs to reject genuine motion, not split hairs about noise.
+constexpr float kCalibrateStillSpeed = 5.0f;
+
 uint32_t packLine(const Devices::LineReading& reading) {
   return (reading.raw[0] & 0xFFu) | ((reading.raw[1] & 0xFFu) << 8) |
          ((reading.raw[2] & 0xFFu) << 16) | ((reading.raw[3] & 0xFFu) << 24);
@@ -151,6 +156,9 @@ void RobotLoop::routeCommand(const Cmd& cmd) {
     case msg::CommandEnvelope::CmdKind::GET_CONFIG:
       handleGetConfig(cmd.env);
       break;
+    case msg::CommandEnvelope::CmdKind::CALIBRATE:
+      handleCalibrate(cmd.env);
+      break;
     case msg::CommandEnvelope::CmdKind::SET_FIELD:
       tlm_.ack(cmd.env.corr_id,
                static_cast<uint32_t>(configurator_.applyField(
@@ -162,6 +170,31 @@ void RobotLoop::routeCommand(const Cmd& cmd) {
     default:
       break;
   }
+}
+
+void RobotLoop::handleCalibrate(const msg::CommandEnvelope& env) {
+  // Parked precondition, enforced HERE. The gyro averages ~612ms of samples
+  // into its bias estimate; motion during that window is exactly the boot
+  // fault this command exists to repair (see envelope.proto's Calibrate).
+  // Both measured wheel velocities must be still AND nothing may be
+  // commanding velocity this cycle -- the commanded check catches a move
+  // whose measured speed happens to pass through zero (reversals), the
+  // measured check catches coasting with no owner.
+  if (!state_.otos.present) {
+    tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
+    return;
+  }
+  const bool still =
+      std::fabs(state_.wheelLeft.velocity) <= kCalibrateStillSpeed &&
+      std::fabs(state_.wheelRight.velocity) <= kCalibrateStillSpeed &&
+      state_.wheelLeft.cmdVelocity == 0.0f &&
+      state_.wheelRight.cmdVelocity == 0.0f;
+  if (!still) {
+    tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_BUSY));
+    return;
+  }
+  otos_.calibrateImu(static_cast<uint8_t>(env.cmd.calibrate.samples));
+  tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NONE));
 }
 
 void RobotLoop::handleGetConfig(const msg::CommandEnvelope& env) {

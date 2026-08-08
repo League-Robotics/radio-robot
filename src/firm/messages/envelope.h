@@ -54,6 +54,13 @@ struct Estop {
     // --- array / optional-string accessors ---
 };
 
+// Calibrate
+struct Calibrate {
+    uint32_t samples = 0;
+
+    // --- array / optional-string accessors ---
+};
+
 // Wheels
 struct Wheels {
     float v_left = 0.0f;
@@ -139,6 +146,7 @@ struct CommandEnvelope {
         GET_CONFIG = 6,
         SET_FIELD = 7,
         GO_TO = 8,
+        CALIBRATE = 9,
     };
     CmdKind cmd_kind = CmdKind::NONE;
     union {
@@ -150,6 +158,7 @@ struct CommandEnvelope {
         GetConfig get_config;
         SetConfigField set_field;
         GoTo go_to;
+        Calibrate calibrate;
     } cmd = {};
 
     uint32_t corr_id = 0;

@@ -51,6 +51,8 @@ static_assert(std::is_standard_layout<SetConfigField>::value,
               "msg::SetConfigField must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<GoTo>::value,
               "msg::GoTo must be standard-layout for offsetof-based field tables");
+static_assert(std::is_standard_layout<Calibrate>::value,
+              "msg::Calibrate must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Ack>::value,
               "msg::Ack must be standard-layout for offsetof-based field tables");
 static_assert(std::is_standard_layout<Error>::value,

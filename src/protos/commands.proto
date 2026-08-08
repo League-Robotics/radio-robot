@@ -245,4 +245,13 @@ enum Verb {
   // matching CommandEnvelope's own `go_to` arm name exactly (never a bare
   // "goto", a C++ keyword).
   GO_TO      = 24 [(binary) = true];
+
+  // CALIBRATE -- re-run the OTOS gyro bias calibration on demand, robot
+  // parked (envelope.proto's `Calibrate` arm carries the payload; see its
+  // doc comment for the 2026-08-08 boot-while-handled incident this
+  // answers). Arm name load-bearing per the same rule as move/wheels/
+  // estop/get_config/set_field/go_to: `WhichOneof("cmd").upper()` must
+  // read exactly CALIBRATE. 9 bytes -- under GET_CONFIG's 10, so the
+  // kMaxCommandPrefixBytes/kMaxLineBytes budget (comms.h) is unchanged.
+  CALIBRATE  = 25 [(binary) = true];
 }

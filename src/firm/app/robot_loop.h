@@ -229,6 +229,17 @@ class RobotLoop {
   // drive_.takeover(), same as handleMove().
   void handleGoto(const msg::CommandEnvelope& env);
 
+  // handleCalibrate() -- CALIBRATE arm: re-run the OTOS gyro bias
+  // calibration on demand (envelope.proto's Calibrate doc comment carries
+  // the 2026-08-08 boot-while-handled incident this answers). Acks
+  // ERR_NONE and triggers Devices::Otos::calibrateImu() ONLY when the
+  // robot is verifiably parked: both wheels encoder-still AND no motion
+  // owner commanding velocity this cycle -- calibrating while moving is
+  // precisely the fault this command exists to fix, so the precondition
+  // is enforced here, not left to the caller's discipline. Refusals:
+  // ERR_BUSY (moving), ERR_NOT_CONFIGURED (no OTOS present).
+  void handleCalibrate(const msg::CommandEnvelope& env);
+
   // handleGetConfig() -- 132-011: the CONFIG binary arm's read-back half.
   // Unlike every other case in routeCommand()'s switch, this one replies
   // SYNCHRONOUSLY (Comms::sendReply(), a ReplyEnvelope{cfg: ConfigSnapshot}

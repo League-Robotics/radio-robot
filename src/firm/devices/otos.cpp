@@ -214,6 +214,15 @@ uint8_t RealOtos::imuCalibrationSamplesRemaining()
     return readReg8(kRegImuCalibration);
 }
 
+void RealOtos::calibrateImu(uint8_t samples)
+{
+    // Bias calibration only -- deliberately NOT the reset+calibrate pair
+    // init() does, so tracking and a seeded pose survive. 0 means the boot
+    // default (kImuCalibSamples = 255, ~612ms of stillness).
+    if (!initialized_) return;
+    writeReg8(kRegImuCalibration, samples == 0 ? kImuCalibSamples : samples);
+}
+
 void RealOtos::setLinearScalar(float scalar)
 {
     if (!initialized_) return;

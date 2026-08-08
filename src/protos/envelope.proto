@@ -127,6 +127,37 @@ message Stop {
 // now" (bench scripts, the sim's injectStop) moves here.
 message Estop {}
 
+// Calibrate -- re-run the OTOS gyro's bias calibration ON DEMAND, robot
+// parked (stakeholder, 2026-08-08: "we need to have you be able to
+// recalibrate the gyro at will. If it seems to be off, then you go and
+// you park the robot and reset the gyro").
+//
+// Why this exists as a wire command: the chip calibrates its gyro bias
+// exactly once, at boot, from ~612ms of samples -- and whatever it feels
+// in that window becomes "zero rotation" for the whole session. A robot
+// that boots while being handled drives with a poisoned heading (measured
+// on tovez 2026-08-08: booted mid-battery-swap -> +1.44 deg/s standstill
+// drift, camera-confirmed; one still reboot -> -0.006 deg/s). Before this
+// arm, the only remote rescue was a full DTR reboot, which wipes pose and
+// live config. The old curated Otos live-tuning message had a fire-and-
+// forget `init` trigger; 132-013 retired it with "no Config::Robot-shaped
+// successor" -- this is that successor, as an ACTION arm rather than a
+// config field, because a transient trigger has no place in config-as-
+// truth (it is not a value a file can own).
+//
+// The handler REFUSES (ack err) unless both wheels are encoder-still:
+// calibrating while moving is precisely the boot bug this arm exists to
+// fix, so the firmware enforces the parked precondition rather than
+// trusting every caller to remember it. Tracking and pose are NOT reset --
+// unlike init(), this recalibrates bias only, so a seeded world frame
+// survives.
+//
+// `samples`: gyro samples to average, 1..255; 0 means the default (255,
+// ~612ms -- kImuCalibSamples, the same figure boot uses).
+message Calibrate {
+  uint32 samples = 1;
+}
+
 // Wheels -- the dumb teleop primitive (§2/§3), routed straight to
 // App::Drive, bypassing the planner entirely (and clearing it on arrival:
 // exactly one subsystem owns motion at a time, enforced at routing). This
@@ -337,6 +368,13 @@ message CommandEnvelope {
     GetConfig      get_config = 24;
     SetConfigField set_field  = 25;
     GoTo           go_to      = 26;
+    // calibrate(27) -- the next fresh field number after go_to (26). Same
+    // load-bearing-name rule as every arm above: uppercases to
+    // commands.proto's CALIBRATE verb exactly (WhichOneof("cmd").upper()
+    // derives the wire prefix and the CRC scope). "CALIBRATE" (9 bytes)
+    // stays under GET_CONFIG's 10, so kMaxCommandPrefixBytes/kMaxLineBytes
+    // (comms.h) are unchanged by this addition.
+    Calibrate      calibrate  = 27;
   }
 }
 

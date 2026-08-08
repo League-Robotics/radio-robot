@@ -39,6 +39,17 @@ class Otos {
   virtual void getOffset(float& x, float& y, float& heading) = 0;  // [mm] [mm] [rad]
   virtual void init() = 0;
 
+  // Re-run the gyro bias calibration ONLY -- tracking and pose survive,
+  // unlike init(), which resets both. The chip averages `samples` gyro
+  // readings (~2.4ms each; 255 = ~612ms) into its bias estimate, so the
+  // robot MUST be still for the duration -- the caller (RobotLoop's
+  // CALIBRATE handler) enforces that with an encoder-stillness check.
+  // Exists because the boot-time calibration silently poisons heading
+  // when the robot boots in someone's hands (measured 2026-08-08:
+  // +1.44 deg/s standstill drift; still recalibration -> -0.006 deg/s).
+  // Default no-op: fakes synthesize their pose and have no gyro bias.
+  virtual void calibrateImu(uint8_t samples) {}
+
 };
 
 class RealOtos : public Otos {
@@ -77,6 +88,8 @@ class RealOtos : public Otos {
   uint8_t signalProcessConfig();
 
   uint8_t imuCalibrationSamplesRemaining();
+
+  void calibrateImu(uint8_t samples) override;
 
   void init() override;
 

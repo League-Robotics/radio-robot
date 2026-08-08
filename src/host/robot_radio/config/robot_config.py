@@ -167,6 +167,39 @@ class PeripheralsConfig(BaseModel):
     laser_port: Optional[int] = None
 
 
+class PerceptionSensor(BaseModel):
+    """One sensor's mount position, BODY FRAME: x forward of the wheel axis,
+    y left-positive (ROS REP-103), origin at the centre of rotation."""
+    model_config = ConfigDict(extra="forbid")
+
+    x: float = 0.0  # [mm]
+    y: float = 0.0  # [mm]
+
+
+class PerceptionLineArray(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    x: float = 0.0  # [mm] forward of the wheel axis
+    # [mm] per-channel lateral offsets, channel 1 first. Channel 1 is the
+    # LEFT-most sensor (verified 2026-08-08), and body y is left-positive,
+    # so the values descend left-to-right.
+    channel_y: list[float] = []
+
+
+class PerceptionConfig(BaseModel):
+    """Sensor mount geometry (stakeholder-supplied 2026-08-08). Consumed
+    HOST-side for lever-arm projection of line/colour samples into world
+    coordinates (src/tests/bench/field_map.py); the firmware does not read
+    these, which is why the group is host-only rather than generated.
+    Added to the model because tovez.json grew the block on 2026-08-08 and
+    ``extra="forbid"`` (132-016) rightly refuses unknown keys -- this is
+    the matching field, not a relaxation of that rule."""
+    model_config = ConfigDict(extra="forbid")
+
+    color_sensor: PerceptionSensor = PerceptionSensor()
+    line_array: PerceptionLineArray = PerceptionLineArray()
+
+
 # ---------------------------------------------------------------------------
 # Geometry -- a thin hand-written extension of the generated group: every
 # generated field (trackwidth/rotational_slip/rotation_gain_pos/
@@ -276,6 +309,7 @@ class RobotConfig(BaseModel):
     encoders: EncodersConfig = EncodersConfig()
     gripper: GripperConfig = GripperConfig()
     peripherals: PeripheralsConfig = PeripheralsConfig()
+    perception: PerceptionConfig = PerceptionConfig()
 
     # Derived field — not stored in JSON, computed after load
     mm_per_tick: Optional[float] = None
