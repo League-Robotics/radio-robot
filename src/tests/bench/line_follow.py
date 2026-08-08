@@ -92,13 +92,25 @@ LINE_THRESHOLD = 170
 CHANNEL_Y = (32.0, 8.0, -8.0, -32.0)
 
 # [mm] the line array sits this far FORWARD of the centre of rotation
-# (tovez.json perception.line_array.x), and MIN_RADIUS is the tightest turn
-# the follower will ask for. Bounding omega at speed/MIN_RADIUS keeps the
-# array from being swept sideways off the line faster than the robot drives
-# forward -- outrunning its own sensor is what produced 32% blind samples in
-# the first run. 90mm is tighter than the hairpin's centreline radius.
+# (tovez.json perception.line_array.x).
 ARRAY_LEVER = 96.0
-MIN_RADIUS = 90.0
+
+# [rad/s] hard ceiling on omega, INDEPENDENT of forward speed.
+#
+# This replaces an earlier speed/MIN_RADIUS cap that bounded the turn RADIUS
+# at 90mm. That cap was derived from the wrong constraint -- it required the
+# array's sideways sweep (ARRAY_LEVER * omega) to stay under the forward
+# speed, which is a per-DISTANCE test. The real limit is per-SAMPLE: the line
+# must not leave the array between two readings. At ~28Hz the array sweeps
+# ARRAY_LEVER * omega * 0.036s, so even omega = 1.2 moves it only ~4mm
+# against a 32mm half-width -- a wide margin.
+#
+# The wrong cap had a nasty second-order effect, because omega_max scaled
+# with a speed that itself fell with error: turn authority was LOWEST exactly
+# where the error was largest. MEASURED 2026-08-08: the follower tracked the
+# top waves and the hairpin for 31.6 SECONDS unbroken, then lost the line in
+# the sharp zigzags near the finish, whose corners are tighter than 90mm.
+OMEGA_MAX = 1.2
 
 # [counts] minimum total coverage across all four channels before the
 # centroid is believed. Without this, two channels grazing the line at 50
@@ -112,12 +124,11 @@ KP = 0.030
 KD = 0.004              # small: the error is quantised and D amplifies steps
 
 # Forward speed shaping: full speed centred, SLOW_FLOOR of it at max error.
-# The floor cannot go low: omega is capped at speed/MIN_RADIUS, so cutting
-# the speed also cuts the turn authority, and the FIRST version of this cut
-# it hardest exactly when the error was largest -- the robot sat pinned at
-# err=+32mm for seven consecutive samples, turning at 0.29 rad/s, unable to
-# recover the line it could still see.
-SLOW_FLOOR = 0.70
+# Now that omega is capped independently of speed (OMEGA_MAX), the floor can
+# go low again -- slowing hard into a corner no longer costs turn authority,
+# it buys reaction time. At err=32mm and speed 60 this drives 27mm/s with up
+# to 1.2 rad/s available, a 22mm turn radius: tight enough for the zigzags.
+SLOW_FLOOR = 0.45
 
 # Lost-line recovery, in two phases. Never drive FORWARD while blind -- that
 # is how the robot leaves the course entirely.
@@ -352,8 +363,7 @@ def main() -> int:
                 # at omega=1.1 with v=85. Capping the ratio at 1 bounds the
                 # turn radius at ARRAY_LEVER (96mm), still tighter than the
                 # hairpin needs.
-                omega_max = speed / MIN_RADIUS
-                omega = max(-omega_max, min(omega_max, omega))
+                omega = max(-OMEGA_MAX, min(OMEGA_MAX, omega))
                 last_omega = omega
 
             last_frame = now
