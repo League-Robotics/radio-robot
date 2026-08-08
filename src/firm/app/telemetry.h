@@ -45,6 +45,15 @@ constexpr uint32_t kFlagFaultWheelDeficitRight = 1u << 22;
 // kFlagAckFresh, docs/protocol-v5.md §8.2); 23 is the first bit no protocol
 // generation has ever assigned.
 constexpr uint32_t kFlagColorFresh = 1u << 23;  // see kFlagLineFresh (bit 5)
+// Bits 24/25 -- STALL. The drivetrain was commanded to move, the encoders say
+// it did not, and the encoders were healthy enough to be believed, so
+// App::RobotLoop halted the robot. Distinct from bits 19/20 (kFlagFaultWheelFrozen*,
+// an ENCODER fault where the wheel may be spinning fine) and bits 21/22
+// (kFlagFaultWheelDeficit*, where the wheel IS turning but under its target).
+// These are the only wheel-fault bits that mean the robot stopped itself.
+// LATCHED until the host commands a new motion -- see RobotState::Health::stallLeft.
+constexpr uint32_t kFlagFaultStallLeft = 1u << 24;
+constexpr uint32_t kFlagFaultStallRight = 1u << 25;
 
 // [ms] primary-frame emit floor, deliberately BELOW App::RobotLoop::kCycle
 // (32) so every cycle clears it and telemetry stays ONE FRAME PER CYCLE

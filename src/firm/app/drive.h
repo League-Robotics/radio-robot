@@ -48,6 +48,9 @@ class Drive {
     float posErrMax = 0.0f;         // [mm] Stage B position-error clamp; 0 = unclamped
     float deficitThreshold = 0.0f;  // [mm/s] sustained error magnitude that flags a deficit
     float deficitWindow = 0.0f;     // [ms] how long the deficit condition must sustain
+    float stallSpeed = 0.0f;   // [mm/s] measured speed at or below this is not turning
+    float stallDemand = 0.0f;  // [mm/s] commanded speed above this is asking for motion
+    float stallWindow = 0.0f;  // [ms] sustain time before a stall latches; 0 = off
   };
   void setAdaptationBounds(const AdaptationBounds& bounds) { bounds_ = bounds; }
   const AdaptationBounds& adaptationBounds() const { return bounds_; }
@@ -60,6 +63,14 @@ class Drive {
   float pidRight() const { return lastPidRight_; }  // [mm/s]
   bool deficitLeft() const { return deficitLeft_; }
   bool deficitRight() const { return deficitRight_; }
+
+  // A stall is the drivetrain being ASKED to move and not moving -- the robot
+  // is jammed against something. Unlike deficit() (the wheel turns, just too
+  // slowly) this is a HALT condition: App::RobotLoop stops the robot on it.
+  // See robot_config.proto's WheelControl for the three-way distinction
+  // against deficit and wheelFrozen.
+  bool stallLeft() const { return stallLeft_; }
+  bool stallRight() const { return stallRight_; }
 
   bool calibrated() const { return calibrated_; }
 
@@ -130,6 +141,8 @@ class Drive {
   void applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
                        float& speedRight) const;
 
+  void updateStall(bool conditionNow, uint32_t now, uint32_t& since,
+                   bool& latched) const;
   void updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
                      bool& latched) const;
 
@@ -150,6 +163,10 @@ class Drive {
   uint32_t deficitSinceRight_ = 0;  // [ms]
   bool deficitLeft_ = false;
   bool deficitRight_ = false;
+  uint32_t stallSinceLeft_ = 0;   // [ms] when the stall condition first held
+  uint32_t stallSinceRight_ = 0;  // [ms]
+  bool stallLeft_ = false;
+  bool stallRight_ = false;
 
   static constexpr uint32_t kMaxSampleAge = 200;  // [ms]
 

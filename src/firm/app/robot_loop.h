@@ -280,6 +280,8 @@ class RobotLoop {
   // case that would never tell anyone anything. See the .cpp's own comment
   // at the call site for the measured defect (vevov, 2026-08-03).
   void zeroUnownedMotion();
+  void haltOnStall();
+  void clearStallLatch();
 
   // Publish one wheel's state section (rebaseline/clamp/read), after its
   // collect. `clamped` reports the defensive wire-bound clamp.

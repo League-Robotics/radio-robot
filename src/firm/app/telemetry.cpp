@@ -96,6 +96,8 @@ void Telemetry::update(const Types::RobotState& state, const Drive& drive) {
   setFlag(kFlagFaultWheelFrozenRight, state.health.wheelFrozenRight);
   setFlag(kFlagFaultWheelDeficitLeft, drive.deficitLeft());
   setFlag(kFlagFaultWheelDeficitRight, drive.deficitRight());
+  setFlag(kFlagFaultStallLeft, state.health.stallLeft);
+  setFlag(kFlagFaultStallRight, state.health.stallRight);
 
   if (flags_ & kFlagActive) {
     everMoved_ = true;

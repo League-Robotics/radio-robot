@@ -217,6 +217,11 @@ void RobotLoop::handleGetConfig(const msg::CommandEnvelope& env) {
 }
 
 void RobotLoop::handleMove(const msg::CommandEnvelope& env) {
+  // A new motion command is the host acknowledging the stall: from here the
+  // flag would describe a motion that is over. Cleared at the TOP, before any
+  // acceptance gate, deliberately -- a rejected command still proves the host
+  // is talking to us and has moved on, and it gets its own error ack to act on.
+  clearStallLatch();
   if (!configured_) {
     tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
     return;
@@ -338,6 +343,11 @@ void RobotLoop::recordAccepted(uint32_t id) {
 }
 
 void RobotLoop::handleWheels(const msg::CommandEnvelope& env) {
+  // A new motion command is the host acknowledging the stall: from here the
+  // flag would describe a motion that is over. Cleared at the TOP, before any
+  // acceptance gate, deliberately -- a rejected command still proves the host
+  // is talking to us and has moved on, and it gets its own error ack to act on.
+  clearStallLatch();
   if (!configured_) {
     tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
     return;
@@ -367,6 +377,7 @@ void RobotLoop::handleStop(const msg::CommandEnvelope& env) {
 }
 
 void RobotLoop::handleEstop(const msg::CommandEnvelope& env) {
+  clearStallLatch();
   drive_.estop();
   planner_.estop();
   // 135-004: clears the Navigator's own target in the SAME cycle it
@@ -404,6 +415,11 @@ void RobotLoop::handleEstop(const msg::CommandEnvelope& env) {
 // NavigatorLimits::yawSign (which only ever applies at the Navigator's
 // own omega/Move-command boundary, never here).
 void RobotLoop::handleGoto(const msg::CommandEnvelope& env) {
+  // A new motion command is the host acknowledging the stall: from here the
+  // flag would describe a motion that is over. Cleared at the TOP, before any
+  // acceptance gate, deliberately -- a rejected command still proves the host
+  // is talking to us and has moved on, and it gets its own error ack to act on.
+  clearStallLatch();
   if (!configured_) {
     tlm_.ack(env.corr_id, static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED));
     return;
@@ -508,6 +524,52 @@ void RobotLoop::zeroUnownedMotion() {
   if (planner_.active() || drive_.owns() || navigator_.active()) return;
   state_.wheelLeft.cmdVelocity = 0.0f;
   state_.wheelRight.cmdVelocity = 0.0f;
+}
+
+// haltOnStall() -- stakeholder directive 2026-08-08, after the robot repeatedly
+// drove into the playfield rails and ground there. Nothing in the firmware
+// noticed that a commanded motion was not happening: the wheels kept pushing
+// against the obstacle until a human intervened. App::Drive now detects the
+// condition (drive.cpp's updateStall) and this stops the robot on it.
+//
+// This is a HALT, not a report, and it is deliberately the SAME halt ESTOP
+// performs -- zero the wheel targets, clear the planner queue, cancel any goto.
+// Halting the wheels alone would not do: a queued Move or an in-flight GO_TO
+// would resume pushing against the obstacle the instant the current segment
+// ended, which is the grinding this exists to stop.
+//
+// Called BEFORE drive_.tick() in cycle() so the zeroed command reaches the
+// motors on this very cycle -- Drive::tick() is what writes duty, so halting
+// after it would spend one more cycle (~32ms) driving into the obstacle.
+// It acts on the stall the PREVIOUS cycle's tick() latched, which is the
+// correct pairing: that tick compared its command against the encoder reading
+// published for it.
+void RobotLoop::haltOnStall() {
+  const bool left = drive_.stallLeft();
+  const bool right = drive_.stallRight();
+  if (!left && !right) return;
+
+  // Latch into health BEFORE the halt clears Drive's own detector state. The
+  // halt erases the condition within a cycle (cmdVelocity drops to zero, so
+  // the demand falls below stallDemand), so without this the robot would stop
+  // for no reason the host could ever see.
+  state_.health.stallLeft = state_.health.stallLeft || left;
+  state_.health.stallRight = state_.health.stallRight || right;
+
+  drive_.estop();
+  planner_.estop();
+  navigator_.cancel();
+  state_.wheelLeft.cmdVelocity = 0.0f;
+  state_.wheelRight.cmdVelocity = 0.0f;
+}
+
+// clearStallLatch() -- the host acknowledging the stall by asking for motion
+// again. Every command that starts a new motion clears it, so the flag on the
+// wire always refers to THIS motion, never a previous one. Nothing else clears
+// it: a stall that is never acknowledged stays visible indefinitely.
+void RobotLoop::clearStallLatch() {
+  state_.health.stallLeft = false;
+  state_.health.stallRight = false;
 }
 
 void RobotLoop::publishWheel(Devices::Motor& motor,
@@ -695,6 +757,7 @@ void RobotLoop::cycle() {
   ++cycleCount_;  // drives the line/color alternation in the pace block below
 
   zeroUnownedMotion();
+  haltOnStall();
 
   drive_.tick(state_);
 

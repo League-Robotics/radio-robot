@@ -117,6 +117,9 @@ class WheelControl(BaseModel):
     pid_kaff: float = 0.0
     pid_max: float = 0.0
     pos_err_max: float = 0.0
+    stall_speed: float = 0.0
+    stall_demand: float = 0.0
+    stall_window: float = 0.0
 
 class Planner(BaseModel):
     model_config = ConfigDict(extra="forbid")

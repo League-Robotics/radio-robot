@@ -471,6 +471,31 @@ message WheelControl {
   // accumulator era) -- so a robot JSON shipping pid_i_max = 0 has no I term
   // regardless of what this field says.
   float pos_err_max        = 12 [(min) = 0.0];  // [mm] Stage B position-error clamp; 0 = unclamped
+
+  // STALL DETECTION. A stall is the drivetrain being ASKED to move and not
+  // moving: the robot is jammed -- against a rail, a wall, or the table edge.
+  // It is a distinct fault from the two this message already describes, and
+  // conflating them is why nothing caught the rail collisions:
+  //
+  //   deficit_*   the PID cannot MEET a speed it is partly achieving. Reports
+  //               only; the wheel IS turning.
+  //   wheelFrozen the ENCODER stopped reporting (Devices::Motor::wedgeSuspect).
+  //               A sensor fault -- the wheel may well be spinning.
+  //   stall_*     commanded speed is real, measured speed is ~zero, and the
+  //               encoder is healthy enough to be believed. The wheel is
+  //               physically held. THIS ONE STOPS THE ROBOT.
+  //
+  // The encoder-health precondition is load-bearing: without it a wedged
+  // encoder reads as zero speed forever and would trip a false stall on a
+  // perfectly free wheel. App::Drive gates on the same freshness test its
+  // own PID already uses before trusting a reading.
+  //
+  // 0 on stall_window disables the detector entirely, matching this message's
+  // "0 = disabled" convention. Disabling it means the robot will once again
+  // grind against a rail until something else notices.
+  float stall_speed        = 13 [(min) = 0.0];  // [mm/s] measured speed at or below this counts as not turning
+  float stall_demand       = 14 [(min) = 0.0];  // [mm/s] commanded speed above this counts as genuinely asking for motion
+  float stall_window       = 15 [(min) = 0.0];  // [ms] how long both must hold before the stall latches; 0 = detector off
 }
 
 // Planner -- Motion::Planner's BOOT-ONLY tuning surface: profile velocity/

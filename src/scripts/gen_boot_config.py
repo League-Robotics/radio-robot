@@ -662,6 +662,14 @@ def wheel_controller_config_for_config(cfg: dict) -> dict:
         "kaff": float(_require(cfg, "wheel_control", "pid_kaff")),
         "pidMax": float(_require(cfg, "wheel_control", "pid_max")),
         "posErrMax": float(_require(cfg, "wheel_control", "pos_err_max")),
+        # Stall detection (2026-08-08). _require, not a defaulted get: a robot
+        # JSON that omits these bakes a robot with NO stall protection, and
+        # config-as-truth says that must fail loudly at build time rather than
+        # ship silently disabled. Setting stall_window to 0 in the JSON is the
+        # supported way to turn the detector off deliberately.
+        "stallSpeed": float(_require(cfg, "wheel_control", "stall_speed")),
+        "stallDemand": float(_require(cfg, "wheel_control", "stall_demand")),
+        "stallWindow": float(_require(cfg, "wheel_control", "stall_window")),
     }
 
 
@@ -1149,6 +1157,9 @@ msg::WheelControl defaultWheelControlGroup() {{
     cfg.pid_kaff = {_f(wheel_controller["kaff"])};    // [s]
     cfg.pid_max = {_f(wheel_controller["pidMax"])};    // [mm/s]
     cfg.pos_err_max = {_f(wheel_controller["posErrMax"])};  // [mm]
+    cfg.stall_speed = {_f(wheel_controller["stallSpeed"])};  // [mm/s]
+    cfg.stall_demand = {_f(wheel_controller["stallDemand"])};  // [mm/s]
+    cfg.stall_window = {_f(wheel_controller["stallWindow"])};  // [ms]
     return cfg;
 }}
 

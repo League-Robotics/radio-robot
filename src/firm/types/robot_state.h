@@ -123,6 +123,14 @@ struct RobotState {
     bool positionClamped = false;
     bool wheelFrozenLeft = false;
     bool wheelFrozenRight = false;
+    // Stall -- the drivetrain was asked to move and did not, so App::RobotLoop
+    // halted the robot. LATCHED, unlike every other flag in this struct: it
+    // survives the halt that clears the condition, and is cleared only when
+    // the host commands a new motion (MOVE/WHEELS/GO_TO) or ESTOPs. Without
+    // the latch the halt erases its own evidence within one cycle and the
+    // host never learns why the robot stopped.
+    bool stallLeft = false;
+    bool stallRight = false;
     bool ready = false;
   } health;
 };

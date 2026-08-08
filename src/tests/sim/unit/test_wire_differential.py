@@ -137,9 +137,14 @@ def test_field_numbers_match_pb2_descriptors():
     # `go_to` (26, 135-004: GoTo / App::RobotLoop::handleGoto()) is the next
     # fresh arm after set_field, same load-bearing-name rule -- uppercases
     # to commands.proto's GO_TO verb exactly.
+    # `calibrate` (27, 2026-08-08: Calibrate / App::RobotLoop::handleCalibrate())
+    # is the next fresh arm after go_to, same load-bearing-name rule --
+    # uppercases to commands.proto's CALIBRATE verb exactly. Its 9-byte verb
+    # name stays under GET_CONFIG's 10, so the prefix/line budgets are
+    # unchanged.
     expected_cmd_numbers = {"config": 6, "stop": 13, "move": 21,
                             "wheels": 22, "estop": 23, "get_config": 24,
-                            "set_field": 25, "go_to": 26}
+                            "set_field": 25, "go_to": 26, "calibrate": 27}
     actual_cmd_numbers = {
         f.name: f.number for f in pb_envelope.CommandEnvelope.DESCRIPTOR.oneofs_by_name["cmd"].fields
     }

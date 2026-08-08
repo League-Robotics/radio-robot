@@ -85,6 +85,13 @@ struct WheelControllerBootConfig {
   float iMax = 0.0f;  // [mm/s] integrator clamp
   float kaff = 0.0f;  // [s] accel feedforward
   float pidMax = 0.0f;  // [mm/s] total fast-loop authority clamp
+
+  // Stall detection -- see robot_config.proto's WheelControl for why this is
+  // a different fault from deficit* and from wheelFrozen, and for why the
+  // encoder-health precondition is load-bearing.
+  float stallSpeed = 0.0f;  // [mm/s] measured speed at or below this is not turning
+  float stallDemand = 0.0f;  // [mm/s] commanded speed above this is genuinely asking for motion
+  float stallWindow = 0.0f;  // [ms] sustain time before the stall latches; 0 = detector off
 };
 
 WheelControllerBootConfig defaultWheelControllerConfig();

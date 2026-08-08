@@ -32,6 +32,9 @@ void Drive::configure(const Config::Robot& config) {
   bounds.posErrMax = config.wheelControl.pos_err_max;
   bounds.deficitThreshold = config.wheelControl.deficit_threshold;
   bounds.deficitWindow = config.wheelControl.deficit_window;
+  bounds.stallSpeed = config.wheelControl.stall_speed;
+  bounds.stallDemand = config.wheelControl.stall_demand;
+  bounds.stallWindow = config.wheelControl.stall_window;
   setAdaptationBounds(bounds);
 }
 
@@ -64,6 +67,10 @@ void Drive::estop() {
   deficitSinceRight_ = 0;
   deficitLeft_ = false;
   deficitRight_ = false;
+  stallSinceLeft_ = 0;
+  stallSinceRight_ = 0;
+  stallLeft_ = false;
+  stallRight_ = false;
 }
 
 bool Drive::takeCompletion(uint32_t* moveId) {
@@ -219,6 +226,22 @@ void Drive::updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
   latched = (now - since) >= static_cast<uint32_t>(bounds_.deficitWindow);
 }
 
+// updateStall() -- the sustain-and-latch half of stall detection. Same shape
+// as updateDeficit() above and deliberately kept a SEPARATE function rather
+// than merged with it: the two describe different faults, gate on different
+// config keys, and only this one causes the robot to be halted, so a future
+// change to either must not silently move the other.
+void Drive::updateStall(bool conditionNow, uint32_t now, uint32_t& since,
+                        bool& latched) const {
+  if (bounds_.stallWindow <= 0.0f || !conditionNow) {
+    since = 0;
+    latched = false;
+    return;
+  }
+  if (since == 0) since = now;
+  latched = (now - since) >= static_cast<uint32_t>(bounds_.stallWindow);
+}
+
 uint32_t Drive::sampleAge(uint32_t now, uint32_t sampleTime) const {
   return (now < sampleTime) ? 0u : (now - sampleTime);
 }
@@ -282,6 +305,65 @@ void Drive::tick(const Types::RobotState& state) {
   updateDeficit(std::fabs(errRight) > bounds_.deficitThreshold && biasSaturatedRight &&
                    pidSaturatedRight,
                state.time.cycleStart, deficitSinceRight_, deficitRight_);
+
+  // STALL -- the robot was asked to move and is not moving.
+  //
+  // MEASURED ON tovez 2026-08-08, driving into the playfield rail: the FIRST
+  // version of this test asked "are the WHEELS turning", gated on the encoder
+  // being believable (`!wheelFrozen`). It never fired, for two compounding
+  // reasons, and both are why the test now lives on the OTOS:
+  //
+  //  1. On a slippery mat a blocked robot's wheels SLIP rather than stop --
+  //     the first rail run logged 239/222 encoder ticks (~17cm of wheel
+  //     rotation) while the robot sat still against the rail.
+  //  2. When the wheels DID stop dead (second run: encoders frozen 4.4s while
+  //     commanded 80mm/s), Devices::MotorArmor::updateWedgeDetector() had
+  //     already latched wedgeSuspect() -- because its condition, "position
+  //     unchanged while duty is applied", IS the definition of a stall. The
+  //     believability guard therefore suppressed the detector exactly when
+  //     the stall was real. Encoders alone CANNOT separate "the wheel is
+  //     held" from "the encoder is dead": both look identical.
+  //
+  // The OTOS separates them, because it measures ground travel optically and
+  // is independent of the encoders entirely. Same run: |v_x| read ~150mm/s
+  // while rolling and 4.6mm/s while jammed against the rail.
+  //
+  // Rotation counts as moving: a PIVOT translates nothing, so v_x alone would
+  // call every in-place turn a stall. omega is converted to the speed it
+  // implies at the wheel rim (omega * halfTrack) so the SAME stallSpeed
+  // threshold covers both, and no second config field is needed.
+  const float halfTrack = 0.5f * trackWidth_;  // [mm]
+  const bool otosBelievable =
+      state.otos.present && state.otos.connected &&
+      sampleAge(state.time.cycleStart, state.otos.sampleTime) <= kMaxSampleAge;
+  const bool bodyStill = std::fabs(state.otos.v_x) <= bounds_.stallSpeed &&
+                         std::fabs(state.otos.omega) * halfTrack <= bounds_.stallSpeed;
+
+  // Gate on the RAW cmdVelocity, not the post-floor speed*: applySpeedFloor()
+  // boosts sub-v_min commands up to the floor, and a stall test run off the
+  // boosted value would read a near-zero request as a demand for motion.
+  const bool demanding =
+      std::fabs(state.wheelLeft.cmdVelocity) > bounds_.stallDemand ||
+      std::fabs(state.wheelRight.cmdVelocity) > bounds_.stallDemand;
+
+  // FALLBACK with no usable OTOS: fall back to the encoders, and deliberately
+  // do NOT suppress on wheelFrozen this time -- see reason 2 above. That
+  // trades a possible false halt on a genuinely dead encoder for catching a
+  // real jam, which is the right way round: stopping a healthy robot is
+  // recoverable, grinding a wheel against a rail until a human notices is the
+  // failure this exists to end.
+  const bool encoderStill =
+      std::fabs(state.wheelLeft.velocity) <= bounds_.stallSpeed &&
+      std::fabs(state.wheelRight.velocity) <= bounds_.stallSpeed &&
+      state.wheelLeft.connected && state.wheelRight.connected;
+
+  const bool stalled = demanding && (otosBelievable ? bodyStill : encoderStill);
+
+  // One physical condition -- the ROBOT is stuck -- so both wheels report it.
+  // Which wheel is "at fault" is not a question the OTOS can answer, and
+  // pretending otherwise would put a guess on the wire.
+  updateStall(stalled, state.time.cycleStart, stallSinceLeft_, stallLeft_);
+  updateStall(stalled, state.time.cycleStart, stallSinceRight_, stallRight_);
 
   const bool wheelsMoving = std::fabs(left_.velocity()) > kRestVelocity ||
                             std::fabs(right_.velocity()) > kRestVelocity;

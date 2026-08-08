@@ -252,6 +252,179 @@ void scenarioSetDutyStagesRawValues() {
   checkFloatEq(right.appliedDuty(), dutyRight, "right appliedDuty() reflects the commanded duty");
 }
 
+
+// ===========================================================================
+// STALL DETECTION -- 2026-08-08, stakeholder directive after the robot drove
+// into the playfield rails repeatedly and ground there with nothing noticing.
+//
+// The condition is deliberately three-part -- a real demand for motion AND no
+// measured motion AND an encoder healthy enough to be believed -- and the
+// scenarios below pin each part by REMOVING it and proving the stall does not
+// latch. The encoder-health part matters most: without it a wedged encoder
+// reads zero speed forever and would halt a perfectly healthy robot.
+// ===========================================================================
+
+// Mirrors tovez.json's shipped stall values so the harness exercises the
+// geometry the real robot runs, not a convenient made-up one.
+App::Drive::AdaptationBounds stallBounds() {
+  App::Drive::AdaptationBounds bounds;
+  bounds.stallSpeed = 15.0f;    // [mm/s]
+  bounds.stallDemand = 40.0f;   // [mm/s]
+  bounds.stallWindow = 500.0f;  // [ms]
+  return bounds;
+}
+
+// One cycle of blackboard state: what was commanded, what the OTOS measured
+// of ACTUAL ground travel, and what the encoders read. The OTOS is what the
+// stall test believes -- see drive.cpp's stall block for the measured reason.
+Types::RobotState stallState(float cmd, float otosVx, uint32_t now,  // [mm/s] [mm/s] [ms]
+                             bool otosOk = true, float otosOmega = 0.0f,
+                             float wheelVel = 0.0f, bool connected = true,
+                             bool frozen = false) {
+  Types::RobotState state;
+  state.time.cycleStart = now;
+  state.wheelLeft.cmdVelocity = cmd;
+  state.wheelRight.cmdVelocity = cmd;
+  state.wheelLeft.velocity = wheelVel;
+  state.wheelRight.velocity = wheelVel;
+  state.wheelLeft.connected = connected;
+  state.wheelRight.connected = connected;
+  state.wheelLeft.sampleTime = now;  // age 0, inside kMaxSampleAge
+  state.wheelRight.sampleTime = now;
+  state.health.wheelFrozenLeft = frozen;
+  state.health.wheelFrozenRight = frozen;
+  state.otos.present = otosOk;
+  state.otos.connected = otosOk;
+  state.otos.v_x = otosVx;
+  state.otos.omega = otosOmega;
+  state.otos.sampleTime = now;
+  return state;
+}
+
+// Drives `cycles` ticks of the same condition, 32ms apart (kCycle), starting
+// at a deliberately nonzero time -- updateStall() uses `since == 0` as its
+// unarmed sentinel, so a scenario starting at t=0 would never arm.
+void tickStall(App::Drive& drive, float cmd, float otosVx, uint32_t cycles,
+               bool otosOk = true, float otosOmega = 0.0f,
+               float wheelVel = 0.0f, bool connected = true,
+               bool frozen = false) {
+  for (uint32_t i = 0; i < cycles; ++i) {
+    const uint32_t now = 1000u + i * 32u;  // [ms]
+    Types::RobotState state = stallState(cmd, otosVx, now, otosOk, otosOmega,
+                                         wheelVel, connected, frozen);
+    drive.tick(state);
+  }
+}
+
+// A Drive calibrated and armed so tick() actually runs its body: tick()
+// early-returns unless setDutyPerSpeed() has been called, and the stall test
+// reads the blackboard regardless of who owns motion.
+struct StallRig {
+  TestSim::SimPlant plant;
+  TestSim::ScriptedI2CHook bus{plant};
+  Devices::NezhaMotor left{plant, baseNezhaConfig(1)};
+  Devices::NezhaMotor right{plant, baseNezhaConfig(2)};
+  App::Drive drive{left, right, 200.0f};
+
+  StallRig() {
+    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+    primeAtZero(left, bus, wireAddr);
+    primeAtZero(right, bus, wireAddr);
+    drive.setDutyPerSpeed(1.0f, 1.0f);
+    drive.setAdaptationBounds(stallBounds());
+  }
+};
+
+void scenarioStallLatchesOnCommandedMotionThatIsNotHappening() {
+  beginScenario("stall: commanded 150mm/s, OTOS says the robot is not moving");
+  StallRig rig;
+  // 500ms window at 32ms cycles: 16 ticks spans 480ms (not yet), 17 spans 512.
+  tickStall(rig.drive, 150.0f, 0.0f, 16);
+  checkTrue(!rig.drive.stallLeft(), "no stall at 480ms -- still inside the window");
+  tickStall(rig.drive, 150.0f, 0.0f, 17);
+  checkTrue(rig.drive.stallLeft(), "stall latches once the window elapses");
+  checkTrue(rig.drive.stallRight(), "both wheels report it -- the ROBOT is stuck");
+}
+
+void scenarioWheelsSlippingAgainstAWallStillStalls() {
+  beginScenario("stall: wheels SPINNING against a wall is still a stall");
+  StallRig rig;
+  // The rail case measured on tovez: 17cm of encoder travel while the robot
+  // sat still. An encoder-only test reads this as healthy driving; the OTOS
+  // reads the truth. This is the scenario the first design got wrong.
+  tickStall(rig.drive, 150.0f, /*otosVx=*/2.0f, 40, /*otosOk=*/true,
+            /*otosOmega=*/0.0f, /*wheelVel=*/150.0f);
+  checkTrue(rig.drive.stallLeft(), "slipping wheels must not hide a jammed robot");
+}
+
+void scenarioWedgedEncoderWithRobotMovingIsNotAStall() {
+  beginScenario("stall: a wedged encoder on a MOVING robot is not a stall");
+  StallRig rig;
+  // Encoders frozen and flagged wedged, but the OTOS says the robot is
+  // travelling. This is the false positive the OTOS gate exists to prevent,
+  // and it is why the encoder reading cannot be the primary signal.
+  tickStall(rig.drive, 150.0f, /*otosVx=*/140.0f, 40, /*otosOk=*/true,
+            /*otosOmega=*/0.0f, /*wheelVel=*/0.0f, /*connected=*/true,
+            /*frozen=*/true);
+  checkTrue(!rig.drive.stallLeft(), "a moving robot must never latch a stall");
+}
+
+void scenarioPivotIsNotAStall() {
+  beginScenario("stall: an in-place PIVOT translates nothing but is not stalled");
+  StallRig rig;
+  // v_x is ~0 through a pivot, so a v_x-only test would call every turn a
+  // stall. 1.0 rad/s across a 200mm track is 100mm/s at the rim.
+  tickStall(rig.drive, 150.0f, /*otosVx=*/0.0f, 40, /*otosOk=*/true,
+            /*otosOmega=*/1.0f);
+  checkTrue(!rig.drive.stallLeft(), "rotation counts as moving");
+}
+
+void scenarioNoOtosFallsBackToEncoders() {
+  beginScenario("stall: with no usable OTOS the encoders are the fallback");
+  StallRig rig;
+  tickStall(rig.drive, 150.0f, /*otosVx=*/0.0f, 40, /*otosOk=*/false,
+            /*otosOmega=*/0.0f, /*wheelVel=*/0.0f);
+  checkTrue(rig.drive.stallLeft(), "encoder fallback still protects the robot");
+  App::Drive::AdaptationBounds b = stallBounds();
+  rig.drive.setAdaptationBounds(b);
+}
+
+void scenarioStandingSubDemandCommandIsNotAStall() {
+  beginScenario("stall: a command below stallDemand is not a demand for motion");
+  StallRig rig;
+  // 30mm/s is under the 40mm/s demand floor: a standing sub-breakaway command
+  // legitimately does not move the robot, and is not a jam.
+  tickStall(rig.drive, 30.0f, 0.0f, 40);
+  checkTrue(!rig.drive.stallLeft(), "sub-demand command must not latch a stall");
+}
+
+void scenarioMovingRobotIsNotAStall() {
+  beginScenario("stall: a robot travelling above stallSpeed is not stalled");
+  StallRig rig;
+  tickStall(rig.drive, 150.0f, 60.0f, 40);
+  checkTrue(!rig.drive.stallLeft(), "a moving robot must not latch a stall");
+}
+
+void scenarioZeroWindowDisablesTheDetector() {
+  beginScenario("stall: stall_window = 0 disables the detector entirely");
+  StallRig rig;
+  App::Drive::AdaptationBounds off = stallBounds();
+  off.stallWindow = 0.0f;
+  rig.drive.setAdaptationBounds(off);
+  tickStall(rig.drive, 150.0f, 0.0f, 40);
+  checkTrue(!rig.drive.stallLeft(), "zero window is off, matching the 0-is-disabled convention");
+}
+
+void scenarioEstopClearsTheStallLatch() {
+  beginScenario("stall: estop() clears the latch along with the rest of Drive");
+  StallRig rig;
+  tickStall(rig.drive, 150.0f, 0.0f, 40);
+  checkTrue(rig.drive.stallLeft(), "precondition: the stall latched");
+  rig.drive.estop();
+  checkTrue(!rig.drive.stallLeft(), "estop() clears the left stall latch");
+  checkTrue(!rig.drive.stallRight(), "estop() clears the right stall latch");
+}
+
 // ===========================================================================
 // 2. stop(): both wheel targets reach 0 within one cycle of the next
 //    NezhaMotor::tick() (AC #2), transitioning from a previously nonzero
@@ -2339,6 +2512,15 @@ int main() {
   scenarioDifferentialWithNearZeroCommonModeNowBoostedTowardVMin();
   scenarioRawZeroWheelStaysZeroUnderRatioPreservingScale();
   scenarioSpeedFloorIsATeleopAffordanceNotAGlobalOne();
+  scenarioStallLatchesOnCommandedMotionThatIsNotHappening();
+  scenarioWheelsSlippingAgainstAWallStillStalls();
+  scenarioWedgedEncoderWithRobotMovingIsNotAStall();
+  scenarioPivotIsNotAStall();
+  scenarioNoOtosFallsBackToEncoders();
+  scenarioStandingSubDemandCommandIsNotAStall();
+  scenarioMovingRobotIsNotAStall();
+  scenarioZeroWindowDisablesTheDetector();
+  scenarioEstopClearsTheStallLatch();
 
   if (g_failureCount == 0) {
     std::printf("OK: all App::Drive scenarios passed\n");

@@ -284,6 +284,18 @@
         "pos_err_max": {
           "type": "number",
           "minimum": 0.0
+        },
+        "stall_speed": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "stall_demand": {
+          "type": "number",
+          "minimum": 0.0
+        },
+        "stall_window": {
+          "type": "number",
+          "minimum": 0.0
         }
       }
     },

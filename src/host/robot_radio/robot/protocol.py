@@ -345,6 +345,8 @@ _FLAG_FAULT_WHEEL_FROZEN_RIGHT = 1 << 20
 # own kFlagFaultWheelDeficitLeft/Right doc comment.
 _FLAG_FAULT_WHEEL_DEFICIT_LEFT = 1 << 21
 _FLAG_FAULT_WHEEL_DEFICIT_RIGHT = 1 << 22
+_FLAG_FAULT_STALL_LEFT = 1 << 24
+_FLAG_FAULT_STALL_RIGHT = 1 << 25
 # NOT bit 11 -- that is _FLAG_EVENT_BOOT_READY above.
 _FLAG_COLOR_FRESH = 1 << 23
 
@@ -646,6 +648,38 @@ class TLMFrame:
         """Bit 22 (130-005) -- same as ``fault_wheel_deficit_left``, RIGHT
         wheel."""
         return self._flag(_FLAG_FAULT_WHEEL_DEFICIT_RIGHT)
+
+    @property
+    def fault_stall_left(self) -> bool:
+        """Bit 24 -- the LEFT wheel was commanded to move and did not, so the
+        firmware HALTED the robot (App::RobotLoop::haltOnStall). This is the
+        robot jammed against something: a rail, a wall, the table edge.
+
+        Distinct from the two neighbouring wheel faults, and the distinction
+        is the whole point -- only this one means the robot stopped itself:
+
+        - ``fault_wheel_frozen_left`` (19) is an ENCODER fault; the wheel may
+          be spinning perfectly well.
+        - ``fault_wheel_deficit_left`` (21) means the wheel IS turning, just
+          under its commanded speed.
+        - this means the wheel is being driven and is not turning at all.
+
+        LATCHED: it survives the halt that ends the stall condition, and
+        clears when the host commands a new motion (MOVE/WHEELS/GO_TO/ESTOP).
+        So it always describes the motion that was just stopped, and a halt
+        can never erase its own explanation before the host sees it.
+        """
+        return self._flag(_FLAG_FAULT_STALL_LEFT)
+
+    @property
+    def fault_stall_right(self) -> bool:
+        """Bit 25 -- same as ``fault_stall_left``, RIGHT wheel."""
+        return self._flag(_FLAG_FAULT_STALL_RIGHT)
+
+    @property
+    def stalled(self) -> bool:
+        """Either wheel stalled -- the robot halted itself on an obstacle."""
+        return self.fault_stall_left or self.fault_stall_right
 
     @property
     def event_deadman_expired(self) -> bool:
@@ -982,6 +1016,15 @@ _SET_KEY_TARGETS: dict[str, "tuple[int, str]"] = {
     # mm/s) -- both are live and both matter; setting one is not setting
     # the other. See robot_config.proto's WheelControl.pos_err_max.
     "pid.posErrMax": (robot_config_pb2.WHEEL_CONTROL, "pos_err_max"),
+    # Stall detection (2026-08-08). stall.speed is the measured-speed ceiling
+    # below which a wheel counts as not turning, stall.demand the commanded
+    # floor above which we are genuinely asking for motion, stall.window the
+    # sustain time before the firmware HALTS the robot. See
+    # robot_config.proto's WheelControl for why this is a different fault
+    # from deficit/wheelFrozen.
+    "stall.speed": (robot_config_pb2.WHEEL_CONTROL, "stall_speed"),
+    "stall.demand": (robot_config_pb2.WHEEL_CONTROL, "stall_demand"),
+    "stall.window": (robot_config_pb2.WHEEL_CONTROL, "stall_window"),
 }
 
 # PlannerConfigPatch/CONFIG_PLANNER -- DELETED (115-003, gut-to-minimal-
