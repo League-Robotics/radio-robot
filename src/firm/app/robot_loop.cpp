@@ -41,9 +41,27 @@ uint32_t packLine(const Devices::LineReading& reading) {
          ((reading.raw[2] & 0xFFu) << 16) | ((reading.raw[3] & 0xFFu) << 24);
 }
 
-uint32_t packColor(const Devices::ColorReading& reading) {
-  return ((reading.r >> 8) & 0xFFu) | (((reading.g >> 8) & 0xFFu) << 8) |
-         (((reading.b >> 8) & 0xFFu) << 16) | (((reading.c >> 8) & 0xFFu) << 24);
+// Squeeze one 16-bit channel into the wire's 8 bits by scaling against the
+// ADC's ACTUAL full scale, not against 65535.
+//
+// This used to be a bare `>> 8`, which silently assumed the ADC ran to
+// 65535. It does not: at the shipped ATIME (252) the APDS integrates for
+// 11.1ms and saturates at 4100 counts, so `>> 8` could only ever emit 0..16
+// and rounded every channel under 256 counts to zero. Measured on tovez
+// 2026-08-08: r/g/b pinned at 0 and c at 2 across 375 consecutive frames,
+// zero spread on all four -- the sensor was reading correctly and the wire
+// was throwing the answer away.
+uint8_t scaleColorChannel(uint32_t value, uint32_t fullScale) {  // [counts]
+  if (fullScale == 0) return 0;
+  const uint32_t scaled = (value * 255u) / fullScale;
+  return static_cast<uint8_t>(scaled > 255u ? 255u : scaled);
+}
+
+uint32_t packColor(const Devices::ColorReading& reading, uint32_t fullScale) {  // [counts]
+  return static_cast<uint32_t>(scaleColorChannel(reading.r, fullScale)) |
+         (static_cast<uint32_t>(scaleColorChannel(reading.g, fullScale)) << 8) |
+         (static_cast<uint32_t>(scaleColorChannel(reading.b, fullScale)) << 16) |
+         (static_cast<uint32_t>(scaleColorChannel(reading.c, fullScale)) << 24);
 }
 
 }  // namespace
@@ -523,7 +541,7 @@ void RobotLoop::publishLineColor(bool tickedLine) {
   state_.perception.lineFresh = lineFresh;
   state_.perception.colorFresh = colorFresh;
   if (lineFresh) state_.perception.line = packLine(line_.reading());
-  if (colorFresh) state_.perception.color = packColor(color_.reading());
+  if (colorFresh) state_.perception.color = packColor(color_.reading(), color_.fullScale());
 
   // Validity LATCHES on the first reading and only drops when the leaf
   // itself reports the device gone -- it deliberately does NOT track

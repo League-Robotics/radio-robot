@@ -93,6 +93,19 @@ class ColorSensorLeaf {
   ColorReading reading() const;
   bool readingFresh() const;
 
+  // [counts] the ADC's full-scale value at the CURRENT integration time --
+  // 1025 per 2.78ms integration step, i.e. 1025 * (256 - ATIME), saturating
+  // at the register's own 16-bit ceiling.
+  //
+  // Callers that squeeze a reading into fewer bits MUST scale against this,
+  // not against 65535. At the shipped ATIME (252 -> 11.1ms) full scale is
+  // only 4100, so a naive `>> 8` leaves just 16 of 256 output codes usable
+  // and rounds every channel below 256 counts to zero. Measured on tovez
+  // 2026-08-08 before this was exposed: r/g/b pinned at 0 and c at 2 across
+  // 375 consecutive frames, zero spread -- a sensor that reads fine but
+  // could not express anything.
+  uint32_t fullScale() const;
+
  private:
   enum class DetectPhase : uint8_t { AltProbe, ApdsProbe, Done };
 

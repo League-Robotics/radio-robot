@@ -161,6 +161,14 @@ void ColorSensorLeaf::tick(uint64_t nowUs) {
 
 ColorReading ColorSensorLeaf::reading() const { return cachedReading_; }
 
+uint32_t ColorSensorLeaf::fullScale() const {
+  // APDS-9960: integration time = 2.78ms * (256 - ATIME), and the ALS ADC
+  // saturates at 1025 counts per step, capped by the 16-bit register.
+  const uint32_t steps = 256u - (config_.integration & 0xFFu);
+  const uint32_t scale = 1025u * steps;
+  return (scale > 65535u) ? 65535u : scale;
+}
+
 bool ColorSensorLeaf::readingFresh() const { return readingFresh_; }
 
 // ---------------------------------------------------------------------------
