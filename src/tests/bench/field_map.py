@@ -147,7 +147,15 @@ SWEEP_FENCE = (52.0, 34.0)  # [cm] |x|, |y| limits on the centre of rotation
 # One raster pitch is the natural size: wander further than that and the leg
 # is sampling a row it does not belong to, so the data is wrong even when the
 # robot is safe.
-CROSS_TRACK_LIMIT = 6.0  # [cm]
+#
+# Sized as a RUNAWAY catcher, not an evenness auditor. Measured 2026-08-08
+# with rows squared to 0.015 rad: passes hold 0.7-2.3cm, but an occasional
+# row wanders ~6cm and a 6.0cm limit killed the run on it. A wandering row
+# costs EVENNESS, not correctness -- every sample is stamped with the pose
+# measured when it was taken, never with the row's planned y -- so aborting
+# the whole scan over one is the wrong trade. 9cm still fires long before
+# the fence, with the robot mid-mat and room to stop.
+CROSS_TRACK_LIMIT = 9.0  # [cm]
 
 # How much encoder movement still counts as "stopped" when confirming a halt.
 # Encoder position is [mm]; a stationary robot jitters by well under this,
@@ -712,6 +720,14 @@ TURN_BLIND_FRAMES = 20       # consecutive camera misses before we halt
 # robot covers ~5cm between checks, which is inside every margin here.
 CAM_CHECK_PERIOD = 0.3       # [s]
 
+# [rad] how square a sweep row must be before it is driven. Set by the pass
+# length, not by taste: residual heading becomes cross-track, and over an
+# 88cm pass 0.015 rad (0.86deg) is ~1.3cm -- comfortably inside a 3.7cm row
+# pitch. The old 0.05 rad allowed 4.5cm, which is more than a pitch and made
+# rows crowd. Achievable only on ODOMETRY heading (the camera reads tag yaw
+# to ~1-2deg) and only with a healthy gyro -- gyro_recal.py first.
+SWEEP_HEADING_TOL = 0.015
+
 # The bench-room lights are on a network relay and they switch themselves OFF
 # on their own (.claude/rules/hardware-bench-testing.md). That used to cost a
 # dark frame; now it is a SAFETY issue, because every guard on this drive path
@@ -861,15 +877,25 @@ def align_heading(bot, target, tol=0.05, tries=8, fix_fn=None):  # [rad] [rad]
         # tell that no turning was happening at all rather than that it was
         # converging badly.
         rate = TURN_OMEGA_FINE if abs(err) <= TURN_FINE_BAND else TURN_OMEGA_FAST
-        # Do NOT stop this pivot on `stop_angle`. That condition is evaluated
-        # in ODOMETRY angle, which is exactly the quantity the scrub corrupts:
-        # measured 2026-08-08, odometry over-reports rotation ~18x on the mat,
-        # so a stop_angle of 167deg ended the move after ~9deg of real turn,
-        # and ten attempts spent 66s to cover 90deg. Command an open-ended
-        # rotation instead and stop it from OUT HERE, watching the camera.
+        # How this pivot STOPS depends on who is refereeing it, and getting
+        # that wrong is expensive: an earlier version commanded the
+        # open-ended angle unconditionally, so the odometry path (fix_fn
+        # None) asked for a 6.5 rad -- 372 degree -- spin instead of the
+        # error, and align_heading gave up with a +57.4deg residual after
+        # spinning the robot bodily around (2026-08-08).
+        #
+        # - Camera referee (fix_fn given): command an OPEN-ENDED rotation and
+        #   stop it from out here, watching tag 100. Used when odometry
+        #   heading cannot be trusted -- e.g. a gyro whose bias was
+        #   calibrated at a bad boot, before gyro_recal.py has fixed it.
+        # - Odometry referee (fix_fn None, the normal case now): stop on
+        #   `stop_angle` = the error itself. The firmware evaluates that in
+        #   odometry heading, which with a healthy gyro is both accurate and
+        #   far finer than the camera can read tag yaw.
         turn_id = bot._next_id()
         bot.p.move_twist(0.0, 0.0, OMEGA_SIGN * math.copysign(rate, err),
-                         stop_angle=TURN_OPEN_ANGLE,
+                         stop_angle=(TURN_OPEN_ANGLE if fix_fn is not None
+                                     else abs(err)),
                          timeout=TURN_OPEN_TIMEOUT, move_id=turn_id)
         if fix_fn is not None:
             spun = _spin_to_heading(bot, fix_fn, target, err, tol)
@@ -1021,7 +1047,8 @@ def straight_scan(bot, dc, fmap, perception, channel_y, fence, x_span, y_span,
 
 def collect_straight(bot, fmap, perception, channel_y, fence, seconds,
                      leg_y=None, cross_track=None,
-                     hard_fence=RAIL_FENCE, fix_fn=None):  # [cm] [cm]
+                     hard_fence=RAIL_FENCE, fix_fn=None,
+                     leg_y_cam=None):  # [cm] [cm] [cm]
     """Map during a straight MOVE; stop early once it goes inactive.
 
     Pass `fix_fn` and the fence is checked against the CAMERA as well as
@@ -1062,11 +1089,19 @@ def collect_straight(bot, fmap, perception, channel_y, fence, seconds,
                     print(f"    CAMERA fence: robot truly at "
                           f"({c[0]:+.1f},{c[1]:+.1f})cm -- halting")
                     return (c[0], c[1])
-                if (leg_y is not None and cross_track is not None
-                        and abs(c[1] - leg_y) > cross_track):
-                    print(f"    CAMERA cross-track: leg y={leg_y:+.1f} but "
-                          f"robot truly at y={c[1]:+.1f} "
-                          f"({abs(c[1] - leg_y):.1f}cm off) -- halting")
+                # Compare camera against a CAMERA-frame reference. leg_y
+                # comes from odometry, and the two frames sit a few cm apart
+                # even right after a seed (the squaring pivot alone sweeps
+                # the 4.78cm sensor lever arm). Scoring one against the other
+                # is an apples-to-oranges test that fires on a pass running
+                # perfectly straight -- measured 2026-08-08: odometry leg
+                # y=-1.0 vs camera y=+5.2 aborted row 1 for a 6.2cm
+                # "excursion" that was entirely frame offset.
+                if (leg_y_cam is not None and cross_track is not None
+                        and abs(c[1] - leg_y_cam) > cross_track):
+                    print(f"    CAMERA cross-track: leg y={leg_y_cam:+.1f} "
+                          f"(camera frame) but robot truly at y={c[1]:+.1f} "
+                          f"({abs(c[1] - leg_y_cam):.1f}cm off) -- halting")
                     return (c[0], c[1])
         for env in bot.conn.drain_binary_tlm():
             t = getattr(env, "tlm", None)
@@ -1095,35 +1130,37 @@ def collect_straight(bot, fmap, perception, channel_y, fence, seconds,
 
 def edge_sweep(bot, fmap, perception, channel_y, fix_fn, x_east, x_west,
                y_start, pitch, rows, speed):
-    """Scan in EVEN ROWS: every pass runs east->west, at constant y, always.
+    """Scan in EVEN ROWS by REVERSING, never turning around.
 
-    Stakeholder spec 2026-08-08. The obvious alternative -- a boustrophedon
-    that alternates the direction of travel -- gives every other row a
-    different heading, and that is what turns a scan into a zigzag rather
-    than a set of rows. Whatever residual heading error align_heading leaves
-    behind tilts a westbound pass one way and an eastbound pass the other, so
-    consecutive rows converge at one end and splay at the other; adjacent
-    passes then disagree about where their own y is and the map reads as
-    smeared bands instead of lines. Driving every pass on the SAME heading
-    (pi, west) removes that degree of freedom outright: the residual is the
-    same sign on every row, so the rows stay parallel and the whole scan is
-    offset rather than sheared.
+    Stakeholder spec 2026-08-08, restated after a wrong turn: "you don't turn
+    around. You go forward, you go back. You can drive in both directions,
+    and it will be a lot more accurate if you do that."
 
-    Two more reasons the extra transit is worth paying for:
+    The robot faces WEST for the entire scan. Odd rows drive forward (west),
+    even rows drive backward (east) along that same heading. A differential
+    drive reverses exactly as well as it goes forward, so this covers the mat
+    with ZERO 180deg pivots -- and pivots are the expensive manoeuvre here:
+    each one is a chance to leave a heading residual, and it is heading
+    residual that tilts a pass off its row.
 
-    - The lever arm is unchanged pass to pass. The sensors sit ahead of the
-      centre of rotation, so the swath they trace is a function of heading;
-      hold heading fixed and every row samples the same body geometry, which
-      is what makes rows comparable to each other at all.
-    - There is one heading to square to, not two. Every row squares to the
-      same pi, so a correction that works on row 0 works on row 15; a
-      reversing scan has to land BOTH 0 and pi correctly, and gets a fresh
-      chance to leave a large residual on every second row.
+    An earlier version of this function drove every pass east->west with a
+    GO_TO, turning around between rows, on the theory that odometry heading
+    could not be trusted to hold a line. That theory was WRONG: heading was
+    unreliable because the OTOS gyro's bias had been calibrated at a boot
+    that happened mid-battery-swap (+1.44 deg/s standstill drift). With a
+    healthy gyro -- check with src/tests/bench/gyro_recal.py before any run,
+    and recalibrate with it if drift is off -- a straight open-loop pass
+    holds its row: 90cm of centre-line driving stayed inside +/-1.6cm with
+    the camera only grading, never steering.
 
-    Only the RETURNS are angled. The GO_TO that carries the robot from one
-    row's west end back to the next row's east end also steps it down one
-    pitch in y, so the row change costs no separate manoeuvre -- the diagonal
-    IS the return.
+    Heading is squared ONCE per row, to pi, and both directions share it, so
+    there is a single heading to get right rather than two. The lever arm is
+    likewise unchanged pass to pass: the sensors sit ahead of the centre of
+    rotation, so the swath they trace depends on heading; holding heading
+    fixed is what makes rows comparable to each other at all.
+
+    Row changes are still made with a GO_TO to the next row's start, which
+    absorbs the previous row's end error instead of accumulating it.
 
     Returns the breach position if the fence or the cross-track guard fired,
     otherwise None. None also covers a give-up (lost tag, unseedable pose,
@@ -1131,11 +1168,29 @@ def edge_sweep(bot, fmap, perception, channel_y, fix_fn, x_east, x_west,
     """
     from goto_otos import FRAME_WORLD
 
-    for i in range(rows):
-        y_target = y_start - i * pitch
+    # Visit rows CENTRE-OUTWARD, not north-to-south. The robot starts at the
+    # centre, so a north-to-south order makes the very first move a long
+    # diagonal to a far corner -- and the Navigator arcs on a long diagonal.
+    # Measured 2026-08-08: the transit from (+1.6,+0.1) to row 0 at
+    # (+44.0,+27.5) swung north to y=+34.1 and tripped the fence before a
+    # single row was driven. Ordering by |y| keeps every transit short: the
+    # first is a few cm from centre, and each later one is a single pitch
+    # step from the row just finished.
+    row_ys = sorted((y_start - k * pitch for k in range(rows)), key=abs)
 
-        # This GO_TO *is* the angled return from the previous row's west end:
-        # back east and down one pitch in a single move.
+    for i, y_target in enumerate(row_ys):
+        # Alternate the DIRECTION OF TRAVEL, never the heading: the robot
+        # finishes each row at one end and starts the next from that same
+        # end, so the alternation follows the SEQUENCE index, not y. v_x
+        # carries the sign; heading stays pi throughout.
+        forward = (i % 2) == 0
+        x_from = x_east if forward else x_west
+        x_to = x_west if forward else x_east
+
+        # This GO_TO carries the robot to THIS row's start -- which end that
+        # is alternates, since the scan reverses rather than turning around.
+        # It also steps down one pitch in y, so the row change costs no
+        # separate manoeuvre.
         #
         # Issued REPEATEDLY until the camera says the row start is actually
         # where it was asked for. One GO_TO is not enough to place a row: the
@@ -1148,14 +1203,14 @@ def edge_sweep(bot, fmap, perception, channel_y, fix_fn, x_east, x_west,
         # the move.
         breach = None
         for attempt in range(ROW_PLACE_TRIES):
-            _c, gid = bot.goto_wire(x_east * 10.0, y_target * 10.0,
+            _c, gid = bot.goto_wire(x_from * 10.0, y_target * 10.0,
                                     FRAME_WORLD, speed=speed,
                                     arrive=ROW_ARRIVE, timeout=40000.0)
             _done, breach = wait_for_goto(bot, gid, timeout=45.0, fmap=fmap,
                                           perception=perception,
                                           channel_y=channel_y,
                                           fence=SWEEP_FENCE,
-                                          arrived_at=(x_east, y_target),
+                                          arrived_at=(x_from, y_target),
                                           hard_fence=SWEEP_FENCE,
                                           fix_fn=fix_fn)
             if breach:
@@ -1192,37 +1247,58 @@ def edge_sweep(bot, fmap, perception, channel_y, fix_fn, x_east, x_west,
                   "stopping the sweep")
             return None
 
-        # Drive the pass as a GO_TO to the far end of the SAME row, not as an
-        # open-loop straight twist.
+        # Square to WEST once, and drive the pass STRAIGHT -- forward on even
+        # rows, backward on odd. No pivot, no turning around: v_x carries the
+        # direction while heading stays pi, which is the whole point of a
+        # reversing scan (stakeholder: "you go forward, you go back... it
+        # will be a lot more accurate if you do that").
         #
-        # This is the lesson of the whole 2026-08-08 session in one line: on
-        # this mat the wheels scrub, encoder-derived heading over-reports
-        # rotation by an order of magnitude, and nothing that steers by
-        # odometry heading holds a line. An open-loop move_twist commits to
-        # whatever heading it starts with and cannot notice it is wrong -- one
-        # such pass, begun squared and seeded, finished 20cm north of where
-        # every guard believed it was, out on the bare wood.
-        # A GO_TO is closed-loop on a WORLD target: the Navigator keeps
-        # steering at the far end of the row for the whole pass, so heading
-        # error is corrected continuously instead of integrated. It costs a
-        # turn at each end, which the stakeholder would rather avoid -- but
-        # even rows were the actual requirement, and no amount of squaring up
-        # beforehand buys them while the heading reference is this bad.
-        _c, pid = bot.goto_wire(x_west * 10.0, y_target * 10.0, FRAME_WORLD,
-                                speed=speed, arrive=ROW_ARRIVE,
-                                timeout=int(abs(x_east - x_west) * 10.0
-                                            / speed * 1000 * 4))
-        done, breach = wait_for_goto(bot, pid, timeout=60.0, fmap=fmap,
-                                     perception=perception,
-                                     channel_y=channel_y, fence=SWEEP_FENCE,
-                                     arrived_at=(x_west, y_target),
-                                     hard_fence=SWEEP_FENCE, fix_fn=fix_fn)
+        # An open-loop straight drive is the right tool ONLY when heading is
+        # trustworthy, and an earlier version of this file wrongly concluded
+        # it never was -- blaming wheel scrub on the mat. The real fault was
+        # the OTOS gyro's bias, calibrated once at boot and poisoned by a
+        # boot that happened mid-battery-swap (+1.44 deg/s standstill drift).
+        # Verify with src/tests/bench/gyro_recal.py before any run and
+        # recalibrate if it is off; with a healthy gyro a 90cm pass held its
+        # line to +/-1.6cm on odometry alone.
+        # Square on ODOMETRY, not the camera, and square it TIGHT.
+        #
+        # Residual heading becomes cross-track over the pass: at the
+        # camera-refereed tol of 0.05 rad (2.9deg) an 88cm pass can wander
+        # 4.5cm, and measured 2026-08-08 row 0 did exactly that (planned
+        # y=+1.6, ended +6.2) -- more than one 3.7cm pitch, so rows would
+        # crowd. The camera cannot do better: tag 100 is small in frame and
+        # its yaw is good to only ~1-2deg. A healthy gyro is far finer than
+        # that, which is why the referee moves back to odometry now that the
+        # bias is calibrated -- and it is much faster besides, since it needs
+        # no camera round-trip per pivot. Odometry was just seeded from the
+        # camera two lines above, so it is anchored to the world frame.
+        if not align_heading(bot, math.pi, tol=SWEEP_HEADING_TOL):
+            print(f"  [{i:2d}] heading will not square up -- halting rather "
+                  "than driving blind")
+            return None
+
+        here = bot.pose_blocking(timeout=3.0)
+        leg_ref = (here[1] / 10.0) if here is not None else y_target
+        # The camera guard needs its OWN reference, in its own frame.
+        cam_here = camera_fix(fix_fn, samples=3)
+        leg_ref_cam = cam_here[1] if cam_here is not None else None
+        dist = abs(x_to - x_from) * 10.0                  # [mm]
+        v_x = speed if forward else -speed
+        bot.p.move_twist(v_x, 0.0, 0.0, stop_distance=dist,
+                         timeout=int(dist / speed * 1000 * 3), move_id=0)
+        breach = collect_straight(bot, fmap, perception, channel_y,
+                                  SWEEP_FENCE, seconds=dist / speed + 6.0,
+                                  leg_y=leg_ref, cross_track=CROSS_TRACK_LIMIT,
+                                  hard_fence=SWEEP_FENCE, fix_fn=fix_fn,
+                                  leg_y_cam=leg_ref_cam)
         if breach:
             return breach
         end = camera_fix(fix_fn, samples=5)
         end_y = end[1] if end is not None else float("nan")
-        print(f"  [{i:2d}] y={y_target:+6.1f} E->W ended y={end_y:+6.1f}  "
-              f"refl_cells={fmap.refl_cells} colour_cells={fmap.color_cells}")
+        print(f"  [{i:2d}] y={y_target:+6.1f} {'E->W' if forward else 'W->E'} "
+              f"ended y={end_y:+6.1f}  refl_cells={fmap.refl_cells} "
+              f"colour_cells={fmap.color_cells}")
     return None
 
 
