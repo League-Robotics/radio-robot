@@ -96,8 +96,24 @@ FENCE_MARGIN = 14.0  # [cm]
 # rails, because at a reported y=+40.4 the line array was at ~+50 and the rail
 # is at 44.65.
 ROBOT_REACH = 9.6   # [cm] line array ahead of the centre of rotation
-STOP_TRAVEL = 2.9   # [cm] measured estop travel (.claude/rules/playfield-testing.md)
+# Measured on tovez 2026-08-08: a fence trip at x=+52.5 came to rest at
+# x=+56.8, i.e. 4.3cm of travel between the breach being SEEN and the robot
+# stopping -- half again the 2.9cm quoted in .claude/rules/playfield-testing.md
+# for a bare estop. The difference is the detection leg: that 2.9cm figure is
+# stopping distance from the moment estop lands, while this budget also has to
+# cover the telemetry frame that carried the breach and the command going back
+# out over the relay. Budget what was actually observed, not the ideal.
+STOP_TRAVEL = 4.5   # [cm]
 RAIL_MARGIN = 2.5   # [cm]
+
+# The Navigator overshoots the end of a move before settling, so a leg endpoint
+# is NOT where the robot stops. Measured: 52.5 reached on a 46.0 target here,
+# and this file already recorded 54 on a 48 target. A scan whose x_span leaves
+# less than this between the leg end and the rail fence will trip on a transit
+# no matter how well the legs themselves are driven -- which is what ended the
+# 2026-08-08 run at leg 5. Used to CLAMP the requested span rather than leaving
+# it to whoever picks the flags.
+NAV_OVERSHOOT = 7.0  # [cm]
 RAIL_INSET = ROBOT_REACH + STOP_TRAVEL + RAIL_MARGIN  # [cm]
 RAIL_FENCE = (X_LIM - RAIL_INSET, Y_LIM - RAIL_INSET)  # [cm]
 
@@ -1027,6 +1043,57 @@ def calibrate_from_dots(bot, dc, speed, out_path, points):
     return cal
 
 
+def score_against_truth(fmap: FieldMap) -> None:
+    """Print per-feature contrast against the camera-surveyed mat.
+
+    Turns "the map looks about right" into a number per feature. For each
+    surveyed shape it compares cells ON the printed outline with cells well
+    OFF it but still nearby, so the comparison is local and does not care
+    about lighting drift across the field.
+
+    Read the p90 column, not the median. The printed lines are ~5mm wide and
+    the four line-sensor channels are POINTS (at -32/-8/+8/+32mm), so a pass
+    lays down four thin tracks rather than a swath: most cells inside the
+    outline band never had a sensor over the line at all, and the median is
+    therefore dominated by the white mat beside it. p90 is what the sensor
+    saw when it actually crossed.
+    """
+    refl = fmap.reduce_refl()
+    if not refl.count():
+        print("\nno reflectance cells -- nothing to score")
+        return
+    xs = np.linspace(-X_LIM, X_LIM, GRID_W)
+    ys = np.linspace(-Y_LIM, Y_LIM, GRID_H)
+    XX, YY = np.meshgrid(xs, ys)
+
+    def seg_dist(px, py, a, b):
+        ax, ay = a
+        bx, by = b
+        dx, dy = bx - ax, by - ay
+        L = dx * dx + dy * dy
+        if L == 0:
+            return np.hypot(px - ax, py - ay)
+        t = np.clip(((px - ax) * dx + (py - ay) * dy) / L, 0, 1)
+        return np.hypot(px - (ax + t * dx), py - (ay + t * dy))
+
+    print(f"\n{'feature':<15}{'n':>6}{'on p90':>9}{'off med':>9}{'contrast':>10}")
+    print("-" * 49)
+    for label, pts in MAT_TRUTH:
+        segs = list(zip(pts, pts[1:] + ([pts[0]] if len(pts) > 2 else [])))
+        d = np.full(XX.shape, 1e9)
+        for a, b in segs:
+            d = np.minimum(d, seg_dist(XX, YY, a, b))
+        on = (d < 1.5) & ~refl.mask
+        off = (d > 4.0) & (d < 9.0) & ~refl.mask
+        if on.sum() < 5 or off.sum() < 5:
+            print(f"{label:<15}{on.sum():>6}   NOT COVERED by this scan")
+            continue
+        on_p90 = float(np.percentile(refl.data[on], 90))
+        off_med = float(np.median(refl.data[off]))
+        print(f"{label:<15}{on.sum():>6}{on_p90:>9.1f}{off_med:>9.1f}"
+              f"{on_p90 - off_med:>+10.1f}")
+
+
 # --------------------------------------------------------------------------
 # Rendering
 # --------------------------------------------------------------------------
@@ -1181,6 +1248,7 @@ def main() -> int:
 
     if args.replay:
         fmap = FieldMap.load(pathlib.Path(args.replay))
+        score_against_truth(fmap)
         render(fmap, OUT / f"{args.out}.png", f"field map (replay of {args.replay})")
         return 0
 
@@ -1260,6 +1328,23 @@ def main() -> int:
     # driving past its edge is harmless (stakeholder, 2026-08-08). Keep a real
     # margin from the field limits and give the raster room for the
     # Navigator's end-of-transit overshoot.
+    # Clamp the span so the Navigator's end-of-transit overshoot still lands
+    # inside the rail fence. Sizing the scan and sizing the fence independently
+    # is how a run dies on a transit it drove correctly: on 2026-08-08 an
+    # x_span of 46 overshot to 52.5 against a 52.15 rail fence and ended the
+    # run at leg 5, having driven every leg cleanly. The fence is not the thing
+    # to relax here -- the scan is.
+    max_x = RAIL_FENCE[0] - NAV_OVERSHOOT
+    max_y = RAIL_FENCE[1] - NAV_OVERSHOOT
+    if args.x_span > max_x or args.y_span > max_y:
+        print(f"  clamping span to fit the rail fence: "
+              f"x {args.x_span:.1f}->{min(args.x_span, max_x):.1f}, "
+              f"y {args.y_span:.1f}->{min(args.y_span, max_y):.1f}cm "
+              f"(rail fence {RAIL_FENCE[0]:.1f}/{RAIL_FENCE[1]:.1f}, "
+              f"Navigator overshoot {NAV_OVERSHOOT:.1f})")
+        args.x_span = min(args.x_span, max_x)
+        args.y_span = min(args.y_span, max_y)
+
     fence = (min(X_LIM - 6.0, args.x_span + 14.0),
              min(Y_LIM - 6.0, args.y_span + 14.0))
     waypoints = raster(args.x_span, args.y_span, args.pitch)
@@ -1293,6 +1378,7 @@ def main() -> int:
             fmap.save(npz_path)
             print(f"\nwrote {npz_path}  ({fmap.refl_cells} reflectance cells, "
                   f"{fmap.color_cells} colour cells)")
+            score_against_truth(fmap)
             render(fmap, OUT / f"{args.out}.png", "playfield reflectance + colour map")
             bot.close()
             return 0
@@ -1346,6 +1432,7 @@ def main() -> int:
     npz = npz_path
     fmap.save(npz)
     print(f"\nwrote {npz}  ({fmap.refl_cells} reflectance cells, {fmap.color_cells} colour cells)")
+    score_against_truth(fmap)
     render(fmap, OUT / f"{args.out}.png", "playfield reflectance + colour map")
     return 0
 
