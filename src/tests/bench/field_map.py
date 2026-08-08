@@ -101,6 +101,36 @@ RAIL_MARGIN = 2.5   # [cm]
 RAIL_INSET = ROBOT_REACH + STOP_TRAVEL + RAIL_MARGIN  # [cm]
 RAIL_FENCE = (X_LIM - RAIL_INSET, Y_LIM - RAIL_INSET)  # [cm]
 
+# How far a "straight" leg may wander off its own y before the leg is aborted.
+# This is the guard that catches an excursion while there is still room to
+# stop; the geofence only speaks once the robot is already at the field edge.
+# One raster pitch is the natural size: wander further than that and the leg
+# is sampling a row it does not belong to, so the data is wrong even when the
+# robot is safe.
+CROSS_TRACK_LIMIT = 6.0  # [cm]
+
+# How much encoder movement still counts as "stopped" when confirming a halt.
+# Encoder position is [mm]; a stationary robot jitters by well under this,
+# while a robot still rolling at even 50mm/s moves ~12mm between the two
+# reads halt_verified takes 0.25s apart.
+HALT_ENCODER_SLACK = 3  # [mm]
+
+# A squaring pivot is a pure rotation, but the pose it reports is NOT taken at
+# the centre of rotation: data/robots/tovez.json puts the OTOS chip at
+# offset (-47.7, +3.5)mm, i.e. r = 4.78cm off centre. Rotating by theta sweeps
+# that chip around a chord of 2*r*sin(theta/2) -- up to 9.56cm for a 180deg
+# turn -- with the robot's centre never moving at all. The sensor orbits; the
+# robot does not translate.
+#
+# So this limit must clear a full 180deg sweep or it fires on correct pivots.
+# Measured 2026-08-08 with an 8cm limit: a ~115deg correction reported exactly
+# 8.1cm of "drift" (2*4.78*sin(57.5deg) = 8.06) and halted the run twice.
+# 14cm clears the 9.56cm worst case with margin while still catching what this
+# guard is actually for -- a "pivot" that is driving across the field, which
+# shows up as tens of cm.
+OTOS_LEVER = 4.78          # [cm] hypot(47.7, 3.5)mm, from the robot JSON
+PIVOT_DRIFT_LIMIT = 14.0   # [cm] > 2*OTOS_LEVER (9.56) + slop
+
 
 def within(fence, x, y):
     return abs(x) <= fence[0] and abs(y) <= fence[1]
@@ -231,6 +261,32 @@ ROBOT_TAG = 100
 # the tag-height calibration below and for scoring the finished map.
 DOTS = {"NW": (-50.0, 30.0), "NE": (50.0, 30.0),
         "SW": (-50.0, -30.0), "SE": (50.0, -30.0)}  # [cm]
+
+# --------------------------------------------------------------------------
+# Ground truth for the KIPR Botball mat, surveyed from the overhead camera
+# 2026-08-08: feature corners read off a captured frame and pushed through
+# AprilCam's calibrated homography (`pixel_to_world`), NOT paced off by hand.
+#
+# This exists so the finished map can be COMPARED to something rather than
+# admired. Without it, a reflectance plot is a grey blob that everyone agrees
+# looks vaguely right; with it, "the sensor found the Start-box border at
+# x=+36" is a checkable claim.
+#
+# Note the mat very nearly fills the field: x -61..+63, y -34..+32 against a
+# field of +/-67.15 x +/-44.65. There is no wide apron of bare wood to scan
+# around, which is why an off-pattern leg reaches a rail so quickly.
+MAT_EXTENT = {"x": (-61.3, 63.1), "y": (-33.8, 32.1)}  # [cm]
+
+# Each entry: (label, [(x, y), ...] closed polygon in cm).
+MAT_TRUTH = [
+    ("blue diamond", [(-59.6, 13.0), (-44.0, 28.4), (-28.8, 12.5), (-44.4, -2.8)]),
+    ("green square", [(-14.7, 13.1), (9.7, 12.7), (9.1, -12.9), (-15.1, -12.3)]),
+    ("yellow square", [(-37.4, -7.9), (-17.4, -8.4), (-17.7, -28.0), (-37.6, -27.4)]),
+    # The Start box's left border: one long black line, the single strongest
+    # and most unambiguous feature on the mat, and the natural first thing to
+    # check a scan against.
+    ("start border", [(36.9, 30.5), (35.4, -29.6)]),
+]
 
 
 def connect_camera():
@@ -386,17 +442,47 @@ def halt_verified(bot, tries: int = 4) -> bool:
     2026-08-03: a stop issued ONCE by a host that then went quiet produced
     936mm of continued travel with no decay, and estop() failed 5 of 6
     attempts -- the Nezha brick latches its last commanded speed, so a lost
-    zero write is permanent. Confirm the active flag actually drops.
+    zero write is permanent.
+
+    Confirmed on the ENCODERS, not on kFlagActive. The flag drops for a cycle
+    whenever Motion::Navigator re-issues with replace=true, so "flag is clear"
+    can be read off a robot that is still rolling -- a false POSITIVE on the
+    one check whose whole job is to catch a halt that did not take. Encoder
+    position standing still across two reads is the physical fact; the flag is
+    an opinion about ownership.
     """
+    def positions(window=0.6):
+        """Newest encoder pair seen within `window`. Polls rather than taking
+        one drain: a single drain right after an estop often comes back empty,
+        which is absence of evidence, not evidence the robot is moving -- and
+        reading it as a failed halt made this function cry wolf."""
+        deadline = time.time() + window
+        last = None
+        while time.time() < deadline:
+            for env in bot.conn.drain_binary_tlm():
+                t = getattr(env, "tlm", None)
+                if t is None:
+                    continue
+                f = TLMFrame.from_pb2(t)
+                if f.enc is not None:
+                    last = f.enc
+            if last is not None:
+                return last
+            time.sleep(0.02)
+        return last
+
     for _ in range(tries):
         try:
             bot.p.estop()
         except Exception:
             pass
-        time.sleep(0.25)
-        frames = [getattr(e, "tlm", None) for e in bot.conn.drain_binary_tlm()]
-        frames = [f for f in frames if f is not None]
-        if frames and not (frames[-1].flags & 0x04):  # kFlagActive clear
+        first = positions()
+        time.sleep(0.3)
+        second = positions()
+        # Both reads must land AND agree to within a wheel's worth of noise.
+        if (first is not None and second is not None
+                and abs(second[0] - first[0]) <= HALT_ENCODER_SLACK
+                and abs(second[1] - first[1]) <= HALT_ENCODER_SLACK):
             return True
     return False
 
@@ -523,7 +609,32 @@ def wait_for_goto(bot, goto_id, timeout=45.0, fmap=None, perception=None,
     return False, None
 
 
-def align_heading(bot, target, tol=0.05):  # [rad] [rad]
+# Sign relating commanded omega to the heading this script measures.
+# POSITIVE commanded omega DECREASES heading (.claude/rules/playfield-testing.md;
+# re-measured on tovez 2026-08-08: err was -12.4deg, omega was commanded at
+# -0.9 rad/s, and the camera yaw went UP by 23.2deg). So to reduce a positive
+# heading you command positive omega, i.e. the correction is -sign(err).
+OMEGA_SIGN = -1.0
+
+# Turn rate for the squaring pivot, in two speeds.
+#
+# The robot carries ~130ms of actuation latency, so whatever it is doing when
+# the stop condition is reached it keeps doing for another 130ms. At 0.9 rad/s
+# that is 6.7deg of overshoot against a 1.4deg tolerance, which cannot
+# converge -- measured 2026-08-08, a 12.4deg demand produced a 23.2deg turn.
+# At 0.35 rad/s the same latency is worth only ~2.6deg.
+#
+# But slow-everywhere is wasteful here, because the corrections are not small.
+# A reversing scan alternates leg direction, so the GO_TO that carries the
+# robot to the next leg's start leaves it facing the way it travelled -- up to
+# 180deg from where the leg needs to point. At 0.35 rad/s that is a 9s pivot,
+# every leg. So: coarse rate until the error is small, fine rate to land it.
+TURN_OMEGA_FAST = 0.9    # [rad/s] while the error is still large
+TURN_OMEGA_FINE = 0.35   # [rad/s] final approach, where overshoot decides
+TURN_FINE_BAND = 0.35    # [rad] (~20deg) error below which we slow down
+
+
+def align_heading(bot, target, tol=0.025, tries=6):  # [rad] [rad]
     """Square the robot to `target` heading before a straight leg.
 
     move_twist drives along the robot's CURRENT heading, not along a world
@@ -534,33 +645,92 @@ def align_heading(bot, target, tol=0.05):  # [rad] [rad]
 
     This is the ONLY turning a reversing scan needs: a small correction once
     per leg, never a 180 deg pivot.
+
+    `tol` is set by the leg length, not by taste. Residual heading error
+    becomes cross-track error over the leg: at the old 0.05 rad (2.9deg) a
+    92cm leg can wander 4.6cm, which on its own nearly exhausts the 6cm
+    cross-track budget and aborted leg 4 of the 2026-08-08 run. 0.025 rad
+    (1.4deg) halves that to ~2.3cm, and is achievable -- the camera-scored
+    probe the same day landed a 33.8deg correction with 0.9deg residual.
+
+    Returns True ONLY if the heading was actually verified inside `tol`.
+
+    That word "only" is the whole point, and it is a bug fix. This function
+    used to `return True` after exhausting its four correction attempts --
+    the same answer it gives on success -- so a heading it had FAILED to
+    correct was indistinguishable from one it had. The caller then ran a
+    full-mat-width straight leg (2 * x_span, ~100cm) along that unverified
+    heading. At 11 deg of residual error a 100cm leg walks 20cm sideways;
+    at 20 deg it walks 34cm. That is how the run of 2026-08-08 put the
+    robot into the rails three times without ever issuing a command that
+    pointed at a rail: the robot drove exactly where it was told, along a
+    heading nobody had checked. Not a geofence failure -- the geofence was
+    the last line, and the excursions started upstream of it.
     """
-    for _ in range(4):
+    for _ in range(tries):
         pose = bot.pose_blocking(timeout=3.0)
         if pose is None:
             return False
         err = wrap(target - pose[2])
         if abs(err) < tol:
             return True
-        bot.p.move_twist(0.0, 0.0, math.copysign(0.9, err),
-                         stop_angle=abs(err), timeout=12000.0, move_id=0)
+        # Correlate on a REAL move id and wait for that move's completion ack.
+        # move_id=0 plus "break when kFlagActive is clear" was the third copy
+        # of the same defect in this file (see drive_closing): the flag drops
+        # for a cycle whenever Motion::Navigator re-issues with replace=true,
+        # so this loop broke out immediately and halt_verified() estopped the
+        # pivot before it had turned. Four attempts then re-read an UNCHANGED
+        # pose -- which is why the run of 2026-08-08 reported the identical
+        # residual (-12.3deg) from two independent align_heading() calls, a
+        # tell that no turning was happening at all rather than that it was
+        # converging badly.
+        rate = TURN_OMEGA_FINE if abs(err) <= TURN_FINE_BAND else TURN_OMEGA_FAST
+        turn_id = bot._next_id()
+        bot.p.move_twist(0.0, 0.0, OMEGA_SIGN * math.copysign(rate, err),
+                         stop_angle=abs(err), timeout=20000.0, move_id=turn_id)
         t0 = time.time()
-        while time.time() - t0 < 12.0:
-            frames = [getattr(e, "tlm", None) for e in bot.conn.drain_binary_tlm()]
-            frames = [f for f in frames if f is not None]
-            if frames:
-                f = frames[-1]
+        anchor = (pose[0] / 10.0, pose[1] / 10.0)
+        done = False
+        # A 180deg pivot at the fine rate is ~9s; allow for that plus latency.
+        while time.time() - t0 < 20.0 and not done:
+            for env in bot.conn.drain_binary_tlm():
+                f = getattr(env, "tlm", None)
+                if f is None:
+                    continue
                 if f.flags & 0x02:
                     x, y = float(f.otos.x) / 10.0, float(f.otos.y) / 10.0
-                    if not within(RAIL_FENCE, x, y):
+                    # Guard on DRIFT, not on absolute position. This is a pure
+                    # pivot (v_x = v_y = 0), so it does not translate and an
+                    # absolute fence is the wrong test: it deadlocks the robot
+                    # exactly when re-orienting is what would save it. Measured
+                    # 2026-08-08: parked at x=+52.4 against a 52.15 rail fence,
+                    # align_heading tripped and returned False before turning
+                    # at all -- unable to turn because it was too close to a
+                    # wall, which is precisely backwards. What IS worth
+                    # aborting on is a "pivot" that turns out to be driving.
+                    if math.hypot(x - anchor[0], y - anchor[1]) > PIVOT_DRIFT_LIMIT:
+                        print(f"    pivot DRIFTED {math.hypot(x - anchor[0], y - anchor[1]):.1f}cm "
+                              f"-- not a pure rotation, halting")
                         halt_verified(bot)
                         return False
-                if not (f.flags & 0x04):
-                    break
-            time.sleep(0.05)
+                for ack in (TLMFrame.from_pb2(f).acks or []):
+                    if ack.corr_id == turn_id:
+                        done = True
+            time.sleep(0.02)
         halt_verified(bot)
         time.sleep(0.4)
-    return True
+
+    # Attempts spent. Say what actually happened -- do NOT report the
+    # success answer for a failure (see the docstring).
+    pose = bot.pose_blocking(timeout=3.0)
+    if pose is None:
+        return False
+    err = wrap(target - pose[2])
+    if abs(err) < tol:
+        return True
+    print(f"    align_heading GAVE UP: residual {math.degrees(err):+.1f}deg "
+          f"(tol {math.degrees(tol):.1f}deg) -- refusing to run the leg")
+    return False
 
 
 def straight_scan(bot, dc, fmap, perception, channel_y, fence, x_span, y_span,
@@ -619,14 +789,38 @@ def straight_scan(bot, dc, fmap, perception, channel_y, fence, x_span, y_span,
         # (east) for BOTH directions -- a backward leg reverses along the same
         # heading rather than turning around, which is the whole point.
         if not align_heading(bot, 0.0):
-            print("  could not read pose to align heading -- halting")
-            return None
+            # Do NOT run a full-width leg on a heading that would not square
+            # up. Re-fix from the camera, re-seed, and try once more -- a
+            # stale pose is the likeliest reason the correction chased its
+            # own tail. Still failing means stop, not "drive anyway".
+            fix = camera_fix(fix_fn, samples=9)
+            if fix is None or not seed_retry(bot, fix[0], fix[1], fix[2]):
+                print("  heading unresolvable and no camera re-seed -- halting")
+                return None
+            travelled = 0.0
+            if not align_heading(bot, 0.0):
+                print("  heading will not square up even after a camera "
+                      "re-seed -- halting rather than driving blind")
+                return None
+        # Cross-track is measured from where the robot ACTUALLY is, not from
+        # the leg's nominal y. The GO_TO onto the leg start lands within its
+        # arrival tolerance, not exactly -- measured 2026-08-08, a leg planned
+        # at y=+7.0 began at y=+8.7. Scoring that leg against +7.0 spends
+        # 1.7cm of the budget before the robot has moved, and then aborts a
+        # leg that was actually running straight. The leg is a straight line
+        # from wherever it starts; that is what the guard should hold it to.
+        # The map is unaffected either way -- every sample is stamped with the
+        # measured pose, never with the planned one.
+        here = bot.pose_blocking(timeout=3.0)
+        leg_ref = (here[1] / 10.0) if here is not None else y
+
         dist = 2.0 * x_span * 10.0                      # [mm]
         v_x = speed if forward else -speed
         bot.p.move_twist(v_x, 0.0, 0.0, stop_distance=dist,
                          timeout=int(dist / speed * 1000 * 3), move_id=0)
         breach = collect_straight(bot, fmap, perception, channel_y, fence,
-                                  seconds=dist / speed + 6.0)
+                                  seconds=dist / speed + 6.0,
+                                  leg_y=leg_ref, cross_track=CROSS_TRACK_LIMIT)
         if breach:
             return breach
         travelled += 2.0 * x_span
@@ -635,8 +829,22 @@ def straight_scan(bot, dc, fmap, perception, channel_y, fence, x_span, y_span,
     return None
 
 
-def collect_straight(bot, fmap, perception, channel_y, fence, seconds):
-    """Map during a straight MOVE; stop early once it goes inactive."""
+def collect_straight(bot, fmap, perception, channel_y, fence, seconds,
+                     leg_y=None, cross_track=None):  # [cm] [cm]
+    """Map during a straight MOVE; stop early once it goes inactive.
+
+    `leg_y`/`cross_track` add the guard that actually catches an excursion
+    EARLY. A "straight" leg is supposed to hold one y; watching how far it
+    has departed from that y is a direct measurement of the leg going wrong,
+    and it fires whatever the cause -- residual heading error, a slipping
+    wheel on the vinyl, a dropped command leaving a stale twist running.
+
+    The geofence alone cannot do this job. It only speaks up once the robot
+    is already at the edge of the field, by which point the leg has been
+    wrong for most of its length and the remaining stopping distance is the
+    only thing between the robot and the rail. Cross-track fires while the
+    robot is still in open space, mid-mat, with room to stop.
+    """
     t0 = time.time()
     idle = 0
     while time.time() - t0 < seconds:
@@ -647,6 +855,12 @@ def collect_straight(bot, fmap, perception, channel_y, fence, seconds):
             x, y = float(t.otos.x) / 10.0, float(t.otos.y) / 10.0
             if not within(RAIL_FENCE, x, y) or not within(fence, x, y):
                 return (x, y)
+            if (leg_y is not None and cross_track is not None
+                    and abs(y - leg_y) > cross_track):
+                print(f"    CROSS-TRACK abort: leg y={leg_y:+.1f} but robot "
+                      f"at y={y:+.1f} ({abs(y - leg_y):.1f}cm off, limit "
+                      f"{cross_track:.1f}cm)")
+                return (x, y)
             accumulate(TLMFrame.from_pb2(t), (x, y, float(t.otos.heading) * 0.001),
                        perception, fmap, channel_y)
             idle = idle + 1 if not (t.flags & 0x04) else 0
@@ -656,12 +870,25 @@ def collect_straight(bot, fmap, perception, channel_y, fence, seconds):
     return None
 
 
-def drive_closing(bot, r0, timeout=45.0, slack=4.0):
+def drive_closing(bot, goto_id, r0, timeout=45.0, slack=4.0):
     """Run a move that must reduce the robot's radius from the field centre.
 
     Used only for recovery, where the robot may start outside the fence and an
     absolute limit would deadlock it. The invariant here is directional, not
     positional: driving home is always allowed, driving further out never is.
+
+    Ends on the COMPLETION ACK, exactly like wait_for_goto, and for the same
+    measured reason: `kFlagActive` (bit 2) flickers False MID-MOVE because
+    Motion::Navigator re-issues its internal planner moves with replace=true,
+    leaving cycles with no motion owner. This function used to return True on
+    the first frame with that bit clear, which it sees almost immediately --
+    so the caller halted a fraction of a second into every attempt and the
+    robot barely moved. Measured 2026-08-08: three recovery attempts from
+    (-15.7,+4.9) left the robot at (-16.4,+4.5), i.e. 0.8cm of travel, and
+    reported "could not converge" for a 16cm drive.
+
+    This is the SECOND place that flag fooled this script. If a third drive
+    loop is ever added, it waits on the ack too.
     """
     worst = r0 + slack
     t0 = time.time()
@@ -674,8 +901,9 @@ def drive_closing(bot, r0, timeout=45.0, slack=4.0):
             if r > worst:
                 return False
             worst = min(worst, r + slack)
-            if not (t.flags & 0x04):
-                return True
+            for ack in (TLMFrame.from_pb2(t).acks or []):
+                if ack.corr_id == goto_id:
+                    return True
         time.sleep(0.02)
     return True
 
@@ -717,7 +945,7 @@ def recover_to_centre(bot, dc, fix_fn, speed):
         # centre instead: any increase in radius means it is heading the wrong
         # way and gets halted immediately.
         _c, gid = bot.goto_wire(0.0, 0.0, FRAME_WORLD, speed=speed, timeout=40000.0)
-        if not drive_closing(bot, math.hypot(fix[0], fix[1])):
+        if not drive_closing(bot, gid, math.hypot(fix[0], fix[1])):
             print("  recovery drove AWAY from the centre -- halted")
             halt_verified(bot)
             return False
@@ -815,12 +1043,39 @@ def render(fmap: FieldMap, path: pathlib.Path, title: str) -> None:
     extent = [-X_LIM, X_LIM, -Y_LIM, Y_LIM]
 
     ax = axes[0]
-    im = ax.imshow(refl, origin="lower", extent=extent, cmap="viridis",
-                   vmin=refl.min() if refl.count() else 0,
-                   vmax=refl.max() if refl.count() else 255)
-    ax.set_title(f"reflectance (median of up to {MAX_SAMPLES}/cell) -- "
-                 f"{fmap.refl_cells} cells")
-    fig.colorbar(im, ax=ax, label="raw counts")
+    # Two things about this scale, both measured on the KIPR mat 2026-08-08.
+    #
+    # 1. The line sensor reads INVERTED: high counts = DARK surface. White mat
+    #    sits near 0, bare wood near 240, and the printed lines in between.
+    #    `gray_r` maps high counts to dark ink, so the plot looks like the
+    #    thing being scanned instead of its photographic negative.
+    # 2. Scale on PERCENTILES, never min/max. The mat's whole signal lives in
+    #    roughly 0-150 (89% of cells below 60), but any cell that catches bare
+    #    wood off the mat edge reads ~240 -- and a handful of those stretched
+    #    a min/max ramp so far that every printed line on the mat rendered as
+    #    the same near-black as the mat itself. The features were IN the data
+    #    the whole time; the colourbar was hiding them.
+    # p90, not p98, for the upper end. The surface is BIMODAL -- mat (0-150)
+    # and bare wood (~240) are two separated populations, not one spread --
+    # so even p98 lands in the wood mode as soon as ~2% of cells see off-mat
+    # floor, and the mat collapses into the bottom sixth of the ramp again.
+    # Measured on this dataset: p50=22, p75=35, p90=65, p98=238. p90 puts the
+    # mat's printed lines across the full ramp; wood and the darkest lines
+    # both clip to solid black, which is the right trade -- the features being
+    # read are ON the mat.
+    if refl.count():
+        vals = refl.compressed()
+        vmin, vmax = (float(np.percentile(vals, 2)),
+                      float(np.percentile(vals, 90)))
+        if vmax - vmin < 1.0:      # degenerate (uniform surface) -- fall back
+            vmin, vmax = float(vals.min()), float(vals.max()) + 1.0
+    else:
+        vmin, vmax = 0.0, 255.0
+    im = ax.imshow(refl, origin="lower", extent=extent, cmap="gray_r",
+                   vmin=vmin, vmax=vmax)
+    ax.set_title(f"line sensor, HIGH = DARK (median of up to {MAX_SAMPLES}/cell) "
+                 f"-- {fmap.refl_cells} cells, scale p2-p90 [{vmin:.0f},{vmax:.0f}]")
+    fig.colorbar(im, ax=ax, label="raw counts (high = dark surface)")
 
     ax = axes[1]
     rgb = np.zeros((GRID_H, GRID_W, 3), dtype=float)
@@ -846,6 +1101,19 @@ def render(fmap: FieldMap, path: pathlib.Path, title: str) -> None:
             ax.plot(dx, dy, "o", mfc="none", mec="red", ms=12, mew=2)
             ax.annotate(name, (dx, dy), color="red", fontsize=8,
                         xytext=(4, 4), textcoords="offset points")
+        # Camera-surveyed truth, so the map is checked and not just admired.
+        for label, pts in MAT_TRUTH:
+            xs = [p[0] for p in pts]
+            ys = [p[1] for p in pts]
+            if len(pts) > 2:          # closed shape
+                xs.append(pts[0][0])
+                ys.append(pts[0][1])
+            ax.plot(xs, ys, "-", color="cyan", lw=1.6, alpha=0.9)
+        ax.plot([MAT_EXTENT["x"][0], MAT_EXTENT["x"][1], MAT_EXTENT["x"][1],
+                 MAT_EXTENT["x"][0], MAT_EXTENT["x"][0]],
+                [MAT_EXTENT["y"][0], MAT_EXTENT["y"][0], MAT_EXTENT["y"][1],
+                 MAT_EXTENT["y"][1], MAT_EXTENT["y"][0]],
+                "--", color="cyan", lw=1.0, alpha=0.6)
         ax.set_xlabel("x [cm]")
         ax.set_ylabel("y [cm]")
 
