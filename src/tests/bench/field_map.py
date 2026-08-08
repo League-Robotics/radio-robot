@@ -117,6 +117,30 @@ NAV_OVERSHOOT = 7.0  # [cm]
 RAIL_INSET = ROBOT_REACH + STOP_TRAVEL + RAIL_MARGIN  # [cm]
 RAIL_FENCE = (X_LIM - RAIL_INSET, Y_LIM - RAIL_INSET)  # [cm]
 
+# Fence used by the edge sweep. Deliberately looser than RAIL_FENCE, on
+# stakeholder direction 2026-08-08 ("you don't need a huge 10cm inset around
+# the rail... you just need to not run off the playfield").
+#
+# The reason the tighter fence was wrong here: RAIL_FENCE insets the rail by
+# the robot's forward REACH (9.6cm, the line array ahead of the centre of
+# rotation) equally in x and y. During this sweep the robot faces WEST for
+# every pass, so its y-extent is its half-WIDTH, not its reach -- the reach
+# points along x, where it is correctly budgeted. Applying a forward-reach
+# inset sideways cost ~4cm of usable band at each end and put the mat's north
+# and south borders out of reach for no physical reason.
+#
+# The x half is set by stopping arithmetic, not by taste. A breach is only
+# SEEN at the fence and the robot then coasts, so what has to fit inside the
+# rail is fence_x + STOP_TRAVEL + ROBOT_REACH: 52.0 + 4.5 + 9.6 = 66.1
+# against X_LIM 67.15, about 1cm of slack. Anything looser puts the line
+# array through the east rail on a trip.
+#
+# The y half is deliberately looser than RAIL_FENCE's 28.05, and that is the
+# whole point of having a second fence: rows run to |y| = 30, which the
+# isotropic inset forbade for no physical reason. At 34.0 the centre of
+# rotation still stays >10cm clear of the rails at Y_LIM 44.65.
+SWEEP_FENCE = (52.0, 34.0)  # [cm] |x|, |y| limits on the centre of rotation
+
 # How far a "straight" leg may wander off its own y before the leg is aborted.
 # This is the guard that catches an excursion while there is still room to
 # stop; the geofence only speaks once the robot is already at the field edge.
@@ -570,7 +594,8 @@ def seed_retry(bot, x, y, heading, tries=4):  # [cm] [cm] [rad]
 
 
 def wait_for_goto(bot, goto_id, timeout=45.0, fmap=None, perception=None,
-                  channel_y=None, fence=None, arrived_at=None):
+                  channel_y=None, fence=None, arrived_at=None,
+                  hard_fence=RAIL_FENCE, fix_fn=None):
     """Block until the GO_TO's COMPLETION ACK arrives. Optionally map en route.
 
     The completion ack is the protocol's own end-of-move signal (docs/
@@ -588,6 +613,7 @@ def wait_for_goto(bot, goto_id, timeout=45.0, fmap=None, perception=None,
     Returns (completed, breached_at_or_None).
     """
     deadline = time.time() + timeout
+    last_cam = [0.0]
     while time.time() < deadline:
         for env in bot.conn.drain_binary_tlm():
             t = getattr(env, "tlm", None)
@@ -596,9 +622,19 @@ def wait_for_goto(bot, goto_id, timeout=45.0, fmap=None, perception=None,
             frame = TLMFrame.from_pb2(t)
             if t.flags & 0x02:
                 x, y = float(t.otos.x) / 10.0, float(t.otos.y) / 10.0
-                # RAIL_FENCE always; the caller's tighter fence as well when
+                # `hard_fence` always; the caller's tighter fence as well when
                 # one is given. No drive path is ever unfenced.
-                if not within(RAIL_FENCE, x, y) or (
+                #
+                # The floor is a PARAMETER, defaulting to RAIL_FENCE, because
+                # RAIL_FENCE is not a universal truth -- it insets the rail by
+                # the robot's forward REACH in BOTH axes, which is only right
+                # while the robot is driving along x. The edge sweep faces west
+                # for every pass, so its y-extent is a half-width, and it
+                # passes SWEEP_FENCE here instead. Left unparameterised, the
+                # floor silently overrode the looser fence it was handed and
+                # the sweep's first row (y=+30 against a 28.05 floor) breached
+                # before the robot had mapped a single cell.
+                if not within(hard_fence, x, y) or (
                         fence is not None and not within(fence, x, y)):
                     return False, (x, y)
                 if fmap is not None:
@@ -607,6 +643,16 @@ def wait_for_goto(bot, goto_id, timeout=45.0, fmap=None, perception=None,
             for ack in (frame.acks or []):
                 if ack.corr_id == goto_id:
                     return True, None
+        # Camera check on TRUTH, for the same reason as collect_straight: an
+        # odometry fence cannot catch a fault whose symptom IS bad odometry.
+        if fix_fn is not None and time.time() - last_cam[0] > CAM_CHECK_PERIOD:
+            last_cam[0] = time.time()
+            keep_lights_on()
+            c = fix_fn()
+            if c is not None and not within(hard_fence, c[0], c[1]):
+                print(f"    CAMERA fence during transit: robot truly at "
+                      f"({c[0]:+.1f},{c[1]:+.1f})cm -- halting")
+                return False, (c[0], c[1])
         time.sleep(0.02)
 
     # The ack never came -- but did the robot actually get there? Acks ride
@@ -649,9 +695,105 @@ TURN_OMEGA_FAST = 0.9    # [rad/s] while the error is still large
 TURN_OMEGA_FINE = 0.35   # [rad/s] final approach, where overshoot decides
 TURN_FINE_BAND = 0.35    # [rad] (~20deg) error below which we slow down
 
+# The pivot is commanded in ODOMETRY angle but judged in CAMERA angle, and on
+# the vinyl mat those are wildly different because the tyres scrub: a pivot
+# that odometry scored at 53deg turned the robot 2.9deg (tovez, 2026-08-08).
+# So ask for more than the error and let the camera-refereed loop converge.
+# The cap stops a large over-ask from spinning past the target and hunting.
+# The pivot is commanded OPEN-ENDED and stopped by the host watching the
+# camera, because the firmware's own stop_angle is measured in the corrupted
+# quantity. These two just have to be bigger than any real correction.
+TURN_OPEN_ANGLE = 6.5        # [rad] ~2 full turns; never the actual stop
+TURN_OPEN_TIMEOUT = 15000.0  # [ms] backstop if the host stops watching
+TURN_WATCH_LIMIT = 12.0      # [s] longest we watch one pivot before retrying
+TURN_BLIND_FRAMES = 20       # consecutive camera misses before we halt
 
-def align_heading(bot, target, tol=0.025, tries=6):  # [rad] [rad]
+# How often a moving pass is checked against camera truth. At 180mm/s the
+# robot covers ~5cm between checks, which is inside every margin here.
+CAM_CHECK_PERIOD = 0.3       # [s]
+
+# The bench-room lights are on a network relay and they switch themselves OFF
+# on their own (.claude/rules/hardware-bench-testing.md). That used to cost a
+# dark frame; now it is a SAFETY issue, because every guard on this drive path
+# is refereed by the camera and a dark room blinds all of them at once. It
+# happened three times in the session of 2026-08-08, once mid-sweep. So the
+# run re-asserts the lights on a timer rather than trusting them to stay on.
+LIGHTS_URL = "http://192.168.1.122/rpc/Switch.Set?id=0&on=true"
+LIGHTS_PERIOD = 60.0  # [s]
+
+# Placing a row start. A single GO_TO stops at the Navigator's own arrival
+# tolerance, which is wider than the row pitch -- so the row start is
+# re-issued until the CAMERA agrees it is where it was asked for.
+ROW_ARRIVE = 25.0       # [mm] tighter than the Navigator default
+ROW_PLACE_TOL = 2.0     # [cm] good enough for a 4cm pitch
+ROW_PLACE_TRIES = 3
+
+
+def keep_lights_on(state=[0.0]):  # noqa: B006  -- deliberate call-scoped cache
+    """Poke the light relay, at most every LIGHTS_PERIOD. Never raises: a
+    failure to reach the relay must not take down a run that is mid-drive."""
+    if time.time() - state[0] < LIGHTS_PERIOD:
+        return
+    state[0] = time.time()
+    try:
+        import urllib.request
+        urllib.request.urlopen(LIGHTS_URL, timeout=3).read()
+    except Exception:
+        pass
+
+
+def _spin_to_heading(bot, fix_fn, target, err0, tol):  # [rad] [rad] [rad]
+    """Watch the camera during an open-ended pivot; return when to stop.
+
+    Returns True if the camera saw us reach `tol`, None if we ran out of
+    time (caller may retry), False if the camera went away entirely -- the
+    one case where continuing to spin a robot nobody can see is unacceptable.
+
+    Stops on a SIGN FLIP as well as on tolerance: overshooting past the target
+    means the next round would just chase it back, and a pivot nobody halts is
+    how a bounded correction becomes a spin.
+    """
+    t0 = time.time()
+    blind = 0
+    while time.time() - t0 < TURN_WATCH_LIMIT:
+        c = fix_fn()
+        if c is None:
+            blind += 1
+            if blind > TURN_BLIND_FRAMES:
+                print("    lost tag 100 mid-pivot -- halting")
+                return False
+            time.sleep(0.05)
+            continue
+        blind = 0
+        err = wrap(target - c[2])
+        if abs(err) < tol or (err * err0) < 0:
+            return True
+        time.sleep(0.02)
+    return None
+
+
+def align_heading(bot, target, tol=0.05, tries=8, fix_fn=None):  # [rad] [rad]
     """Square the robot to `target` heading before a straight leg.
+
+    Scored against the CAMERA when `fix_fn` is given, and it always should be
+    on the playfield. Odometry is not usable as the referee for a pivot on
+    this surface. Measured on tovez 2026-08-08, seeded from the camera
+    immediately beforehand: align_heading drove odometry from +126.9deg to
+    -178.1deg -- 53deg of rotation by its own reckoning -- while the camera
+    showed the robot had physically turned 2.9deg, from +126.9 to +129.8.
+    The subsequent "straight west" leg then ran at a true +128deg and put the
+    robot 20cm off where every guard believed it was, on bare wood past the
+    mat's north edge, with the line sensor reading ~229 where odometry said
+    mid-mat.
+    Cause: the wheels SCRUB on the vinyl mat during a pivot. The encoders
+    turn, the robot does not, and heading here is encoder-derived
+    (data/robots/tovez.json: otos_untrusted true, weight_heading_otos 0.0),
+    so odometry over-reports rotation by roughly an order of magnitude. The
+    same function scored 0.9deg residual earlier that day -- at x=+52.4,
+    which is OFF the mat on bare wood, where the tyres grip.
+    So the pivot is commanded open-loop and then MEASURED against the camera,
+    re-seeding odometry from truth each round so the fence and the
+    cross-track check downstream are working from reality.
 
     move_twist drives along the robot's CURRENT heading, not along a world
     axis -- so a "straight" leg issued at an unknown heading walks diagonally.
@@ -683,11 +825,29 @@ def align_heading(bot, target, tol=0.025, tries=6):  # [rad] [rad]
     heading nobody had checked. Not a geofence failure -- the geofence was
     the last line, and the excursions started upstream of it.
     """
+    def truth():
+        """Heading to steer by: the camera when we have it, else odometry."""
+        if fix_fn is not None:
+            c = camera_fix(fix_fn, samples=5)
+            if c is not None:
+                # Put odometry back on truth every round. Whatever the pivot
+                # did to the encoder-derived heading, the fence and the
+                # cross-track check that follow must not inherit it.
+                seed_retry(bot, c[0], c[1], c[2], tries=2)
+                return c[2], (c[0], c[1])
+        p = bot.pose_blocking(timeout=3.0)
+        if p is None:
+            return None, None
+        return p[2], (p[0] / 10.0, p[1] / 10.0)
+
     for _ in range(tries):
+        heading, pos = truth()
+        if heading is None:
+            return False
         pose = bot.pose_blocking(timeout=3.0)
         if pose is None:
             return False
-        err = wrap(target - pose[2])
+        err = wrap(target - heading)
         if abs(err) < tol:
             return True
         # Correlate on a REAL move id and wait for that move's completion ack.
@@ -701,9 +861,23 @@ def align_heading(bot, target, tol=0.025, tries=6):  # [rad] [rad]
         # tell that no turning was happening at all rather than that it was
         # converging badly.
         rate = TURN_OMEGA_FINE if abs(err) <= TURN_FINE_BAND else TURN_OMEGA_FAST
+        # Do NOT stop this pivot on `stop_angle`. That condition is evaluated
+        # in ODOMETRY angle, which is exactly the quantity the scrub corrupts:
+        # measured 2026-08-08, odometry over-reports rotation ~18x on the mat,
+        # so a stop_angle of 167deg ended the move after ~9deg of real turn,
+        # and ten attempts spent 66s to cover 90deg. Command an open-ended
+        # rotation instead and stop it from OUT HERE, watching the camera.
         turn_id = bot._next_id()
         bot.p.move_twist(0.0, 0.0, OMEGA_SIGN * math.copysign(rate, err),
-                         stop_angle=abs(err), timeout=20000.0, move_id=turn_id)
+                         stop_angle=TURN_OPEN_ANGLE,
+                         timeout=TURN_OPEN_TIMEOUT, move_id=turn_id)
+        if fix_fn is not None:
+            spun = _spin_to_heading(bot, fix_fn, target, err, tol)
+            halt_verified(bot)
+            time.sleep(0.4)
+            if spun is False:
+                return False
+            continue
         t0 = time.time()
         anchor = (pose[0] / 10.0, pose[1] / 10.0)
         done = False
@@ -738,10 +912,10 @@ def align_heading(bot, target, tol=0.025, tries=6):  # [rad] [rad]
 
     # Attempts spent. Say what actually happened -- do NOT report the
     # success answer for a failure (see the docstring).
-    pose = bot.pose_blocking(timeout=3.0)
-    if pose is None:
+    heading, _pos = truth()
+    if heading is None:
         return False
-    err = wrap(target - pose[2])
+    err = wrap(target - heading)
     if abs(err) < tol:
         return True
     print(f"    align_heading GAVE UP: residual {math.degrees(err):+.1f}deg "
@@ -846,8 +1020,20 @@ def straight_scan(bot, dc, fmap, perception, channel_y, fence, x_span, y_span,
 
 
 def collect_straight(bot, fmap, perception, channel_y, fence, seconds,
-                     leg_y=None, cross_track=None):  # [cm] [cm]
+                     leg_y=None, cross_track=None,
+                     hard_fence=RAIL_FENCE, fix_fn=None):  # [cm] [cm]
     """Map during a straight MOVE; stop early once it goes inactive.
+
+    Pass `fix_fn` and the fence is checked against the CAMERA as well as
+    against odometry, a few times a second. That is not belt-and-braces, it
+    is the only check that was working: on 2026-08-08 this pass ran with
+    odometry reporting y=+18.6 while the camera had the robot at y=+38.5, out
+    on the bare wood past the mat's north edge. Every guard here said mid-mat
+    and safe, because every guard read odometry. The line sensor agreed with
+    the camera -- the cells odometry placed mid-mat came back at ~229, which
+    is wood, not white vinyl.
+    An odometry-only fence cannot catch a fault whose whole symptom is that
+    odometry is wrong.
 
     `leg_y`/`cross_track` add the guard that actually catches an excursion
     EARLY. A "straight" leg is supposed to hold one y; watching how far it
@@ -863,13 +1049,34 @@ def collect_straight(bot, fmap, perception, channel_y, fence, seconds,
     """
     t0 = time.time()
     idle = 0
+    last_cam = 0.0
     while time.time() - t0 < seconds:
+        # Camera check a few times a second, on TRUTH, independent of
+        # anything odometry believes.
+        if fix_fn is not None and time.time() - last_cam > CAM_CHECK_PERIOD:
+            last_cam = time.time()
+            keep_lights_on()
+            c = fix_fn()
+            if c is not None:
+                if not within(hard_fence, c[0], c[1]):
+                    print(f"    CAMERA fence: robot truly at "
+                          f"({c[0]:+.1f},{c[1]:+.1f})cm -- halting")
+                    return (c[0], c[1])
+                if (leg_y is not None and cross_track is not None
+                        and abs(c[1] - leg_y) > cross_track):
+                    print(f"    CAMERA cross-track: leg y={leg_y:+.1f} but "
+                          f"robot truly at y={c[1]:+.1f} "
+                          f"({abs(c[1] - leg_y):.1f}cm off) -- halting")
+                    return (c[0], c[1])
         for env in bot.conn.drain_binary_tlm():
             t = getattr(env, "tlm", None)
             if t is None or not (t.flags & 0x02):
                 continue
             x, y = float(t.otos.x) / 10.0, float(t.otos.y) / 10.0
-            if not within(RAIL_FENCE, x, y) or not within(fence, x, y):
+            # `hard_fence` defaults to RAIL_FENCE, so every existing caller is
+            # unchanged; the edge sweep passes its own, for the reason spelled
+            # out in wait_for_goto.
+            if not within(hard_fence, x, y) or not within(fence, x, y):
                 return (x, y)
             if (leg_y is not None and cross_track is not None
                     and abs(y - leg_y) > cross_track):
@@ -883,6 +1090,139 @@ def collect_straight(bot, fmap, perception, channel_y, fence, seconds,
         if idle > 40 and time.time() - t0 > 2.0:
             break
         time.sleep(0.02)
+    return None
+
+
+def edge_sweep(bot, fmap, perception, channel_y, fix_fn, x_east, x_west,
+               y_start, pitch, rows, speed):
+    """Scan in EVEN ROWS: every pass runs east->west, at constant y, always.
+
+    Stakeholder spec 2026-08-08. The obvious alternative -- a boustrophedon
+    that alternates the direction of travel -- gives every other row a
+    different heading, and that is what turns a scan into a zigzag rather
+    than a set of rows. Whatever residual heading error align_heading leaves
+    behind tilts a westbound pass one way and an eastbound pass the other, so
+    consecutive rows converge at one end and splay at the other; adjacent
+    passes then disagree about where their own y is and the map reads as
+    smeared bands instead of lines. Driving every pass on the SAME heading
+    (pi, west) removes that degree of freedom outright: the residual is the
+    same sign on every row, so the rows stay parallel and the whole scan is
+    offset rather than sheared.
+
+    Two more reasons the extra transit is worth paying for:
+
+    - The lever arm is unchanged pass to pass. The sensors sit ahead of the
+      centre of rotation, so the swath they trace is a function of heading;
+      hold heading fixed and every row samples the same body geometry, which
+      is what makes rows comparable to each other at all.
+    - There is one heading to square to, not two. Every row squares to the
+      same pi, so a correction that works on row 0 works on row 15; a
+      reversing scan has to land BOTH 0 and pi correctly, and gets a fresh
+      chance to leave a large residual on every second row.
+
+    Only the RETURNS are angled. The GO_TO that carries the robot from one
+    row's west end back to the next row's east end also steps it down one
+    pitch in y, so the row change costs no separate manoeuvre -- the diagonal
+    IS the return.
+
+    Returns the breach position if the fence or the cross-track guard fired,
+    otherwise None. None also covers a give-up (lost tag, unseedable pose,
+    heading that will not square) -- those print their own reason first.
+    """
+    from goto_otos import FRAME_WORLD
+
+    for i in range(rows):
+        y_target = y_start - i * pitch
+
+        # This GO_TO *is* the angled return from the previous row's west end:
+        # back east and down one pitch in a single move.
+        #
+        # Issued REPEATEDLY until the camera says the row start is actually
+        # where it was asked for. One GO_TO is not enough to place a row: the
+        # Navigator stops at its own arrival tolerance, which is far wider
+        # than the 4cm pitch these rows need. Measured 2026-08-08, row 0 was
+        # asked for y=+30.0 and began at y=+16.6 -- a 13.4cm miss, three
+        # pitches of error, which makes "even rows" impossible no matter how
+        # straight each pass is. Re-issuing from closer in converges, because
+        # a fixed arrival tolerance is a smaller absolute error the shorter
+        # the move.
+        breach = None
+        for attempt in range(ROW_PLACE_TRIES):
+            _c, gid = bot.goto_wire(x_east * 10.0, y_target * 10.0,
+                                    FRAME_WORLD, speed=speed,
+                                    arrive=ROW_ARRIVE, timeout=40000.0)
+            _done, breach = wait_for_goto(bot, gid, timeout=45.0, fmap=fmap,
+                                          perception=perception,
+                                          channel_y=channel_y,
+                                          fence=SWEEP_FENCE,
+                                          arrived_at=(x_east, y_target),
+                                          hard_fence=SWEEP_FENCE,
+                                          fix_fn=fix_fn)
+            if breach:
+                return breach
+            c = camera_fix(fix_fn, samples=5)
+            if c is None:
+                break
+            if abs(c[1] - y_target) <= ROW_PLACE_TOL:
+                break
+            print(f"  [{i:2d}] row start y={c[1]:+.1f} wanted {y_target:+.1f} "
+                  f"({abs(c[1]-y_target):.1f}cm out) -- re-issuing "
+                  f"({attempt + 1}/{ROW_PLACE_TRIES})")
+            # Re-seed before re-issuing, or the retry is a no-op: the GO_TO is
+            # driven in the ROBOT's frame, and if that frame has drifted the
+            # robot already believes it is standing on the target. Measured
+            # 2026-08-08: three re-issues in a row returned the identical
+            # y=+25.9, because each one was asking a robot that thought it had
+            # arrived to drive to where it thought it already was.
+            if not seed_retry(bot, c[0], c[1], c[2]):
+                break
+        # A missing completion ack is deliberately NOT fatal here. The camera
+        # fix immediately below re-establishes the frame from the camera
+        # rather than from the Navigator's opinion of where it finished, and
+        # the pass itself is a fixed distance from wherever the robot actually
+        # is -- so a dropped ack costs nothing that the next two lines do not
+        # already re-measure.
+
+        fix = camera_fix(fix_fn, samples=9)
+        if fix is None:
+            print(f"  [{i:2d}] camera cannot see tag 100 -- stopping the sweep")
+            return None
+        if not seed_retry(bot, fix[0], fix[1], fix[2]):
+            print(f"  [{i:2d}] seed did not read back after retries -- "
+                  "stopping the sweep")
+            return None
+
+        # Drive the pass as a GO_TO to the far end of the SAME row, not as an
+        # open-loop straight twist.
+        #
+        # This is the lesson of the whole 2026-08-08 session in one line: on
+        # this mat the wheels scrub, encoder-derived heading over-reports
+        # rotation by an order of magnitude, and nothing that steers by
+        # odometry heading holds a line. An open-loop move_twist commits to
+        # whatever heading it starts with and cannot notice it is wrong -- one
+        # such pass, begun squared and seeded, finished 20cm north of where
+        # every guard believed it was, out on the bare wood.
+        # A GO_TO is closed-loop on a WORLD target: the Navigator keeps
+        # steering at the far end of the row for the whole pass, so heading
+        # error is corrected continuously instead of integrated. It costs a
+        # turn at each end, which the stakeholder would rather avoid -- but
+        # even rows were the actual requirement, and no amount of squaring up
+        # beforehand buys them while the heading reference is this bad.
+        _c, pid = bot.goto_wire(x_west * 10.0, y_target * 10.0, FRAME_WORLD,
+                                speed=speed, arrive=ROW_ARRIVE,
+                                timeout=int(abs(x_east - x_west) * 10.0
+                                            / speed * 1000 * 4))
+        done, breach = wait_for_goto(bot, pid, timeout=60.0, fmap=fmap,
+                                     perception=perception,
+                                     channel_y=channel_y, fence=SWEEP_FENCE,
+                                     arrived_at=(x_west, y_target),
+                                     hard_fence=SWEEP_FENCE, fix_fn=fix_fn)
+        if breach:
+            return breach
+        end = camera_fix(fix_fn, samples=5)
+        end_y = end[1] if end is not None else float("nan")
+        print(f"  [{i:2d}] y={y_target:+6.1f} E->W ended y={end_y:+6.1f}  "
+              f"refl_cells={fmap.refl_cells} colour_cells={fmap.color_cells}")
     return None
 
 
@@ -951,7 +1291,16 @@ def recover_to_centre(bot, dc, fix_fn, speed):
         if not seed_retry(bot, fix[0], fix[1], fix[2]):
             print("  centre: seed did not read back")
             return False
-        if math.hypot(fix[0], fix[1]) < 6.0:
+        # Accept 10cm, not 6. The GO_TO stops at the Navigator's own arrival
+        # tolerance, which is WIDER than 6cm -- so a 6cm test can never pass:
+        # the move reports complete without the robot driving, and the loop
+        # burns all three attempts reading the identical position. Measured
+        # 2026-08-08: recovery reached (-3.8,+6.3) (7.4cm out) and then sat
+        # there for attempts 2 and 3. Being within 10cm of centre is adequate
+        # for what this function is for -- start from the middle, localised --
+        # and the seed that follows is taken from the CAMERA at wherever it
+        # actually stopped, so nothing downstream assumes 0,0.
+        if math.hypot(fix[0], fix[1]) < 10.0:
             print(f"  centred at ({fix[0]:+.1f},{fix[1]:+.1f})cm, frame established")
             return True
         print(f"  at ({fix[0]:+.1f},{fix[1]:+.1f})cm -- driving to centre "
@@ -1230,7 +1579,28 @@ def main() -> int:
                          "The parallax fit is linear, so a smaller box that is "
                          "reliably seen fits it and extrapolates.")
     ap.add_argument("--replay", help="render an existing .npz and exit -- no robot needed")
-    ap.add_argument("--out", default="field_map")
+    ap.add_argument("--out", default=None,
+                    help="basename under output/ (default: field_map, or "
+                         "sweep with --sweep)")
+    ap.add_argument("--sweep", action="store_true",
+                    help="edge sweep: every pass runs east->west at constant "
+                         "y, stepping south, with only the RETURNS angled. "
+                         "Even rows on one heading instead of a zigzag; "
+                         "fenced by SWEEP_FENCE, not the raster's clamp")
+    ap.add_argument("--rows", type=int, default=16,
+                    help="[count] sweep passes")
+    ap.add_argument("--y-start", type=float, default=30.0,
+                    help="[cm] y of the sweep's first (northmost) pass")
+    # Not wider, because a leg endpoint is NOT where the robot stops: this
+    # file measures the Navigator overshooting the end of a transit by ~6.5cm
+    # ("52.5 reached on a 46.0 target", NAV_OVERSHOOT = 7.0). 44 + 7 = 51
+    # lands inside SWEEP_FENCE's 52; 46 would not, and the run would die on a
+    # transit it had driven correctly.
+    ap.add_argument("--x-east", type=float, default=44.0,
+                    help="[cm] east end of every sweep pass -- where each "
+                         "pass starts")
+    ap.add_argument("--x-west", type=float, default=-44.0,
+                    help="[cm] west end of every sweep pass")
     ap.add_argument("--straight", action="store_true",
                     help="scan by REVERSING instead of turning around at the "
                          "end of each leg -- no pivots, so no accumulated "
@@ -1245,6 +1615,13 @@ def main() -> int:
                     help="[cm] skip legs whose |y| is below this, to fill in "
                          "an outer band without re-driving mapped ground")
     args = ap.parse_args()
+
+    # One output file per MODE, not per run. The sweep is meant to be repeated
+    # -- re-run it and it OVERWRITES sweep.npz rather than littering output/
+    # with a new file every attempt, which is what makes "the latest sweep"
+    # unambiguous when someone goes looking for it later.
+    if args.out is None:
+        args.out = "sweep" if args.sweep else "field_map"
 
     if args.replay:
         fmap = FieldMap.load(pathlib.Path(args.replay))
@@ -1334,31 +1711,46 @@ def main() -> int:
     # x_span of 46 overshot to 52.5 against a 52.15 rail fence and ended the
     # run at leg 5, having driven every leg cleanly. The fence is not the thing
     # to relax here -- the scan is.
-    max_x = RAIL_FENCE[0] - NAV_OVERSHOOT
-    max_y = RAIL_FENCE[1] - NAV_OVERSHOOT
-    if args.x_span > max_x or args.y_span > max_y:
-        print(f"  clamping span to fit the rail fence: "
-              f"x {args.x_span:.1f}->{min(args.x_span, max_x):.1f}, "
-              f"y {args.y_span:.1f}->{min(args.y_span, max_y):.1f}cm "
-              f"(rail fence {RAIL_FENCE[0]:.1f}/{RAIL_FENCE[1]:.1f}, "
-              f"Navigator overshoot {NAV_OVERSHOOT:.1f})")
-        args.x_span = min(args.x_span, max_x)
-        args.y_span = min(args.y_span, max_y)
+    # The sweep is deliberately NOT clamped by any of this. The clamp exists to
+    # keep the raster's x_span/y_span inside RAIL_FENCE minus the Navigator's
+    # overshoot; applied to the sweep it would pull x_east/x_west back in by
+    # ~6cm at each end -- and the ends are the part of the mat this sweep
+    # exists to reach. The sweep is fenced by SWEEP_FENCE instead, checked
+    # inside every move by wait_for_goto and collect_straight.
+    if args.sweep:
+        fence = SWEEP_FENCE
+        waypoints = []
+        print(f"\nedge sweep: {args.rows} rows, pitch {args.pitch}cm, "
+              f"x {args.x_east:+.1f} -> {args.x_west:+.1f}cm, "
+              f"y {args.y_start:+.1f} -> "
+              f"{args.y_start - (args.rows - 1) * args.pitch:+.1f}cm, "
+              f"fence +/-{SWEEP_FENCE[0]:.1f}/{SWEEP_FENCE[1]:.1f}cm")
+    else:
+        max_x = RAIL_FENCE[0] - NAV_OVERSHOOT
+        max_y = RAIL_FENCE[1] - NAV_OVERSHOOT
+        if args.x_span > max_x or args.y_span > max_y:
+            print(f"  clamping span to fit the rail fence: "
+                  f"x {args.x_span:.1f}->{min(args.x_span, max_x):.1f}, "
+                  f"y {args.y_span:.1f}->{min(args.y_span, max_y):.1f}cm "
+                  f"(rail fence {RAIL_FENCE[0]:.1f}/{RAIL_FENCE[1]:.1f}, "
+                  f"Navigator overshoot {NAV_OVERSHOOT:.1f})")
+            args.x_span = min(args.x_span, max_x)
+            args.y_span = min(args.y_span, max_y)
 
-    fence = (min(X_LIM - 6.0, args.x_span + 14.0),
-             min(Y_LIM - 6.0, args.y_span + 14.0))
-    waypoints = raster(args.x_span, args.y_span, args.pitch)
-    # Start with the leg whose y is nearest the centre and work outward: the
-    # robot begins AT the centre, so this keeps the first transit short instead
-    # of sending it diagonally across the field to a far corner. Sort the LEGS
-    # (waypoint PAIRS), never the waypoints individually -- that would scramble
-    # each leg's start/end and turn the raster into random criss-crossing.
-    legs = [waypoints[i:i + 2] for i in range(0, len(waypoints), 2)]
-    legs = [leg for leg in legs if abs(leg[0][1]) >= args.y_min]
-    legs.sort(key=lambda leg: abs(leg[0][1]))
-    waypoints = [pt for leg in legs for pt in leg]
-    print(f"\nraster: {len(waypoints)} waypoints, pitch {args.pitch}cm, "
-          f"fence +/-{fence[0]:.1f}/{fence[1]:.1f}cm")
+        fence = (min(X_LIM - 6.0, args.x_span + 14.0),
+                 min(Y_LIM - 6.0, args.y_span + 14.0))
+        waypoints = raster(args.x_span, args.y_span, args.pitch)
+        # Start with the leg whose y is nearest the centre and work outward: the
+        # robot begins AT the centre, so this keeps the first transit short instead
+        # of sending it diagonally across the field to a far corner. Sort the LEGS
+        # (waypoint PAIRS), never the waypoints individually -- that would scramble
+        # each leg's start/end and turn the raster into random criss-crossing.
+        legs = [waypoints[i:i + 2] for i in range(0, len(waypoints), 2)]
+        legs = [leg for leg in legs if abs(leg[0][1]) >= args.y_min]
+        legs.sort(key=lambda leg: abs(leg[0][1]))
+        waypoints = [pt for leg in legs for pt in leg]
+        print(f"\nraster: {len(waypoints)} waypoints, pitch {args.pitch}cm, "
+              f"fence +/-{fence[0]:.1f}/{fence[1]:.1f}cm")
 
     travelled = 0.0
     last = None
@@ -1367,6 +1759,22 @@ def main() -> int:
             halt_verified(bot)
             bot.close()
             return 2
+
+        if args.sweep:
+            breach = edge_sweep(bot, fmap, perception, channel_y, fix_corrected,
+                                args.x_east, args.x_west, args.y_start,
+                                args.pitch, args.rows, args.speed)
+            if breach:
+                print(f"  GEOFENCE breach at ({breach[0]:+.1f},{breach[1]:+.1f})cm")
+            halt_verified(bot)
+            fmap.save(npz_path)
+            print(f"\nwrote {npz_path}  ({fmap.refl_cells} reflectance cells, "
+                  f"{fmap.color_cells} colour cells)")
+            score_against_truth(fmap)
+            render(fmap, OUT / f"{args.out}.png",
+                   "playfield reflectance + colour map (edge sweep)")
+            bot.close()
+            return 0
 
         if args.straight:
             breach = straight_scan(bot, dc, fmap, perception, channel_y, fence,

@@ -244,6 +244,36 @@ catalog (`tlm_log.py` for a flat CSV telemetry capture,
 characterization, `velocity_step_response.py` for sensor/PID
 characterization).
 
+## The robot must be STILL when it boots (OTOS gyro calibration)
+
+`RealOtos::init()` runs a one-shot ~612ms IMU bias calibration at every
+boot, and nothing waits for it or checks stillness — whatever the gyro
+feels in that window becomes "zero rotation" for the whole session. A robot
+that boots while being handled (battery swap, being carried, set down)
+drives with a poisoned heading until its next boot.
+
+Measured on `tovez` 2026-08-08: booted mid-battery-swap → **+1.44 deg/s**
+standstill heading drift (camera-confirmed motionless) plus ~3cm/30s
+position creep (the phantom rotation sweeping the 47.8mm sensor lever arm).
+One still reboot → **−0.006 deg/s**, after which it held a 90cm centre-line
+pass to ±1.6cm on odometry alone. Symptoms: heading rotates while parked;
+pivots complete by odometry while the camera sees a fraction of the turn;
+GO_TO curves off-line. Do not blame wheel scrub or the Navigator, and do
+not steer from the camera to compensate — reboot instead.
+
+**Rescue without flashing** — `gauti` (the companion Pi on the robot)
+holds the micro:bit's direct USB port; closing it drops DTR and resets the
+nRF. With the robot PARKED and untouched:
+
+```bash
+ssh ros@gauti 'ls -l /dev/serial/by-id/'   # confirm tovez UID 990636...b276...
+ssh ros@gauti 'timeout 1 cat /dev/ttyACM0 >/dev/null'   # DTR drop = reset
+```
+
+Wait ~5s (boot + preamble + calibration), then VERIFY: standstill heading
+drift over 20–30s must be ≈0 before driving. A reboot zeroes the pose and
+wipes live-pushed config — re-seed and re-push after.
+
 ## Safety notes
 
 - On the stand the wheels spin free; still avoid loose clothing/fingers near the
