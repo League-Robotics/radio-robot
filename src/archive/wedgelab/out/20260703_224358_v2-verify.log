@@ -1,6 +1,0 @@
-# opened /dev/cu.usbmodem2121102 at 2026-07-03 22:43:58
-PONG wedgelab
->> run legs 4
-RUN legs 4 (any byte aborts)
-STOPV ok (legs-end) att=0 d=0
-RESULT legs n=4 ep=0,0,0,0 glitch=0 errs=0 persist=0

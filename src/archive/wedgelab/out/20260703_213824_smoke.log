@@ -1,4 +1,0 @@
-# opened /dev/cu.usbmodem2121102 at 2026-07-03 21:38:24
->> run spin 5
-RUN spin 5 (any byte aborts)
-RESULT spin sec=5 epR=0 epL=0 glitch=0 errs=0
