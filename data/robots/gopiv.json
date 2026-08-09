@@ -75,7 +75,11 @@
     "pid_i_max": 60.0,
     "pid_kaff": 0.0,
     "pid_max": 100.0,
-    "pos_err_max": 10.0
+    "pos_err_max": 10.0,
+    "stall_speed": 0.0,
+    "stall_demand": 0.0,
+    "stall_window": 0.0,
+    "_stall_note": "2026-08-09: added so this robot can be BUILT at all -- gen_boot_config.py requires all three (config-as-truth, sprint 114) and they were added to tovez.json only, which left gopiv and togov unbuildable. Held at 0, which is the documented INERT state, not a guess: tovez.json's own _stall_note says 'the whole detector is inert on any robot whose JSON leaves stall_window at 0'. gopiv has no drive characterization of its own, and tovez's numbers (15.0 / 40.0 / 500.0) are DESIGN CHOICES derived from tovez's own measured v_min, deadband and planner.a_max -- none of which have been measured here -- so borrowing them would be a fabricated calibration, not a default. Same posture togov.json takes for its uncharacterized wheel_control group. Replace with gopiv's own numbers before relying on stall detection on this robot. NOTE: togov.json still has this gap and is still unbuildable."
   },
   "planner": {
     "v_max": 400.0,
