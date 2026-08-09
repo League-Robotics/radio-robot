@@ -17,7 +17,7 @@
 
 #include "app/fake_otos.h"
 #include "hal/motor.h"
-#include "motion/body_kinematics.h"
+#include "kinematics/differential_kinematics.h"
 #include "motion/odometry.h"
 
 namespace {
@@ -96,9 +96,9 @@ void scenarioAlwaysPresentFreshOnlyAfterTick() {
 
 // 2. A straight drive: both wheels advance equally. FakeOtos.pose() must
 //    mirror Odometry's integrated pose exactly, and its body twist must be
-//    the SAME BodyKinematics::forward() the loop fuses for frame_.twist.
+//    the SAME Kinematics::DifferentialKinematics::forward() the loop fuses for frame_.twist.
 void scenarioStraightMirrorsOdometryAndTwist() {
-  std::printf("scenario: straight drive -- pose mirrors Odometry, twist matches BodyKinematics::forward\n");
+  std::printf("scenario: straight drive -- pose mirrors Odometry, twist matches Kinematics::DifferentialKinematics::forward\n");
   StubMotor left, right;
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
   App::FakeOtos fake(odom, left, right, kTrackWidth);
@@ -112,16 +112,16 @@ void scenarioStraightMirrorsOdometryAndTwist() {
   right.setVelocity(200.0f);
 
   float expV = 0.0f, expOmega = 0.0f;
-  BodyKinematics::forward(200.0f, 200.0f, kTrackWidth, expV, expOmega);
+  Kinematics::DifferentialKinematics::forward(200.0f, 200.0f, kTrackWidth, expV, expOmega);
 
   fake.tick(1000000);
   Hal::PoseReading r = fake.pose();
   checkNear(r.x, odom.x(), 1e-4f, "pose().x mirrors Odometry x");
   checkNear(r.y, odom.y(), 1e-4f, "pose().y mirrors Odometry y");
   checkNear(r.heading, odom.theta(), 1e-4f, "pose().heading mirrors Odometry theta");
-  checkNear(r.v_x, expV, 1e-4f, "pose().v_x matches BodyKinematics::forward v");
+  checkNear(r.v_x, expV, 1e-4f, "pose().v_x matches Kinematics::DifferentialKinematics::forward v");
   checkNear(r.v_y, 0.0f, 1e-4f, "pose().v_y is 0 for a differential drive");
-  checkNear(r.omega, expOmega, 1e-4f, "pose().omega matches BodyKinematics::forward omega");
+  checkNear(r.omega, expOmega, 1e-4f, "pose().omega matches Kinematics::DifferentialKinematics::forward omega");
 }
 
 // 3. A spin: wheels counter-rotate. Heading advances, forward speed ~0, and
@@ -141,7 +141,7 @@ void scenarioSpinMirrorsOdometryAndTwist() {
   right.setVelocity(-100.0f);
 
   float expV = 0.0f, expOmega = 0.0f;
-  BodyKinematics::forward(100.0f, -100.0f, kTrackWidth, expV, expOmega);
+  Kinematics::DifferentialKinematics::forward(100.0f, -100.0f, kTrackWidth, expV, expOmega);
 
   fake.tick(1020000);
   Hal::PoseReading r = fake.pose();

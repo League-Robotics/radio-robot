@@ -54,7 +54,7 @@ endforeach()
 # sibling test's link graph.
 add_executable(pose_ownership_test tests/pose_ownership_test.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../odometry.cpp
-  ${CMAKE_CURRENT_SOURCE_DIR}/../body_kinematics.cpp)
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../kinematics/differential_kinematics.cpp)
 target_link_libraries(pose_ownership_test PRIVATE planner)
 # odometry.cpp/body_kinematics.cpp use the qualified #include "motion/..."
 # spelling every other src/firm/motion consumer uses (root CMakeLists.txt,

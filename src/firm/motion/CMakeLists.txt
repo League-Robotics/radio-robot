@@ -56,11 +56,18 @@ set(MOTION_DIR "${CMAKE_SOURCE_DIR}")
 # note). Ticket 016 deleted state_estimator.{h,cpp} outright (Motion::
 # StateEstimator retired from the loop, robot-state-pose-needs-exactly-
 # one-writer.md -- a per-cycle computation with no consumer). What's
-# left: body_kinematics (twist<->wheel conversion) and odometry
-# (dead-reckoning integration, RobotState::pose's sole writer).
+# left: odometry (dead-reckoning integration, RobotState::pose's sole
+# writer). body_kinematics left this tree entirely in the platform/
+# hardware/hal reorganization: it is src/firm/kinematics/ now, behind
+# Kinematics::Model, because chassis geometry belongs to the drivetrain
+# model rather than to the motion library. Odometry still needs the
+# differential map to integrate, so this target links it from there.
 # ---------------------------------------------------------------------------
+set(KINEMATICS_DIR "${REPO_ROOT}/src/firm/kinematics")
 add_library(motion STATIC
-    "${MOTION_DIR}/body_kinematics.cpp"
+    "${KINEMATICS_DIR}/kinematics.cpp"
+    "${KINEMATICS_DIR}/differential_kinematics.cpp"
+    "${KINEMATICS_DIR}/mecanum_kinematics.cpp"
     "${MOTION_DIR}/odometry.cpp"
 )
 
@@ -68,9 +75,10 @@ add_library(motion STATIC
 # "motion/..."` style includes (the SAME include text these headers used
 # back when they lived under src/firm/motion/ -- see the root
 # CMakeLists.txt / src/firm/platform/host/CMakeLists.txt's own matching comment).
-# "${REPO_ROOT}/src/firm" resolves body_kinematics.h's ONE allowed
-# src/firm dependency, `#include "messages/common.h"` -- the single
-# exception the sprint's boundary rule permits (messages/ only, never
+# "${REPO_ROOT}/src/firm" resolves the ONE allowed src/firm dependency
+# these modules have, `#include "messages/common.h"` (and, for the
+# kinematics sources, their own `kinematics/...` self-includes) -- the
+# single exception the boundary rule permits (messages/ only, never
 # anything else from src/firm).
 target_include_directories(motion PUBLIC
     "${REPO_ROOT}/src"

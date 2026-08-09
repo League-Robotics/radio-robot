@@ -58,7 +58,7 @@ set(MOTION_DIR "${REPO_ROOT}/src/firm/motion")
 #   messages/wire.cpp, messages/wire_runtime.cpp
 #                              -- the generated + hand-written codec
 #                                 primitives
-#   src/firm/motion/body_kinematics.cpp
+#   src/firm/kinematics/differential_kinematics.cpp
 #                              -- pure math, no CODAL deps. Moved out of
 #                                 SOURCE_DIR/kinematics/ (122-001: that
 #                                 directory is retired, folded flat into
@@ -177,13 +177,16 @@ set(MESSAGE_SOURCES
     "${SOURCE_DIR}/messages/wire.cpp"
     "${SOURCE_DIR}/messages/wire_runtime.cpp"
 )
-# body_kinematics.cpp also moved under MOTION_DIR (122-001) -- it lived at
-# SOURCE_DIR/kinematics/ (a child of src/firm) before this ticket; the
-# kinematics/ directory itself is retired (folded flat into src/firm/motion).
-# KINEMATICS_SOURCES keeps its own variable name (nothing downstream needs
-# renaming to know it's now motion-owned).
+# kinematics/ is a real subsystem again (the platform/hardware/hal
+# reorganization): Kinematics::Model, the swappable twist<->wheel-speed map,
+# with DifferentialKinematics (the former BodyKinematics free functions,
+# unchanged math) and MecanumKinematics behind it. The 122-era arrangement
+# -- body_kinematics.cpp folded flat into src/motion -- is gone. Chassis
+# geometry (track width, wheelbase) lives HERE and nowhere below it.
 set(KINEMATICS_SOURCES
-    "${MOTION_DIR}/body_kinematics.cpp"
+    "${SOURCE_DIR}/kinematics/differential_kinematics.cpp"
+    "${SOURCE_DIR}/kinematics/kinematics.cpp"
+    "${SOURCE_DIR}/kinematics/mecanum_kinematics.cpp"
 )
 set(SIM_SOURCES
     "${CMAKE_SOURCE_DIR}/sim_ctypes.cpp"

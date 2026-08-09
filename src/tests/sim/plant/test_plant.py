@@ -8,7 +8,7 @@ physics feed; ticket 108-004 migrated this harness onto it, replacing the
 deleted scripted-FIFO ``Devices::I2CBus`` fake ticket 108-001 removed), and
 the HOST_BUILD Devices/App/Kinematics sources they exercise
 (``src/firm/hardware/nezha/nezha_motor.cpp``, ``src/firm/hardware/generic/real_otos.cpp``,
-``src/firm/motion/body_kinematics.cpp``, ``src/firm/app/odometry.cpp``) with
+``src/firm/kinematics/differential_kinematics.cpp``, ``src/firm/app/odometry.cpp``) with
 ``-DHOST_BUILD``, against the SAME headers every ARM build compiles.
 Mirrors ``test_app_odometry.py``'s exact shape: compile with the system
 C++ compiler, run the resulting binary, assert it exits 0.
@@ -40,7 +40,7 @@ _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _ODOMETRY_SRC = _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "hardware" / "nezha" / "nezha_motor.cpp"
 _OTOS_SRC = _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp"
-_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "motion" / "body_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "kinematics" / "differential_kinematics.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard.
 _CXX_STANDARD = "c++20"

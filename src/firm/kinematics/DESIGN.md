@@ -2,121 +2,106 @@
 root: ../../../docs/design/design.md
 ---
 
-# Kinematics (`src/firm/kinematics`, namespace `BodyKinematics`)
+# Kinematics
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-16 · **Status:** stable
+**Owner:** Eric Busboom · **Last reviewed:** 2026-08-09 · **Status:** in-flux
 
 ---
 
-> **RETIRED — code relocated (sprint 122 ticket 001, 2026-07-24, finalized
-> ticket 122-004).** `BodyKinematics` has been MOVED to
-> `src/firm/motion/body_kinematics.{h,cpp}` — a new SIBLING tree of `src/firm`
-> (sprint 122's two-layer base/motion split; see that sprint's
-> `sprint.md`), flat (no nested `kinematics/` subdirectory under
-> `src/firm/motion`). This directory (`src/firm/kinematics/`) permanently
-> holds only this DESIGN.md, no source — it remains a required,
-> one-level-down child of the validated root `src/firm`
-> (`.clasi/config.yaml`'s `sources:`) purely so `close_sprint`'s design
-> validator has a `DESIGN.md` to find here; it is kept, not deleted,
-> because the math/rationale below is unchanged and still authoritative,
-> and other current docs (`docs/design/design.md`,
-> `src/firm/app/DESIGN.md`) link to it by this path. **For current
-> orientation, the module list, the boundary contract, and the
-> `motion_tests` build, see
-> [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md)** — this file is the
-> historical derivation record only; treat every "Orientation"/
-> "Interfaces" section below as accurate MATH at a location this
-> subsystem no longer occupies.
-
 ## 1. Purpose
 
-`BodyKinematics` is the differential-drive math: the (v, ω) ↔ (vL, vR)
-twist/wheel-speed maps and curvature-preserving saturation. It is split out
-of `devices/` and `app/` because it is pure math with no bus, no timing, and
-no state — the one place in the firmware that can be trusted to compile,
-link, and be exercised identically on ARM and in a host unit test with zero
-scaffolding. Nothing else owns this math; `app/Drive` and `app/Odometry`
-call into it rather than duplicating the equations.
+`kinematics/` owns the **twist ↔ wheel-speed map**, and with it the only
+sanctioned home for **chassis geometry** (track width, wheelbase).
+Everything above states intent as a body twist `(v_x, v_y, omega)`;
+everything below deals in per-wheel linear speeds and knows nothing about
+the chassis.
+
+This directory was retired by sprint 122 (its `BodyKinematics` folded flat
+into `src/motion`) and is live again as of the platform/hardware/hal
+reorganization, for the reason that reorganization exists: a drivetrain map
+hardcoded to a single scalar track width is exactly what leaves "a mecanum
+or X-drive robot with no home."
 
 ## 2. Orientation
 
-Three operations, each with a scalar form (`float` in/out params) and an
-array/message form (`msg::BodyTwist3`, `wheels[2]`) used by the app layer:
+```
+kinematics/
+  kinematics.h                Kinematics::Twist, Kinematics::Model, saturate()
+  kinematics.cpp              Model::saturate() -- the one concrete method
+  differential_kinematics.*   two wheels; the former BodyKinematics math
+  mecanum_kinematics.*        four wheels, holonomic
+```
 
-- **`inverse`** — body twist → wheel speeds.
-- **`forward`** — wheel speeds → body twist (used by `Odometry` to integrate
-  encoder deltas back into a twist).
-- **`saturate`** — clamp wheel speeds to a ceiling without breaking the
-  commanded curvature.
+- **`Kinematics::Twist`** is a plain float aggregate. It is deliberately
+  *not* `msg::BodyTwist3`: that type's `v_x`/`v_y`/`omega` are `int32_t`
+  RAW wire counts that only mean anything through its own
+  `packVX()`/`unpackVX()` 0.1 scale. See §4 for what that mismatch had
+  already produced.
+- **`Kinematics::Model`** is the interface: `wheelCount()`,
+  `inverse(twist, wheels[])`, `forward(wheels[], twist)`, plus a concrete
+  `saturate()`.
+- Both implementations expose their equations twice: as **statics** taking
+  the geometry explicitly (the pre-reorganization free-function shape,
+  which every existing call site still uses) and as the **virtual
+  overrides**, which call those statics with the instance's own geometry.
+  One copy of each equation, two entry points.
 
-The math itself — derivation, arc geometry, why saturation preserves ratio
-rather than clamping each wheel independently — is **not** repeated here.
-It lives in [docs/kinematics-model.md](../../../docs/kinematics-model.md)
-§1.3 (inverse/forward) and §1.7 (saturation); the header/`.cpp` doc comments
-carry the equations a caller needs at the call site. Read that document
-first if you need to understand *why* the equations are what they are.
+`saturate()` is concrete rather than virtual because "scale every wheel by
+the same factor so the fastest sits at the ceiling" is a property of
+preserving the wheel-speed ratio, which is drivetrain-independent. Only
+`wheelCount()` varies, and it reads that.
 
 ## 3. Constraints and Invariants
 
-- **Stateless and pure — no I2C, no globals, no heap.** This is the whole
-  reason the subsystem is split out: it must compile and behave identically
-  under `HOST_BUILD` and on ARM with no fakes or seams. Adding any state,
-  side effect, or bus access here defeats that and would force every caller
-  (and every host test) to start injecting fakes for what should be a bare
-  function call.
-- **CCW-positive `omega`; signed `vL`/`vR`.** Yaw rate is positive
-  counterclockwise (right-hand convention about +z, matching
-  `docs/kinematics-model.md`'s body frame: +x forward, +y left). Wheel
-  speeds are signed mm/s, not signed PWM or magnitude+direction — reversing
-  a wheel is a negative speed, not a separate flag.
-- **`saturate` preserves curvature, never clamps a wheel independently.**
-  When the faster wheel would exceed `vWheelMax - steerHeadroom`, both wheel
-  speeds scale by the same factor. Clamping only the offending wheel breaks
-  the commanded wheel-speed ratio and sends the robot off its arc — see
-  kinematics-model.md §1.7 for the failure mode this avoids.
-- **`steerHeadroom` is a deliberate non-goal to remove.** It exists so a
-  straight-line command at top speed still leaves the outer control loop
-  some authority to steer; do not "simplify" saturation to use the raw
-  `vWheelMax` as the ceiling.
+- **Chassis geometry lives here and nowhere below.** A `Hal::Motor` knows
+  nothing about track width; a `Hal::Wheel` (when it exists) would know a
+  diameter, not a chassis.
+- **Pure functions.** No I2C, no clock, no global state, no heap. Every
+  entry point is a pure map from its inputs.
+- **No wire types.** This layer deals in real units. It includes nothing
+  from `messages/`, which also keeps it usable from `motion/` under that
+  subsystem's own dependency rule.
+- **A model that cannot realize a requested component ignores it** rather
+  than failing — `DifferentialKinematics::inverse()` drops `v_y`. Refusing
+  an impossible motion is the caller's limit checking, not this map's job.
 
-## 4. Design
+## 4. Design notes and open items
 
-Each scalar function is a direct transcription of the corresponding equation
-in kinematics-model.md — there is no additional structure to describe. The
-array-form overloads (`inverse`/`forward`/`saturate` taking `msg::BodyTwist3`
-and `wheels[2]`) exist as the API shape `app/Drive` and `app/Odometry`
-actually call: they wrap the scalar forms, fixing `v_y` to 0 (a differential
-drivetrain cannot strafe) rather than duplicating logic. There is no
-independent array-form implementation to keep in sync with the scalar one.
+**A latent scale bug removed.** The pre-reorganization `BodyKinematics`
+carried array-form overloads taking `msg::BodyTwist3`, and they assigned
+raw floats straight into that struct's `int32_t` fields — bypassing
+`packVX()`. Any consumer reading them back through `unpackVX()` would have
+seen a 10× scale error on top of truncation to whole raw counts. It never
+fired because nothing ever called them: every real call site used the
+scalar forms. They are not carried forward.
 
-## 5. Interfaces
+**`Motion::Planner` does NOT take a `Kinematics::Model&`, and that is the
+single largest gap between this reorganization and the proposal that
+shaped it.** The proposal states that `Motion::Planner` "currently calls
+`BodyKinematics` functions directly for its per-wheel profiling" and would
+"take a `Kinematics&` instead of assuming differential." The first half is
+not accurate, and it changes the size of the second half:
 
-### Exposes
-- **`inverse(v, omega, b, vL_out, vR_out)`** / **`inverse(msg::BodyTwist3, b,
-  wheels[2])`** — body twist to wheel speeds. Pure, no failure mode; `b` is
-  the caller's calibrated track width (see `docs/design/design.md` §5 /
-  [`../config/DESIGN.md`](../config/DESIGN.md) for where that calibration
-  comes from).
-- **`forward(vL, vR, b, v_out, omega_out)`** / array form — wheel speeds to
-  body twist. Used by `app/Odometry` each cycle to fold encoder deltas into
-  the twist it integrates.
-- **`saturate(vL, vR, vWheelMax, steerHeadroom, vL_out, vR_out)`** / array
-  form — curvature-preserving ceiling. Pass-through when already under the
-  effective ceiling.
+- `Motion::Planner` calls `BodyKinematics` **nowhere**. It inlines
+  differential-drive algebra against `limits_.plant.trackWidth` in roughly
+  fifteen places in `planner.cpp` — `halfTrack` splits, `(right - left) /
+  trackWidth` yaw-rate recoveries, `alphaDecel * 0.5f * trackWidth`
+  ceilings, per-wheel profile shaping.
+- `App::Drive` does the same: its constructor takes exactly two
+  `Hal::Motor&` and a scalar `trackWidth`, and `(targetRight_ -
+  targetLeft_) / trackWidth_` is how it reports commanded omega.
 
-### Consumes
-- **`msg::BodyTwist3`** (from `messages/`) — the wire-plane twist type used
-  by the array-form overloads; see [messages/DESIGN.md](../messages/DESIGN.md).
-- **Calibrated track width `b` and saturation limits** (`vWheelMax`,
-  `steerHeadroom`) are supplied by the caller (`app/Drive`), sourced from
-  `config/` — see [config/DESIGN.md](../config/DESIGN.md).
+So making the planner drivetrain-agnostic is not a parameter swap; it is a
+rewrite of its per-wheel profiling model in terms of N wheels, in the one
+component that actually drives the robot. That is a behavior-changing
+project with its own hardware verification, not part of a reorganization
+whose contract is "same behavior, better addresses" — doing it inside this
+reorganization would have meant shipping an unverifiable diff.
 
-## 6. Open Questions / Known Limitations
-
-- The array-form overloads were originally added as a differential-drive
-  adapter for a shared `IKinematics` contract shared with a mecanum
-  implementation; that shared contract and its only consumer were deleted in
-  the sprint 102 single-loop rebuild. The array-form API is kept because
-  `app/` calls it, not because the shared-contract alias still exists — if a
-  second drivetrain kind is ever added, revisit whether a shared interface
-  is worth reintroducing.
+What this directory delivers instead is the seam that project needs: a real
+interface, a second implementation to prove it is one, and every existing
+`BodyKinematics` caller already moved onto it. `MecanumKinematics` is
+unconstructed for exactly this reason — there is no four-wheel drivetrain
+to hand it to yet. Togov is a real mecanum chassis
+(`data/robots/togov.json`), so that is the next drivetrain, not a
+hypothetical one.

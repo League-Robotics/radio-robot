@@ -2,7 +2,7 @@
 
 #include <cmath>
 
-#include "motion/body_kinematics.h"
+#include "kinematics/differential_kinematics.h"
 
 namespace TestSim {
 
@@ -14,13 +14,13 @@ void OtosPlant::step(float leftPosition, float rightPosition, float dt) {
   lastLeft_ = leftPosition;
   lastRight_ = rightPosition;
 
-  // The SAME BodyKinematics::forward() call + midpoint-arc accumulation
+  // The SAME Kinematics::DifferentialKinematics::forward() call + midpoint-arc accumulation
   // App::Odometry::integrate() performs (src/firm/app/odometry.cpp) -- see
   // this file's header for why that duplication is deliberate, not a
   // second heading formula.
   float distance = 0.0f;       // [mm] this cycle's body-frame forward travel
   float headingDelta = 0.0f;   // [rad] this cycle's heading change
-  BodyKinematics::forward(deltaLeft, deltaRight, trackWidth_, distance, headingDelta);
+  Kinematics::DifferentialKinematics::forward(deltaLeft, deltaRight, trackWidth_, distance, headingDelta);
 
   float midHeading = heading_ + headingDelta * 0.5f;
   x_ += distance * std::cos(midHeading);

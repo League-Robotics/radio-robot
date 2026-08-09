@@ -3,7 +3,7 @@
 //
 // Boundary: inside -- taking both wheels' position deltas (handed in by the
 // caller every cycle, NOT read from a held Hal::Motor&), calling
-// BodyKinematics::forward(), accumulating x/y/theta. Outside -- reading the
+// Kinematics::DifferentialKinematics::forward(), accumulating x/y/theta. Outside -- reading the
 // leaves themselves (the base's job -- src/firm/app/robot_loop.cpp reads
 // Hal::Motor::position() and passes the two floats in), fusing with
 // OTOS/camera (the host's job), and OTOS sampling itself (App::
@@ -40,7 +40,7 @@ namespace Motion {
 
 class Odometry {
  public:
-  // trackWidth -- [mm], BodyKinematics::forward()'s own `b` parameter.
+  // trackWidth -- [mm], Kinematics::DifferentialKinematics::forward()'s own `b` parameter.
   // initialLeftPosition/initialRightPosition -- the two leaves' CURRENT
   // position() readings at construction time (mirrors what the caller
   // already has on hand), used to seed the delta baseline so the very
@@ -51,7 +51,7 @@ class Odometry {
   // Takes both leaves' CURRENT position() readings (the caller's job to
   // read them -- see this file's own header), computes this cycle's
   // per-wheel delta against the last integrate()/construction baseline, and
-  // maps the delta pair through BodyKinematics::forward() (NOT a
+  // maps the delta pair through Kinematics::DifferentialKinematics::forward() (NOT a
   // hand-rolled equivalent) to get a per-cycle (distance, headingDelta)
   // pair. This is valid without a separate dt because forward()'s
   // equations are linear/homogeneous in vL/vR -- feeding it position

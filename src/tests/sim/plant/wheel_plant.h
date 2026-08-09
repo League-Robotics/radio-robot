@@ -21,7 +21,7 @@
 // degrees, a suspected angle-wrap attractor in ITS OWN heading math, never
 // root-caused). This file carries NO heading state of its own at all --
 // see otos_plant.h for where heading actually lives (Odometry's own
-// integration, via BodyKinematics::forward() over two WheelPlant
+// integration, via Kinematics::DifferentialKinematics::forward() over two WheelPlant
 // positions) and architecture-update.md Decision 3 for the full rationale.
 //
 // Deterministic/seeded: every quantity here is plain, non-random float

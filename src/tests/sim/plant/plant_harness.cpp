@@ -342,7 +342,7 @@ void scenarioPivotHeadingSaneViaOdometry() {
   std::vector<CycleSample> trace = runScenario(/*dutyLeft=*/-dutyMag, /*dutyRight=*/dutyMag, kCycles);
   const CycleSample& last = trace.back();
 
-  // BodyKinematics::forward(): omega = (vR - vL) / b. vR > 0, vL < 0 here,
+  // Kinematics::DifferentialKinematics::forward(): omega = (vR - vL) / b. vR > 0, vL < 0 here,
   // so omega > 0 -- a positive (CCW) turn.
   checkTrue(last.odomTheta > 0.3f,
             "Odometry::theta() is a significant, positive (CCW) rotation after the pivot run");
@@ -352,7 +352,7 @@ void scenarioPivotHeadingSaneViaOdometry() {
             "system-level scenario's job)");
 
   // Equal-and-opposite wheel duties are an exact pivot: each cycle's
-  // BodyKinematics::forward() distance term is (vR + vL)/2 == 0 exactly
+  // Kinematics::DifferentialKinematics::forward() distance term is (vR + vL)/2 == 0 exactly
   // (vL == -vR by construction), so Odometry's x_/y_ never accumulate any
   // translation.
   checkFloatEq(last.odomX, 0.0f, "pivot: Odometry::x() shows no translation", 1e-2f);
@@ -361,7 +361,7 @@ void scenarioPivotHeadingSaneViaOdometry() {
   // Sanity cross-check (NOT the primary assertion -- Decision 3's own
   // "will always agree closely, by design" consequence): the plant's own
   // OTOS pose derives from the SAME two wheel positions via the SAME
-  // BodyKinematics::forward() call, so its MAGNITUDE should land close to
+  // Kinematics::DifferentialKinematics::forward() call, so its MAGNITUDE should land close to
   // Odometry's independently-integrated heading.
   //
   // SIGN (135-008, sim-otos-heading-sign-diverges-from-hardware-angle-

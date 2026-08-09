@@ -32,7 +32,7 @@
 #include "hal/device_config.h"
 #include "hal/device_types.h"
 #include "hardware/nezha/nezha_motor.h"
-#include "motion/body_kinematics.h"
+#include "kinematics/differential_kinematics.h"
 #include "motion/odometry.h"
 #include "scripted_i2c_hook.h"
 #include "sim_plant.h"
@@ -117,8 +117,8 @@ void driveToPosition(Hardware::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus,
 // ===========================================================================
 // 1. Straight-line case: equal wheel deltas -> theta unchanged, x
 //    accumulates the common distance, y unchanged. Cross-checked against
-//    BodyKinematics::forward()'s own direct output for the same deltas
-//    (AC's "against BodyKinematics::forward()'s own known-correct output").
+//    Kinematics::DifferentialKinematics::forward()'s own direct output for the same deltas
+//    (AC's "against Kinematics::DifferentialKinematics::forward()'s own known-correct output").
 // ===========================================================================
 
 void scenarioStraightLineAccumulatesDistanceNoHeadingChange() {
@@ -140,7 +140,7 @@ void scenarioStraightLineAccumulatesDistanceNoHeadingChange() {
   odom.integrate(left.position(), right.position(), 0, 0);
 
   float expectedDist = 0.0f, expectedHeadingDelta = 0.0f;
-  BodyKinematics::forward(50.0f, 50.0f, trackWidth, expectedDist, expectedHeadingDelta);
+  Kinematics::DifferentialKinematics::forward(50.0f, 50.0f, trackWidth, expectedDist, expectedHeadingDelta);
   checkNear(expectedDist, 50.0f, 1e-3f, "sanity: independent forward() gives distance == 50 for equal deltas");
   checkNear(expectedHeadingDelta, 0.0f, 1e-6f, "sanity: independent forward() gives headingDelta == 0 for equal deltas");
 
@@ -179,7 +179,7 @@ void scenarioPureRotationAccumulatesHeadingNoTranslation() {
   odom.integrate(left.position(), right.position(), 0, 0);
 
   float expectedDist = 0.0f, expectedHeadingDelta = 0.0f;
-  BodyKinematics::forward(-d, d, trackWidth, expectedDist, expectedHeadingDelta);
+  Kinematics::DifferentialKinematics::forward(-d, d, trackWidth, expectedDist, expectedHeadingDelta);
   checkNear(expectedDist, 0.0f, 1e-3f, "sanity: independent forward() gives distance == 0 for equal-and-opposite deltas");
   checkNear(expectedHeadingDelta, (d - (-d)) / trackWidth, 1e-4f,
             "sanity: independent forward() gives headingDelta == (dR-dL)/b");
@@ -389,7 +389,7 @@ void scenarioEpochChangeReAnchorsThatWheelOnlyLeavesTheOtherDiffingNormally() {
 
   float expectedDist = 0.0f, expectedHeadingDelta = 0.0f;
   // deltaLeft credited as 0 (re-anchored), deltaRight the real +30mm.
-  BodyKinematics::forward(0.0f, 30.0f, trackWidth, expectedDist, expectedHeadingDelta);
+  Kinematics::DifferentialKinematics::forward(0.0f, 30.0f, trackWidth, expectedDist, expectedHeadingDelta);
   // Independent midpoint-arc integration (odometry.cpp's own formula):
   // theta_ was exactly 0 before this call (the first cycle was straight),
   // so midTheta is just half this call's own headingDelta.
@@ -410,7 +410,7 @@ void scenarioEpochChangeReAnchorsThatWheelOnlyLeavesTheOtherDiffingNormally() {
   driveToPosition(right, bus, wireAddr, 100.0f, 100000);
   odom.integrate(left.position(), right.position(), 1, 0);
   float nextDist = 0.0f, nextHeadingDelta = 0.0f;
-  BodyKinematics::forward(10.0f, 30.0f, trackWidth, nextDist, nextHeadingDelta);  // 10-0, 100-70
+  Kinematics::DifferentialKinematics::forward(10.0f, 30.0f, trackWidth, nextDist, nextHeadingDelta);  // 10-0, 100-70
   checkNear(odom.theta(), thetaBeforeNextCycle + nextHeadingDelta, 1e-3f,
             "post-rebaseline cycle: theta advances by the ordinary (10, 30) delta pair off the "
             "re-anchored baseline -- no phantom catch-up from the eaten cycle");

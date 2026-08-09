@@ -14,7 +14,7 @@
 //
 // tick() synthesizes:
 //   - pose x/y/heading   <- the just-integrated Odometry pose (odom_)
-//   - body twist v_x/omega <- BodyKinematics::forward(vL, vR, trackWidth),
+//   - body twist v_x/omega <- Kinematics::DifferentialKinematics::forward(vL, vR, trackWidth),
 //     the SAME fusion App::RobotLoop::updateTlm() uses for frame_.twist;
 //     v_y is 0 (a differential drive has no lateral body velocity).
 // present()/connected() are always true (a fake is always "there"), and
@@ -35,7 +35,7 @@ class FakeOtos : public Hal::Otos {
  public:
   // odom -- the pose source (read, never mutated). left/right -- the SAME
   // two Motor leaves Odometry integrates, used only for their velocity() to
-  // fuse the body twist. trackWidth -- [mm], BodyKinematics::forward()'s `b`.
+  // fuse the body twist. trackWidth -- [mm], Kinematics::DifferentialKinematics::forward()'s `b`.
   FakeOtos(const Motion::Odometry& odom, Hal::Motor& left, Hal::Motor& right,
            float trackWidth);  // [mm]
 
