@@ -36,8 +36,8 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _COMMS_CPP = _REPO_ROOT / "src" / "firm" / "core" / "comms.cpp"
 _ROBOT_LOOP_CPP = _REPO_ROOT / "src" / "firm" / "core" / "robot_loop.cpp"
-_ROBOT_LOOP_H = _REPO_ROOT / "src" / "firm" / "app" / "robot_loop.h"
-_DRIVE_H = _REPO_ROOT / "src" / "firm" / "app" / "drive.h"
+_ROBOT_LOOP_H = _REPO_ROOT / "src" / "firm" / "core" / "robot_loop.h"
+_DRIVE_H = _REPO_ROOT / "src" / "firm" / "core" / "differential_drive.h"
 
 _IF_OPEN = re.compile(r"^\s*#\s*(if|ifdef|ifndef)\b(.*)$")
 _ELSE = re.compile(r"^\s*#\s*(else|elif)\b")

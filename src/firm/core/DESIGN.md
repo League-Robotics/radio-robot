@@ -1585,3 +1585,82 @@ the layering and change behavior: `RobotLoop::cycle()` calls
 written until later in the cycle, so it would start reporting the
 previous cycle's pose. Full reasoning in
 [`../hal/DESIGN.md`](../hal/DESIGN.md) §4.
+
+
+---
+
+## Appendix — Robot: bus arbitration and RobotState extension
+
+The reorganization proposal asks for a `Robot` that formalizes what
+`Core::composeRobot()`/`Core::RobotGraph` already does, and leaves two
+questions open when it becomes concrete. Both were looked at; neither
+produced a code change, and here is why, so the next person does not have
+to re-derive it.
+
+### 1. Bus arbitration — who may touch I2C, and when
+
+**Answer: `Core::RobotLoop::cycle()` is the arbiter, by construction, and
+that is correct. `RobotGraph` is not, and should not become one.**
+
+The proposal's concern is that exclusivity today is "an emergent property
+of `RobotLoop`'s tick order" rather than an owned, documented rule. Half of
+that is right — it *is* `cycle()`'s ordering — but it is not emergent, it
+is the schedule's entire purpose, and it is visible in one function:
+
+```
+drive_.tick()                     -- writes both motors
+motorL_.requestSample()           -- L select write
+  runAndWait(kSettle, pump)       -- the settle window is NOT idle: comms
+motorL_.tick()                    -- L collect
+motorR_.requestSample()           -- R select write
+  runAndWait(kSettle, pump+route)
+motorR_.tick()                    -- R collect
+publishWheels()                   -- at L/R same-generation coherence
+  runAndWaitUntil(cycleStart, kCycle, ...)
+    otos_.tick()                  -- OTOS read
+    tickLineColor()               -- line on odd cycles, colour on even
+```
+
+Every bus transaction in the firmware appears in that list, in that order,
+on one cooperative fiber. Nothing else may start one: `hardware/DESIGN.md`'s
+"No leaf sleeps or blocks" invariant means a driver does exactly the bounded
+work its `tick()` is called for and returns.
+
+A runtime lock would add cost and hide the real rule. The rule is not
+"take the mutex", it is **"the loop hands out bus slots, and the Nezha's
+0x46 encoder register latches ONE pending read per select"** — which is a
+scheduling constraint, not a mutual-exclusion one. A lock cannot express it;
+the ordering above can, and does. `Platform::MicroBitI2CBus::inUse_`
+remains what it is: a diagnostic re-entrancy counter that proves the rule
+holds, not a lock that enforces it.
+
+Moving arbitration to `RobotGraph` would make this worse, not better.
+`RobotGraph` is a composition root — it constructs the graph and hands out
+references. Giving it scheduling authority would split "who owns the
+schedule" across two objects, which is exactly the smear the single-loop
+rebuild exists to prevent.
+
+**What is genuinely owed here is documentation, and this section is it.**
+
+### 2. `Types::RobotState` extension — inheritance vs. composition
+
+Not attempted, and the proposal says why better than a summary can: it is
+"the highest-blast-radius single change in this reorg", and every current
+consumer assumes the one concrete type.
+
+Two things found while doing the rest of the work bear on the eventual
+design:
+
+- `RobotState` is a **flat, dependency-free POD by deliberate design**, and
+  that is load-bearing: it is the one type both `core/` and `motion/` may
+  name, which is what lets `motion/` keep its no-upward-dependencies rule
+  (`Wheel::cmdVelocity` is the actuation boundary precisely because it is a
+  plain field on a plain struct). An inheritance hierarchy puts a vtable and
+  a base-class dependency into that shared floor.
+- A composition slot — a generic base plus an opaque robot-specific member
+  — keeps the POD property. It costs every consumer of the extra data a cast
+  or a variant, which is the trade to weigh, not something to decide as a
+  side effect of moving files.
+
+It needs its own design pass with a real second robot's requirements in
+hand, not a guess made during a reorganization.
