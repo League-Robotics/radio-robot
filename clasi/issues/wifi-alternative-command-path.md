@@ -34,11 +34,20 @@ the robot, alongside USB serial and the radio relay.
 3. **Host-side UDP connection class** in `robot_radio.io`, so
    `NezhaProtocol` / `rogo` can target `<robot-ip>:<port>` instead of a
    serial device.
-4. **Network prerequisite (stakeholder-owned).** The bench-DNS
-   reservations (gopiv=192.168.4.10, tovez=192.168.4.11) sit on
-   192.168.4.0/24, which nothing currently routes — the mesh DHCPs
-   clients onto 192.168.1.0/24. Either route/VLAN the .4 subnet or move
-   the reservations into the pool the mesh serves.
+4. **Network prerequisite — RESOLVED 2026-08-09.** The network is one
+   flat 192.168.0.0/21; gopiv's module now answers durably at
+   192.168.4.10 (ping + UDP echo + TCP/telnet verified from the bench
+   host). Working recipe — DHCP reservation for the module MAC, module
+   netmask forced to 255.255.248.0 (the mesh DHCP scope wrongly serves
+   /24), then a fresh association (`AT+RST`) so the AP re-learns the
+   binding; the AP silently drops frames from source IPs without a DHCP
+   binding. Full findings:
+   `docs/knowledge/2026-08-08-wifi-module-sockets.md` §6b. Remaining
+   network nit: fix the mesh DHCP scope's netmask option to /21, after
+   which plain DHCP + reservation suffices and no static override is
+   needed (also unblocks `wifi_setup.py`, which takes netmask from DHCP
+   by design). Tovez's module (192.168.4.11) still needs its own MAC
+   reservation when it gets a module.
 5. **Acceptance = the standing hardware gate**: `move_twist` over UDP on
    the stand with climbing encoders, and `estop()` over WiFi verified.
 

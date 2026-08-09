@@ -156,6 +156,48 @@ frame in-band (protocol v5's COBS+CRC+0x0A does this already).
 | module silent at 115200 after working earlier | it kept a commanded `AT+UART_CUR` baud across the micro:bit reset ✅ |
 | `ERROR` on `CIPSTART` | a link is already open — `AT+CIPCLOSE` first ✅ |
 
+## 6b. Fixed-IP routing findings (2026-08-09, all ✅ on the bench)
+
+The fixed-IP scheme (192.168.4.10 for gopiv) came alive 2026-08-09 after a
+morning of one-way traffic. The network is one flat 192.168.0.0/21 L2; the
+final working combination and the traps, in order discovered:
+
+- **The mesh's DHCP scope serves netmask 255.255.255.0 on the /21
+  network.** A client honoring that lease cannot reply to hosts outside
+  its /24 slice (its gateway may even sit off-subnet). The module needed
+  the /21 (`255.255.248.0`) applied explicitly. Symptom of the mismatch:
+  inbound packets arrive (visible as `+IPD` through the bridge) while
+  every module-originated packet — UDP replies, TCP SYN-ACK, ICMP — dies.
+  NOTE for `wifi_setup.py`: it takes netmask from DHCP by design, so until
+  the DHCP scope's mask option is corrected to /21, it will re-apply the
+  broken /24.
+- **The AP tracks client IP bindings (anti-spoof/quarantine behavior).**
+  A static source IP with no matching DHCP binding was silently dropped
+  AP-side even with a correct netmask, and the block persisted until the
+  association was bounced. Working recipe: DHCP reservation for the
+  module's MAC (`AT+CIPSTAMAC?` → e.g. gopiv's b4:0e:cf:af:1b:09) at the
+  reserved address, THEN `AT+RST` so the module rejoins and the AP
+  re-learns the binding. After that, static and leased address agree and
+  everything flows.
+- **`AT+CIPSTA` persists across module power cycles** (survived a battery
+  swap and multiple `AT+RST`s) — a fixed IP set once stays set. `AT+CWDHCP=1,1`
+  reverts to leased operation.
+- **The module DOES answer ICMP echo** — ping 3/3 at 3.8–62 ms once the
+  path was clean (the wide spread is WiFi power-save wake latency). Earlier
+  "module never answers ping" observations were the AP filtering, not the
+  firmware; and the 2026-08-08 "ping works" observation was a different
+  device squatting the stale address. Ping is a valid liveness probe ONLY
+  once the binding/association state is known-good — `AT+PING` from the
+  module side remains the more diagnostic direction.
+- **Server shapes verified**: `AT+CIPMUX=1` + `AT+CIPSERVER=1,7` accepts
+  inbound TCP (link events `0,CONNECT`/`0,CLOSED`, data as
+  `+IPD,<link>,<len>:`), and `AT+CIPSTART=4,"UDP","0.0.0.0",0,7,2`
+  (wildcard peer, mode 2) receives on port 7 from any host and retargets
+  replies to the last sender — `AT+CIPSTATUS` shows the peer swap live.
+  Echo replies on a TCP link race the peer's close: a one-shot
+  `echo x | nc` sees its connection close before the AT-driven echo lands;
+  an interactive session sees echoes fine.
+
 ## 7. Example code
 
 Host-side (through the atbridge pipe — this exact flow ran ✅; loss-aware

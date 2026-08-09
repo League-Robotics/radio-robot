@@ -4,7 +4,7 @@
     "common_name": "robot",
     "device_name": "gopiv",
     "enum": 3,
-    "port": null,
+    "port": "/dev/cu.usbmodem2121302",
     "role": "NEZHA2",
     "serial": "2175407711",
     "uid": "9906360200052820049d38a46da36a83000000006e052820"
@@ -14,7 +14,7 @@
     "common_name": "relay",
     "device_name": "getez",
     "enum": 1,
-    "port": null,
+    "port": "/dev/cu.usbmodem214102",
     "role": "RADIOBRIDGE",
     "serial": "1784514240",
     "uid": "990636020005282017449eac613c0332000000006e052820"
