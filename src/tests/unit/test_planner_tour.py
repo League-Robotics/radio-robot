@@ -336,7 +336,7 @@ def test_run_tour_full_tour_completes_without_stop_when_every_leg_only_rides_the
 #
 # The whole reason this mode exists (measured on `tovez` 2026-08-05, ticket
 # 134-004): the firmware's cumulative-heading intent ledger (`carryValid_`)
-# is what closes the square tour, and `App::RobotLoop::handleWheels()` calls
+# is what closes the square tour, and `Core::RobotLoop::handleWheels()` calls
 # `planner_.estop()` -- which CLEARS that ledger -- for any WHEELS command,
 # including a zero-velocity one. A host that holds a `wheels(0, 0)` lease
 # through each inter-move dwell therefore tears the ledger down at every

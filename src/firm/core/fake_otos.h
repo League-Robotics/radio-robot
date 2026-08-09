@@ -1,4 +1,4 @@
-// fake_otos.h -- App::FakeOtos: a bench implementation of the Hal::Otos
+// fake_otos.h -- Core::FakeOtos: a bench implementation of the Hal::Otos
 // interface that reports the robot's dead-reckoned Odometry pose AS IF it
 // were a real OTOS chip, without touching the I2C bus. Selected at the
 // main.cpp composition root under `#ifdef FAKE_OTOS` (the ONE place that
@@ -6,16 +6,16 @@
 // nor cares which implementation it drives.
 //
 // The synthesis is pulled by this class's own tick(), not pushed into the
-// real leaf. Because a fake needs App:: context (the Odometry pose and
+// real leaf. Because a fake needs Core:: context (the Odometry pose and
 // the wheel Motors' velocities), it lives in app/ rather than devices/ --
 // the devices/ isolation invariant forbids that leaf layer from depending
-// on App::Odometry, which is exactly why the interface (Hal::Otos) is
+// on Core::Odometry, which is exactly why the interface (Hal::Otos) is
 // the seam and this concrete fake sits above it.
 //
 // tick() synthesizes:
 //   - pose x/y/heading   <- the just-integrated Odometry pose (odom_)
 //   - body twist v_x/omega <- Kinematics::DifferentialKinematics::forward(vL, vR, trackWidth),
-//     the SAME fusion App::RobotLoop::updateTlm() uses for frame_.twist;
+//     the SAME fusion Core::RobotLoop::updateTlm() uses for frame_.twist;
 //     v_y is 0 (a differential drive has no lateral body velocity).
 // present()/connected() are always true (a fake is always "there"), and
 // poseFresh() is true after the first tick() -- mirroring the freshness the
@@ -29,7 +29,7 @@
 #include "hardware/generic/real_otos.h"
 #include "motion/odometry.h"
 
-namespace App {
+namespace Core {
 
 class FakeOtos : public Hal::Otos {
  public:
@@ -72,4 +72,4 @@ class FakeOtos : public Hal::Otos {
   uint64_t sampleTimeUs_ = 0;  // [us] sampleTime()'s backing field -- the last tick()'s own nowUs
 };
 
-}  // namespace App
+}  // namespace Core

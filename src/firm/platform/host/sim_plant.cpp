@@ -43,7 +43,7 @@ constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);  // [rad/LSB]
 // sim-otos-heading-sign-diverges-from-hardware-angle-moves-never-stop.md,
 // Option A). OtosPlant's own (x, y, heading) accumulator carries the SAME
 // sign as encoder-derived heading -- it integrates via the identical
-// midpoint-arc math App::Odometry uses (otos_plant.h's own header comment).
+// midpoint-arc math Core::Odometry uses (otos_plant.h's own header comment).
 // The REAL chip does not: it is measurably mounted with its heading sign
 // INVERTED relative to encoder heading (+84.58deg optical vs. -82.45deg
 // encoder on one measured rotation -- planner.cpp:499-513's own comment),
@@ -240,7 +240,7 @@ int SimPlant::handleOtosRead(uint8_t* data, int len) {
     // Hal::Otos::readPositionVelocity() as `whF` -- see that method's
     // own "reuses the SAME kPosMmPerLsb/kHdgRadPerLsb" comment for why the
     // SAME kHdgRadPerLsb scale applies here too) is OtosPlant::omega(), a
-    // real finite-difference rate estimate -- App::HeadingSource's own
+    // real finite-difference rate estimate -- Core::HeadingSource's own
     // measurement-age projection (locus 1) needed a real omega_meas to
     // characterize/validate at all; before ticket 109-010 this word was
     // always zero ("no scenario asserts on OTOS's twist").

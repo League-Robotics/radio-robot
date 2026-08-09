@@ -21,7 +21,7 @@ the only files in this tree that include `MicroBit.h`.
 transactions out of a physics model), `TestSim::SimClock`/`SimSleeper`, the
 `sim_ctypes.cpp` C ABI, and `sim_harness.h`. It is a platform in exactly
 the sense this directory means: **real firmware, substituted primitives.**
-`App::composeRobot()` is called identically by `src/firm/main.cpp` and by
+`Core::composeRobot()` is called identically by `src/firm/main.cpp` and by
 `TestSim::SimHarness`; the only difference between them is which
 `Platform::I2CBus`/`Platform::Clock`/`Platform::Sleeper` the caller
 constructs and passes in.

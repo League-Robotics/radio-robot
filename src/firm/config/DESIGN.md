@@ -26,13 +26,13 @@ the system doc's firmware-tree overview, `docs/design/design.md` §5, and
 
 **115-003 (gut-to-minimal-firmware S1 motion-stack excision):**
 `Config::defaultPlannerConfig() -> msg::PlannerConfig` is DELETED, not
-ported — `msg::PlannerConfig` itself, and the `App::Pilot`/
+ported — `msg::PlannerConfig` itself, and the `Core::Pilot`/
 `Motion::Executor` that consumed it, are gone wholesale (`planner.proto`
 deleted). `Config` now hands `main.cpp` motor/drivetrain/OTOS defaults only.
 
 **117 ticket 003 (predict-to-now estimator v1, fail-closed fusion-weight
 config):** `Config::defaultEstimatorConfig() -> EstimatorBootConfig` is
-ADDED — `App::StateEstimator`'s (117 ticket 002) boot-time fusion-weight
+ADDED — `Core::StateEstimator`'s (117 ticket 002) boot-time fusion-weight
 defaults, baked from the robot JSON's new `estimator` section. `Config` now
 hands `main.cpp` motor/drivetrain/OTOS/estimator defaults.
 
@@ -44,7 +44,7 @@ does not yet describe `Config::Robot` (`robot.h`, 132-006/132-007's own
 whole-configuration object, generated-group members from
 `messages/robot_config.h` plus its own derived-value methods —
 `effectiveTrackWidth()`/`rotationOffsetPos()`/`rotationOffsetNeg()`/
-`velocityFilterWeight()`), `App::Configurator`'s ownership of it
+`velocityFilterWeight()`), `Core::Configurator`'s ownership of it
 (`app/configurator.h`), the `Config::default*Group()` family
 (`boot_config.h`, 132-005), `config_parity_capi.h`/`.cpp` (132-003), or
 `persisted_tuning.h`/`.cpp`. A full reconciliation pass is out of this
@@ -136,7 +136,7 @@ see `docs/design/design.md` §5, devices isolation invariant), and never touches
   any of the three fails codegen loudly (`src/tests/sim/unit/
   test_gen_boot_config_required_keys.py`'s parametrized case for each).
   `weight_heading_otos`/`weight_omega_otos` are committed `0.0` in every
-  robot JSON this sprint (stakeholder's encoder-only-v1 decision, `App::
+  robot JSON this sprint (stakeholder's encoder-only-v1 decision, `Core::
   StateEstimator` does no OTOS blending yet); `staleness_ms` carries a
   reasoned per-robot placeholder (each robot JSON's own inline comment).
 - **`OtosBootConfig` itself is still boot-time-baked only** — the BOOT
@@ -162,7 +162,7 @@ see `docs/design/design.md` §5, devices isolation invariant), and never touches
 - **`EstimatorBootConfig` (117 ticket 003) mirrors `OtosBootConfig`'s own
   "boot-baked, plus a separate live override" shape** — the BOOT defaults
   (baked from the robot JSON's `estimator.*` keys) are consumed once, at
-  `App::StateEstimator` construction, in `main.cpp` (ticket 004 wires the
+  `Core::StateEstimator` construction, in `main.cpp` (ticket 004 wires the
   actual construction call). HISTORICALLY (until 132-013), the curated
   Estimator live-tuning message (`config.proto`/`envelope.proto`) was the
   SEPARATE, live runtime override, applied by `RobotLoop::handleConfig`'s
@@ -172,7 +172,7 @@ see `docs/design/design.md` §5, devices isolation invariant), and never touches
   into `persistedTuning_`/flash (Design Rationale
   Decision 4, sprint 117's overlay `design/design.md`): a reboot always
   reverts to `EstimatorBootConfig`'s baked value, never the last live-tuned
-  one. `EstimatorBootConfig` itself is declared independently of `App::
+  one. `EstimatorBootConfig` itself is declared independently of `Core::
   StateEstimator::FusionWeights` (a field-for-field mirror, not a shared
   type) because `config/` may depend only on `messages/` (`docs/design/
   design.md` §5's dependency diagram), never on `app/`.
@@ -236,9 +236,9 @@ constants block once, rather than re-deriving it per field.
   Consumed directly by `main.cpp`'s `Hal::OtosOdometer` construction — never
   a wire surface (§3).
 - **`Config::defaultEstimatorConfig() -> Config::EstimatorBootConfig`**
-  (117 ticket 003): `App::StateEstimator`'s fail-closed boot-time
+  (117 ticket 003): `Core::StateEstimator`'s fail-closed boot-time
   fusion-weight defaults (`headingOtos`/`omegaOtos`/`staleness`). Consumed
-  by `main.cpp`'s `App::StateEstimator` construction (ticket 004) — never a
+  by `main.cpp`'s `Core::StateEstimator` construction (ticket 004) — never a
   wire surface itself (§3); HISTORICALLY the separate live curated
   Estimator live-tuning message was dispatched by `RobotLoop::
   handleConfig`, not this function -- superseded 132-013 by the ESTIMATOR

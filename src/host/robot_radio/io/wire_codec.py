@@ -31,7 +31,7 @@ out (or ``None``/an exception on malformed input) -- no I/O, no threading, no
 protobuf-schema knowledge. ``ByteStreamDemuxer`` is the one stateful piece:
 it accumulates raw bytes from a byte-oriented transport (a real serial port,
 a loopback fake, ...) and yields complete ``'\\n'``-terminated lines,
-mirroring ``App::Transport::readLine()``'s own contract (``comms.h``).
+mirroring ``Core::Transport::readLine()``'s own contract (``comms.h``).
 124-005: this is now a PLAIN split-on-``'\\n'`` -- there is no more text-vs-
 binary demux at this layer at all (that heuristic, ``_looks_like_text()``,
 is deleted, not adapted -- see that function's own former docstring for why
@@ -315,7 +315,7 @@ def decode_frame(frame: bytes, command: bytes = b"") -> bytes | None:
 class ByteStreamDemuxer:
     """Accumulates raw bytes from a byte-oriented transport and demuxes them
     into complete ``'\\n'``-terminated wire LINES -- matches
-    ``App::Transport::readLine()``'s own contract (``comms.h``) /
+    ``Core::Transport::readLine()``'s own contract (``comms.h``) /
     ``SerialPort::readLine()``'s concrete implementation
     (``serial_port.cpp``): protocol v5's uniform grammar (124-005, issue
     §1/§7) makes ``'\\n'`` (0x0A) an UNCONDITIONAL terminator in both

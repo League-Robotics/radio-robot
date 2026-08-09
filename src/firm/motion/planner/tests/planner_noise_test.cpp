@@ -320,7 +320,7 @@ void testTrackingLagSensitivity() {
 //
 // sim-tour-turn-shaping-undershoots-90-degree-turns.md's own defect (a
 // commanded 90deg tour turn landing 10.8-20.8deg SHORT, deterministically)
-// lives in the FULL sim/tour stack -- App::RobotLoop's rotation
+// lives in the FULL sim/tour stack -- Core::RobotLoop's rotation
 // calibration, the cumulative baseline ledger, and a chained tour's next
 // Move overriding the still-turning wheels the instant `done` fires all
 // compound together (see that issue file and this ticket's own commit for

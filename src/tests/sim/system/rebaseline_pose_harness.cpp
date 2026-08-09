@@ -1,5 +1,5 @@
 // rebaseline_pose_harness.cpp -- 131-004 (position-rebaseline-destroys-the-
-// pose.md, SUC-131-004): pose-sanity across App::RobotLoop::publishWheel()'s
+// pose.md, SUC-131-004): pose-sanity across Core::RobotLoop::publishWheel()'s
 // software position rebaseline (kPositionRebaselineMargin==30,000mm,
 // robot_loop.cpp), against the REAL, live-responding TestSim::SimHarness/
 // TestSim::SimPlant -- the same composition root main.cpp boots (130-002).
@@ -113,7 +113,7 @@ void scenarioPoseSanityAcrossRebaselineMarginAndSoak() {
   // short of the 30,000mm margin, so the run never crossed the boundary it
   // exists to test and the scenario failed on its own setup check.
   constexpr float kRunDistance = 36000.0f;                      // [mm]
-  constexpr float kCyclePeriod = App::RobotLoop::kCycle * 0.001f;  // [s]
+  constexpr float kCyclePeriod = Core::RobotLoop::kCycle * 0.001f;  // [s]
   const int kRunCycles = static_cast<int>(kRunDistance / (kSpeed * kCyclePeriod)) + 1;
 
   const Types::RobotState* state = &sim.robotLoop().state();
@@ -331,7 +331,7 @@ void scenarioMoveInFlightAtRebaselineBoundaryCompletesCorrectly() {
 int main() {
   std::printf("=== Position-rebaseline pose sanity (131-004, SUC-131-004) ===\n");
   std::printf("Direct proof that Motion::Odometry/Motion::PoseTracker re-anchor across "
-              "App::RobotLoop::publishWheel()'s software position rebaseline, instead of "
+              "Core::RobotLoop::publishWheel()'s software position rebaseline, instead of "
               "differencing across the ~30,000mm jump.\n\n");
 
   scenarioPoseSanityAcrossRebaselineMarginAndSoak();

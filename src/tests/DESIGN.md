@@ -25,12 +25,12 @@ of the same material, kept in sync with it.
 Three never-combined domains, plus two flat "kept categories":
 
 - **`sim/`** — runs on a developer laptop against `src/firm/platform/host/`'s host-build
-  firmware simulator, no hardware. `unit/` (per-module `App::`/
+  firmware simulator, no hardware. `unit/` (per-module `Core::`/
   `Devices::` host-build harnesses, one `*_harness.cpp` + `test_*.py`
   pair per module), `plant/` (`TestSim::WheelPlant`/`OtosPlant` — a
   seeded duty→velocity→position first-order model plus fault-injection
   knobs), `support/` (`TestSim::SimApi`/`FakeTransport`/
-  `wire_test_codec.h` — wires the real `App::RobotLoop` against the real
+  `wire_test_codec.h` — wires the real `Core::RobotLoop` against the real
   plant), `system/` (whole-robot scenario tests built on `SimApi`, the
   scripted-twist demo, fault-injection scenarios). `uv run python -m
   pytest` collects this domain only (`pyproject.toml`'s `testpaths`) —
@@ -68,7 +68,7 @@ Three never-combined domains, plus two flat "kept categories":
   already use.
 - **`tools/`** — test tooling/helpers shared across domains. Includes
   `one_step_ahead.py` (sprint 117: a pure-Python, dependency-free
-  reference implementation of `App::StateEstimator`'s zero-order-hold
+  reference implementation of `Core::StateEstimator`'s zero-order-hold
   one-step-ahead prediction math — a genuinely separate reimplementation
   of ticket 002's C++ formula, not a wrapper around it — plus a
   leave-one-out walk and RMS-by-pattern-phase grouping helpers).
@@ -195,7 +195,7 @@ the TestGUI would see, not a divergent, test-only code path.
 - **`src/tests/sim/plant/`'s `WheelPlant`/`OtosPlant`** — the physics
   model `src/firm/platform/host/sim_plant.cpp` delegates to; see
   [`../sim/DESIGN.md`](../sim/DESIGN.md) §2.
-- **`src/tests/sim/support/fake_transport.h`** — the `App::Transport`
+- **`src/tests/sim/support/fake_transport.h`** — the `Core::Transport`
   HOST_BUILD double used by both the sim harness and host-build unit
   harnesses.
 

@@ -1,5 +1,5 @@
-"""Off-hardware acceptance proof for ticket 105-001 (SUC-018), App::RobotLoop
-(``src/firm/app/robot_loop.{h,cpp}``) -- the boot loop + main cycle body
+"""Off-hardware acceptance proof for ticket 105-001 (SUC-018), Core::RobotLoop
+(``src/firm/core/robot_loop.{h,cpp}``) -- the boot loop + main cycle body
 extracted from ``src/firm/main.cpp``.
 
 Compiles ``app_robot_loop_harness.cpp`` together with every HOST_BUILD
@@ -10,7 +10,7 @@ sim_clock.cpp`` -- ticket 108-010's Devices::Clock/Sleeper host-test fakes),
 ``TestSim::SimPlant`` (``src/firm/platform/host/sim_plant.cpp`` -- ticket
 108-002's real Devices::I2CBus implementation, plus its own ``src/tests/sim/
 plant/{wheel,otos}_plant.cpp`` physics dependencies), and the wire codec
-``App::Comms``/``App::Telemetry`` need to encode/decode) with
+``Core::Comms``/``Core::Telemetry`` need to encode/decode) with
 ``-DHOST_BUILD``, against the SAME headers every ARM build compiles --
 ``robot_loop.h``/``robot_loop.cpp`` include no ``MicroBit.h`` anywhere in
 this graph (the ticket's own acceptance criterion). Mirrors
@@ -41,12 +41,12 @@ _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 _SUPPORT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "support"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_robot_loop_harness.cpp"
 
-_ROBOT_LOOP_SRC = _SOURCE_DIR / "app" / "robot_loop.cpp"
-_PREAMBLE_SRC = _SOURCE_DIR / "app" / "preamble.cpp"
-_COMMS_SRC = _SOURCE_DIR / "app" / "comms.cpp"
-_TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
-_DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
-# 122-002: App::applyOtosSample() split out of odometry.cpp (now
+_ROBOT_LOOP_SRC = _SOURCE_DIR / "core" / "robot_loop.cpp"
+_PREAMBLE_SRC = _SOURCE_DIR / "core" / "preamble.cpp"
+_COMMS_SRC = _SOURCE_DIR / "core" / "comms.cpp"
+_TELEMETRY_SRC = _SOURCE_DIR / "core" / "telemetry.cpp"
+_DRIVE_SRC = _SOURCE_DIR / "core" / "differential_drive.cpp"
+# 122-002: Core::applyOtosSample() split out of odometry.cpp (now
 # Motion::Odometry, src/firm/motion/) into this new base-side file --
 # robot_loop.cpp's own applyOtosSample() call needs it linked in.
 _ODOMETRY_SRC = _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp"
@@ -118,10 +118,10 @@ def _find_cxx_compiler() -> str:
         "all. Confirmed by direct -DHOST_BUILD compile (125-006, "
         "2026-07-29): an unrelated, independent motion-library rework "
         "('Planner integration,' dated 2026-07-26 per src/firm/platform/host/"
-        "sim_harness.h's own comments) changed App::RobotLoop's "
-        "constructor from 15 to 16 arguments (added App::Configurator, "
+        "sim_harness.h's own comments) changed Core::RobotLoop's "
+        "constructor from 15 to 16 arguments (added Core::Configurator, "
         "replaced the Motion::MoveQueue& slot with Motion::Planner&) and "
-        "removed App::Drive::gainsLeft()/gainsRight() -- ~28 compile "
+        "removed Core::DifferentialDrive::gainsLeft()/gainsRight() -- ~28 compile "
         "errors across app_robot_loop_harness.cpp's ~20 inline RobotLoop "
         "construction call sites, which were never updated for that "
         "change (it predates and is unrelated to sprint 125's own "
@@ -146,7 +146,7 @@ def _find_cxx_compiler() -> str:
     ),
 )
 def test_app_robot_loop_harness_compiles_and_passes(tmp_path):
-    """Compile App::RobotLoop + every module/leaf it composes + the harness; assert every scenario passes."""
+    """Compile Core::RobotLoop + every module/leaf it composes + the harness; assert every scenario passes."""
     sources = [
         _HARNESS_SRC,
         _ROBOT_LOOP_SRC,

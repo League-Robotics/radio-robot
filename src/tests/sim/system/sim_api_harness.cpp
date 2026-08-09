@@ -2,7 +2,7 @@
 // 108-004) from TestSim::SimApi (src/tests/sim/support/sim_api.{h,cpp}, deleted
 // ticket 108-003) onto TestSim::SimHarness/TestSim::SimPlant
 // (tests/_infra/sim/{sim_harness.h,sim_plant.h}). Proves: boot completes
-// through the REAL App::RobotLoop (kEventBootReady visible in decoded
+// through the REAL Core::RobotLoop (kEventBootReady visible in decoded
 // telemetry), an injected MOVE drives REAL plant velocity ramping (visible
 // as encLeft/encRight/velLeft/velRight in decoded telemetry), an explicit
 // STOP command acks and clears `active`, a MOVE's own TIME stop condition
@@ -23,7 +23,7 @@
 // pace block == the whole cycle's virtual schedule).
 //
 // 116-006 (MOVE protocol cutover): bare TWIST (injectTwist()) and
-// App::Deadman are both gone -- every injection below is a TIME-stop MOVE
+// Core::Deadman are both gone -- every injection below is a TIME-stop MOVE
 // (injectMove()) instead, and scenario 4 (originally "deadman expiry") is
 // rewritten as scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic() --
 // see that scenario's own comment for why kFlagEventDeadmanExpired is no
@@ -41,7 +41,7 @@
 #include <string>
 #include <vector>
 
-#include "app/telemetry.h"
+#include "core/telemetry.h"
 #include "bench_test_config.h"
 #include "messages/envelope.h"
 #include "sim_harness.h"
@@ -112,8 +112,8 @@ bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId, bool
 }
 
 // ===========================================================================
-// 1. Boot: SimHarness::boot() drives App::Preamble to done() and calls the
-//    REAL App::RobotLoop::boot() -- both motors and OTOS resolve connected
+// 1. Boot: SimHarness::boot() drives Core::Preamble to done() and calls the
+//    REAL Core::RobotLoop::boot() -- both motors and OTOS resolve connected
 //    (scripted success). 125-002 (telemetry-emit-policy-rebuild-spec.md
 //    Part 1 item 8/Part 8 #1): there is no boot-ready telemetry bit any
 //    more, and a silent host gets ZERO unsolicited frames after boot (mode_
@@ -153,7 +153,7 @@ void scenarioBootCompletesThroughRealRobotLoop() {
 
   bool sawConnected = false;
   for (const auto& f : frames) {
-    if ((f.telemetry.flags & App::kFlagConnLeft) && (f.telemetry.flags & App::kFlagConnRight)) sawConnected = true;
+    if ((f.telemetry.flags & Core::kFlagConnLeft) && (f.telemetry.flags & Core::kFlagConnRight)) sawConnected = true;
   }
   checkTrue(sawConnected, "decoded telemetry reports kFlagConnLeft/kFlagConnRight true");
 }
@@ -254,7 +254,7 @@ void scenarioStopAcksAndClearsActive() {
   bool sawInactive = false;
   bool sawIdleMode = false;
   for (const auto& f : frames) {
-    if (!(f.telemetry.flags & App::kFlagActive)) sawInactive = true;
+    if (!(f.telemetry.flags & Core::kFlagActive)) sawInactive = true;
     if (f.telemetry.mode == msg::DriveMode::IDLE) sawIdleMode = true;
   }
   checkTrue(sawInactive, "decoded telemetry shows active=false after STOP");
@@ -263,7 +263,7 @@ void scenarioStopAcksAndClearsActive() {
 
 // ===========================================================================
 // 4. MOVE expiry stops the plant (116-006, MOVE protocol cutover -- REPLACES
-//    the deleted App::Deadman's own expiry scenario): NO STOP is ever sent
+//    the deleted Core::Deadman's own expiry scenario): NO STOP is ever sent
 //    -- a short TIME-stop MOVE's own stop condition is met on its own, and
 //    MoveQueue::tick()'s own "queue now empty -> Drive::stop()" path
 //    (move_queue.cpp) fires unconditionally, every cycle, with no lease to
@@ -303,7 +303,7 @@ void scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic() {
 
   bool sawInactive = false;
   for (const auto& f : frames) {
-    if (!(f.telemetry.flags & App::kFlagActive)) sawInactive = true;
+    if (!(f.telemetry.flags & Core::kFlagActive)) sawInactive = true;
   }
   checkTrue(sawInactive, "decoded telemetry shows active=false once the Move's own TIME stop "
                          "condition is met (no STOP was ever sent, no deadman lease involved)");
@@ -389,7 +389,7 @@ void scenarioVirtualCycleTimingDiagnostic() {
   // changed on 2026-08-07 (kCycle 50 -> 32, and the post-duty-write kClear
   // window deleted as measured-dead padding) -- the scenario then failed
   // reporting a schedule defect that was really its own stale mirror.
-  constexpr uint32_t kCycle = App::RobotLoop::kCycle;  // [ms]
+  constexpr uint32_t kCycle = Core::RobotLoop::kCycle;  // [ms]
 
   checkTrue(sleepCount == 3,
             "exactly 3 Sleeper::sleepMillis() calls per cycle() (2 runAndWait settle blocks + "
@@ -428,7 +428,7 @@ void scenarioVirtualCycleTimingDiagnostic() {
 //    MOVE sequence (2+ legs, "equivalent to a tour") holds a converged
 //    Stage C bias across EVERY leg boundary -- through the REAL
 //    RobotLoop::handleMove() call site (robot_loop.cpp:227), not a
-//    hand-invoked App::Drive::takeover() call (that unit-level proof
+//    hand-invoked Core::DifferentialDrive::takeover() call (that unit-level proof
 //    already lives in app_drive_harness.cpp's own
 //    scenarioBiasPersistsAcrossChainedTakeoverBoundaries()).
 //    configureSimForBenchTest() installs the EXACT calibration inverse of
@@ -457,7 +457,7 @@ void scenarioBiasPersistsAcrossChainedMoveLegs() {
   const float trueKff = 1.0f / TestSim::kDefaultDutyVelMax;
   sim.drive().setDutyPerSpeed(trueKff * 0.8f, trueKff * 0.8f);
 
-  App::Drive::AdaptationBounds bounds;
+  Core::DifferentialDrive::AdaptationBounds bounds;
   bounds.vMin = 0.0f;
   bounds.biasMax = 80.0f;   // [mm/s]
   bounds.tauAdapt = 1.0f;   // [s] -- converges within a few seconds of virtual cruise

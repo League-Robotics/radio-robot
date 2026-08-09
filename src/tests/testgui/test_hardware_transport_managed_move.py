@@ -397,7 +397,7 @@ def test_run_unmanaged_distance_sends_wheels_not_a_move(transport):
 
     It used to send `move_twist(stop_distance=...)`, which runs the planner and
     its closed loop -- so the button labelled unmanaged was managed. WHEELS is
-    routed firmware-side straight to App::Drive after planner_.estop().
+    routed firmware-side straight to Core::DifferentialDrive after planner_.estop().
     """
     transport.run_unmanaged(distance_mm=200.0)
 

@@ -13,7 +13,7 @@
 //     and behaviorally (tick()'s written duty changes with
 //     config.drive.wheel_gain_left_accel, proving setWheelCorrection()
 //     actually took effect, not just that the setter was reachable).
-//   - App::configurePlanner()/configureMotor()/configureOtos()
+//   - Core::configurePlanner()/configureMotor()/configureOtos()
 //     (boot_calibration.h) -- the three Config::Robot-consuming adapters
 //     for the subsystems that cannot take Config::Robot& as a member
 //     method themselves (src/firm/motion/planner/'s own narrower dependency
@@ -32,8 +32,8 @@
 #include <cstdint>
 #include <string>
 
-#include "app/boot_calibration.h"
-#include "app/drive.h"
+#include "core/boot_calibration.h"
+#include "core/differential_drive.h"
 #include "config/robot.h"
 #include "hal/motor.h"
 #include "hardware/generic/real_otos.h"
@@ -235,22 +235,22 @@ int main() {
     checkFloatEq(lowAlpha.velocityFilterWeight(), 1.0f, "velocityFilterWeight() below floor (0.0)");
   }
 
-  // --- App::Drive::configure() -------------------------------------------
+  // --- Core::DifferentialDrive::configure() -------------------------------------------
 
   beginScenario("Drive::configure() installs Stage B/C via setControlGains()/setAdaptationBounds()");
   {
     RecordingMotor left, right;
-    App::Drive drive(left, right, /*trackWidth=*/128.0f);
+    Core::DifferentialDrive drive(left, right, /*trackWidth=*/128.0f);
     drive.configure(config);
 
-    const App::Drive::ControlGains& gains = drive.controlGains();
+    const Core::DifferentialDrive::ControlGains& gains = drive.controlGains();
     checkFloatEq(gains.kp, config.wheelControl.pid_kp, "controlGains().kp");
     checkFloatEq(gains.ki, config.wheelControl.pid_ki, "controlGains().ki");
     checkFloatEq(gains.iMax, config.wheelControl.pid_i_max, "controlGains().iMax");
     checkFloatEq(gains.kaff, config.wheelControl.pid_kaff, "controlGains().kaff");
     checkFloatEq(gains.pidMax, config.wheelControl.pid_max, "controlGains().pidMax");
 
-    const App::Drive::AdaptationBounds& bounds = drive.adaptationBounds();
+    const Core::DifferentialDrive::AdaptationBounds& bounds = drive.adaptationBounds();
     checkFloatEq(bounds.vMin, config.wheelControl.v_min, "adaptationBounds().vMin");
     checkFloatEq(bounds.biasMax, config.wheelControl.bias_max, "adaptationBounds().biasMax");
     checkFloatEq(bounds.tauAdapt, config.wheelControl.tau_adapt, "adaptationBounds().tauAdapt");
@@ -285,7 +285,7 @@ int main() {
     state.time.cyclePeriod = 50000;         // [us]
 
     RecordingMotor leftA, rightA;
-    App::Drive driveA(leftA, rightA, /*trackWidth=*/128.0f);
+    Core::DifferentialDrive driveA(leftA, rightA, /*trackWidth=*/128.0f);
     Config::Robot configGain1 = isolatedConfig;
     configGain1.drive.wheel_gain_left_accel = 1.0f;
     driveA.configure(configGain1);
@@ -294,7 +294,7 @@ int main() {
     checkFloatEq(leftA.lastDuty, 200.0f, "tick() duty with wheel_gain_left_accel == 1.0");
 
     RecordingMotor leftB, rightB;
-    App::Drive driveB(leftB, rightB, /*trackWidth=*/128.0f);
+    Core::DifferentialDrive driveB(leftB, rightB, /*trackWidth=*/128.0f);
     Config::Robot configGain2 = isolatedConfig;
     configGain2.drive.wheel_gain_left_accel = 2.0f;
     driveB.configure(configGain2);
@@ -303,7 +303,7 @@ int main() {
     checkFloatEq(leftB.lastDuty, 100.0f, "tick() duty with wheel_gain_left_accel == 2.0");
   }
 
-  // --- App::configurePlanner() --------------------------------------------
+  // --- Core::configurePlanner() --------------------------------------------
 
   beginScenario("configurePlanner() installs shaper ceilings via applyShaperLimits()");
   {
@@ -311,7 +311,7 @@ int main() {
     Motion::Planner planner(limits);
     checkFalse(planner.shaperConfigured(), "shaperConfigured() before configurePlanner()");
 
-    App::configurePlanner(planner, config);
+    Core::configurePlanner(planner, config);
 
     checkTrue(planner.shaperConfigured(), "shaperConfigured() after configurePlanner()");
     checkFloatEq(planner.limits().ceilings.aMax, config.plannerShaper.a_max, "limits().ceilings.aMax");
@@ -327,14 +327,14 @@ int main() {
                 "limits().ceilings.yawJerkMax");
   }
 
-  // --- App::configureMotor() ----------------------------------------------
+  // --- Core::configureMotor() ----------------------------------------------
 
   beginScenario("configureMotor() applies travel calib and returns true when the motor is at rest");
   {
     RecordingMotor motor;
     motor.stagedVelocity = 0.0f;
     motor.stagedAppliedDuty = 0.0f;
-    const bool ok = App::configureMotor(motor, config, /*isLeft=*/true);
+    const bool ok = Core::configureMotor(motor, config, /*isLeft=*/true);
     checkTrue(ok, "configureMotor() return value, at rest, left side");
     checkFloatEq(motor.lastTravelCalib, config.motors.travel_calib_left,
                 "applyTravelCalib() argument, left side");
@@ -343,7 +343,7 @@ int main() {
     RecordingMotor motor;
     motor.stagedVelocity = 0.0f;
     motor.stagedAppliedDuty = 0.0f;
-    const bool ok = App::configureMotor(motor, config, /*isLeft=*/false);
+    const bool ok = Core::configureMotor(motor, config, /*isLeft=*/false);
     checkTrue(ok, "configureMotor() return value, at rest, right side");
     checkFloatEq(motor.lastTravelCalib, config.motors.travel_calib_right,
                 "applyTravelCalib() argument, right side");
@@ -354,13 +354,13 @@ int main() {
     RecordingMotor motor;
     motor.stagedVelocity = 100.0f;  // [mm/s], well above the rest threshold
     motor.stagedAppliedDuty = 0.3f;
-    const bool ok = App::configureMotor(motor, config, /*isLeft=*/true);
+    const bool ok = Core::configureMotor(motor, config, /*isLeft=*/true);
     checkFalse(ok, "configureMotor() return value while moving");
     checkFloatEq(motor.lastTravelCalib, -1.0f,
                 "applyTravelCalib() must NOT be called while the motor is moving");
   }
 
-  // --- App::configureOtos() ------------------------------------------------
+  // --- Core::configureOtos() ------------------------------------------------
 
   beginScenario(
       "configureOtos() applies scalars (REGISTER-domain, via "
@@ -368,7 +368,7 @@ int main() {
       "(unconverted) via existing setters");
   {
     RecordingOtos otos;
-    App::configureOtos(otos, config);
+    Core::configureOtos(otos, config);
     checkFloatEq(otos.linearScalar, static_cast<float>(Hardware::scaleToRegister(config.otos.linear_scale)),
                 "setLinearScalar() argument is REGISTER-domain, matching begin()'s own conversion");
     checkFloatEq(otos.angularScalar, static_cast<float>(Hardware::scaleToRegister(config.otos.angular_scale)),

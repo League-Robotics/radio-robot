@@ -87,7 +87,7 @@ not accurate, and it changes the size of the second half:
   fifteen places in `planner.cpp` — `halfTrack` splits, `(right - left) /
   trackWidth` yaw-rate recoveries, `alphaDecel * 0.5f * trackWidth`
   ceilings, per-wheel profile shaping.
-- `App::Drive` does the same: its constructor takes exactly two
+- `Core::DifferentialDrive` does the same: its constructor takes exactly two
   `Hal::Motor&` and a scalar `trackWidth`, and `(targetRight_ -
   targetLeft_) / trackWidth_` is how it reports commanded omega.
 

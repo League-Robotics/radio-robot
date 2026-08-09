@@ -1,5 +1,5 @@
 // stop_path_safety_harness.cpp -- off-hardware acceptance harness for ticket
-// 133-001, App::RobotLoop::zeroUnownedMotion(): the derived-idle safety
+// 133-001, Core::RobotLoop::zeroUnownedMotion(): the derived-idle safety
 // arbitration step that runs immediately ahead of drive_.tick(), the single
 // actuation path.
 //
@@ -10,7 +10,7 @@
 // physically latches its last commanded speed and does not reset on an
 // nRF52 reset, so a lost zero write is permanent, not transient. Above the
 // two encoder-gated leaf defences, the ownership handoff left a gap nothing
-// covered: App::Drive::update() publishes ONE zero pair on the expiry cycle
+// covered: Core::DifferentialDrive::update() publishes ONE zero pair on the expiry cycle
 // and then returns early forever after (`if (!owned) return;`), and
 // Motion::Planner::update() runs unconditionally but republishes only ITS
 // OWN idea of the command. Nothing re-stated "no one is driving, so the
@@ -24,13 +24,13 @@
 // tail and reports the FIRST offending cycle index, not a final value.
 //
 // Built on TestSim::SimHarness (src/firm/platform/host/sim_harness.h) -- the composition
-// root that mirrors src/firm/main.cpp via App::composeRobot(), so the
-// App::RobotLoop under test here is the shipped graph, not a hand-wired
+// root that mirrors src/firm/main.cpp via Core::composeRobot(), so the
+// Core::RobotLoop under test here is the shipped graph, not a hand-wired
 // stand-in. Same choice, and for the same reason, as
 // robot_loop_tlm_harness.cpp (see that file's header for why
 // src/tests/sim/unit/app_robot_loop_harness.cpp is not an option).
 //
-// NOT COVERED HERE, deliberately: the App::Drive half of 133-001 (arming
+// NOT COVERED HERE, deliberately: the Core::DifferentialDrive half of 133-001 (arming
 // the stop re-assertion window on the commanded nonzero->zero transition of
 // the duty pair) is a Drive-internal contract with the motor leaves, proven
 // at that layer by app_drive_harness.cpp's own
@@ -46,7 +46,7 @@
 // against a build with zeroUnownedMotion()'s call site commented out: all
 // three scenarios below still PASS. The reason is specific and worth
 // knowing: in this sim, nothing ever leaves a stale nonzero on the
-// blackboard for the guard to catch. App::RobotLoop::handleWheels() calls
+// blackboard for the guard to catch. Core::RobotLoop::handleWheels() calls
 // planner_.estop() (zeroing Motion::Planner's own cmdLeft_/cmdRight_)
 // before arming Drive, so the planner's unconditional republish after a
 // WHEELS expiry republishes a ZERO; and a Move that times out mid-motion
@@ -100,7 +100,7 @@ void checkTrue(bool condition, const std::string& what) {
 
 // --- Shared fixture constants ---------------------------------------------
 
-// [mm/s] a plainly-nonzero teleop speed, comfortably above App::Drive's own
+// [mm/s] a plainly-nonzero teleop speed, comfortably above Core::DifferentialDrive's own
 // kRestVelocity and any configured speed floor, so "the wheels really were
 // turning" is never in doubt.
 constexpr float kTeleopSpeed = 150.0f;
@@ -114,7 +114,7 @@ constexpr float kTeleopSpeed = 150.0f;
 // asserted that it had -- the harness reported a runaway that was really
 // just a test that stopped waiting long enough.
 constexpr int cyclesFor(uint32_t duration) {  // [ms]
-  return static_cast<int>((duration + App::RobotLoop::kCycle - 1) / App::RobotLoop::kCycle);
+  return static_cast<int>((duration + Core::RobotLoop::kCycle - 1) / Core::RobotLoop::kCycle);
 }
 
 // [ms] one WHEELS command's bounded lifetime -- long enough that the plant
@@ -163,7 +163,7 @@ void scenarioSilentHostAfterExpiryHoldsZeroOnEveryCycle() {
     if (sim.drive().owns()) ++ownedCycles;
     if (sim.driveTargetVelLeft() != 0.0f && sim.driveTargetVelRight() != 0.0f) ++nonzeroCycles;
   }
-  checkTrue(ownedCycles >= 8, "setup: App::Drive genuinely owned motion for most of the command");
+  checkTrue(ownedCycles >= 8, "setup: Core::DifferentialDrive genuinely owned motion for most of the command");
   checkTrue(nonzeroCycles >= 8, "setup: a nonzero cmdVelocity really was staged while it owned");
   checkTrue(!sim.drive().owns(), "setup: the command has expired by the end of the command phase");
   const float commandedTravel = std::fabs(sim.trueX() - startX);  // [mm]
@@ -230,7 +230,7 @@ void scenarioNeitherDeciderOwnsAtBootYieldsZeroBeforeFirstActuation() {
   // every assertion below could pass vacuously on a robot that happened to
   // have an owner.
   checkTrue(!sim.planner().active(), "setup: the planner is inactive at boot");
-  checkTrue(!sim.drive().owns(), "setup: App::Drive has never been armed");
+  checkTrue(!sim.drive().owns(), "setup: Core::DifferentialDrive has never been armed");
   checkTrue(sim.driveTargetVelLeft() == 0.0f && sim.driveTargetVelRight() == 0.0f,
             "cmdVelocity is zero BEFORE the first cycle, i.e. before the first actuation");
 
@@ -329,7 +329,7 @@ void scenarioArbitrationStepNeverWritesNonzero() {
       // motion. While Drive owns an armed, unexpired command, the staged
       // pair is its own target, untouched.
       if (owned && zeroPair && sim.robotLoop().state().command.moveActive) {
-        fail("cmdVelocity was zero while App::Drive owned an ACTIVE command -- the arbiter is "
+        fail("cmdVelocity was zero while Core::DifferentialDrive owned an ACTIVE command -- the arbiter is "
              "not permitted to override a live decider");
       }
     }
@@ -339,7 +339,7 @@ void scenarioArbitrationStepNeverWritesNonzero() {
     fail("cmdVelocity took a value neither zero nor the commanded pair on " +
          std::to_string(unexplainedValueCycles) + " cycle(s); first was (" +
          std::to_string(firstUnexplainedLeft) + ", " + std::to_string(firstUnexplainedRight) +
-         ") -- App::RobotLoop originated a value no decider asked for");
+         ") -- Core::RobotLoop originated a value no decider asked for");
   }
   checkTrue(ownedNonzeroCycles >= 20,
             "setup: the owned/nonzero half was genuinely exercised across the three legs (" +

@@ -23,7 +23,7 @@ bool SerialPort::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
             // UNCONDITIONAL terminator -- no heuristic, no recognizer.
             // Deliver the accumulated bytes AS-IS (no '\r' stripping here
             // -- a binary line may legitimately carry 0x0D as content;
-            // App::Comms::dispatchLine() strips a trailing '\r' only once
+            // Core::Comms::dispatchLine() strips a trailing '\r' only once
             // it has classified the line as cleartext). Safe: COBS is
             // keyed on 0x0A (wire_runtime.h item 8), so a binary line's
             // own bytes never contain a literal 0x0A -- this terminator
@@ -55,7 +55,7 @@ void SerialPort::send(const uint8_t* data, uint16_t len) {
     // must-arrive lines use sendReliable() instead.
     //
     // `data`/`len` is the full `<COMMAND>':'<COBS bytes>` wire line
-    // content (App::Comms::sendReply() builds it); this appends the
+    // content (Core::Comms::sendReply() builds it); this appends the
     // SINGLE trailing '\n' terminator, via the raw uint8_t*/len send()
     // overload (NOT ManagedString -- the content is not a NUL-terminated
     // C string and may not be printable ASCII).

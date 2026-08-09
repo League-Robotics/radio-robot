@@ -46,7 +46,7 @@ ORIGINAL plan for how
 Motion would drive wheel actuation. That stack was superseded in practice
 by `Motion::Planner` (`planner/`, added 125–127) without ever being
 deleted — `Motion::Planner::update()` wrote `Types::RobotState::Wheel::
-cmdVelocity` directly from the start, `App::RobotLoop::cycle()` consumed
+cmdVelocity` directly from the start, `Core::RobotLoop::cycle()` consumed
 it directly, and `MoveQueue` was never wired into either. Sprint 128
 ticket 014 confirmed zero callers and deleted `wheel_sink.h`,
 `move_queue.{h,cpp}`, `stop_condition.{h,cpp}`, `velocity_shaper.{h,cpp}`
@@ -62,7 +62,7 @@ velocity-control law have existed in this codebase; this section tracks
 which of them an engineer debugging misbehaving wheels should suspect:
 1. The closed-loop wheel-velocity PID relocated here from
    `src/firm/devices/velocity_pid.{h,cpp}` (125-003) — a full,
-   never-instantiated class (`App::Drive` never actually held an instance
+   never-instantiated class (`Core::DifferentialDrive` never actually held an instance
    by the time 122-002/125-002 finished reshaping `Drive` into a bare duty
    sink). **DELETED outright** — `wheel_velocity_pid.{h,cpp}`, zero callers.
 2. `Motion::WheelPid`/`Planner::stageDuty()` (formerly
@@ -90,10 +90,10 @@ which of them an engineer debugging misbehaving wheels should suspect:
    ticket: `Planner::update()` now publishes `cmdVelocity` bit-for-bit as
    the profiled command, always. This is a responsibility RELOCATION, not
    a base-depends-on-motion violation — the code moved to generation 4,
-   below, which is `App::`-owned; `src/firm` still imports nothing from
+   below, which is `Core::`-owned; `src/firm` still imports nothing from
    `src/firm/motion` for this feature (sprint 130 Architecture Design Rationale
    Decision 2).
-4. `App::Drive`'s unified wheel-speed controller (`src/firm/app/drive.{h,cpp}`,
+4. `Core::DifferentialDrive`'s unified wheel-speed controller (`src/firm/core/differential_drive.{h,cpp}`,
    130-004/130-005) — the CURRENT live law, and the only one actuating any
    wheel today. Three-timescale: a calibrated conversion map (offline,
    per-wheel/per-direction affine, unchanged from Drive's own prior
@@ -112,7 +112,7 @@ debugging "which pose is the robot's pose" might reach for; only two
 still exist:
 - **`Motion::Odometry`** (`odometry.{h,cpp}`) — the telemetry trip
   odometer: encoder-only dead reckoning, and `Types::RobotState::pose`'s
-  ONE writer (`App::RobotLoop::publishPose()`, robot_loop.cpp). This is
+  ONE writer (`Core::RobotLoop::publishPose()`, robot_loop.cpp). This is
   the pose a host reading telemetry sees.
 - **`Motion::Planner`'s internal `PoseTracker`** (`planner/planner.cpp`,
   the `pose_` member) — the planner's OWN working estimate, separately
@@ -128,7 +128,7 @@ still exist:
   this tree. It lived at `state_estimator.{h,cpp}`: predict-to-now
   wheel/body PEER estimates via ZOH extrapolation plus its own separate
   v1 complementary OTOS blend, constructor-injected weights, wired into
-  `App::RobotLoop::cycle()`'s trailing kPace block every cycle
+  `Core::RobotLoop::cycle()`'s trailing kPace block every cycle
   (`stateEstimator_.update(state_, now)`) since sprint 117 — but its
   `update()` took `RobotState` by CONST reference and held its own
   private peer basis, so it never actually wrote back into
@@ -152,7 +152,7 @@ math/rationale/tuning-history prose. The now-deleted `StopCondition`/
 in [`src/firm/motion/DESIGN.md`](../firm/motion/DESIGN.md) (marked
 RETIRED there since 122, kept solely as a historical derivation record —
 math at a location the code no longer occupies) and
-[`src/firm/app/DESIGN.md`](../firm/app/DESIGN.md) (`MoveQueue`/pre-122
+[`src/firm/core/DESIGN.md`](../firm/app/DESIGN.md) (`MoveQueue`/pre-122
 history sections) — neither file is rewritten to remove that history;
 see each file's own header for the "why this stays" rationale.
 
@@ -161,9 +161,9 @@ see each file's own header for the "why this stays" rationale.
 | File / directory | Role |
 |---|---|
 | `body_kinematics.{h,cpp}` | `BodyKinematics` — stateless differential-drive twist/wheel-speed maps (`inverse`/`forward`) and curvature-preserving `saturate`. Moved verbatim from `src/firm/kinematics/` (122-001; that directory is retired, folded flat here rather than nested as `src/firm/motion/kinematics/`). The one permitted `src/firm` dependency: `#include "messages/common.h"` for the array-form overloads' `msg::BodyTwist3` parameter. Full derivation: [`src/firm/kinematics/DESIGN.md`](../firm/kinematics/DESIGN.md) and [`docs/kinematics-model.md`](../../docs/kinematics-model.md). |
-| `odometry.{h,cpp}` | `Motion::Odometry` — encoder-only dead-reckoning: integrates both wheels' position deltas through `BodyKinematics::forward()` into a world pose (`x`/`y`/`theta`) plus cumulative `pathLength()`. `integrate()` takes the caller's current wheel positions as plain float parameters — no `Devices::Motor&` held. `Types::RobotState::pose`'s ONE writer (128 ticket 016 — see "Estimator roster" in §1). OTOS sampling (`applyOtosSample()`) stays base-side (`src/firm/app/otos_sample.{h,cpp}`) since it needs `Devices::Otos&`/telemetry types, neither of which this tree may depend on. |
+| `odometry.{h,cpp}` | `Motion::Odometry` — encoder-only dead-reckoning: integrates both wheels' position deltas through `BodyKinematics::forward()` into a world pose (`x`/`y`/`theta`) plus cumulative `pathLength()`. `integrate()` takes the caller's current wheel positions as plain float parameters — no `Devices::Motor&` held. `Types::RobotState::pose`'s ONE writer (128 ticket 016 — see "Estimator roster" in §1). OTOS sampling (`applyOtosSample()`) stays base-side (`src/firm/core/otos_sample.{h,cpp}`) since it needs `Devices::Otos&`/telemetry types, neither of which this tree may depend on. |
 | `state_estimator.{h,cpp}` | **Deleted (128 ticket 016).** Was: `Motion::StateEstimator`, predict-to-now wheel/body PEER state estimates via ZOH extrapolation plus a v1 complementary OTOS blend — a per-cycle computation with no consumer. See "Estimator roster" in §1 for the full accounting and what remains (`Odometry`, `Planner`'s own internal `PoseTracker`). |
-| `planner/` | **`Motion::Planner`** — the on-robot motion decider (125–128, superseding the deleted `Motion::MoveQueue`): its own STANDALONE CMake project (`planner/CMakeLists.txt`), not built by this directory's own `CMakeLists.txt`. Profile generation (`profile.{h,cpp}`), jerk-limited shaping (`shape.{h,cpp}`), wheel-command estimation (`estimation.{h,cpp}`), and the top-level `Planner` (`planner.{h,cpp}`) that ties them together and writes `Types::RobotState::Wheel::cmdVelocity` directly every cycle — no boundary interface, the blackboard field IS the boundary (128). The duty-stage closed loop (`wheel_pid.{h,cpp}`, PARKED from the live tick as of 128-015) is **DELETED outright (130-007)** — see "Wheel control generations" in §1. `wheel_trim.{h,cpp}` (the velocity-domain trim loop that used to be summed into `cmdVelocity` here) is **DELETED outright (130-005)** — `Motion::Planner` publishes the bare profiled command now; the wheel-speed controller lives entirely in `App::Drive` (`src/firm/app/drive.{h,cpp}`) — see "Wheel control generations" in §1. `capi.cpp` builds the `motionplanner` shared library, the ctypes surface `src/tests/bench/planner_harness.py` drives. Its own `tests/` directory holds seven ctest executables (`profile_test`, `shape_test`, `estimation_test`, `planner_scenarios_test`, `planner_noise_test`, `ratio_lock_test`, `pose_ownership_test` — 128-016's own regression guard for `Odometry` being `state.pose`'s sole writer; 130-007 removed `wheel_pid_test`/`planner_duty_scenarios_test` with the deleted duty stage), run via the `planner_tests` custom target. See §4 below. |
+| `planner/` | **`Motion::Planner`** — the on-robot motion decider (125–128, superseding the deleted `Motion::MoveQueue`): its own STANDALONE CMake project (`planner/CMakeLists.txt`), not built by this directory's own `CMakeLists.txt`. Profile generation (`profile.{h,cpp}`), jerk-limited shaping (`shape.{h,cpp}`), wheel-command estimation (`estimation.{h,cpp}`), and the top-level `Planner` (`planner.{h,cpp}`) that ties them together and writes `Types::RobotState::Wheel::cmdVelocity` directly every cycle — no boundary interface, the blackboard field IS the boundary (128). The duty-stage closed loop (`wheel_pid.{h,cpp}`, PARKED from the live tick as of 128-015) is **DELETED outright (130-007)** — see "Wheel control generations" in §1. `wheel_trim.{h,cpp}` (the velocity-domain trim loop that used to be summed into `cmdVelocity` here) is **DELETED outright (130-005)** — `Motion::Planner` publishes the bare profiled command now; the wheel-speed controller lives entirely in `Core::DifferentialDrive` (`src/firm/core/differential_drive.{h,cpp}`) — see "Wheel control generations" in §1. `capi.cpp` builds the `motionplanner` shared library, the ctypes surface `src/tests/bench/planner_harness.py` drives. Its own `tests/` directory holds seven ctest executables (`profile_test`, `shape_test`, `estimation_test`, `planner_scenarios_test`, `planner_noise_test`, `ratio_lock_test`, `pose_ownership_test` — 128-016's own regression guard for `Odometry` being `state.pose`'s sole writer; 130-007 removed `wheel_pid_test`/`planner_duty_scenarios_test` with the deleted duty stage), run via the `planner_tests` custom target. See §4 below. |
 | `CMakeLists.txt` | The standalone `motion_tests` build (Design Rationale Decision 4) for THIS directory's own remaining leaves (`body_kinematics`/`odometry`) — plain CMake, no `libfirmware_host`, no ctypes, no Python. Builds a static `motion` library from those two `.cpp` files (128-015 deleted a third, `wheel_velocity_pid.cpp` — zero instantiations; 128-016 deleted a fourth, `state_estimator.cpp` — see "Wheel control generations"/"Estimator roster" in §1). As of 128-014 there is no standalone (non-pytest) ctest coverage for either of them attached to this target yet — see the file's own comment and §4 below. Separate from, and does not depend on, `planner/`'s own CMake project. |
 
 ## 3. Constraints and Invariants
@@ -189,11 +189,11 @@ see each file's own header for the "why this stays" rationale.
 - **`Types::RobotState::Wheel::cmdVelocity` is THE base<->motion
   actuation boundary** (128, superseding the deleted `Motion::WheelSink`
   velocity-sink interface). No abstract interface, no concrete
-  implementation to hold — `Motion::Planner::update()` (or `App::Drive::
+  implementation to hold — `Motion::Planner::update()` (or `Core::DifferentialDrive::
   update()` for WHEELS teleop) writes the field directly;
   `RobotLoop::cycle()` reads it directly. See `robot_state.h`'s own
   `cmdVelocity` field comment for the full writer/consumer contract.
-- **No `Hal::*`, `Hardware::*`, `Platform::*`, `App::*`, or bus/timing
+- **No `Hal::*`, `Hardware::*`, `Platform::*`, `Core::*`, or bus/timing
   collaborator anywhere in this tree.** Every module takes plain data (floats, explicit `now`
   timestamps, plain structs) as parameters — never a held
   `Platform::Clock&`, `Hal::Motor&`, or telemetry-frame reference.
@@ -201,7 +201,7 @@ see each file's own header for the "why this stays" rationale.
   hand-fed numbers alone, identically under `HOST_BUILD`, on ARM, and in
   the standalone `motion_tests`/`planner_tests` builds.
 - **Qualified `#include "motion/...h"` paths resolve unchanged** in every
-  `src/firm` caller (e.g. `src/firm/app/robot_loop.h`'s `#include
+  `src/firm` caller (e.g. `src/firm/core/robot_loop.h`'s `#include
   "motion/odometry.h"`/`#include "motion/planner/planner.h"`). Both the
   ARM build (root
   `CMakeLists.txt`) and the sim build (`src/firm/platform/host/CMakeLists.txt`) add
@@ -214,7 +214,7 @@ see each file's own header for the "why this stays" rationale.
 
 **Module relationship inside this tree.** `Odometry` calls
 `BodyKinematics::forward()` to fold encoder deltas into a world pose, and
-is `Types::RobotState::pose`'s ONE writer (`App::RobotLoop::
+is `Types::RobotState::pose`'s ONE writer (`Core::RobotLoop::
 publishPose()` reads `x()`/`y()`/`theta()` off it every cycle — 128
 ticket 016, "Estimator roster" in §1). `Motion::StateEstimator`, formerly
 a peer of `Odometry` here, is deleted (same ticket) — see §1 for the full
@@ -224,17 +224,17 @@ depend on any of this directory's own three leaves (it has its own
 kinematics/shaping/estimation code, see `planner/CMakeLists.txt`) — the
 only thing tying `planner/` to the rest of this tree is that both halves
 write into the SAME `Types::RobotState` blackboard, from the base's own
-composition root -- `App::composeRobot()`/`App::RobotGraph`
-(`src/firm/app/boot_wiring.h`), the ONE function both `main.cpp` and
+composition root -- `Core::composeRobot()`/`Core::RobotGraph`
+(`src/firm/core/boot_wiring.h`), the ONE function both `main.cpp` and
 `src/firm/platform/host/sim_harness.h` call (130-002, unify-sim-and-robot-composition-
 roots.md) -- never from one motion-library module calling into another
 across the `planner/` boundary.
 
 **The actuation boundary (`Types::RobotState::Wheel::cmdVelocity`).**
 Whichever subsystem currently owns motion — `Motion::Planner` for a Move,
-`App::Drive` for WHEELS teleop — writes this cycle's commanded wheel
+`Core::DifferentialDrive` for WHEELS teleop — writes this cycle's commanded wheel
 speed directly onto the shared blackboard; `RobotLoop::cycle()` reads it
-back and hands it to `App::Drive::tick()` for actuation. Exclusivity is
+back and hands it to `Core::DifferentialDrive::tick()` for actuation. Exclusivity is
 enforced by ORDERING (exactly one of the two `update()` calls actually
 writes, per cycle — see `robot_loop.h`'s own doc comment), not by a
 locked/shared resource or an abstract interface. This SUPERSEDES the
@@ -317,7 +317,7 @@ bench-side planner exercising outside the full sim harness. See
 - **`src/tests/sim/plant/wheel_plant.{h,cpp}`** — reused, deterministic
   physics scaffolding; not linked into this tree's own `motion` library,
   only into pytest/ctypes harnesses that exercise it externally.
-- Nothing else. No `Devices::*`, `App::*`, `Config::*`, or wire-codec
+- Nothing else. No `Devices::*`, `Core::*`, `Config::*`, or wire-codec
   dependency anywhere in this tree — see §3's invariants above.
 
 ## 6. Open Questions / Known Limitations
@@ -326,7 +326,7 @@ bench-side planner exercising outside the full sim harness. See
   — a real gap for a future ticket, not a silent regression: the three
   leaves it could cover are exercised via pytest/ctypes instead today.
 - **RESOLVED (130-004/130-005, stakeholder 2026-08-01): the wheels' one
-  true control law is `App::Drive`'s unified three-timescale controller**
+  true control law is `Core::DifferentialDrive`'s unified three-timescale controller**
   (generation 4, "Wheel control generations" in §1) — not the duty stage,
   not `WheelTrim`. `WheelTrim` is deleted outright (130-005); the duty
   stage (`Motion::WheelPid`/`Planner::stageDuty()`, PARKED since 128-015)
@@ -344,7 +344,7 @@ bench-side planner exercising outside the full sim harness. See
   separate pre-128 documents**, not consolidated here (deliberate — see
   §1's own note): [`src/firm/motion/DESIGN.md`](../firm/motion/DESIGN.md)
   (StopCondition/VelocityShaper, RETIRED since 122) and
-  [`src/firm/app/DESIGN.md`](../firm/app/DESIGN.md) (MoveQueue, marked
+  [`src/firm/core/DESIGN.md`](../firm/app/DESIGN.md) (MoveQueue, marked
   there as pre-128 history), plus
   [`docs/design/history/land-at-zero-margin-derivation.md`](../../docs/design/history/land-at-zero-margin-derivation.md)
   for the land-at-zero completion predicate specifically. A future

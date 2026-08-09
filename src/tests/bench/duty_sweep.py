@@ -4,7 +4,7 @@ wheel plant (duty -> steady-state speed) over the FULL duty range, per motor,
 per direction, plus a simultaneous-both-wheels grid, and derive population
 constants (mean map, adaptation bounds, breakaway band).
 
-`App::Drive` is OPEN LOOP (`src/firm/app/drive.h:14`): it converts a commanded
+`Core::DifferentialDrive` is OPEN LOOP (`src/firm/core/differential_drive.h:14`): it converts a commanded
 wheel speed to duty via `dutyPerSpeed` and writes it, with no feedback. So
 `dutyPerSpeed` IS the plant model, and when it is wrong the robot simply runs at
 the wrong speed -- measured 2026-07-31 at 35% of commanded. This tool measures
@@ -27,7 +27,7 @@ CORRECTIONS TO EARLIER VERSIONS OF THIS SCRIPT
 
 3. **`dutyPerSpeed` is now BAKED IN FIRMWARE, not config-sourced -- a second,
    more subtle staleness bug this sprint fixes.** Since 2026-07-31
-   (`App::Drive::kDutyPerSpeed`, drive.h), `boot_calibration.cpp`'s
+   (`Core::DifferentialDrive::kDutyPerSpeed`, drive.h), `boot_calibration.cpp`'s
    `installDriveCalibration()` calls
    `drive.setDutyPerSpeed(Drive::kDutyPerSpeed, Drive::kDutyPerSpeed)`
    UNCONDITIONALLY -- "MEASURED, NOT CONFIGURED" -- and deliberately ignores
@@ -115,7 +115,7 @@ _REPO = pathlib.Path(__file__).resolve().parents[3]
 
 DEFAULT_PORT = "/dev/cu.usbmodem2121102"
 
-# App::Drive arms each WHEELS command until `commandDeadline_ = now + duration`
+# Core::DifferentialDrive arms each WHEELS command until `commandDeadline_ = now + duration`
 # (drive.cpp:16), so the host must re-arm well inside the window or the deadman
 # fires mid-rung and the wheel coasts -- which reads as a soft plant rather than
 # a lost lease. Refresh at ~1/5 of the lease. See
@@ -129,11 +129,11 @@ REST = 0.5           # [s] full stop between rungs, so each starts from stuck
 MOTION = 5.0         # [mm/s] below this the wheel is considered not turning
 
 # The measured plant inverse the FIRMWARE ACTUALLY USES -- see point 3 above.
-# MUST track src/firm/app/drive.h's `Drive::kDutyPerSpeed`; there is no
+# MUST track src/firm/core/differential_drive.h's `Drive::kDutyPerSpeed`; there is no
 # firmware->host config read-back path, so this is a hand-kept mirror, not a
 # read. If drive.h's constant ever changes, update this too or the whole duty
 # axis silently goes stale again exactly as it did this session.
-KNOWN_DUTY_PER_SPEED = 0.001182  # [duty/(mm/s)] == App::Drive::kDutyPerSpeed
+KNOWN_DUTY_PER_SPEED = 0.001182  # [duty/(mm/s)] == Core::DifferentialDrive::kDutyPerSpeed
 
 # A deliberately saturating command: any value this large clamps duty to 1.0
 # regardless of which dutyPerSpeed was used to pick it, so this reading needs

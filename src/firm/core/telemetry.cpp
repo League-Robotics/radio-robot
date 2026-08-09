@@ -1,11 +1,11 @@
-#include "app/telemetry.h"
+#include "core/telemetry.h"
 
-#include "app/drive.h"
+#include "core/differential_drive.h"
 
-namespace App {
+namespace Core {
 
 static_assert(sizeof(msg::Telemetry{}.acks_) == static_cast<size_t>(kAckRingDepth) * sizeof(uint32_t),
-              "App::kAckRingDepth (telemetry.h) must match telemetry.proto's Telemetry.acks (max_count)");
+              "Core::kAckRingDepth (telemetry.h) must match telemetry.proto's Telemetry.acks (max_count)");
 
 constexpr uint32_t kAckErrBits = 4;
 constexpr uint32_t kAckErrMask = (1u << kAckErrBits) - 1;
@@ -32,7 +32,7 @@ void Telemetry::setLiveFlag(uint32_t bit, bool active) {
   setFlag(bit, active);
 }
 
-void Telemetry::update(const Types::RobotState& state, const Drive& drive) {
+void Telemetry::update(const Types::RobotState& state, const DifferentialDrive& drive) {
   const uint32_t now = state.time.cycleStart + (state.time.cycleBusy / 1000u);  // [ms] ([us]->[ms])
 
   frame_.mode = static_cast<msg::DriveMode>(state.command.mode);

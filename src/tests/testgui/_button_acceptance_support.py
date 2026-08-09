@@ -37,7 +37,7 @@ percentage. The abs_margin term absorbs the fixed lag; rel_tol absorbs the
 residual proportional error. See ``test_gui_button_acceptance.py``'s own
 module-level tolerance constants for the concrete numbers per path.
 
-Turn-prediction campaign (2026-07-22, ``App::MoveQueue``'s former stop-
+Turn-prediction campaign (2026-07-22, ``Core::MoveQueue``'s former stop-
 condition time-lead anticipation constant, since DELETED -- see below) /
 wire-testgui-live-push-of-estimator-stop-lead fix (same day, follow-up):
 ``MANAGED_ANGLE_ABS_MARGIN_DEG``/``MANAGED_DIST_ABS_MARGIN_MM`` below were
@@ -63,7 +63,7 @@ transports -- see ``clasi/issues/wire-testgui-live-push-of-estimator-stop-lead.m
 
 118 ticket 004 (land-at-zero-completion-delete-stop-lead.md): the time-
 lead anticipation constant itself is DELETED -- the completion mechanism
-it drove no longer exists (see ``App::MoveQueue::tick()``'s own doc
+it drove no longer exists (see ``Core::MoveQueue::tick()``'s own doc
 comment for the land-at-zero predicate that replaces it), so the connect-
 time push above now carries nine fields, not ten.
 

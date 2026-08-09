@@ -11,7 +11,7 @@
 //     onto ANY prior config_ state leaves config_ holding EXACTLY X, not a
 //     blend of X and whatever was there before.
 //   - install(target) always forwards config_'s CURRENT value to the real
-//     subsystem setter (Drive::configure()/App::configureOtos()), the SAME
+//     subsystem setter (Drive::configure()/Core::configureOtos()), the SAME
 //     call loadBaked()+install() (boot time) uses -- there is no separate
 //     "pushed" code path a live SetConfigGroup takes that a baked boot
 //     does not.
@@ -42,8 +42,8 @@
 #include <cstring>
 #include <string>
 
-#include "app/configurator.h"
-#include "app/drive.h"
+#include "core/configurator.h"
+#include "core/differential_drive.h"
 #include "config/robot.h"
 #include "hal/motor.h"
 #include "hardware/generic/real_otos.h"
@@ -155,7 +155,7 @@ struct FieldVal {
   float value;
 };
 
-msg::ErrCode pushGroup(App::Configurator& configurator, msg::ConfigGroupTarget target,
+msg::ErrCode pushGroup(Core::Configurator& configurator, msg::ConfigGroupTarget target,
                         const std::initializer_list<FieldVal>& fields) {
   uint8_t buf[256];
   size_t pos = 0;
@@ -178,7 +178,7 @@ int main() {
   // loadBaked() and applyGroup() commit identically into config_). ------
   RecordingMotor aMotorL, aMotorR;
   RecordingOtos aOtos;
-  App::Drive aDrive(aMotorL, aMotorR, /*trackWidth=*/128.0f);
+  Core::DifferentialDrive aDrive(aMotorL, aMotorR, /*trackWidth=*/128.0f);
   // dutyPerSpeed is BOOT-ONLY even inside the "live" DRIVE group --
   // Configurator::install()'s own doc comment: "neither Drive::configure()
   // nor install(DRIVE) touch dutyPerSpeed live." The composition root sets
@@ -190,7 +190,7 @@ int main() {
   Motion::PlannerLimits aLimits;
   Motion::Planner aPlanner(aLimits);
   Motion::NavigatorLimits aNavigatorLimits;
-  App::Configurator a(aDrive, aMotorL, aMotorR, aOtos, aPlanner, aNavigatorLimits, /*tuningStore=*/nullptr);
+  Core::Configurator a(aDrive, aMotorL, aMotorR, aOtos, aPlanner, aNavigatorLimits, /*tuningStore=*/nullptr);
 
   // tovez.json's own DRIVE/WHEEL_CONTROL/OTOS/PLANNER_SHAPER values
   // (data/robots/tovez.json, read 2026-08-04 -- field numbers per
@@ -215,12 +215,12 @@ int main() {
   // tovez's values -- the actual "bake from togov, push tovez" scenario. --
   RecordingMotor bMotorL, bMotorR;
   RecordingOtos bOtos;
-  App::Drive bDrive(bMotorL, bMotorR, /*trackWidth=*/126.0f);
+  Core::DifferentialDrive bDrive(bMotorL, bMotorR, /*trackWidth=*/126.0f);
   bDrive.setDutyPerSpeed(0.00187325f, 0.00187325f);  // togov.json's own value -- boot-baked, see A's own comment above
   Motion::PlannerLimits bLimits;
   Motion::Planner bPlanner(bLimits);
   Motion::NavigatorLimits bNavigatorLimits;
-  App::Configurator b(bDrive, bMotorL, bMotorR, bOtos, bPlanner, bNavigatorLimits, /*tuningStore=*/nullptr);
+  Core::Configurator b(bDrive, bMotorL, bMotorR, bOtos, bPlanner, bNavigatorLimits, /*tuningStore=*/nullptr);
 
   beginScenario("B: baked from togov (seed -- different values than tovez)");
   checkEq(pushGroup(b, msg::ConfigGroupTarget::DRIVE,

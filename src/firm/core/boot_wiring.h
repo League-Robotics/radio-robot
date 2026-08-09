@@ -1,6 +1,6 @@
-// boot_wiring.h -- App::RobotGraph / App::composeRobot(): the ONE shared
+// boot_wiring.h -- Core::RobotGraph / Core::composeRobot(): the ONE shared
 // composition root src/firm/main.cpp (ARM) and TestSim::SimHarness (sim,
-// src/firm/platform/host/sim_harness.h) both build the whole App::/Motion:: dependency
+// src/firm/platform/host/sim_harness.h) both build the whole Core::/Motion:: dependency
 // graph through. 130-002 (unify-sim-and-robot-composition-roots.md):
 // before this file existed, main.cpp and SimHarness each hand-wired their
 // own copy of this graph, and the two copies had already drifted once --
@@ -55,14 +55,14 @@
 // explaining why -- see TestSim::SimHarness's own composeRobot() call.
 #pragma once
 
-#include "app/boot_calibration.h"
-#include "app/comms.h"
-#include "app/configurator.h"
-#include "app/drive.h"
-#include "app/fake_otos.h"
-#include "app/preamble.h"
-#include "app/robot_loop.h"
-#include "app/telemetry.h"
+#include "core/boot_calibration.h"
+#include "core/comms.h"
+#include "core/configurator.h"
+#include "core/differential_drive.h"
+#include "core/fake_otos.h"
+#include "core/preamble.h"
+#include "core/robot_loop.h"
+#include "core/telemetry.h"
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
 #include "platform/clock.h"
@@ -77,7 +77,7 @@
 #include "motion/odometry.h"
 #include "motion/planner/planner.h"
 
-namespace App {
+namespace Core {
 
 // BootOverrides -- see this file's own header above. nullptr (the default)
 // means "use the baked robot-JSON value"; a caller that sets a field is
@@ -108,7 +108,7 @@ struct BootOverrides {
   // wheelCorrection -- the FOURTH genuinely-justified override (133-005),
   // and the one with a price tag attached.
   //
-  // App::Drive's Stage A commanded->actual correction (measured =
+  // Core::DifferentialDrive's Stage A commanded->actual correction (measured =
   // gain*commanded + intercept, per wheel per direction of approach,
   // docs/design/wheel-speed-command-mapping.md) LINEARIZES one physical
   // drivetrain's gearbox. TestSim::WheelPlant is a plain first-order
@@ -123,7 +123,7 @@ struct BootOverrides {
   // deliberately omits the wheel correction from what it pushes, and says
   // so at length. What went wrong is that the SIM never needed the push:
   // 130-002 unified the sim and hardware composition roots, so the sim's
-  // Drive takes its Stage A calibration from the BAKE (Config::
+  // DifferentialDrive takes its Stage A calibration from the BAKE (Config::
   // defaultDriveGroup(), generated from data/robots/tovez.json) like real
   // hardware does. The invariant survived on a coincidence -- the bake
   // happened to hold identity -- and the coincidence was documented as if
@@ -179,9 +179,9 @@ struct BootOverrides {
   const float* navigatorYawSign = nullptr;
 };
 
-// RobotGraph -- owns the WHOLE App::/Motion:: object graph: both drive
+// RobotGraph -- owns the WHOLE Core::/Motion:: object graph: both drive
 // motors (bare NezhaMotor wrapped in MotorArmor), the OTOS/color/line
-// leaves, Comms/Telemetry, Drive, Odometry, Planner, Preamble,
+// leaves, Comms/Telemetry, DifferentialDrive, Odometry, Planner, Preamble,
 // Configurator, and RobotLoop, wired in the same dependency order
 // main.cpp/SimHarness always constructed them in. Constructed once by
 // composeRobot() (below) and then held for the life of the program/test --
@@ -234,7 +234,7 @@ class RobotGraph {
   Hardware::LineSensorLeaf& line() { return line_; }
   Comms& comms() { return comms_; }
   Telemetry& telemetry() { return tlm_; }
-  Drive& drive() { return drive_; }
+  DifferentialDrive& drive() { return drive_; }
   Motion::Odometry& odometry() { return odom_; }
   Motion::Planner& planner() { return planner_; }
   Motion::Navigator& navigator() { return navigator_; }
@@ -266,7 +266,7 @@ class RobotGraph {
   //
   // 132-006 (the-configuration-object.md): this struct used to be named
   // `Resolved` and additionally carried driveConfig/wheelControllerConfig
-  // -- both DELETED here, because App::Configurator now owns those two
+  // -- both DELETED here, because Core::Configurator now owns those two
   // groups' values (Config::Robot, configurator.h) and installs them
   // itself, post-construction, via configurator_.loadBaked() +
   // configurator_.install() (see boot_wiring.cpp's constructor body). What
@@ -274,11 +274,11 @@ class RobotGraph {
   // residue the issue's own audit found (trackWidth, the OTOS lever
   // arm/scales, ColorConfig/LineConfig, PlannerLimits' non-re-appliable
   // fields, the per-port motor wiring) -- values that MUST be complete
-  // before Drive/Odometry/the OTOS leaf/Motion::Planner/the motor leaves
+  // before DifferentialDrive/Odometry/the OTOS leaf/Motion::Planner/the motor leaves
   // are constructed, because none of them has a setter for these fields at
   // all. Config::Robot cannot supply these yet: it does not model per-port
   // motor wiring (msg::Motors is drive-pair-only, no port/slewRate/polled),
-  // and Configurator itself cannot be constructed before Drive/Planner/the
+  // and Configurator itself cannot be constructed before DifferentialDrive/Planner/the
   // motor leaves exist (it holds references to them) -- so this
   // construction-time bake stays a SEPARATE step from Configurator::
   // loadBaked(), which populates the read-back object AFTER construction,
@@ -319,7 +319,7 @@ class RobotGraph {
 
   Comms comms_;
   Telemetry tlm_;
-  Drive drive_;
+  DifferentialDrive drive_;
   Motion::Odometry odom_;
 
   // otos_ binds to whichever OTOS implementation this build selects.
@@ -329,7 +329,7 @@ class RobotGraph {
   // pre-130-002 order, where the FAKE_OTOS ifdef block came after odom's
   // construction for the same reason.
 #ifdef FAKE_OTOS
-  App::FakeOtos fakeOtos_;
+  Core::FakeOtos fakeOtos_;
 #endif
   Hal::Otos& otos_;
 
@@ -339,7 +339,7 @@ class RobotGraph {
   // holds a Planner& to it) and BEFORE configurator_/robotLoop_ (both need
   // references into these). navigatorLimits_ starts default-constructed
   // (NavigatorLimits' own struct defaults, arc_solver.h) -- the REAL,
-  // robot-JSON-baked values land via App::configureNavigator(), called from
+  // robot-JSON-baked values land via Core::configureNavigator(), called from
   // configurator_.install() at the end of this constructor's body, exactly
   // like every other live group's boot-time fan-out (configurator.cpp's own
   // install()). Motion::Navigator holds navigatorLimits_ by const
@@ -364,4 +364,4 @@ RobotGraph composeRobot(Platform::I2CBus& bus, const Platform::Clock& clock, Pla
                         Config::TuningStore* tuningStore, const char* banner, const char* idLine,
                         const BootOverrides& overrides = {});
 
-}  // namespace App
+}  // namespace Core

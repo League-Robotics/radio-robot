@@ -1,5 +1,5 @@
 // app_robot_loop_pacing_harness.cpp -- host-build unit test for ticket
-// 131-005 (SUC-131-005): proves App::RobotLoop::cycle()'s trailing pacing
+// 131-005 (SUC-131-005): proves Core::RobotLoop::cycle()'s trailing pacing
 // block, now targeting an ABSOLUTE end-of-cycle deadline
 // (state_.time.cycleStart + kCycle) rather than a gap relative to its own
 // entry mark, converges the MEAN measured inter-cycle-start period
@@ -37,7 +37,7 @@
 // established is reused here verbatim, in a fresh file rather than
 // resurrecting the broken one).
 //
-// Deliberately built directly on App::composeRobot() (app/boot_wiring.h,
+// Deliberately built directly on Core::composeRobot() (app/boot_wiring.h,
 // 130-002's shared composition root), NOT TestSim::SimHarness
 // (src/firm/platform/host/sim_harness.h): SimHarness's own step() always advances its
 // internal SimClock by exactly kCycleDtUs BEFORE calling cycle() and owns
@@ -56,8 +56,8 @@
 #include <cstdint>
 #include <cstdio>
 
-#include "app/boot_wiring.h"
-#include "app/robot_loop.h"
+#include "core/boot_wiring.h"
+#include "core/robot_loop.h"
 #include "platform/clock.h"
 #include "fake_transport.h"
 #include "sim_clock.h"
@@ -130,9 +130,9 @@ int main() {
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
 
-  App::RobotGraph graph = App::composeRobot(
+  Core::RobotGraph graph = Core::composeRobot(
       plant, clock, sleeper, serialFake, radioFake, /*tuningStore=*/nullptr,
-      "DEVICE:NEZHA2:pacing_test:test:1", "ID:unknown", App::BootOverrides{});
+      "DEVICE:NEZHA2:pacing_test:test:1", "ID:unknown", Core::BootOverrides{});
 
   // Boot: unlike TestSim::SimHarness::driveBootToDone() (src/firm/platform/host/
   // sim_harness.h), no manual clock pre-seeding/stepping is needed here --
@@ -181,7 +181,7 @@ int main() {
       "samples (kCycle = %ums, injected per-call overrun pattern 1/0/2/1/3/0/1ms, period 7 -- "
       "genuinely varies which pacing block absorbs how much from cycle to cycle)\n",
       meanPeriodMs, minPeriodMs, maxPeriodMs, periodSamples,
-      static_cast<unsigned>(App::RobotLoop::kCycle));
+      static_cast<unsigned>(Core::RobotLoop::kCycle));
 
   // The whole point: the mean converges to kCycle, not kCycle plus a
   // fixed structural offset (130-011 measured +4ms on real hardware, at
@@ -196,7 +196,7 @@ int main() {
   // later in the SAME cycle, but it does not compound into the NEXT
   // cycle either -- cycle()'s own cycleStart is a fresh markTime() read
   // every cycle, not carried forward from the previous one.
-  const double kCycleF = static_cast<double>(App::RobotLoop::kCycle);
+  const double kCycleF = static_cast<double>(Core::RobotLoop::kCycle);
   checkTrue(meanPeriodMs > kCycleF - 2.0 && meanPeriodMs < kCycleF + 2.0,
             "mean delivered inter-cycle period converges to kCycle (within +/-2ms), not "
             "kCycle plus a fixed structural offset (130-011's own +4ms-at-any-nominal defect)");

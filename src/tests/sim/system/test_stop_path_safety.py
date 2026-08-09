@@ -1,5 +1,5 @@
 """Off-hardware acceptance proof for ticket 133-001 -- the derived-idle
-safety-arbitration step ``App::RobotLoop::zeroUnownedMotion()``.
+safety-arbitration step ``Core::RobotLoop::zeroUnownedMotion()``.
 
 Compiles ``stop_path_safety_harness.cpp`` against TestSim::SimHarness
 (``src/firm/platform/host/sim_harness.h``) plus its full dependency graph, with
@@ -12,7 +12,7 @@ the measured defect each scenario exists for.
 Two independent proofs live here:
 
 1. ``test_stop_path_safety_harness_compiles_and_passes`` -- the behavioral
-   half: three end-to-end scenarios through the real ``App::RobotLoop``.
+   half: three end-to-end scenarios through the real ``Core::RobotLoop``.
 2. ``test_arbitration_step_writes_only_zero`` -- the STRUCTURAL half. The
    monotone contract ("this method may write only ``0.0f``") is what makes
    a loop-level write to a decider-owned field legitimate at all, and no
@@ -43,7 +43,7 @@ _PLANT_DIR = _SYSTEM_DIR.parent / "plant"
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 
 _HARNESS_SRC = _SYSTEM_DIR / "stop_path_safety_harness.cpp"
-_ROBOT_LOOP_SRC = _SOURCE_DIR / "app" / "robot_loop.cpp"
+_ROBOT_LOOP_SRC = _SOURCE_DIR / "core" / "robot_loop.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WIRE_TEST_CODEC_SRC = _SUPPORT_DIR / "wire_test_codec.cpp"
 _BENCH_TEST_CONFIG_SRC = _SUPPORT_DIR / "bench_test_config.cpp"
@@ -57,21 +57,21 @@ _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 # the Planner/RobotLoop dependency graph ever changes again).
 _APP_SOURCES = [
     _ROBOT_LOOP_SRC,
-    _SOURCE_DIR / "app" / "comms.cpp",
-    _SOURCE_DIR / "app" / "debug.cpp",
-    _SOURCE_DIR / "app" / "configurator.cpp",
-    _SOURCE_DIR / "app" / "telemetry.cpp",
+    _SOURCE_DIR / "core" / "comms.cpp",
+    _SOURCE_DIR / "core" / "debug.cpp",
+    _SOURCE_DIR / "core" / "configurator.cpp",
+    _SOURCE_DIR / "core" / "telemetry.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "profile.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "estimation.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "shape.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "planner.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
-    _SOURCE_DIR / "app" / "drive.cpp",
+    _SOURCE_DIR / "core" / "differential_drive.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
-    _SOURCE_DIR / "app" / "preamble.cpp",
-    _SOURCE_DIR / "app" / "boot_wiring.cpp",
-    _SOURCE_DIR / "app" / "boot_calibration.cpp",
+    _SOURCE_DIR / "core" / "preamble.cpp",
+    _SOURCE_DIR / "core" / "boot_wiring.cpp",
+    _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
@@ -193,9 +193,9 @@ def test_arbitration_step_writes_only_zero():
 
     A zero-only writer cannot originate motion, cannot fight a decider for
     control, and cannot produce a speed no decider asked for -- which is the
-    entire justification for App::RobotLoop writing a decider-owned field at
+    entire justification for Core::RobotLoop writing a decider-owned field at
     all (the ownership invariant at ``RobotLoop::publishWheels()``). The
-    moment this method can emit a nonzero, App::RobotLoop is a third decider
+    moment this method can emit a nonzero, Core::RobotLoop is a third decider
     and that invariant is void, so the restriction is checked here rather
     than left to review.
     """

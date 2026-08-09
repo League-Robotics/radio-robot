@@ -69,7 +69,7 @@ namespace TestSim {
 // Ship-default wheelbase used to construct this SimPlant's own OtosPlant --
 // matches the TestGUI's own default trackwidth (testgui-revival program,
 // simset-max-args-truncation.md's "GUI trackwidth default 128"). A caller
-// composing SimPlant against a differently-configured App::Odometry MUST
+// composing SimPlant against a differently-configured Core::Odometry MUST
 // pass the matching trackWidth to the constructor -- see OtosPlant's own
 // header comment on why the two must agree.
 constexpr float kDefaultTrackWidth = 128.0f;  // [mm]

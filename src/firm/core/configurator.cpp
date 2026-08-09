@@ -1,14 +1,14 @@
-// configurator.cpp -- App::Configurator implementation. See configurator.h
+// configurator.cpp -- Core::Configurator implementation. See configurator.h
 // for the module's boundary.
-#include "app/configurator.h"
+#include "core/configurator.h"
 
 #include <cmath>
 
-#include "app/boot_calibration.h"
+#include "core/boot_calibration.h"
 #include "config/boot_config.h"
 #include "messages/wire.h"
 
-namespace App {
+namespace Core {
 
 namespace {
 
@@ -63,7 +63,7 @@ msg::ConfigSource Configurator::configSource(msg::ConfigGroupTarget target) cons
   return groupSource_[slot];
 }
 
-Configurator::Configurator(Drive& drive, Hal::Motor& motorL,
+Configurator::Configurator(DifferentialDrive& drive, Hal::Motor& motorL,
                            Hal::Motor& motorR, Hal::Otos& otos,
                            Motion::Planner& planner,
                            Motion::NavigatorLimits& navigatorLimits,
@@ -207,7 +207,7 @@ void Configurator::loadBaked(const Config::WheelCorrection* wheelCorrectionOverr
   // wins over whatever data/robots/*.json currently holds -- see this
   // method's own declaration comment and BootOverrides::wheelCorrection
   // (app/boot_wiring.h). Deliberately overwrites config_ itself, not just
-  // the Drive install: read-back (config()/GetConfig(DRIVE)) then reports
+  // the DifferentialDrive install: read-back (config()/GetConfig(DRIVE)) then reports
   // what this robot is ACTUALLY calibrated with, which is the whole point
   // of the configuration object.
   if (wheelCorrectionOverride != nullptr) {
@@ -223,7 +223,7 @@ void Configurator::loadBaked(const Config::WheelCorrection* wheelCorrectionOverr
 
   // 133-006 provenance: everything this function established is BAKED --
   // including a `wheelCorrectionOverride` DRIVE, which is a composition-root
-  // boot value (App::composeRobot()'s sim-plant identity fit, boot_wiring.h),
+  // boot value (Core::composeRobot()'s sim-plant identity fit, boot_wiring.h),
   // not a runtime push. BAKED here means "came from boot-time composition",
   // which is the distinction a caller asking "is the robot running what I
   // pushed" actually needs; the override is deliberately NOT given a
@@ -249,7 +249,7 @@ void Configurator::loadBaked(const Config::WheelCorrection* wheelCorrectionOverr
 // dutyPerSpeed decision (132-009, a stakeholder-decision REVERSAL -- see
 // this file's own git history / the ticket for the full writeup):
 // REVERSED. Before this ticket, this line read
-// `drive_.setDutyPerSpeed(Drive::kDutyPerSpeed, Drive::kDutyPerSpeed)` --
+// `drive_.setDutyPerSpeed(DifferentialDrive::kDutyPerSpeed, DifferentialDrive::kDutyPerSpeed)` --
 // "MEASURED, NOT CONFIGURED" (stakeholder, 2026-07-31), a hardcoded C++
 // constant applied identically to EVERY robot regardless of which JSON was
 // baked, deliberately ignoring config_.drive.duty_per_speed_left/right.
@@ -277,7 +277,7 @@ void Configurator::loadBaked(const Config::WheelCorrection* wheelCorrectionOverr
 // 0.00187325 (the ~1.6x error the-configuration-object.md's Cause section
 // cites) to 0.001182 -- the value that was ALREADY running on every robot
 // via the hardcoded constant this replaces, so no robot's actual boot
-// behavior changes the moment this lands. Drive::kDutyPerSpeed itself is
+// behavior changes the moment this lands. DifferentialDrive::kDutyPerSpeed itself is
 // KEPT (drive.h) as the documented measurement this value traces to and
 // duty_sweep.py's own cross-check anchor, but is no longer read here.
 // togov.json's own duty_per_speed (its own 2026-07-27 sweep, a different
@@ -298,7 +298,7 @@ void Configurator::install() {
 
   // 135-004: the SAME call install(NAVIGATOR) makes -- a live push and a
   // boot bake share one code path, same precedent as PLANNER_SHAPER above.
-  App::configureNavigator(navigatorLimits_, config_);
+  Core::configureNavigator(navigatorLimits_, config_);
 }
 
 // applyGroup() -- see configurator.h's own doc comment. Boot-only targets
@@ -468,7 +468,7 @@ msg::ErrCode Configurator::install(msg::ConfigGroupTarget target) {
   switch (target) {
     case msg::ConfigGroupTarget::DRIVE:
     case msg::ConfigGroupTarget::WHEEL_CONTROL:
-      // Drive::configure() (132-007) pulls BOTH groups' fields in one
+      // DifferentialDrive::configure() (132-007) pulls BOTH groups' fields in one
       // pass -- Stage A wheel correction + crawl pulse from config_.drive,
       // Stage B/C gains/bounds from config_.wheelControl -- so DRIVE and
       // WHEEL_CONTROL share this one call. Neither re-clamps state that is
@@ -481,19 +481,19 @@ msg::ErrCode Configurator::install(msg::ConfigGroupTarget target) {
       return msg::ErrCode::ERR_NONE;
 
     case msg::ConfigGroupTarget::MOTORS: {
-      // Guarded per side (App::configureMotor(), 132-007, boot_calibration.
+      // Guarded per side (Core::configureMotor(), 132-007, boot_calibration.
       // h/.cpp): refuses -- and applies nothing -- while that side reports
       // itself in motion (velocity()/appliedDuty() both nonzero). The
       // refusal is surfaced, not swallowed: ERR_BUSY tells a caller to
       // retry at rest rather than the push silently doing nothing.
-      const bool okLeft = App::configureMotor(motorL_, config_, /*isLeft=*/true);
-      const bool okRight = App::configureMotor(motorR_, config_, /*isLeft=*/false);
+      const bool okLeft = Core::configureMotor(motorL_, config_, /*isLeft=*/true);
+      const bool okRight = Core::configureMotor(motorR_, config_, /*isLeft=*/false);
       if (!okLeft || !okRight) return msg::ErrCode::ERR_BUSY;
       return msg::ErrCode::ERR_NONE;
     }
 
     case msg::ConfigGroupTarget::OTOS:
-      // App::configureOtos() (132-007, domain fix 132-010) now converts
+      // Core::configureOtos() (132-007, domain fix 132-010) now converts
       // linear_scale/angular_scale through Hardware::scaleToRegister()
       // before calling setLinearScalar()/setAngularScalar() -- the SAME
       // conversion RealOtos::begin() applies to the baked value at boot,
@@ -502,13 +502,13 @@ msg::ErrCode Configurator::install(msg::ConfigGroupTarget target) {
       // applyOtosPatch() (the OLD patch surface, above) still has the
       // pass-through bug -- that surface is retired outright by ticket
       // 013, not patched here.
-      App::configureOtos(otos_, config_);
+      Core::configureOtos(otos_, config_);
       return msg::ErrCode::ERR_NONE;
 
     case msg::ConfigGroupTarget::ESTIMATOR:
       // PERMANENT, not a gap: closing trap 2 (the-configuration-object.md)
       // means making this dead end EXPLICIT, not inventing a call site.
-      // App::StateEstimator was deleted outright as dead code (sprint 128
+      // Core::StateEstimator was deleted outright as dead code (sprint 128
       // ticket 016); its one candidate successor, Motion::PoseTracker::
       // blendHeading() (src/firm/motion/planner/estimation.h), had its only
       // call site AND its own config fields (PlannerLimits::
@@ -545,7 +545,7 @@ msg::ErrCode Configurator::install(msg::ConfigGroupTarget target) {
       // already holds a reference to -- the SAME call install() (the
       // no-arg boot fan-out, above) makes -- no setter, by construction
       // (configurator.h's re-appliability table NAVIGATOR row).
-      App::configureNavigator(navigatorLimits_, config_);
+      Core::configureNavigator(navigatorLimits_, config_);
       return msg::ErrCode::ERR_NONE;
 
     case msg::ConfigGroupTarget::GEOMETRY:
@@ -615,4 +615,4 @@ msg::ErrCode Configurator::encodeSnapshot(msg::ConfigGroupTarget target,
   return msg::ErrCode::ERR_NONE;
 }
 
-}  // namespace App
+}  // namespace Core

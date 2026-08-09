@@ -18,7 +18,7 @@ trailing ':', an unknown command, and a truncated line -- are not codec-
 composition vectors at all: they are PARSING/dispatch-layer behaviors (there
 is no "expected_wire_hex" for an unrecognized command; it never decodes to
 anything). Those belong at the grammar-PARSING layer, tested against each
-language's own dispatcher (``App::Comms::dispatchLine()`` in C++,
+language's own dispatcher (``Core::Comms::dispatchLine()`` in C++,
 ``_split_wire_line()``/``_handle_wire_line()`` here) -- exactly what this
 file (mirroring app_comms_harness.cpp's own scenario set) and that harness
 provide, kept in sync by both reading the SAME issue section rather than a
@@ -44,7 +44,7 @@ from robot_radio.io.serial_conn import SerialConnection, _split_wire_line
 from robot_radio.io.wire_codec import decode_frame, encode_frame
 
 # ---------------------------------------------------------------------------
-# _split_wire_line() -- the host mirror of App::Comms::dispatchLine()'s own
+# _split_wire_line() -- the host mirror of Core::Comms::dispatchLine()'s own
 # `<COMMAND>[':' <data>]` parse (comms.cpp).
 # ---------------------------------------------------------------------------
 

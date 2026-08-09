@@ -176,7 +176,7 @@ class SequentialTour:
         `passive` -- wait, draining telemetry, and send NOTHING. This is the
         default, and the correct instrument, for one measured reason: a
         zero-velocity WHEELS command is a TELEOP TAKEOVER, not a no-op.
-        `App::RobotLoop::handleWheels()` calls `planner_.estop()` ("Drive
+        `Core::RobotLoop::handleWheels()` calls `planner_.estop()` ("Drive
         takes over motion -- one owner at a time"), and `Planner::estop()`
         clears `carryValid_`, the planner's cumulative-heading intent
         ledger. So a lease held through the dwell destroys that ledger at

@@ -167,7 +167,7 @@ class TestFormatting:
         assert "11.5" in fmt_twist((149, 200))         # 200 mrad/s -> 11.5 deg/s
 
     def test_wheel_controller_values(self):
-        """130-005: App::Drive's unified wheel-speed controller observability
+        """130-005: Core::DifferentialDrive's unified wheel-speed controller observability
         (dutyPerSpeed/bias/pid rows)."""
         assert fmt_duty_per_speed(0.001182, 0.001193) == "L 0.001182   R 0.001193"
         assert fmt_bias(12.5, -3.2) == "L +12.5   R -3.2   mm/s"
@@ -242,7 +242,7 @@ class TestPanelWiring:
     @pytest.mark.skip(
         reason="115-003 (gut-to-minimal-firmware S1 motion-stack excision) "
         "deletes msg::HeadingSourceStatus/the heading_source telemetry field "
-        "wholesale, alongside the App::HeadingSource that reported it -- "
+        "wholesale, alongside the Core::HeadingSource that reported it -- "
         "TLMFrame no longer accepts a heading_source constructor kwarg at "
         "all (protocol.py's own frame-v2 rework). telemetry_panel.py's "
         "getattr(frame, 'heading_source', None) already degrades to a "

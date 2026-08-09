@@ -185,7 +185,7 @@ _UNMANAGED_YAW_RATE = 2.0     # [rad/s]
 
 # Host-side unmanaged-drive tuning.
 #
-# _BURST/_REFRESH: each WHEELS lease is bounded -- App::Drive arms it until
+# _BURST/_REFRESH: each WHEELS lease is bounded -- Core::DifferentialDrive arms it until
 #   `commandDeadline_ = now + duration` (drive.cpp:16) -- so losing the host
 #   mid-drive stops the robot within one burst. The host MUST re-arm well
 #   inside that window: refresh at <= _BURST/4, leaving four missed sends of
@@ -224,7 +224,7 @@ _UNMANAGED_TRIM_LIMIT = 40.0  # [mm/s] peak-to-peak differential
 def effective_track_width(config: Any) -> "float | None":  # [mm]
     """The robot's EFFECTIVE track width -- the caliper-measured wheel
     separation corrected for scrub -- the identical quantity, from the identical
-    formula, the firmware computes at boot (``App::effectiveTrackWidth()``):
+    formula, the firmware computes at boot (``Core::effectiveTrackWidth()``):
 
         effective = trackwidth / rotational_slip   (slip > 0, else trackwidth)
 
@@ -267,7 +267,7 @@ def effective_track_width(config: Any) -> "float | None":  # [mm]
         cal = getattr(config, "calibration", None)
         slip = getattr(cal, "rotational_slip", None) if cal is not None else None
     # slip == 0 is the documented "uncalibrated" sentinel: apply no correction.
-    # Mirrors App::effectiveTrackWidth()'s `(kScrub > 0.0f)` guard exactly.
+    # Mirrors Core::effectiveTrackWidth()'s `(kScrub > 0.0f)` guard exactly.
     if slip is None or slip <= 0.0:
         return float(trackwidth)
     return float(trackwidth) / float(slip)
@@ -287,7 +287,7 @@ def run_unmanaged_distance_drive(transport: Any, driver: Any, distance: float,
     ``SimLoop`` provide -- ``wheels(l, r, ms)`` and ``estop()``.
 
     UNMANAGED MEANS UNMANAGED. WHEELS is routed firmware-side straight to
-    ``App::Drive`` after ``planner_.estop()``: no profile, no shaping, no
+    ``Core::DifferentialDrive`` after ``planner_.estop()``: no profile, no shaping, no
     firmware stop condition. This replaces a `move_twist()` implementation on
     BOTH backends that ran the planner and its closed loop -- so the button
     labelled unmanaged was managed, on hardware and in Sim alike.

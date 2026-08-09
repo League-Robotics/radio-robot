@@ -1,21 +1,21 @@
 // app_fake_otos_harness.cpp -- off-hardware acceptance proof for
-// App::FakeOtos (src/firm/app/fake_otos.{h,cpp}), the bench implementation
+// Core::FakeOtos (src/firm/app/fake_otos.{h,cpp}), the bench implementation
 // of the Hal::Otos interface that reports the dead-reckoned Odometry
 // pose + wheel-fused body twist as if it were a real OTOS chip
 // (otos-fake-seam issue). Replaces the coverage the deleted
 // Hal::Otos::feedSyntheticSample() scenario used to give in
 // devices_otos_harness.cpp.
 //
-// FakeOtos needs an App::Odometry pose source and two Hal::Motor leaves
+// FakeOtos needs an Core::Odometry pose source and two Hal::Motor leaves
 // (for velocity() -> body twist). Rather than drag in the NezhaMotor + PID +
-// SimPlant + I2C-scripting stack (App::Odometry is exercised against that in
+// SimPlant + I2C-scripting stack (Core::Odometry is exercised against that in
 // app_odometry_harness.cpp), this harness drives a tiny StubMotor whose
 // position()/velocity() the test sets directly -- isolating FakeOtos's own
 // synthesis logic from motor/bus behavior.
 #include <cmath>
 #include <cstdio>
 
-#include "app/fake_otos.h"
+#include "core/fake_otos.h"
 #include "hal/motor.h"
 #include "kinematics/differential_kinematics.h"
 #include "motion/odometry.h"
@@ -81,7 +81,7 @@ void scenarioAlwaysPresentFreshOnlyAfterTick() {
   std::printf("scenario: FakeOtos present/connected always true, poseFresh only after tick()\n");
   StubMotor left, right;
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
-  App::FakeOtos fake(odom, left, right, kTrackWidth);
+  Core::FakeOtos fake(odom, left, right, kTrackWidth);
 
   checkTrue(fake.present(), "present() true before any tick (a fake is always there)");
   checkTrue(fake.connected(), "connected() true before any tick");
@@ -101,7 +101,7 @@ void scenarioStraightMirrorsOdometryAndTwist() {
   std::printf("scenario: straight drive -- pose mirrors Odometry, twist matches Kinematics::DifferentialKinematics::forward\n");
   StubMotor left, right;
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
-  App::FakeOtos fake(odom, left, right, kTrackWidth);
+  Core::FakeOtos fake(odom, left, right, kTrackWidth);
 
   // Both wheels advance 100 mm -> a straight 100 mm leg, heading unchanged.
   left.setPosition(100.0f);
@@ -130,7 +130,7 @@ void scenarioSpinMirrorsOdometryAndTwist() {
   std::printf("scenario: spin -- heading mirrors Odometry, non-zero omega from forward()\n");
   StubMotor left, right;
   Motion::Odometry odom(kTrackWidth, left.position(), right.position());
-  App::FakeOtos fake(odom, left, right, kTrackWidth);
+  Core::FakeOtos fake(odom, left, right, kTrackWidth);
 
   // Left forward, right backward by equal amounts -> pure spin.
   left.setPosition(40.0f);
@@ -160,9 +160,9 @@ int main() {
   scenarioSpinMirrorsOdometryAndTwist();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all App::FakeOtos scenarios passed\n");
+    std::printf("OK: all Core::FakeOtos scenarios passed\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the App::FakeOtos scenarios\n", g_failureCount);
+  std::printf("FAILED: %d assertion(s) across the Core::FakeOtos scenarios\n", g_failureCount);
   return 1;
 }

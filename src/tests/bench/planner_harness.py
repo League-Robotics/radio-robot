@@ -158,7 +158,7 @@ class Move(ctypes.Structure):
                 ("vLeft", ctypes.c_float),       # [mm/s]
                 ("vRight", ctypes.c_float),      # [mm/s]
                 # 134-001. What the CALLER asked for, before an
-                # ingestion-side rewrite of `threshold` (App::RobotLoop::
+                # ingestion-side rewrite of `threshold` (Core::RobotLoop::
                 # handleMove()'s rotation-calibration inversion) turns that
                 # into an actuation-sized command. Read only by the
                 # Planner's cumulative-baseline ledger; <= 0 means UNSET and
@@ -295,7 +295,7 @@ def loadLibrary() -> ctypes.CDLL:
     # 130-005: plannerTrim()'s signature shrank to (profiledLeft,
     # profiledRight, phase) -- Motion::WheelTrim (trim + its integrator) is
     # deleted outright; the wheel-speed controller now lives entirely in
-    # App::Drive (drive.h's own header), whose bias/fast-PID observability
+    # Core::DifferentialDrive (drive.h's own header), whose bias/fast-PID observability
     # reaches the wire Telemetry frame instead of this bench-only C API.
     # plannerApplyTrimGains() is deleted with it -- there is no live gains
     # setter left on Motion::Planner to bind.

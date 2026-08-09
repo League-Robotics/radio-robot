@@ -14,7 +14,7 @@ chart and printed summary. Two things changed:
    wheels()``) instead of a wheels-velocity ``MOVE``. Under the reworked
    routing a ``MOVE`` -- any ``MOVE`` -- goes to ``Motion::Planner``; the
    dumb, time-bounded, planner-free wheel command this tour is built on is
-   ``WHEELS``, routed straight to ``App::Drive``.
+   ``WHEELS``, routed straight to ``Core::DifferentialDrive``.
 2. It runs against the SIM as well as hardware. ``NezhaProtocol`` drives a
    ``SimLoop`` through ``SimConfigConn`` (``robot_radio.io.sim_config``)
    exactly as it drives a ``SerialConnection``, so the tour LOGIC is
@@ -102,7 +102,7 @@ TURN_ARC = TRACK * math.pi / 4.0  # [mm] per-wheel travel for a 90 deg pivot
 BOOT_WAIT = 6.0        # [s] hardware only -- the sim boots synchronously
 TAU = 0.23             # [s] plant time constant (spin-up transient)
 DWELL = 0.10           # [s] armor reversal dwell (sign-flip wheel holds 0)
-CYCLE_S = 0.04         # [s] one SimLoop.step() -- App::RobotLoop::kCycle
+CYCLE_S = 0.04         # [s] one SimLoop.step() -- Core::RobotLoop::kCycle
 
 # Two dwells for two different jobs -- conflating them into one SEGMENT_REST
 # was itself a defect (2026-07-30 finding, out-of-process, stakeholder-
@@ -965,7 +965,7 @@ class Tour:
 
         Neither measurement is needed:
 
-        - Per-wheel gain: App::Drive ALREADY inverts
+        - Per-wheel gain: Core::DifferentialDrive ALREADY inverts
           `actual = gain*commanded + intercept`, per wheel and per direction
           of approach, from the robot JSON's wheel_gain_*/wheel_intercept_*
           (drive.cpp correctedCommand(), seeded in main.cpp). Measuring a

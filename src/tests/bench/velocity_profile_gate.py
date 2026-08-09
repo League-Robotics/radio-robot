@@ -84,7 +84,7 @@ a short capture reads as a short DISTANCE (77 mm of 450 mm, once) and is
 otherwise indistinguishable from real under-travel.
 
 Motion is issued as bare WHEELS commands (`NezhaProtocol.wheels()`) --
-straight to `App::Drive`, bypassing the planner, no shaping and no
+straight to `Core::DifferentialDrive`, bypassing the planner, no shaping and no
 odometry stop condition -- because the profile IS the test. Letting the
 planner shape it would measure the planner instead of the wheel-speed
 controller. The host re-arms the command every `--tick` with a longer
@@ -740,7 +740,7 @@ def _args() -> argparse.Namespace:
     # Live tuning, asserted after connect (see _assert_tuning). Omitted
     # flags leave the firmware's own boot-baked value alone.
     p.add_argument("--vmin", type=float, default=None,
-                   help="[mm/s] App::Drive speed floor via DBG:vmin "
+                   help="[mm/s] Core::DifferentialDrive speed floor via DBG:vmin "
                         "(ROBOT_DEBUG builds only)")
     p.add_argument("--wheel", choices=("both", "left", "right"), default="both",
                    help="which channel(s) carry the profile. Use left/right "
@@ -1186,7 +1186,7 @@ def main() -> int:
         subtitle = (f"{'sim' if args.sim else 'hardware'} · {target} · "
                     f"{profiles[0].duration:.1f} s window · "
                     f"{profiles[0].distance:.0f} mm commanded · "
-                    f"WHEELS straight to App::Drive, no planner, no shaping")
+                    f"WHEELS straight to Core::DifferentialDrive, no planner, no shaping")
         chart_path = pathlib.Path(args.chart)
         render_chart(runs, chart_path, subtitle=subtitle, tolerance=args.tolerance)
         print(f"\n  chart: {chart_path}")

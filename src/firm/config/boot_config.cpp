@@ -351,7 +351,7 @@ msg::Otos defaultOtosGroup() {
     // geometry.odometry_offset_mm.{x,y,yaw_rad}, calibration.
     // otos_linear_scale/otos_angular_scale -- otos_boot_config_values()
     // above. These are the config MULTIPLIER domain (1.0 = no correction),
-    // same as the robot JSON -- App::configureOtos() (app/boot_calibration.
+    // same as the robot JSON -- Core::configureOtos() (app/boot_calibration.
     // cpp) converts through Devices::scaleToRegister() before reaching the
     // chip, the SAME conversion RealOtos::begin() applies to this baked
     // value at boot (132-010 closed the live/boot domain mismatch, trap 3,
@@ -378,7 +378,7 @@ msg::Estimator defaultEstimatorGroup() {
 msg::Navigator defaultNavigatorGroup() {
     // navigator.* (navigator_config_for_config() above) -- Motion::
     // NavigatorLimits' own configuration group (135-004). track_width is
-    // NOT baked here -- App::configureNavigator() (app/boot_calibration.cpp)
+    // NOT baked here -- Core::configureNavigator() (app/boot_calibration.cpp)
     // sources it from Config::Robot::effectiveTrackWidth() instead, the
     // SAME derived value Drive/Odometry/PlannerLimits already use.
     msg::Navigator cfg;

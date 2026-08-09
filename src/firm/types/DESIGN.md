@@ -28,7 +28,7 @@ purpose alongside version plumbing: a shared floor `src/firm` and
 actuation boundary in its own right (sprint 128, superseding the deleted
 `Motion::WheelSink` interface). Three roles, one struct:
 the blackboard every subsystem publishes its own per-cycle section to and
-reads other subsystems' sections from; the source `App::Telemetry` projects
+reads other subsystems' sections from; the source `Core::Telemetry` projects
 into the lossy, scaled wire frame (`msg::Telemetry` — a DIFFERENT, later
 ticket's job, not this file's); and a test fixture (construct one, fill the
 fields under test, call `tick(state, now)`, assert on what it wrote —
@@ -87,13 +87,13 @@ key=value token struct. `version_generated.h` is emitted by
   comments for exactly which subsystem writes each one.
 - **What's OUT of `RobotState` (deliberately, per the issue's own "What
   stays OUT" section): config, PID gains, calibration, fusion weights,
-  persisted tuning, and ACKS.** Acks are protocol bookkeeping (`App::
+  persisted tuning, and ACKS.** Acks are protocol bookkeeping (`Core::
   Telemetry`'s own ack ring), not robot state, even though they change
   every cycle a command lands — the exclusion is about WHAT KIND of thing
   an ack is (a protocol receipt), not how often it changes. Config keeps
   its own patch/persistence path (`Config::TuningSnapshot` and friends).
 - **Superseded by tickets 008/009 — `RobotState` is now published every
-  cycle, not merely defined.** Ticket 007 defined the struct only (`App::
+  cycle, not merely defined.** Ticket 007 defined the struct only (`Core::
   RobotLoop` still built a cycle-local `Motion::StateEstimator::Input`
   variable field-by-field back then); tickets 008 (packed telemetry +
   position-rebaseline trigger) and 009 (the `RobotLoop`/`Telemetry`
@@ -122,7 +122,7 @@ key=value token struct. `version_generated.h` is emitted by
 **`RobotState`'s seed material.** `Motion::StateEstimator::Input` was
 already ~90% of what `RobotState` needs — same encoder/pose/twist/OTOS
 fields, already float-typed, already dependency-shaped the same way
-(motion-owned, no `App::`/`msg::` spelling anywhere) — so it is the
+(motion-owned, no `Core::`/`msg::` spelling anywhere) — so it is the
 struct's natural starting point, per this ticket's own instructions.
 `RobotState` supersedes it field-for-field (every one of `Input`'s former
 16 flat fields maps onto a section field with no information loss — see
@@ -145,7 +145,7 @@ documented in the section's own comment, not encoded into the name. This
 matters because Decision 1 (sprint 124's own architecture, the "scope
 valve") explicitly defers the Drive/Sensors device-ownership reshuffle to
 sprint 125 — `RobotLoop` still reads `Devices::Motor`/`Devices::Otos`
-directly today, but `App::Drive`/a future `Sensors` subsystem take over
+directly today, but `Core::DifferentialDrive`/a future `Sensors` subsystem take over
 that reading next sprint. If a section were named `RobotLoopWheelData` or
 similar, that rename would be forced the moment ownership moves; naming it
 `Wheel` means the section survives the ownership reshuffle unchanged.
@@ -163,14 +163,14 @@ section in this struct disambiguates by section, not by per-field prefix
 `wheelLeftCmdVelocity`).
 
 **`Health` drops the issue sketch's `deadmanExpired`, adds
-`moveTimeout`/`shapingDisabled`.** `App::Deadman` was fully retired in an
+`moveTimeout`/`shapingDisabled`.** `Core::Deadman` was fully retired in an
 earlier sprint — there is no live "deadman expired" signal left to carry
 (its former telemetry flag, `kFlagEventDeadmanExpired`, is declared but
-unwired — `src/firm/app/telemetry.h`'s own comment). This ticket's own
+unwired — `src/firm/core/telemetry.h`'s own comment). This ticket's own
 instructions are to derive the field list from what genuinely exists
 today, not to reproduce the issue's illustrative sketch verbatim, so
 `Health` carries the two fault signals that ARE genuinely live instead
-(`App::RobotLoop`'s own `kFlagFaultMoveTimeout`/`kFlagFaultShapingDisabled`
+(`Core::RobotLoop`'s own `kFlagFaultMoveTimeout`/`kFlagFaultShapingDisabled`
 derivation, sourced from `Motion::Planner::tick()`'s own `Motion::
 TickResult` outcome and `Motion::Planner::shaperConfigured()` — 128,
 superseding the deleted `Motion::MoveQueue`).
@@ -200,12 +200,12 @@ it likewise has no control flow of its own to describe here — its
   — see §2/§3 above for its section list and constraints. One current
   consumer: `Motion::StateEstimator::update(const Input&, uint32_t now)`
   (`src/firm/motion/state_estimator.h`), where `Input` is a type alias onto
-  this struct. `App::RobotLoop` builds a cycle-local instance
+  this struct. `Core::RobotLoop` builds a cycle-local instance
   field-by-field today (ticket 008/009 wire a persistent, `RobotLoop`-
   owned instance through the rest of the cycle).
 - **`Types::Mode` (`robot_state.h`):** mirrors `msg::DriveMode`'s value
   set without depending on it — the one place the two enums are converted
-  between is `App::Telemetry`'s own projection step (ticket 008/009, not
+  between is `Core::Telemetry`'s own projection step (ticket 008/009, not
   yet built).
 - **`PROTO_TAG_OK/ERR/EVT/TLM/CFG/ID`, `PROTO_VERSION`, `FIRMWARE_VERSION`,
   `ReplyFn`/`ReplyCtx`, `KVPair`:** declared, header-only, no current
@@ -222,7 +222,7 @@ it likewise has no control flow of its own to describe here — its
 ## 6. Open Questions / Known Limitations
 
 - **RESOLVED (was open through 124-007): `RobotState` is now published
-  every cycle.** Tickets 008/009 closed this gap — `App::RobotLoop` owns a
+  every cycle.** Tickets 008/009 closed this gap — `Core::RobotLoop` owns a
   persistent `state_` member, publishes every section (`wheelLeft`/
   `wheelRight` including `cmdVelocity`/`positionEpoch`, `otos`,
   `perception`, `pose`, `estimate`, `command`, `health`) at its own
@@ -243,7 +243,7 @@ it likewise has no control flow of its own to describe here — its
   includes `types/protocol.h` at all. `main.cpp`'s banner
   (`DEVICE:NEZHA2:robot:<name>:<serial>`) is hand-formatted from name and
   serial only; it does not use `FIRMWARE_VERSION` or `PROTO_VERSION`.
-  `App::Comms::dispatchCleartext()` answers `HELLO`/`PING`/`ID`/`VER`
+  `Core::Comms::dispatchCleartext()` answers `HELLO`/`PING`/`ID`/`VER`
   with the literal strings `banner_`/`"PONG:t=<ms>"`/`idLine_`/
   `"VER:" FIRMWARE_VERSION_STR` (protocol v5, sprint 124 — supersedes the
   pre-124 `"OK pong"` reply this bullet used to cite), not `PROTO_TAG_OK`.
@@ -256,7 +256,7 @@ it likewise has no control flow of its own to describe here — its
 - **`ReplyFn`/`ReplyCtx`/`KVPair` are artifacts of the deleted
   dispatch-table architecture** (per-command handlers taking a reply
   sink + parsed kv-pairs), not the current single-loop design where
-  `App::Comms::sendReply()` takes a typed `msg::ReplyEnvelope` directly and
+  `Core::Comms::sendReply()` takes a typed `msg::ReplyEnvelope` directly and
   there is no generic kv-pair command parser.
 - **Recommendation (not actioned here):** this ticket is documentation-only
   and changes no code. A follow-up cleanup ticket should decide whether to

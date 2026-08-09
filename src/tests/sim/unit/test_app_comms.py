@@ -1,7 +1,7 @@
-"""Off-hardware acceptance proof for ticket 103-004 (SUC-004), App::Comms
-(``src/firm/app/comms.{h,cpp}``).
+"""Off-hardware acceptance proof for ticket 103-004 (SUC-004), Core::Comms
+(``src/firm/core/comms.{h,cpp}``).
 
-Compiles ``app_comms_harness.cpp`` together with ``src/firm/app/comms.cpp``,
+Compiles ``app_comms_harness.cpp`` together with ``src/firm/core/comms.cpp``,
 ``src/firm/messages/wire.cpp``, and ``src/firm/messages/wire_runtime.cpp`` with
 ``-DHOST_BUILD`` so comms.cpp's ``SerialTransport``/``RadioTransport`` ARM
 adapters (guarded ``#ifndef HOST_BUILD``) are compiled out entirely -- no
@@ -24,14 +24,14 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _TESTS_SIM_DIR = _REPO_ROOT / "src" / "tests" / "sim"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_comms_harness.cpp"
-_COMMS_SRC = _SOURCE_DIR / "app" / "comms.cpp"
+_COMMS_SRC = _SOURCE_DIR / "core" / "comms.cpp"
 # 128-012: the harness now drives Comms::updateStatus(state, tlm) with a
-# real App::Telemetry (for its flags()/mode() -- the two Telemetry-sourced
+# real Core::Telemetry (for its flags()/mode() -- the two Telemetry-sourced
 # STATUS fields), so telemetry.cpp joins the compile graph.
-_TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
-# 130-005: Telemetry::update() takes a const App::Drive& now (its own
+_TELEMETRY_SRC = _SOURCE_DIR / "core" / "telemetry.cpp"
+# 130-005: Telemetry::update() takes a const Core::DifferentialDrive& now (its own
 # observability accessors) -- drive.cpp must link too.
-_DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
+_DRIVE_SRC = _SOURCE_DIR / "core" / "differential_drive.cpp"
 _WIRE_SRC = _SOURCE_DIR / "messages" / "wire.cpp"
 _WIRE_RUNTIME_SRC = _SOURCE_DIR / "messages" / "wire_runtime.cpp"
 
@@ -54,7 +54,7 @@ def _find_cxx_compiler() -> str:
 
 
 def test_app_comms_harness_compiles_and_passes(tmp_path):
-    """Compile App::Comms + the harness (HOST_BUILD) and assert every scenario passes."""
+    """Compile Core::Comms + the harness (HOST_BUILD) and assert every scenario passes."""
     assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
     assert _COMMS_SRC.is_file(), f"comms.cpp missing: {_COMMS_SRC}"
     assert _TELEMETRY_SRC.is_file(), f"telemetry.cpp missing: {_TELEMETRY_SRC}"

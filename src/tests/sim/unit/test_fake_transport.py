@@ -2,8 +2,8 @@
 ``TestSupport::FakeTransport`` (``src/tests/sim/support/fake_transport.h``).
 
 Compiles ``fake_transport_harness.cpp`` with ``-DHOST_BUILD``.
-``fake_transport.h`` only pulls in ``src/firm/app/comms.h`` for the abstract
-``App::Transport`` base class (a pure interface -- no ``.cpp`` to link), so
+``fake_transport.h`` only pulls in ``src/firm/core/comms.h`` for the abstract
+``Core::Transport`` base class (a pure interface -- no ``.cpp`` to link), so
 this is the smallest possible compile unit: no ``comms.cpp``, no
 ``wire.cpp``/``wire_runtime.cpp``, no ``MicroBit.h`` anywhere in this graph.
 Mirrors ``test_app_comms.py``'s exact shape: compile with the system C++

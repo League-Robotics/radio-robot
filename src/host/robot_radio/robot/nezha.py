@@ -1,6 +1,6 @@
 """Nezha — robot driver for the Nezha2 firmware, protocol v2.
 
-Commands (full v2 reference in src/firm/app/CommandProcessor.cpp):
+Commands (full v2 reference in src/firm/core/CommandProcessor.cpp):
 
 Motion
 ------

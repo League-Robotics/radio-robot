@@ -12,7 +12,7 @@ one labelled row per component:
     encpose— encoder-only dead-reckoned pose              [mm, mm, deg]
     otos   — raw OTOS pose                                [mm, mm, deg]
     twist  — fused body-frame velocity + velocity arrow   [mm/s, deg/s]
-    heading src — App::HeadingSource's currently-active sensor (109-005,
+    heading src — Core::HeadingSource's currently-active sensor (109-005,
                   SUC-004; decoded 110-002). This is a standing stakeholder
                   requirement ("I want to know if you're using the
                   [encoders]... that's a big deal") — the row is styled
@@ -228,7 +228,7 @@ def fmt_loop_timing(cycle_busy: "int | None", cycle_period: "int | None") -> str
 
 
 def fmt_duty_per_speed(left: "float | None", right: "float | None") -> str:
-    """App::Drive's installed conversion scale ``[duty/(mm/s)]``, per wheel
+    """Core::DifferentialDrive's installed conversion scale ``[duty/(mm/s)]``, per wheel
     (130-005, issue 04's folded-in observability mandate) -- ``—`` if
     either is absent (no TLMFrame decoded yet)."""
     if left is None or right is None:
@@ -237,7 +237,7 @@ def fmt_duty_per_speed(left: "float | None", right: "float | None") -> str:
 
 
 def fmt_bias(left: "float | None", right: "float | None") -> str:
-    """App::Drive's Stage C adapted bias ``[mm/s]``, per wheel (130-005) --
+    """Core::DifferentialDrive's Stage C adapted bias ``[mm/s]``, per wheel (130-005) --
     ``—`` if either is absent."""
     if left is None or right is None:
         return "—"
@@ -245,7 +245,7 @@ def fmt_bias(left: "float | None", right: "float | None") -> str:
 
 
 def fmt_pid(left: "float | None", right: "float | None") -> str:
-    """App::Drive's Stage B last-computed fast-PID output ``[mm/s]``, per
+    """Core::DifferentialDrive's Stage B last-computed fast-PID output ``[mm/s]``, per
     wheel (130-005) -- ``—`` if either is absent."""
     if left is None or right is None:
         return "—"
@@ -427,7 +427,7 @@ def build_telemetry_panel(recorder: "Any" = None) -> "tuple[Any, Any]":
         ("twist", "tlm_val_twist", True, "tlm_arrow_twist"),
         ("heading src", "tlm_val_heading_source", False, None),
         ("loop", "tlm_val_loop", False, None),  # 122-003
-        # App::Drive's unified wheel-speed controller (130-005, issue 04's
+        # Core::DifferentialDrive's unified wheel-speed controller (130-005, issue 04's
         # folded-in observability mandate).
         ("dutyPerSpeed", "tlm_val_duty_per_speed", False, None),
         ("bias", "tlm_val_bias", False, None),

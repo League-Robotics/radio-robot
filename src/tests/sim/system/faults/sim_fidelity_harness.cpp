@@ -6,7 +6,7 @@
 // both the WheelPlant and OtosPlant sides.
 //
 // Unlike fault_knobs_harness.cpp / sim_api_harness.cpp (which run the FULL
-// TestSim::SimHarness -- the real App::RobotLoop against SimPlant), this
+// TestSim::SimHarness -- the real Core::RobotLoop against SimPlant), this
 // harness exercises the REAL Hal::Otos leaf (src/firm/hardware/generic/real_otos.cpp)
 // directly against a bare TestSim::SimPlant -- no ScriptedI2CHook, no
 // RobotLoop -- so it is SimPlant's own defaultRead()/defaultWrite() fidelity

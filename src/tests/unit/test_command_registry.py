@@ -52,7 +52,7 @@ _CPP_ROW_RE = re.compile(
 # spec, not a tautology.
 # WHEELS/ESTOP added by the command-ingestion rework (command-ingestion-
 # ring-buffered-comms-subsystem-routing-two-stops.md §2): WHEELS is the
-# dumb, time-bounded teleop primitive routed straight to App::Drive, ESTOP
+# dumb, time-bounded teleop primitive routed straight to Core::DifferentialDrive, ESTOP
 # is "halt everything now" -- the meaning STOP used to carry before it
 # became a planned, queued stop.
 # 2026-07-29 additions, all cleartext so they work from a plain terminal:
@@ -67,7 +67,7 @@ _CPP_ROW_RE = re.compile(
 #             it cannot drift from this registry.
 #   DBG    -- 129-003: unsolicited firmware->host debug message channel,
 #             compiled in ONLY for bench (ROBOT_DEBUG) and Sim/host
-#             (HOST_BUILD) builds -- see src/firm/app/debug.h. Registered
+#             (HOST_BUILD) builds -- see src/firm/core/debug.h. Registered
 #             here regardless (a schema-level closed verb set, not a
 #             per-build one) so the host codec always recognizes "DBG:" as
 #             cleartext rather than counting it malformed.

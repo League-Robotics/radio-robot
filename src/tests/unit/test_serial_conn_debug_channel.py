@@ -178,7 +178,7 @@ def test_raising_on_debug_handler_does_not_disturb_telemetry_delivered_before_it
 
 
 def test_oversized_dbg_line_does_not_raise_and_still_reaches_on_debug():
-    """A DBG line far larger than anything App::debugf()'s own
+    """A DBG line far larger than anything Core::debugf()'s own
     kDebugMsgMaxBytes (200) bound would ever produce -- proves the HOST side
     places no assumption on DBG line length either (a crafted/corrupted
     line, not just a well-behaved firmware one)."""

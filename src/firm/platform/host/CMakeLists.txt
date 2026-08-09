@@ -42,11 +42,11 @@ set(MOTION_DIR "${REPO_ROOT}/src/firm/motion")
 # Present:
 #   app/*.cpp                 -- Comms/Drive/Odometry/Preamble/RobotLoop/
 #                                 Telemetry (the single-loop rebuild's
-#                                 whole App:: graph)
+#                                 whole Core:: graph)
 #   app/boot_wiring.cpp, app/boot_calibration.cpp
 #                              -- 130-002 (unify-sim-and-robot-composition-
 #                                 roots.md): the ONE shared composition
-#                                 root (App::composeRobot()/RobotGraph) and
+#                                 root (Core::composeRobot()/RobotGraph) and
 #                                 its Config::boot_config-reading
 #                                 calibration helpers -- TestSim::
 #                                 SimHarness (sim_harness.h) calls the SAME
@@ -103,27 +103,27 @@ set(MOTION_DIR "${REPO_ROOT}/src/firm/motion")
 #                                 sim_configure_drive() config-push path.
 # ---------------------------------------------------------------------------
 set(APP_SOURCES
-    "${SOURCE_DIR}/app/comms.cpp"
-    "${SOURCE_DIR}/app/configurator.cpp"
-    # debug.cpp (129-003): App::debugf()'s only implementation -- ALWAYS
+    "${SOURCE_DIR}/core/comms.cpp"
+    "${SOURCE_DIR}/core/configurator.cpp"
+    # debug.cpp (129-003): Core::debugf()'s only implementation -- ALWAYS
     # live here (HOST_BUILD is unconditionally defined for this whole
-    # library, above), so SimHarness::App::setDebugSink(&comms_) needs a
+    # library, above), so SimHarness::Core::setDebugSink(&comms_) needs a
     # real definition, not the ARM-release inline no-op stub.
-    "${SOURCE_DIR}/app/debug.cpp"
-    "${SOURCE_DIR}/app/drive.cpp"
-    "${SOURCE_DIR}/app/preamble.cpp"
-    "${SOURCE_DIR}/app/robot_loop.cpp"
-    "${SOURCE_DIR}/app/telemetry.cpp"
+    "${SOURCE_DIR}/core/debug.cpp"
+    "${SOURCE_DIR}/core/differential_drive.cpp"
+    "${SOURCE_DIR}/core/preamble.cpp"
+    "${SOURCE_DIR}/core/robot_loop.cpp"
+    "${SOURCE_DIR}/core/telemetry.cpp"
     # 130-002 -- the shared composition root, see this file's own "Present"
     # comment above.
-    "${SOURCE_DIR}/app/boot_wiring.cpp"
-    "${SOURCE_DIR}/app/boot_calibration.cpp"
+    "${SOURCE_DIR}/core/boot_wiring.cpp"
+    "${SOURCE_DIR}/core/boot_calibration.cpp"
 )
 # odometry.cpp (122-002, motion-library extraction ticket 2): lives under
 # MOTION_DIR (122-001: src/firm/motion, a sibling of src/firm), not
 # SOURCE_DIR. The OTOS-perception half odometry.cpp used to also define
 # (applyOtosSample()) is now a private RobotLoop method (robot_loop.cpp,
-# APP_SOURCES) -- Motion::Odometry may not depend on Devices::Otos/App::
+# APP_SOURCES) -- Motion::Odometry may not depend on Devices::Otos/Core::
 # Telemetry::Frame.
 #
 # Sprint 128 ticket 014 deleted stop_condition.cpp/velocity_shaper.cpp/
@@ -142,7 +142,7 @@ set(MOTION_SOURCES
     "${MOTION_DIR}/planner/shape.cpp"
     "${MOTION_DIR}/planner/estimation.cpp"
     "${MOTION_DIR}/planner/planner.cpp"
-    # Navigator integration (135-004): App::RobotLoop now calls Motion::
+    # Navigator integration (135-004): Core::RobotLoop now calls Motion::
     # Navigator (135-003), which itself calls Motion::ArcSolver (135-002)
     # -- both become part of the actual firmware/sim image for the first
     # time in this ticket.
@@ -155,7 +155,7 @@ set(DEVICE_SOURCES
     "${SOURCE_DIR}/hardware/planetx/color_sensor.cpp"
     "${SOURCE_DIR}/hardware/planetx/line_sensor.cpp"
 )
-# config/persisted_tuning.cpp (114-004) -- App::RobotLoop (APP_SOURCES,
+# config/persisted_tuning.cpp (114-004) -- Core::RobotLoop (APP_SOURCES,
 # above) now #includes config/persisted_tuning.h and calls its pure
 # serializeSnapshot()/Config::TuningStore seam directly, so this TU must
 # link into the host lib too. persisted_tuning.cpp's own #ifndef HOST_BUILD
@@ -165,7 +165,7 @@ set(DEVICE_SOURCES
 #
 # config/boot_config.cpp (130-002, REVERSED from this file's pre-130-002
 # "Absent" note): bakes in the active robot JSON at ARM build time -- now
-# linked host-side too, so App::composeRobot() bakes the SAME calibration
+# linked host-side too, so Core::composeRobot() bakes the SAME calibration
 # in both the sim and hardware composition roots by default. Has zero
 # CODAL includes (see boot_config.h's own header), so nothing prevents
 # linking it here.

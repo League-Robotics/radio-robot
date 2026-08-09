@@ -1,5 +1,5 @@
 // app_robot_loop_harness.cpp -- off-hardware acceptance harness for ticket
-// 105-001 (SUC-018), App::RobotLoop (src/firm/app/robot_loop.{h,cpp}), the
+// 105-001 (SUC-018), Core::RobotLoop (src/firm/app/robot_loop.{h,cpp}), the
 // boot loop + main cycle body extracted from src/firm/main.cpp.
 //
 // Proves the extraction is genuinely host-buildable and runnable: constructs
@@ -7,7 +7,7 @@
 // scripted deterministically via TestSim::ScriptedI2CHook (108-009), and a
 // TestSim::SimClock/SimSleeper pair (tests/_infra/sim/sim_clock.cpp, the
 // Platform::Clock/Sleeper host-test fakes -- sprint 108 ticket 010), a
-// minimal App::Transport stub in place of real serial/radio, drives boot()
+// minimal Core::Transport stub in place of real serial/radio, drives boot()
 // to completion, then cycle() a few times, and asserts: no bus script
 // under/over-run (proves cycle ordering matches what main.cpp's
 // pre-extraction body actually issued), encoder-derived position()/
@@ -41,7 +41,7 @@
 // Mirrors app_preamble_harness.cpp's exact scripting/assertion-plumbing
 // conventions (this codebase's established per-harness-file style).
 //
-// 115-005 (gut S1) update: App::Pilot/Motion::Executor/App::HeadingSource
+// 115-005 (gut S1) update: Core::Pilot/Motion::Executor/Core::HeadingSource
 // are deleted along with the rest of the motion stack -- RobotLoop's
 // constructor drops the Pilot& parameter and gains
 // Hardware::ColorSensorLeaf&/Hardware::LineSensorLeaf& (already-constructed
@@ -59,11 +59,11 @@
 #include <deque>
 #include <string>
 
-#include "app/comms.h"
-#include "app/drive.h"
-#include "app/preamble.h"
-#include "app/robot_loop.h"
-#include "app/telemetry.h"
+#include "core/comms.h"
+#include "core/differential_drive.h"
+#include "core/preamble.h"
+#include "core/robot_loop.h"
+#include "core/telemetry.h"
 #include "config/persisted_tuning.h"
 #include "hardware/planetx/color_sensor.h"
 #include "hal/device_config.h"
@@ -126,18 +126,18 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
 // clock, cycle() the loop" step loop in this file (LiveFixture::step() below
 // plus the standalone scenario functions that build their own local
 // plant/clock/robotLoop instead of using LiveFixture). Derived from
-// App::RobotLoop::kCycle (robot_loop.h), NOT an independently-hardcoded
+// Core::RobotLoop::kCycle (robot_loop.h), NOT an independently-hardcoded
 // matching literal -- exactly the class of drift this ticket exists to
 // close off (matches TestSim::SimHarness::kCycleDtUs's own derivation,
 // sim_harness.h).
-constexpr uint32_t kCycleDtUs = App::RobotLoop::kCycle * 1000;  // [us]
+constexpr uint32_t kCycleDtUs = Core::RobotLoop::kCycle * 1000;  // [us]
 
-// --- Minimal App::Transport stub -- no real serial/radio, ever. readLine()
+// --- Minimal Core::Transport stub -- no real serial/radio, ever. readLine()
 // always reports "nothing ready" (this harness does not need to inject
 // commands to prove the extraction runs); send()/sendReliable() just record
 // whether anything was ever sent, proving Telemetry's own emit() path is
 // reachable end-to-end through Comms with no MicroBit.h dependency. -------
-class NullTransport : public App::Transport {
+class NullTransport : public Core::Transport {
  public:
   bool readLine(char*, uint16_t, uint16_t*) override { return false; }
   void send(const uint8_t*, uint16_t) override { ++sendCount; }
@@ -262,7 +262,7 @@ void scriptLineBeginSuccess(TestSim::ScriptedI2CHook& bus) {
 // sat between motorL_.tick() and motorR_.tick(), activating R immediately
 // but deferring L's own first write to cycle 1 -- the asymmetry that
 // produced the straight-leg-crab actuation skew). Both gains are zero
-// (App::Drive's own constructed default, 125-003), so duty is
+// (Core::DifferentialDrive's own constructed default, 125-003), so duty is
 // deterministically 0 forever after each leaf's own first write --
 // write-on-change then skips every subsequent cycle for that leaf,
 // matching this scenario's own 4/2/2 write-count schedule below (both
@@ -340,7 +340,7 @@ bool putMessageField(Buf& b, uint32_t number, const Buf& nested) {
 // armorLine() -- 124-005 (protocol v5 Part A, "framing grammar cutover"):
 // builds the COMPLETE wire LINE, `<command>':'<COBS+CRC bytes>` (CRC-then-
 // COBS, delimiter 0x0A), byte-for-byte the same composition as
-// App::Comms::sendReply()/decodeBinaryFrame() / TestSupport::armor()
+// Core::Comms::sendReply()/decodeBinaryFrame() / TestSupport::armor()
 // (wire_test_codec.cpp). `command` is REQUIRED -- every dispatched binary
 // command needs a real registry verb name (messages/commands.h); every
 // call site below passes "MOVE" or "CONFIG" (this harness never dispatches
@@ -379,7 +379,7 @@ std::string armorLine(const uint8_t* raw, size_t rawLen, const char* command) {
 // specific ack landed, without reconstructing the entire frame's other
 // fields. Verifies the CRC (scoped over the parsed command, not just the
 // COBS framing) before returning, matching
-// App::Comms::decodeBinaryFrame()'s own contract. Every line this harness
+// Core::Comms::decodeBinaryFrame()'s own contract. Every line this harness
 // ever captures outbound is a primary Telemetry frame, verb "TLM" (see
 // telemetry.cpp's own doc comment for why the secondary frame reuses the
 // SAME verb).
@@ -459,18 +459,18 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
 
   NullTransport serialLink;
   NullTransport radioLink;
-  App::Comms comms(serialLink, radioLink, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms);
-  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  Core::Comms comms(serialLink, radioLink, "DEVICE:NEZHA2:robot:test:0");
+  Core::Telemetry tlm(comms);
+  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
-  // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
-  // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
+  // Core::StateEstimator -- default-constructed (0/0/200ms weights). 118
+  // ticket 004: QUARANTINED -- Core::MoveQueue no longer depends on this
   // member (its own former anticipation-lead completion path is deleted,
   // move_queue.h's own file header); kept solely for robotLoop's own
   // consumption below.
   Motion::StateEstimator stateEstimator;
   Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
-  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  Core::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   // --- Drive Preamble to done() BEFORE constructing/calling RobotLoop's
   // own boot() -- see this file's own derivation (robot_loop.cpp's boot()
@@ -497,7 +497,7 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   scriptColorBeginSuccess(bus);
   scriptLineBeginSuccess(bus);
 
-  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+  Core::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
                             drive, odom, moveQueue, preamble, stateEstimator, clock, sleeper);
 
   int sleepsBeforeBoot = sleeper.sleepCount();
@@ -599,18 +599,18 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
-  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms);
-  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  Core::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  Core::Telemetry tlm(comms);
+  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
-  // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
-  // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
+  // Core::StateEstimator -- default-constructed (0/0/200ms weights). 118
+  // ticket 004: QUARANTINED -- Core::MoveQueue no longer depends on this
   // member (its own former anticipation-lead completion path is deleted,
   // move_queue.h's own file header); kept solely for robotLoop's own
   // consumption below.
   Motion::StateEstimator stateEstimator;
   Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
-  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  Core::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
   preamble.step();
@@ -621,12 +621,12 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   scriptColorBeginSuccess(bus);
   scriptLineBeginSuccess(bus);
 
-  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+  Core::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
                             drive, odom, moveQueue, preamble, stateEstimator, clock, sleeper);
   robotLoop.boot();
   checkTrue(preamble.done(), "boot() completes against the FakeTransport-based fixture too");
 
-  // Confirmed pre-patch baseline: App::Drive's own interim gains (125-003:
+  // Confirmed pre-patch baseline: Core::DifferentialDrive's own interim gains (125-003:
   // relocated from Hal::MotorConfig::velGains -- see drive.h's own
   // header) default to Motion::Gains{}'s all-zero default.
   checkFloatEq(drive.gainsLeft().kp, 0.0f, "left motor starts at the constructed (zero) kp");
@@ -798,18 +798,18 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
-  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms);
-  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  Core::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  Core::Telemetry tlm(comms);
+  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
-  // App::StateEstimator -- default-constructed (0/0/200ms weights). 118
-  // ticket 004: QUARANTINED -- App::MoveQueue no longer depends on this
+  // Core::StateEstimator -- default-constructed (0/0/200ms weights). 118
+  // ticket 004: QUARANTINED -- Core::MoveQueue no longer depends on this
   // member (its own former anticipation-lead completion path is deleted,
   // move_queue.h's own file header); kept solely for robotLoop's own
   // consumption below.
   Motion::StateEstimator stateEstimator;
   Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
-  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  Core::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
   preamble.step();
@@ -821,7 +821,7 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   scriptLineBeginSuccess(bus);
 
   MockTuningStore mockStore;
-  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+  Core::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
                             drive, odom, moveQueue, preamble, stateEstimator, clock, sleeper,
                             &mockStore);
   robotLoop.boot();
@@ -877,7 +877,7 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
 
 // ===========================================================================
 // 116-006 (MOVE dispatch cutover, SUC-050/SUC-053/SUC-054/SUC-055) -- the
-// new scenarios below exercise App::RobotLoop's MOVE dispatch/MoveQueue
+// new scenarios below exercise Core::RobotLoop's MOVE dispatch/MoveQueue
 // integration. Unlike the three scenarios above (which need a
 // ScriptedI2CHook's EXACT bus-transaction budget), these run against a
 // LIVE, UNSCRIPTED TestSim::SimPlant -- the same "always answers correctly,
@@ -894,7 +894,7 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
 // three ScriptedI2CHook scenarios above already use.
 //
 // 125-003: "velGains at Devices::Gains{}'s all-zero default" above now
-// means App::Drive's own interim gains (drive.h's own header) -- the SAME
+// means Core::DifferentialDrive's own interim gains (drive.h's own header) -- the SAME
 // property (commanded duty always 0 given a zero target AND zero gains)
 // holds unchanged, just relocated off Hal::MotorConfig.
 // ===========================================================================
@@ -904,7 +904,7 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
 // own first real transaction (no scripted budget to exhaust), so only
 // color_/line_'s own retry-until-exhausted pacing governs how long this
 // loop actually needs to run.
-void driveLivePlantBootToDone(App::Preamble& preamble, TestSim::SimClock& clock) {
+void driveLivePlantBootToDone(Core::Preamble& preamble, TestSim::SimClock& clock) {
   clock.setMicros(0);
   preamble.step();
   clock.setMicros(50000);
@@ -914,7 +914,7 @@ void driveLivePlantBootToDone(App::Preamble& preamble, TestSim::SimClock& clock)
   }
 }
 
-// LiveFixture -- the whole App:: graph, hand-composed against a live
+// LiveFixture -- the whole Core:: graph, hand-composed against a live
 // (unscripted) SimPlant, boot()ed by construction. `step(cycles)` mirrors
 // sim_harness.h's own step(): tick the plant BEFORE the loop reads it,
 // every cycle (that file's own header explains why this order is the one
@@ -933,21 +933,21 @@ struct LiveFixture {
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
 
-  App::Comms comms;
-  App::Telemetry tlm;
-  App::Drive drive;
+  Core::Comms comms;
+  Core::Telemetry tlm;
+  Core::DifferentialDrive drive;
   Motion::Odometry odom;
   // 117 ticket 003: default-constructed (encoder-only-v1 FusionWeights{}
   // default) -- directly reachable by every LiveFixture-based scenario
   // (unlike RobotLoop's own persistedTuning_/tuningStore_, which stay
-  // private). 118 ticket 004: QUARANTINED -- App::MoveQueue no longer
+  // private). 118 ticket 004: QUARANTINED -- Core::MoveQueue no longer
   // depends on this member (its own former anticipation-lead completion
   // path is deleted, move_queue.h's own file header); kept solely for
   // robotLoop's own consumption below.
   Motion::StateEstimator stateEstimator;
   Motion::MoveQueue moveQueue;
-  App::Preamble preamble;
-  App::RobotLoop robotLoop;
+  Core::Preamble preamble;
+  Core::RobotLoop robotLoop;
 
   LiveFixture()
       : motorL(plant, baseMotorConfig(1)),
@@ -1176,13 +1176,13 @@ void scenarioMoveArrivingDuringBootIsExplicitlyRejectedNeverSilentlyDropped() {
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
-  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms);
-  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  Core::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  Core::Telemetry tlm(comms);
+  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   Motion::StateEstimator stateEstimator;
   Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
-  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  Core::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   // Same power-settle sequencing as scenarioBootThenAFewCyclesRunToCompletion()
   // above: one no-op step() at t=0 latches Preamble's own start time; jumping
@@ -1199,7 +1199,7 @@ void scenarioMoveArrivingDuringBootIsExplicitlyRejectedNeverSilentlyDropped() {
   scriptColorBeginSuccess(bus);
   scriptLineBeginSuccess(bus);
 
-  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+  Core::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
                             drive, odom, moveQueue, preamble, stateEstimator, clock, sleeper);
   // Real firmware calls markConfigured() BEFORE run() (main.cpp) --
   // configured_ is already true by the time boot() runs in production.
@@ -1403,7 +1403,7 @@ void scenarioMoveTimeoutSetsFaultFlagOnEndingCycle() {
   LiveFixture fx;
   fx.robotLoop.markConfigured();
 
-  // App::Drive's own interim gains (125-003) default to Motion::Gains{}'s
+  // Core::DifferentialDrive's own interim gains (125-003) default to Motion::Gains{}'s
   // all-zero default -- commanded duty is 0 regardless of target velocity, so the
   // plant's wheels never actually move and odom_.pathLength() stays 0
   // forever: a DISTANCE stop condition can never be satisfied on its own,
@@ -1425,7 +1425,7 @@ void scenarioMoveTimeoutSetsFaultFlagOnEndingCycle() {
     fx.step(1);
     if (!fx.moveQueue.active()) {
       ended = true;
-      flagSetOnEndingCycle = (fx.tlm.flags() & App::kFlagFaultMoveTimeout) != 0;
+      flagSetOnEndingCycle = (fx.tlm.flags() & Core::kFlagFaultMoveTimeout) != 0;
     }
   }
   checkTrue(ended, "the Move ends within a bounded number of cycles (via timeout -- DISTANCE can "
@@ -1440,7 +1440,7 @@ void scenarioMoveTimeoutSetsFaultFlagOnEndingCycle() {
   // next cycle's own emit() call, matching the DISTANCE-stop scenario's
   // own "ack rides the next emitted frame" convention documented above.
   fx.step(1);
-  checkTrue((fx.tlm.flags() & App::kFlagFaultMoveTimeout) == 0,
+  checkTrue((fx.tlm.flags() & Core::kFlagFaultMoveTimeout) == 0,
             "kFlagFaultMoveTimeout clears again the very next cycle");
   {
     uint32_t errCode = 1;  // any nonzero sentinel -- overwritten by findAck() on a match
@@ -1479,7 +1479,7 @@ void scenarioShapingDisabledFlagSetWhileMoveActiveWithBothAxesOff() {
   LiveFixture fx;
   fx.robotLoop.markConfigured();
 
-  checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) == 0,
+  checkTrue((fx.tlm.flags() & Core::kFlagFaultShapingDisabled) == 0,
             "the bit stays clear with no MOVE active at all, even with shaping off");
 
   const uint32_t kCorrId = 9161;
@@ -1491,7 +1491,7 @@ void scenarioShapingDisabledFlagSetWhileMoveActiveWithBothAxesOff() {
           );
   fx.step(1);
   checkTrue(fx.moveQueue.active(), "the Move activates immediately");
-  checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) != 0,
+  checkTrue((fx.tlm.flags() & Core::kFlagFaultShapingDisabled) != 0,
             "the bit is SET the cycle the Move activates -- both axes' ShaperLimits are the "
             "default-off {} LiveFixture never overrides");
 
@@ -1503,11 +1503,11 @@ void scenarioShapingDisabledFlagSetWhileMoveActiveWithBothAxesOff() {
       ended = true;
       break;
     }
-    checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) != 0,
+    checkTrue((fx.tlm.flags() & Core::kFlagFaultShapingDisabled) != 0,
               "the bit stays SET on every cycle the Move remains active");
   }
   checkTrue(ended, "the Move ends within a bounded number of cycles");
-  checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) == 0,
+  checkTrue((fx.tlm.flags() & Core::kFlagFaultShapingDisabled) == 0,
             "the bit clears the same cycle the Move ends -- no MOVE active, no fault");
 }
 
@@ -1543,7 +1543,7 @@ void scenarioShapingDisabledFlagStaysClearWhenBothAxesEnabled() {
           );
   fx.step(1);
   checkTrue(fx.moveQueue.active(), "the Move activates immediately");
-  checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) == 0,
+  checkTrue((fx.tlm.flags() & Core::kFlagFaultShapingDisabled) == 0,
             "the bit stays clear once shaping is enabled on both axes");
 
   bool ended = false;
@@ -1554,7 +1554,7 @@ void scenarioShapingDisabledFlagStaysClearWhenBothAxesEnabled() {
       ended = true;
       break;
     }
-    checkTrue((fx.tlm.flags() & App::kFlagFaultShapingDisabled) == 0,
+    checkTrue((fx.tlm.flags() & Core::kFlagFaultShapingDisabled) == 0,
               "the bit stays clear on every cycle the Move remains active");
   }
   checkTrue(ended, "the Move ends within a bounded number of cycles");
@@ -1630,7 +1630,7 @@ void scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome() {
 // therefore odom_.pathLength()'s cycle-by-cycle growth -- are EXACTLY
 // known, letting this scenario place a DISTANCE stop threshold exactly on
 // the boundary a specific cycle's own odom_.integrate() call crosses.
-// Velocity gains stay at App::Drive's own constructed all-zero default
+// Velocity gains stay at Core::DifferentialDrive's own constructed all-zero default
 // (125-003 -- relocated off Hal::MotorConfig; the same "duty stays
 // exactly 0 regardless of target" posture every other ScriptedI2CHook
 // scenario in this file relies on -- see
@@ -1668,17 +1668,17 @@ void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
-  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms);
-  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  Core::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  Core::Telemetry tlm(comms);
+  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // Default-constructed StateEstimator (0/0/200ms weights) -- quarantined,
-  // App::MoveQueue no longer depends on it (see the other constructions in
+  // Core::MoveQueue no longer depends on it (see the other constructions in
   // this file for the full note); kept solely for robotLoop's own
   // consumption below.
   Motion::StateEstimator stateEstimator;
   Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
-  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  Core::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
   preamble.step();
@@ -1689,7 +1689,7 @@ void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
   scriptColorBeginSuccess(bus);
   scriptLineBeginSuccess(bus);
 
-  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+  Core::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
                             drive, odom, moveQueue, preamble, stateEstimator, clock, sleeper);
   robotLoop.boot();
   checkTrue(preamble.done(), "boot() completes against the ScriptedI2CHook-based fixture too");
@@ -1806,18 +1806,18 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
-  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms);
-  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  Core::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  Core::Telemetry tlm(comms);
+  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   // Turn-prediction campaign: stateEstimator constructed before moveQueue
   // -- see the earlier scenarios' own comment for why.
   Motion::StateEstimator stateEstimator;  // default weights (0.0/0.0/200ms)
   Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
-  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  Core::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   MockTuningStore mockStore;
-  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+  Core::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
                             drive, odom, moveQueue, preamble, stateEstimator, clock,
                             sleeper, &mockStore);
   driveLivePlantBootToDone(preamble, clock);
@@ -1922,7 +1922,7 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   // baseMotorConfig() (this file's own zero-gain default, used by every
   // scenario above) will not do here. 125-003: benchTestMotorConfig() no
   // longer carries gains at all (relocated to benchTestGains(), applied to
-  // App::Drive's own interim closed loop below, not Hal::MotorConfig).
+  // Core::DifferentialDrive's own interim closed loop below, not Hal::MotorConfig).
   Hardware::NezhaMotor motorL(plant, TestSupport::benchTestMotorConfig(1));
   Hardware::NezhaMotor motorR(plant, TestSupport::benchTestMotorConfig(2));
   Hardware::RealOtos otos(plant, Hal::OtosConfig{});
@@ -1931,9 +1931,9 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
-  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms);
-  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  Core::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  Core::Telemetry tlm(comms);
+  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/120.0f);
   drive.applyGainsLeft(TestSupport::benchTestGains());
   drive.applyGainsRight(TestSupport::benchTestGains());
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
@@ -1945,9 +1945,9 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   // own comment for why.
   Motion::StateEstimator stateEstimator;
   Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
-  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  Core::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
-  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+  Core::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
                             drive, odom, moveQueue, preamble, stateEstimator, clock,
                             sleeper);
   driveLivePlantBootToDone(preamble, clock);
@@ -2113,7 +2113,7 @@ void scenarioPrimaryFrameCarriesExactLoopTimingFields() {
 // ===========================================================================
 // 124-008 (issue Sec B4, sprint 124 architecture Decision 6): the
 // position-rebaseline policy. When a wheel's position() reaches
-// App::RobotLoop's own kPositionRebaselineMargin (30000mm, 2000mm below
+// Core::RobotLoop's own kPositionRebaselineMargin (30000mm, 2000mm below
 // EncoderReading.position's wire (abs_max)=32000), assembleFrame() must
 // call Hal::Motor::rebaseline() (software-only, zero bus traffic) --
 // NEVER Motor::resetPosition()/MotorArmor's staged dispatch (a real,
@@ -2147,13 +2147,13 @@ void scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch() {
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
-  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms);
-  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  Core::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  Core::Telemetry tlm(comms);
+  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   Motion::StateEstimator stateEstimator;
   Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
-  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  Core::Preamble preamble(motorL, motorR, otos, color, line, clock);
 
   clock.setMicros(0);
   preamble.step();
@@ -2164,7 +2164,7 @@ void scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch() {
   scriptColorBeginSuccess(bus);
   scriptLineBeginSuccess(bus);
 
-  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
+  Core::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm,
                             drive, odom, moveQueue, preamble, stateEstimator, clock, sleeper);
   robotLoop.boot();
   checkTrue(preamble.done(), "boot() completes against this scenario's own scripted fixture");
@@ -2251,7 +2251,7 @@ void scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch() {
             "the pre-rebaseline position into its own internal offset and zeroes the cache "
             "(nezha_motor.cpp's own softRebaseline()), so the WIRE value is not the raw "
             "unrebaselined 31000mm");
-  checkTrue((decoded1.telemetry.flags & App::kFlagFaultPositionClamped) == 0,
+  checkTrue((decoded1.telemetry.flags & Core::kFlagFaultPositionClamped) == 0,
             "kFlagFaultPositionClamped stays clear -- 31000mm never reached the 32000mm wire "
             "bound, so the defensive clamp path never engaged");
   checkFloatEq(motorL.position(), 0.0f,
@@ -2328,7 +2328,7 @@ void scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch() {
 // extended session") -- proving the policy fires correctly when actually
 // REACHED by accumulation, not merely when handed a pre-cooked value.
 //
-// A pure feedforward gain (kff only, kp/ki left at App::Drive's own
+// A pure feedforward gain (kff only, kp/ki left at Core::DifferentialDrive's own
 // zero default) is configured via CONFIG first: the (125-003, since
 // 128-015 deleted outright) motion-local wheel-velocity PID's own
 // compute() computed `ff = gains.kff * spAbs` with NO measured-velocity
@@ -2415,7 +2415,7 @@ void scenarioPositionRebaselineFiresOverExtendedLiveRunPastCumulativeTravel() {
     // cruise speed, so it must never fire across the WHOLE run. Checked
     // every single cycle (not just at the end) so a transient one-cycle
     // clamp can't hide behind a later cycle's clear.
-    checkTrue((fx.tlm.flags() & App::kFlagFaultPositionClamped) == 0,
+    checkTrue((fx.tlm.flags() & Core::kFlagFaultPositionClamped) == 0,
               "kFlagFaultPositionClamped never fires during the live run -- the margin means "
               "the defensive clamp path is never actually exercised at this cruise speed");
 
@@ -2500,22 +2500,22 @@ void scenarioClampToPositionWireBoundClampsAndFlagsOutOfRangeValues() {
 
   bool clamped = false;
 
-  float overPositive = App::RobotLoop::clampToPositionWireBound(40000.0f, &clamped);
+  float overPositive = Core::RobotLoop::clampToPositionWireBound(40000.0f, &clamped);
   checkFloatEq(overPositive, 32000.0f, "a value past the positive bound clamps to exactly +32000mm");
   checkTrue(clamped, "*clamped is set true for a positive out-of-bound value");
 
   clamped = false;
-  float overNegative = App::RobotLoop::clampToPositionWireBound(-40000.0f, &clamped);
+  float overNegative = Core::RobotLoop::clampToPositionWireBound(-40000.0f, &clamped);
   checkFloatEq(overNegative, -32000.0f, "a value past the negative bound clamps to exactly -32000mm");
   checkTrue(clamped, "*clamped is set true for a negative out-of-bound value");
 
   clamped = true;  // deliberately pre-set to true -- proves the false path also WRITES *clamped
-  float inBounds = App::RobotLoop::clampToPositionWireBound(15000.0f, &clamped);
+  float inBounds = Core::RobotLoop::clampToPositionWireBound(15000.0f, &clamped);
   checkFloatEq(inBounds, 15000.0f, "an in-bound value passes through unchanged");
   checkTrue(!clamped, "*clamped is set false for an in-bound value");
 
   clamped = false;
-  float atBound = App::RobotLoop::clampToPositionWireBound(32000.0f, &clamped);
+  float atBound = Core::RobotLoop::clampToPositionWireBound(32000.0f, &clamped);
   checkFloatEq(atBound, 32000.0f, "exactly at the bound passes through unchanged (not '> bound')");
   checkTrue(!clamped, "*clamped stays false exactly AT the bound -- the check is strictly greater-than");
 }
@@ -2576,14 +2576,14 @@ void scenarioEncoderAgesAreIndependentAndReflectRealCollectSkew() {
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
 
-  App::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
-  App::Telemetry tlm(comms);
-  App::Drive drive(motorL, motorR, /*trackWidth=*/120.0f);
+  Core::Comms comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0");
+  Core::Telemetry tlm(comms);
+  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/120.0f);
   Motion::Odometry odom(/*trackWidth=*/120.0f, motorL.position(), motorR.position());
   Motion::StateEstimator stateEstimator;
   Motion::MoveQueue moveQueue(drive, odom, /*trackWidth=*/120.0f);
-  App::Preamble preamble(motorL, motorR, otos, color, line, clock);
-  App::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm, drive, odom, moveQueue,
+  Core::Preamble preamble(motorL, motorR, otos, color, line, clock);
+  Core::RobotLoop robotLoop(plant, motorL, motorR, otos, color, line, comms, tlm, drive, odom, moveQueue,
                             preamble, stateEstimator, clock, sleeper);
 
   clock.setMicros(50000);
@@ -2641,8 +2641,8 @@ void scenarioEncoderAgesAreIndependentAndReflectRealCollectSkew() {
 // (test_robot_loop_tlm.py). This whole file was ALREADY -DHOST_BUILD
 // compile-broken before sprint 125 started (an unrelated, independent
 // motion-library rework -- "Planner integration," dated 2026-07-26 per
-// src/firm/platform/host/sim_harness.h's own comments -- changed App::RobotLoop's
-// constructor from 15 to 16 arguments and removed App::Drive::
+// src/firm/platform/host/sim_harness.h's own comments -- changed Core::RobotLoop's
+// constructor from 15 to 16 arguments and removed Core::DifferentialDrive::
 // gainsLeft()/gainsRight(); this file's LiveFixture and every other
 // RobotLoop-construction call site here still use the pre-Planner shape),
 // so the 4 scenarios 125-003 originally wrote here never actually ran --
@@ -2690,9 +2690,9 @@ int main() {
   // block above this main() where they used to live.
 
   if (g_failureCount == 0) {
-    std::printf("OK: all App::RobotLoop scenarios passed\n");
+    std::printf("OK: all Core::RobotLoop scenarios passed\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the App::RobotLoop scenarios\n", g_failureCount);
+  std::printf("FAILED: %d assertion(s) across the Core::RobotLoop scenarios\n", g_failureCount);
   return 1;
 }

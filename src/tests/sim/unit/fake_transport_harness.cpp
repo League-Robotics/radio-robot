@@ -1,11 +1,11 @@
 // fake_transport_harness.cpp -- off-hardware acceptance harness for ticket
 // 105-002 (SUC-019), TestSupport::FakeTransport
 // (src/tests/sim/support/fake_transport.h). Proves the primitive ITSELF, in
-// isolation from App::Comms/App::Telemetry: readLine() is non-blocking and
+// isolation from Core::Comms/Core::Telemetry: readLine() is non-blocking and
 // returns false the instant the inbound FIFO is empty, enqueueInbound()/
 // enqueueInboundBinary() lines drain in FIFO order at most one per
 // readLine() call -- 124-005: no more per-entry FrameKind tag, since
-// App::Transport itself no longer distinguishes text/binary at all (see
+// Core::Transport itself no longer distinguishes text/binary at all (see
 // comms.h's own file header) -- arbitrary (including realistic COBS+CRC-
 // framed, 123-002/124-005) content survives the FIFO round trip
 // byte-for-byte, and send()/sendReliable() are two genuinely separate
@@ -26,13 +26,13 @@
 // beginScenario/fail/checkTrue/checkStrEq assertion plumbing, PASS/FAIL
 // printf, exit nonzero on failure. Compiled by test_fake_transport.py with
 // -DHOST_BUILD -- fake_transport.h itself pulls in app/comms.h only for the
-// App::Transport base class, so no MicroBit.h anywhere in this graph.
+// Core::Transport base class, so no MicroBit.h anywhere in this graph.
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
 
-#include "app/comms.h"
+#include "core/comms.h"
 #include "support/fake_transport.h"
 
 namespace {
@@ -96,7 +96,7 @@ void scenarioReadLineReturnsNoneWhenEmpty() {
 // ===========================================================================
 // 2. enqueueInbound() lines drain in FIFO order, at most one per
 //    readLine() call -- matches Comms::pump()'s own "at most one line per
-//    call" contract. 124-005: no more per-entry kind tag (App::Transport
+//    call" contract. 124-005: no more per-entry kind tag (Core::Transport
 //    itself no longer distinguishes text/binary -- see comms.h's own file
 //    header).
 // ===========================================================================

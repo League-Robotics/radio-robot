@@ -1,5 +1,5 @@
 // app_preamble_harness.cpp -- off-hardware acceptance harness for ticket
-// 103-007 (SUC-007), App::Preamble (src/firm/app/preamble.{h,cpp}). Proves:
+// 103-007 (SUC-007), Core::Preamble (src/firm/app/preamble.{h,cpp}). Proves:
 // step() resolves every leaf to a terminal state (done()) via each leaf's
 // own REAL begin()/beginStep(nowUs) entry point over a TestSim::SimPlant
 // (108-002), scripted deterministically via TestSim::ScriptedI2CHook
@@ -38,7 +38,7 @@
 #include <cstdio>
 #include <string>
 
-#include "app/preamble.h"
+#include "core/preamble.h"
 #include "hardware/planetx/color_sensor.h"
 #include "hal/device_config.h"
 #include "hal/device_types.h"
@@ -229,7 +229,7 @@ void scenarioAllPresentHappyPath() {
                   snapshotTxns(bus).colorApds + snapshotTxns(bus).line,
               0, "construction alone issues zero I2C traffic");
 
-  App::Preamble preamble(left, right, otos, color, line, clock);
+  Core::Preamble preamble(left, right, otos, color, line, clock);
 
   // Round-robin order for this scenario (hand-verified against
   // preamble.cpp): Left, Right, Otos, Color, Line -- queue each leaf's
@@ -305,7 +305,7 @@ void scenarioOtosAbsentLatchesAfterRetries() {
   Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
   Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
-  App::Preamble preamble(left, right, otos, color, line, clock);
+  Core::Preamble preamble(left, right, otos, color, line, clock);
 
   // queueWrite()/queueRead() are ONE shared FIFO per I2CBus instance
   // covering EVERY address -- an unscripted call (OTOS here) pops nothing
@@ -388,7 +388,7 @@ void scenarioTransientMotorNakDuringBeginNotLatched() {
   Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
   Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
-  App::Preamble preamble(left, right, otos, color, line, clock);
+  Core::Preamble preamble(left, right, otos, color, line, clock);
 
   scriptMotorBeginTransientNakThenSuccess(bus);  // Left -- transient NAK, recovers
   scriptMotorBeginSuccess(bus);                  // Right -- clean
@@ -439,7 +439,7 @@ void scenarioMultipleAbsentLeavesStillTerminates() {
   Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});  // absent
   Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});     // absent
 
-  App::Preamble preamble(left, right, otos, color, line, clock);
+  Core::Preamble preamble(left, right, otos, color, line, clock);
 
   scriptMotorBeginSuccess(bus);  // Left
   scriptMotorBeginSuccess(bus);  // Right
@@ -475,9 +475,9 @@ int main() {
   scenarioMultipleAbsentLeavesStillTerminates();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all App::Preamble scenarios passed\n");
+    std::printf("OK: all Core::Preamble scenarios passed\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the App::Preamble scenarios\n", g_failureCount);
+  std::printf("FAILED: %d assertion(s) across the Core::Preamble scenarios\n", g_failureCount);
   return 1;
 }

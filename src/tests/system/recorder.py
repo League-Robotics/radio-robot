@@ -30,7 +30,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 # Authoritative telemetry flag-bit names, mirrored from firmware
-# (src/firm/app/telemetry.h:223-264) -- includes bits 17-20, which the host
+# (src/firm/core/telemetry.h:223-264) -- includes bits 17-20, which the host
 # TLMFrame exposes no properties for. RESERVED bits are named so an
 # unexpected set bit is visible rather than silently dropped.
 FLAG_NAMES = [

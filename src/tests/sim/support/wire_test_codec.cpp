@@ -244,7 +244,7 @@ bool decodeTelemetryMessage(const uint8_t* buf, size_t len, msg::Telemetry* out)
         if (!WireRuntime::beginLengthDelimited(buf, len, &pos, 0, &payloadLen)) return false;
         size_t outCount = 0;
         // maxCount from the STRUCT, never a literal: this was a hardcoded 4,
-        // which silently truncated every frame the moment App::kAckRingDepth
+        // which silently truncated every frame the moment Core::kAckRingDepth
         // grew past it (command-ingestion-ring-buffered-comms-subsystem-
         // routing-two-stops.md §1 raised it to 12). The truncation was
         // invisible -- decode still SUCCEEDED, just short -- so a burst's
@@ -487,7 +487,7 @@ uint16_t crcOverScope(const uint8_t* command, size_t commandLen, const uint8_t* 
 // included in this function's own return value, mirroring what a real
 // Transport::readLine() delivers to Comms::pumpTransport() with the
 // delimiter already stripped). Byte-for-byte the same composition as
-// App::Comms::sendReply()/decodeBinaryFrame() (comms.cpp): append the
+// Core::Comms::sendReply()/decodeBinaryFrame() (comms.cpp): append the
 // 2-byte CRC-16/CCITT-FALSE (little-endian, scoped over `command` too)
 // to the raw schema-encoded payload, THEN COBS-encode (delimiter 0x0A)
 // the combined bytes, THEN prepend `command ':'`. `command` is REQUIRED
@@ -495,7 +495,7 @@ uint16_t crcOverScope(const uint8_t* command, size_t commandLen, const uint8_t* 
 // dispatched command needs a real registry verb name. Callers push the
 // result via TestSupport::FakeTransport::enqueueInboundBinary() (an alias
 // of enqueueInbound() since 124-005 -- see that class's own doc comment),
-// matching how App::Comms::decodeBinaryFrame() reverses this exact
+// matching how Core::Comms::decodeBinaryFrame() reverses this exact
 // composition.
 std::string armor(const uint8_t* raw, size_t rawLen, const char* command) {
   uint8_t combined[256];
@@ -524,7 +524,7 @@ std::string armor(const uint8_t* raw, size_t rawLen, const char* command) {
 DecodedLine decodeOutboundLine(const std::string& line) {
   DecodedLine result;
 
-  // Reverse of App::Comms::sendReply()/Telemetry::emitSecondary()'s
+  // Reverse of Core::Comms::sendReply()/Telemetry::emitSecondary()'s
   // CRC-then-COBS composition (comms.cpp/telemetry.cpp) -- see this file's
   // own armor() for the exact mirrored encode side. `line` is the raw
   // `<COMMAND>':'<COBS bytes>` content a TestSupport::FakeTransport

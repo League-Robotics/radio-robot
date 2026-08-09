@@ -1,5 +1,5 @@
-// boot_calibration.h -- App:: free functions that convert the generated
-// Config::boot_config.cpp bake into the App:: / Motion:: types the
+// boot_calibration.h -- Core:: free functions that convert the generated
+// Config::boot_config.cpp bake into the Core:: / Motion:: types the
 // composition root wires together, and install that calibration onto an
 // already-constructed graph.
 //
@@ -9,7 +9,7 @@
 // baked constants), while boot_wiring.cpp's own graph-construction code
 // does not need to be recompiled/relinked just because a caller only wants
 // one small conversion helper (e.g. effectiveTrackWidth()). Splitting the
-// two avoids dragging boot_wiring.cpp's wider App::/Motion:: graph
+// two avoids dragging boot_wiring.cpp's wider Core::/Motion:: graph
 // dependencies into a test that only wants a calibration conversion, and
 // vice versa -- see 130-002's own ticket note on the "four-source-list
 // trap": a caller that links boot_calibration.cpp without boot_wiring.cpp
@@ -32,7 +32,7 @@
 #include "motion/planner/planner.h"
 #include "motion/planner/planner_types.h"
 
-namespace App {
+namespace Core {
 
 // toDeviceMotorConfig -- converts the boot config's wire-plane
 // msg::MotorConfig into the Devices-local MotorConfig NezhaMotor's
@@ -96,16 +96,16 @@ Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainC
 // themselves --
 //   - Motion::Planner (src/firm/motion/planner/): that tree's own, narrower
 //     dependency rule (src/firm/motion/DESIGN.md §3) forbids ANY
-//     App::/Devices::/Config:: dependency, no exception -- "No Devices::*,
-//     App::*, or bus/timing collaborator anywhere in this tree."
+//     Core::/Devices::/Config:: dependency, no exception -- "No Devices::*,
+//     Core::*, or bus/timing collaborator anywhere in this tree."
 //   - Hal::Motor / Hal::Otos (src/firm/devices/): the devices
 //     isolation invariant (src/firm/DESIGN.md §5) forbids devices/ from
 //     including messages/ or config/ headers, and (otos.h's own "Scope
 //     changes" section) Hal::Otos deliberately keeps its OWN narrow
 //     Hal::OtosConfig for exactly this reason today.
-// toDeviceMotorConfig() above already lives here, in App::, for the
+// toDeviceMotorConfig() above already lives here, in Core::, for the
 // identical reason -- these three functions are that same pattern
-// extended to Config::Robot: App:: is the one layer that can see both a
+// extended to Config::Robot: Core:: is the one layer that can see both a
 // Config:: type and the lower-layer subsystem's own API, so the
 // conversion/apply happens here, not down in the subsystem itself. Each
 // reuses an EXISTING setter -- no new firmware control logic.
@@ -159,4 +159,4 @@ void configureOtos(Hal::Otos& otos, const Config::Robot& config);
 // are combined, never a second copy that can drift from it.
 void configureNavigator(Motion::NavigatorLimits& limits, const Config::Robot& config);
 
-}  // namespace App
+}  // namespace Core

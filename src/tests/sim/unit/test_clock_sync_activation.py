@@ -11,8 +11,8 @@ hand-written fixture string."
 pure-Python unit level, but every reply line it feeds ``ping_burst()`` is
 hand-typed in Python (``f"PONG:t={t}"``, protocol v5). This test is different in
 kind, not degree: it compiles and runs ``clock_sync_activation_harness.cpp``
-(this directory), which links the REAL ``App::Comms::pumpTransport()``
-(``src/firm/app/comms.cpp``) -- the exact PING handler
+(this directory), which links the REAL ``Core::Comms::pumpTransport()``
+(``src/firm/core/comms.cpp``) -- the exact PING handler
 ``RobotLoop::cycle()`` calls on real/simulated firmware -- and prints its
 actual reply lines to stdout. Those lines, never touched by Python, are
 then fed straight into ``ClockSync.ping_burst()``'s own ``send_fn``
@@ -42,7 +42,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _TESTS_SIM_DIR = _REPO_ROOT / "src" / "tests" / "sim"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "clock_sync_activation_harness.cpp"
-_COMMS_SRC = _SOURCE_DIR / "app" / "comms.cpp"
+_COMMS_SRC = _SOURCE_DIR / "core" / "comms.cpp"
 _WIRE_SRC = _SOURCE_DIR / "messages" / "wire.cpp"
 _WIRE_RUNTIME_SRC = _SOURCE_DIR / "messages" / "wire_runtime.cpp"
 
@@ -67,7 +67,7 @@ def _find_cxx_compiler() -> str:
 def _run_harness(tmp_path: pathlib.Path) -> list[str]:
     """Compile clock_sync_activation_harness.cpp and return its stdout lines
     (one real "PONG:t=<ms>" reply per line, from the actual compiled
-    App::Comms code -- see this file's own module docstring)."""
+    Core::Comms code -- see this file's own module docstring)."""
     assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
     assert _COMMS_SRC.is_file(), f"comms.cpp missing: {_COMMS_SRC}"
     assert _WIRE_SRC.is_file(), f"wire.cpp missing (run scripts/gen_messages.py?): {_WIRE_SRC}"
@@ -123,7 +123,7 @@ def _run_harness(tmp_path: pathlib.Path) -> list[str]:
 
 
 def test_clock_sync_activates_against_real_firmware_ping_reply(tmp_path):
-    """ClockSync.ping_burst(), driven by the REAL App::Comms PING reply
+    """ClockSync.ping_burst(), driven by the REAL Core::Comms PING reply
     (not a hand-written fixture), converges to a non-None best_offset()."""
     from robot_radio.robot.clock_sync import ClockSync, _parse_pong_t
 

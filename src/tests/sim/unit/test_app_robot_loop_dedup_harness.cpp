@@ -1,6 +1,6 @@
 // test_app_robot_loop_dedup_harness.cpp -- sprint 127 ticket 002's own
 // off-hardware acceptance proof: verifies the `Move.id` dedup short-circuit
-// App::RobotLoop::handleMove() already ships (alreadyAccepted()/
+// Core::RobotLoop::handleMove() already ships (alreadyAccepted()/
 // recordAccepted()/acceptedMoveIds_, src/firm/app/robot_loop.cpp
 // ~216-258), against all four rules the source issue's own Verification
 // section names (clasi/sprints/127-host-side-path-planner-goto-and-path-
@@ -29,7 +29,7 @@
 //
 // Drives the real TestSim::SimHarness (src/firm/platform/host/sim_harness.h) -- the dedup
 // short-circuit lives one layer above Motion::Planner, in
-// App::RobotLoop::handleMove() itself, so a bare Planner (the scaffolding
+// Core::RobotLoop::handleMove() itself, so a bare Planner (the scaffolding
 // test_app_robot_loop_replace_harness.cpp's cases 1-5 use) has no id memory
 // whatsoever to exercise. Each scenario below gets its OWN fresh
 // SimHarness, matching this tier's established convention (see e.g. cases
@@ -371,7 +371,7 @@ void scenarioErrFullNotRecorded() {
   // = 2.0s" that became 1.28s -- less than the 1.5s these moves need -- when
   // kCycle came down 50 -> 32 on 2026-08-07).
   constexpr uint32_t kDrainWindow = 2000;  // [ms]
-  sim.step(static_cast<int>(kDrainWindow / App::RobotLoop::kCycle) + 1);
+  sim.step(static_cast<int>(kDrainWindow / Core::RobotLoop::kCycle) + 1);
   (void)sim.drainTelemetry();
   checkTrue(!sim.planner().active(), "the planner is idle -- all five fill moves completed and drained");
   checkUintEq(static_cast<uint32_t>(queueDepth(sim.planner())), 0u, "queue is fully drained");

@@ -1,13 +1,13 @@
 """Host-build unit test for ticket 131-005 (SUC-131-005): compiles
 ``app_robot_loop_pacing_harness.cpp`` together with every HOST_BUILD source
-the real ``App::composeRobot()`` graph needs (mirrors
+the real ``Core::composeRobot()`` graph needs (mirrors
 ``src/tests/sim/system/test_sim_api.py``'s own ``_all_sources()`` list, the
 current, composeRobot()-based recipe -- NOT ``test_app_robot_loop.py``'s
 older hand-wired-graph recipe, whose harness file is independently xfailed),
 runs the resulting binary, and asserts it exits 0.
 
 See ``app_robot_loop_pacing_harness.cpp``'s own file header for what the
-harness actually proves: that ``App::RobotLoop::cycle()``'s trailing pacing
+harness actually proves: that ``Core::RobotLoop::cycle()``'s trailing pacing
 block, now an absolute end-of-cycle deadline (131-005), converges the mean
 measured inter-cycle-start period to ``kCycle`` under injected per-block
 jitter/rounding, rather than drifting to ``kCycle`` plus a fixed structural
@@ -40,30 +40,30 @@ _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 
 # Mirrors test_sim_api.py's own _APP_SOURCES/_DEVICE_SOURCES/_CONFIG_SOURCES/
 # _MESSAGE_SOURCES/_KINEMATICS_SOURCES lists exactly -- this harness composes
-# the SAME App::composeRobot() graph sim_api_harness.cpp does (via
-# App::RobotGraph/App::composeRobot(), app/boot_wiring.h), just with a
+# the SAME Core::composeRobot() graph sim_api_harness.cpp does (via
+# Core::RobotGraph/Core::composeRobot(), app/boot_wiring.h), just with a
 # custom Devices::Sleeper (JitterySleeper) instead of TestSim::SimHarness's
 # fixed internal one. Keep this list in sync with test_sim_api.py's own if
 # composeRobot()'s own dependency graph ever grows -- see this codebase's
 # established per-harness source-list duplication convention
 # (coding-standards.md's "grep-ability" rationale).
 _APP_SOURCES = [
-    _SOURCE_DIR / "app" / "robot_loop.cpp",
-    _SOURCE_DIR / "app" / "comms.cpp",
-    _SOURCE_DIR / "app" / "debug.cpp",
-    _SOURCE_DIR / "app" / "configurator.cpp",
-    _SOURCE_DIR / "app" / "telemetry.cpp",
+    _SOURCE_DIR / "core" / "robot_loop.cpp",
+    _SOURCE_DIR / "core" / "comms.cpp",
+    _SOURCE_DIR / "core" / "debug.cpp",
+    _SOURCE_DIR / "core" / "configurator.cpp",
+    _SOURCE_DIR / "core" / "telemetry.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "profile.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "estimation.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "shape.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "planner.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
-    _SOURCE_DIR / "app" / "drive.cpp",
+    _SOURCE_DIR / "core" / "differential_drive.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
-    _SOURCE_DIR / "app" / "preamble.cpp",
-    _SOURCE_DIR / "app" / "boot_wiring.cpp",
-    _SOURCE_DIR / "app" / "boot_calibration.cpp",
+    _SOURCE_DIR / "core" / "preamble.cpp",
+    _SOURCE_DIR / "core" / "boot_wiring.cpp",
+    _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",

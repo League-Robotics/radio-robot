@@ -149,7 +149,7 @@ than the geometry does. Each named tour carries a `planner.tour.TourExecution`
 
 **The settle is passive — the GUI sends nothing at all during a dwell, and
 nothing may be added that does.** A zero-velocity `WHEELS` command is a teleop
-*takeover*, not a no-op: `App::RobotLoop::handleWheels()` calls
+*takeover*, not a no-op: `Core::RobotLoop::handleWheels()` calls
 `planner_.estop()`, which clears `carryValid_`, the planner's cumulative-heading
 intent ledger — the mechanism that makes this tour close. Holding a
 `wheels(0, 0)` lease through the dwells tears that ledger down at every corner:

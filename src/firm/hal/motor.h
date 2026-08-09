@@ -25,8 +25,8 @@
 // (kp/ki/kff/iMax/kaw) belongs to whoever owns the relocated control law.
 //
 // Surface: exactly the union of what the app graph calls today —
-// App::Drive (setDuty), App::Odometry (position/velocity),
-// App::Preamble (begin), App::RobotLoop (requestSample/tick/
+// Core::DifferentialDrive (setDuty), Core::Odometry (position/velocity),
+// Core::Preamble (begin), Core::RobotLoop (requestSample/tick/
 // position/velocity/connected/wedged/applyTravelCalib) — plus the raw-duty
 // and reset verbs the bench/test surface uses. wedged()/wedgeSuspect()
 // default to false so a bare (armor-less) motor is honest: nothing is
@@ -58,7 +58,7 @@ class Motor {
   virtual void setDuty(float duty) = 0;           // [-1, 1] raw duty
   virtual void setNeutral(Neutral mode) = 0;
 
-  // Live travel-calibration apply (App::configureMotor(), side-selected --
+  // Live travel-calibration apply (Core::configureMotor(), side-selected --
   // robot_config.proto's Motors.travel_calib_left/right). The ONE
   // MotorConfig field this interface still live-applies; gain routing
   // moved out with the PID (this file's own header).
@@ -66,9 +66,9 @@ class Motor {
   // No Config::Robot-consuming configure() on THIS interface (132-007,
   // the-configuration-object.md): the devices isolation invariant (this
   // file's own DESIGN.md §3) forbids devices/ from naming a Config::
-  // type at all. App::configureMotor(Hal::Motor&, const
+  // type at all. Core::configureMotor(Hal::Motor&, const
   // Config::Robot&, bool isLeft) -> bool (app/boot_calibration.h) is the
-  // Config::Robot-consuming entry point instead — the same App::-layer
+  // Config::Robot-consuming entry point instead — the same Core::-layer
   // pattern toDeviceMotorConfig() (same file) already uses for
   // msg::MotorConfig -> Hal::MotorConfig. It calls applyTravelCalib()
   // below, guarded like reconfigure()'s own at-rest check.

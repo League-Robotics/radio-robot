@@ -1,5 +1,5 @@
 // config_gate_harness.cpp -- ticket 114-001's own acceptance proof: the
-// configuration-completeness gate (App::RobotLoop::configured_/
+// configuration-completeness gate (Core::RobotLoop::configured_/
 // markConfigured()/isConfigured(), robot_loop.h/.cpp) makes "unconfigured" a
 // real, refusable state on TestSim::SimHarness, and the configured-then-
 // accepted transition actually produces real, measured wheel motion -- not
@@ -15,7 +15,7 @@
 // Scenarios:
 //   1. A freshly-constructed (and booted) SimHarness starts unconfigured.
 //   2. MOVE against an unconfigured harness: ack_err == ERR_NOT_CONFIGURED
-//      (flags bit 5 fresh); App::Drive's own staged twist is never touched
+//      (flags bit 5 fresh); Core::DifferentialDrive's own staged twist is never touched
 //      (driveTargetVelLeft/Right() stay 0) and no real (nonzero-speed) duty
 //      byte ever reaches the simulated bus (write-hook duty-history check).
 //   3. STOP against an unconfigured harness: still ack_err == 0/OK
@@ -32,7 +32,7 @@
 // 115-009 (gut S1's own test-sweep/green-bar ticket): a former Scenario 3
 // ("MOVE against an unconfigured harness") is DELETED, not ported --
 // `injectMove()`/`pilotQueueDepth()`/`pilotState()`/`Motion::State` are all
-// Motion::Executor/App::Pilot-era `TestSim::SimHarness` API deleted
+// Motion::Executor/Core::Pilot-era `TestSim::SimHarness` API deleted
 // wholesale by 115-002/115-006 (gut S1 motion-stack excision); there is no
 // MOVE command in the S1 minimal firmware to refuse. `findAck()` below is
 // also rewritten for the single ack slot (`Telemetry.ack_corr`/`ack_err`,
@@ -139,7 +139,7 @@ bool putMessageField(Buf& b, uint32_t number, const Buf& nested) {
 // armorLine() -- 124-005 (protocol v5 Part A, "framing grammar cutover"):
 // builds the COMPLETE wire LINE, `<command>':'<COBS+CRC bytes>` (CRC-then-
 // COBS, delimiter 0x0A), byte-for-byte the same composition as
-// App::Comms::sendReply()/decodeBinaryFrame() / TestSupport::armor()
+// Core::Comms::sendReply()/decodeBinaryFrame() / TestSupport::armor()
 // (wire_test_codec.cpp). `command` is REQUIRED -- every dispatched binary
 // command needs a real registry verb name (messages/commands.h); this
 // file's only caller (armorMotorConfigCommand() below) always passes
@@ -300,7 +300,7 @@ int main() {
     checkTrue(findAck(lines, 504, &errCode), "an ack for corrId=504 was seen");
     checkTrue(errCode == 0,
               "CONFIG{WHEEL_CONTROL} still acks ack_err==0/OK even though the harness is unconfigured");
-    // pid_kp routes to App::Drive's unified wheel-speed controller (Stage
+    // pid_kp routes to Core::DifferentialDrive's unified wheel-speed controller (Stage
     // B) via Configurator::install(WHEEL_CONTROL) -> Drive::configure() --
     // the ONE wheel controller every cmdVelocity writer shares (drive.h's
     // own header). 132-013 (patch-surface retirement): this used to be

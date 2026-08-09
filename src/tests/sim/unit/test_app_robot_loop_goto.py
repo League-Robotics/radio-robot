@@ -1,7 +1,7 @@
 """Off-hardware acceptance proof for sprint 135 ticket 004 (SUC-001/SUC-002/
-SUC-003): App::RobotLoop::handleGoto()/routeCommand()'s GOTO case/cycle()'s
+SUC-003): Core::RobotLoop::handleGoto()/routeCommand()'s GOTO case/cycle()'s
 Navigator-vs-Planner ownership dispatch, exercised end to end against the
-REAL App::RobotLoop graph (TestSim::SimHarness -- the same composeRobot()
+REAL Core::RobotLoop graph (TestSim::SimHarness -- the same composeRobot()
 composition root main.cpp uses, baking data/robots/tovez.json's real
 navigator block).
 
@@ -26,7 +26,7 @@ graph this file's harness carries.
 Compiles test_app_robot_loop_goto_harness.cpp against the same full
 HOST_BUILD dependency graph test_sim_harness_configure.py/
 test_app_robot_loop_replace.py compile (SimHarness composes the real
-App::RobotLoop graph -- see sim_harness.h's own header).
+Core::RobotLoop graph -- see sim_harness.h's own header).
 
     uv run python -m pytest src/tests/sim/unit/test_app_robot_loop_goto.py -v -s
 """
@@ -56,24 +56,24 @@ _BENCH_TEST_CONFIG_SRC = _SUPPORT_DIR / "bench_test_config.cpp"
 
 # Same full HOST_BUILD RobotLoop dependency graph test_sim_harness_configure.py/
 # test_app_robot_loop_replace.py compile (SimHarness composes the real
-# App::RobotLoop graph -- see sim_harness.h's own header).
+# Core::RobotLoop graph -- see sim_harness.h's own header).
 _APP_SOURCES = [
-    _SOURCE_DIR / "app" / "robot_loop.cpp",
-    _SOURCE_DIR / "app" / "comms.cpp",
-    _SOURCE_DIR / "app" / "debug.cpp",
-    _SOURCE_DIR / "app" / "configurator.cpp",
-    _SOURCE_DIR / "app" / "telemetry.cpp",
+    _SOURCE_DIR / "core" / "robot_loop.cpp",
+    _SOURCE_DIR / "core" / "comms.cpp",
+    _SOURCE_DIR / "core" / "debug.cpp",
+    _SOURCE_DIR / "core" / "configurator.cpp",
+    _SOURCE_DIR / "core" / "telemetry.cpp",
     _MOTION_PLANNER_DIR / "profile.cpp",
     _MOTION_PLANNER_DIR / "estimation.cpp",
     _MOTION_PLANNER_DIR / "shape.cpp",
     _MOTION_PLANNER_DIR / "planner.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
-    _SOURCE_DIR / "app" / "drive.cpp",
+    _SOURCE_DIR / "core" / "differential_drive.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
-    _SOURCE_DIR / "app" / "preamble.cpp",
-    _SOURCE_DIR / "app" / "boot_wiring.cpp",
-    _SOURCE_DIR / "app" / "boot_calibration.cpp",
+    _SOURCE_DIR / "core" / "preamble.cpp",
+    _SOURCE_DIR / "core" / "boot_wiring.cpp",
+    _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 _MOTION_SOURCES = []
 _DEVICE_SOURCES = [

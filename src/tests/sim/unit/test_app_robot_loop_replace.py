@@ -16,15 +16,15 @@ sets, matched to what each half of the harness needs:
     (``src/firm/motion/planner/planner.cpp`` + its own leaf modules --
     profile/shape/estimation (130-005: wheel_trim deleted; 130-007:
     wheel_pid/the parked M4 duty stage deleted too -- the wheel-speed
-    controller now lives entirely in App::Drive) -- plus the test-only
+    controller now lives entirely in Core::DifferentialDrive) -- plus the test-only
     zero-Python scaffolding at ``src/firm/motion/planner/tests/test_support.h``,
     the SAME machinery ``src/firm/motion/planner/tests/
     planner_scenarios_test.cpp``'s own ``testReplacePreempts()`` already
-    uses). No RobotLoop, no wire codec, no App::/Devices:: graph.
+    uses). No RobotLoop, no wire codec, no Core::/Devices:: graph.
   - The duplicate-id sanity check drives the real
     ``TestSim::SimHarness`` (``src/firm/platform/host/sim_harness.h``), because that
     dedup short-circuit lives one layer up, in
-    ``App::RobotLoop::handleMove()`` -- so this one scenario needs the
+    ``Core::RobotLoop::handleMove()`` -- so this one scenario needs the
     full HOST_BUILD RobotLoop dependency graph every other post-Planner-
     integration sim/unit harness compiles (mirrors
     ``test_sim_harness_configure.py``'s own source list).
@@ -59,45 +59,45 @@ _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _BENCH_TEST_CONFIG_SRC = _SUPPORT_DIR / "bench_test_config.cpp"
 
 # Same full HOST_BUILD RobotLoop dependency graph test_sim_harness_configure.py
-# compiles (SimHarness composes the real App::RobotLoop graph -- see
+# compiles (SimHarness composes the real Core::RobotLoop graph -- see
 # sim_harness.h's own header) -- needed by this file's own
 # scenarioDuplicateIdSanityNoOp(). Cases 1-5's own planner.cpp/shape.cpp/
 # profile.cpp/estimation.cpp are ALREADY part of this same list (Planner
 # integration folded them into every RobotLoop-linking graph; 130-005:
 # wheel_trim.cpp deleted; 130-007: wheel_pid.cpp/the parked M4 duty stage
 # deleted too -- the wheel-speed controller now lives entirely in
-# App::Drive) -- one combined source list serves both halves of the
+# Core::DifferentialDrive) -- one combined source list serves both halves of the
 # harness with no duplication.
 _APP_SOURCES = [
-    _SOURCE_DIR / "app" / "robot_loop.cpp",
-    _SOURCE_DIR / "app" / "comms.cpp",
-    # debug.cpp (129-003): App::debugf()'s only implementation --
+    _SOURCE_DIR / "core" / "robot_loop.cpp",
+    _SOURCE_DIR / "core" / "comms.cpp",
+    # debug.cpp (129-003): Core::debugf()'s only implementation --
     # TestSim::SimHarness's constructor always calls
-    # App::setDebugSink(&comms_) now (HOST_BUILD is defined below,
+    # Core::setDebugSink(&comms_) now (HOST_BUILD is defined below,
     # so the real, non-stub setDebugSink()/debugf() are what this
     # graph links), mirroring src/firm/platform/host/CMakeLists.txt's own
     # APP_SOURCES entry.
-    _SOURCE_DIR / "app" / "debug.cpp",
-    _SOURCE_DIR / "app" / "configurator.cpp",
-    _SOURCE_DIR / "app" / "telemetry.cpp",
+    _SOURCE_DIR / "core" / "debug.cpp",
+    _SOURCE_DIR / "core" / "configurator.cpp",
+    _SOURCE_DIR / "core" / "telemetry.cpp",
     _MOTION_PLANNER_DIR / "profile.cpp",
     _MOTION_PLANNER_DIR / "estimation.cpp",
     _MOTION_PLANNER_DIR / "shape.cpp",
     _MOTION_PLANNER_DIR / "planner.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
-    _SOURCE_DIR / "app" / "drive.cpp",
+    _SOURCE_DIR / "core" / "differential_drive.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
-    _SOURCE_DIR / "app" / "preamble.cpp",
-    # 130-002 -- the shared composition root (App::composeRobot()/
+    _SOURCE_DIR / "core" / "preamble.cpp",
+    # 130-002 -- the shared composition root (Core::composeRobot()/
     # RobotGraph) sim_harness.h now boots through, plus its
     # Config::boot_config-reading calibration helpers (the "four-source-
     # list trap" this ticket's own note calls out).
-    _SOURCE_DIR / "app" / "boot_wiring.cpp",
-    _SOURCE_DIR / "app" / "boot_calibration.cpp",
+    _SOURCE_DIR / "core" / "boot_wiring.cpp",
+    _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 # 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
-# entry here) is gone outright -- zero instantiations; App::Drive holds no
+# entry here) is gone outright -- zero instantiations; Core::DifferentialDrive holds no
 # controller of its own (open-loop duty from calibrated speed, drive.h's
 # own header). See src/firm/motion/DESIGN.md's "wheel control generations" note.
 _MOTION_SOURCES = []

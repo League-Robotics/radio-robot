@@ -2,8 +2,8 @@
 track derivation against the firmware's.
 
 ``robot_radio.testgui.transport.effective_track_width()`` must produce the
-identical number ``App::effectiveTrackWidth()``
-(``src/firm/app/boot_calibration.cpp``) derives at boot::
+identical number ``Core::effectiveTrackWidth()``
+(``src/firm/core/boot_calibration.cpp``) derives at boot::
 
     effective = trackwidth / rotational_slip   (slip > 0, else trackwidth)
 

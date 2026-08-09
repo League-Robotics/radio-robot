@@ -229,7 +229,7 @@ class AckEntry:
         int for a packed-scalar repeated field; there is no ``AckEntry``
         wire message any more, issue §B4), not the whole ``Telemetry``
         frame it rode in on. `corr_id`` is the upper bits, ``err`` the low
-        4 (mirrors ``App::Telemetry::pushAckRing()``'s own packing,
+        4 (mirrors ``Core::Telemetry::pushAckRing()``'s own packing,
         telemetry.cpp)."""
         corr_id = entry >> 4
         err = entry & 0xF
@@ -339,7 +339,7 @@ _FLAG_FAULT_SHAPING_DISABLED = 1 << 16
 _FLAG_FAULT_WHEEL_FROZEN_LEFT = 1 << 19
 _FLAG_FAULT_WHEEL_FROZEN_RIGHT = 1 << 20
 # 130-005 (wheel-speed-controller-moves-into-drive.md, issue 04's
-# folded-in observability mandate): App::Drive's deficit-flag policy --
+# folded-in observability mandate): Core::DifferentialDrive's deficit-flag policy --
 # a sustained large speed error while BOTH Stage C's bias and Stage B's
 # fast PID sit pinned at their configured authority. See telemetry.h's
 # own kFlagFaultWheelDeficitLeft/Right doc comment.
@@ -467,13 +467,13 @@ class TLMFrame:
         driving on.
       - ``fault_wheel_deficit_left``/``fault_wheel_deficit_right`` (bits
         21/22, 130-005, wheel-speed-controller-moves-into-drive.md) —
-        App::Drive's deficit-flag policy: a sustained large speed error
+        Core::DifferentialDrive's deficit-flag policy: a sustained large speed error
         while BOTH Stage C's bias and Stage B's fast PID sit pinned at
         their configured authority ceiling — no more correction to give,
         so the robot runs slow, loudly, rather than silently.
       - ``duty_per_speed_left``/``duty_per_speed_right``/``bias_left``/
         ``bias_right``/``pid_left``/``pid_right`` (fields 17-22, 130-005)
-        — App::Drive's unified wheel-speed controller's installed
+        — Core::DifferentialDrive's unified wheel-speed controller's installed
         conversion scale and live per-wheel Stage C/B state, always
         populated (no presence gate).
     These properties are the ticket's own "existing downstream consumer
@@ -547,7 +547,7 @@ class TLMFrame:
     otos_reading: "OtosReading | None" = None      # full OTOS burst (adds v_x/v_y/omega/time over `otos`); valid iff otos_present
     cycle_busy: int | None = None                 # [us] cycleStart -> frame-staging instant, THIS cycle (123-004, migrated from TelemetrySecondary)
     cycle_period: int | None = None               # [us] this cycle's cycleStart minus the previous cycle's (123-004)
-    # App::Drive's unified wheel-speed controller (130-005, issue 04's
+    # Core::DifferentialDrive's unified wheel-speed controller (130-005, issue 04's
     # folded-in observability mandate): the installed conversion scale,
     # Stage C's adapted bias, and Stage B's last-computed fast-PID output,
     # per wheel. Always populated (no presence gate) -- Drive always has
@@ -635,7 +635,7 @@ class TLMFrame:
 
     @property
     def fault_wheel_deficit_left(self) -> bool:
-        """Bit 21 (130-005) -- App::Drive's LEFT-wheel deficit-flag
+        """Bit 21 (130-005) -- Core::DifferentialDrive's LEFT-wheel deficit-flag
         policy: a sustained large speed error while BOTH the Stage C bias
         and the Stage B fast PID sit pinned at their configured authority
         -- there is no more correction to give, so the robot runs slow,
@@ -652,7 +652,7 @@ class TLMFrame:
     @property
     def fault_stall_left(self) -> bool:
         """Bit 24 -- the LEFT wheel was commanded to move and did not, so the
-        firmware HALTED the robot (App::RobotLoop::haltOnStall). This is the
+        firmware HALTED the robot (Core::RobotLoop::haltOnStall). This is the
         robot jammed against something: a rail, a wall, the table edge.
 
         Distinct from the two neighbouring wheel faults, and the distinction
@@ -793,7 +793,7 @@ class TLMFrame:
         frame.cycle_busy = int(telemetry.cycle_busy)
         frame.cycle_period = int(telemetry.cycle_period)
 
-        # App::Drive's unified wheel-speed controller (130-005) -- always
+        # Core::DifferentialDrive's unified wheel-speed controller (130-005) -- always
         # populated, no presence gate (see this dataclass's own field
         # comments above).
         frame.duty_per_speed_left = float(telemetry.duty_per_speed_left)
@@ -992,7 +992,7 @@ def tlm_drop_rate(frames: "list[TLMFrame]") -> float:
 # set_config()/the SET verb still recognize them for a human/hardware caller.
 #
 # pid.kp/ki/kff/iMax/kaw -- REPOINTED (130-005, unchanged by this ticket) onto
-# App::Drive's unified wheel-speed controller's Stage B fast-PID gains
+# Core::DifferentialDrive's unified wheel-speed controller's Stage B fast-PID gains
 # (WheelControl.pid_kp/pid_ki/pid_kaff/pid_i_max/pid_max), a LIVE,
 # PERSISTED target (configurator.h's own re-appliability table) -- these are
 # genuinely wired, unlike tw/rotSlip above.
@@ -1030,7 +1030,7 @@ _SET_KEY_TARGETS: dict[str, "tuple[int, str]"] = {
 # PlannerConfigPatch/CONFIG_PLANNER -- DELETED (115-003, gut-to-minimal-
 # firmware S1 motion-stack excision): minSpeed/headingKp/headingKd/
 # distanceKp/arriveDwell all patched PlannerConfigPatch (config.proto),
-# deleted wholesale alongside Motion::Executor/App::Pilot, the subsystems
+# deleted wholesale alongside Motion::Executor/Core::Pilot, the subsystems
 # that read them. There is no live config target left for any of the five
 # -- they are simply no longer valid set_config() keys (returns the same
 # "unknown key" outcome as any other bogus key).
@@ -1040,7 +1040,7 @@ _SET_KEY_TARGETS: dict[str, "tuple[int, str]"] = {
 # Watchdog window), which is itself deleted -- every Move is now
 # self-bounding (its own stop condition or required `timeout`), so the
 # separate deadman/watchdog window this key configured is gone along with
-# `App::Deadman`. `sTimeout` is simply no longer a valid set_config() key --
+# `Core::Deadman`. `sTimeout` is simply no longer a valid set_config() key --
 # returns the same "unknown key" outcome any other bogus key already
 # produced.
 _ALL_SET_KEYS = frozenset(_SET_KEY_TARGETS)
@@ -1175,7 +1175,7 @@ def _build_move_stop_kwargs(*, stop_time: float | None, stop_distance: float | N
 
 
 # GoTo.frame (envelope.proto) -- 0=WORLD (OTOS/SEED frame), 1=ROBOT (resolved
-# once, firmware-side, at acceptance). Matches App::RobotLoop::handleGoto()'s
+# once, firmware-side, at acceptance). Matches Core::RobotLoop::handleGoto()'s
 # own goTo.frame check and src/tests/bench/goto_otos.py's own
 # FRAME_WORLD/FRAME_ROBOT exactly -- see NezhaProtocol.go_to() below.
 GOTO_FRAME_WORLD = 0
@@ -1662,7 +1662,7 @@ class NezhaProtocol:
         Supersedes the deleted 103-era ``twist()`` (bare ``v_x``/``omega`` +
         deadman-arming ``duration``): every ``Move`` is now bounded by its
         own stop condition and a required ``timeout`` backstop instead of a
-        separate watchdog module (``App::Deadman`` no longer exists).
+        separate watchdog module (``Core::Deadman`` no longer exists).
 
         ``v_y`` is accepted and wire-forwarded but ignored server-side on
         this differential build (``MoveTwist.v_y``'s own doc comment) —
@@ -1681,7 +1681,7 @@ class NezhaProtocol:
         (``ValueError`` for a non-positive value) to avoid a wasted wire
         round trip for a command the firmware would reject anyway.
 
-        ``replace`` selects queue semantics against ``App::MoveQueue`` (1
+        ``replace`` selects queue semantics against ``Core::MoveQueue`` (1
         active + 4 pending): ``True`` (the default — matches every existing
         caller's own pre-Move "just drive this now" usage) flushes pending
         and preempts the active Move, starting this one immediately;
@@ -1820,7 +1820,7 @@ class NezhaProtocol:
         ``WHEELS``; command-ingestion-ring-buffered-comms-subsystem-routing-
         two-stops.md §2).
 
-        Routed firmware-side straight to ``App::Drive``, bypassing the
+        Routed firmware-side straight to ``Core::DifferentialDrive``, bypassing the
         planner entirely and superseding whatever it was doing. No profile,
         no shaping, no odometry stop condition — just a wheel pair held for
         a bounded window, then zero. This is the RIGHT call for teleop and
@@ -1839,14 +1839,14 @@ class NezhaProtocol:
         16/16 reproductions: a host that issued a stop ONCE and then went
         quiet got **936 mm of continued travel with no decay** — still
         going when the capture ended — and ``estop()`` failed 5 of 6
-        attempts. The duration expires correctly inside ``App::Drive``;
+        attempts. The duration expires correctly inside ``Core::DifferentialDrive``;
         what failed was the expiry reaching the MOTOR. The Nezha brick
         physically latches its last commanded speed and does not reset on
         an nRF52 reset, so a single zero write that is lost on the bus is
         permanent, not transient.
 
         Sprint 133 ticket 001 closed both halves of that gap (a derived-idle
-        safety arbitration step in ``App::RobotLoop``, and arming the stop
+        safety arbitration step in ``Core::RobotLoop``, and arming the stop
         re-assertion window on the commanded nonzero→zero transition rather
         than on an encoder reading). Verified in sim and by construction as
         of that ticket; hardware re-verification on ``tovez`` is ticket 004.
@@ -1903,7 +1903,7 @@ class NezhaProtocol:
             ``GOTO_FRAME_ROBOT`` (1) is the robot's own current body frame
             (+x forward, +y left) at the moment this command is ACCEPTED --
             resolved to world coordinates ONCE, firmware-side
-            (``App::RobotLoop::handleGoto()``), so the target does not
+            (``Core::RobotLoop::handleGoto()``), so the target does not
             chase the robot as it turns.
         speed: [mm/s] cruise-speed override; ``0.0`` (the default) falls
             open to the robot's own configured ``NavigatorLimits::speed``
@@ -1938,7 +1938,7 @@ class NezhaProtocol:
         Unlike ``move_twist()``/``move_wheels()``, there is no id-keyed
         acceptance/dedup ring on the firmware side for GO_TO
         (``RobotLoop::handleGoto()`` has none -- verified directly against
-        ``src/firm/app/robot_loop.cpp``, 135-007): every GO_TO, retried or
+        ``src/firm/core/robot_loop.cpp``, 135-007): every GO_TO, retried or
         genuinely new, calls ``Motion::Navigator::start()`` and (re)starts
         navigation toward whatever target it carries. A RETRY of a lost
         enqueue ack is still safe to resend with the SAME ``goto_id`` (it
@@ -1960,7 +1960,7 @@ class NezhaProtocol:
         """Halt everything NOW (``CommandEnvelope{estop: Estop{}}``, wire
         verb ``ESTOP``) — a zero-field oneof arm that "cannot be malformed."
 
-        Zeroes ``App::Drive``'s targets AND clears ``Motion::Planner``'s
+        Zeroes ``Core::DifferentialDrive``'s targets AND clears ``Motion::Planner``'s
         active + pending queue in the same cycle. The discarded queue
         entries get NO completion acks: you asked for a halt, not for a
         report that the things you cancelled finished.
@@ -2091,7 +2091,7 @@ class NezhaProtocol:
         matcher this method used): ``move_twist()``/``move_wheels()``/
         ``stop()``/``config()`` get no synchronous ``ReplyEnvelope`` of
         their own — their outcome rides ``Telemetry.acks`` (a depth-4
-        ring, each entry a real, once-pushed ``App::Telemetry::ack()``
+        ring, each entry a real, once-pushed ``Core::Telemetry::ack()``
         call) inside a subsequent ``Telemetry`` push. The pre-120 single
         slot (``ack_corr``/``ack_err``, valid iff ``flags`` bit 5) lost a
         command's ack the instant a LATER command's ack landed within the
@@ -2105,7 +2105,7 @@ class NezhaProtocol:
 
         DEPTH 4 -> 12 (command-ingestion-ring-buffered-comms-subsystem-
         routing-two-stops.md §1): the firmware now buffers inbound commands
-        in a ring (``App::kCmdRingDepth``) and drains the WHOLE ring in one
+        in a ring (``Core::kCmdRingDepth``) and drains the WHOLE ring in one
         control cycle, so a burst of N commands produces N acks inside a
         single frame. The ack ring was raised to match the command ring for
         exactly that reason -- at the old depth 4 a 5-command burst would

@@ -4,7 +4,7 @@
 the new config surface).
 
 ``sim_boot_config.py`` computes the Tier-2 (boot-only) ``Devices::
-MotorConfig``/``App::Drive``/rotation-calibration scalar sets
+MotorConfig``/``Core::DifferentialDrive``/rotation-calibration scalar sets
 ``gen_boot_config.py`` bakes into a real robot's ``boot_config.cpp``, but at
 sim-open time -- from EITHER a raw robot-JSON dict (still the OLD 13-section
 shape pending ticket 017's reshape -- calls ``gen_boot_config.py``'s own
@@ -17,7 +17,7 @@ groups DIRECTLY, no dict-path derivation needed at all).
 115-003 deleted this module's ``msg::PlannerConfig`` half
 (``planner_boot_config_for()``/``_heading_source_wire_value()``) wholesale
 -- ``msg::PlannerConfig`` itself, and every ``gen_boot_config.py`` mapping
-function it called, went with the deleted ``App::Pilot``/``Motion::Executor``
+function it called, went with the deleted ``Core::Pilot``/``Motion::Executor``
 subsystems (ticket 003's proto surgery). ``motor_boot_config_for()`` below
 is the sole survivor of that generation; ``drive_boot_config_for()``/
 ``drivetrain_boot_config_for()`` (125-007/113-005) round out this file's

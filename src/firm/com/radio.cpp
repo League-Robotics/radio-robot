@@ -78,7 +78,7 @@ bool Radio::poll(char* buf, uint16_t cap, uint16_t* outLen) {
     // UNCONDITIONAL terminator -- every sender (send(), the sole outbound
     // path) appends exactly one trailing '\n'; strip it here. No '\r'
     // stripping -- a binary line may legitimately carry 0x0D as
-    // content; App::Comms::dispatchLine() strips a trailing '\r' only once
+    // content; Core::Comms::dispatchLine() strips a trailing '\r' only once
     // it has classified the line as cleartext (see this class's own file
     // header).
     int contentLen = _msgLen;
@@ -125,11 +125,11 @@ void Radio::sendFragmented(const uint8_t* payload, int payloadLen) {
 
 void Radio::send(const uint8_t* data, uint16_t len) {
     // `data`/`len` is the full wire LINE content (a command-prefixed COBS
-    // body, or a cleartext reply -- App::Comms builds either shape the
+    // body, or a cleartext reply -- Core::Comms builds either shape the
     // same way before handing it here) + a single trailing '\n' delimiter
     // -- the ONE terminator every outbound line uses (see this class's
     // own file header). Payload buffer generously covers
-    // App::kMaxLineBytes (207) + 1 delimiter with headroom;
+    // Core::kMaxLineBytes (207) + 1 delimiter with headroom;
     // truncates (rather than overflows) on an over-length caller,
     // mirroring SerialPort::send()'s own defensive truncation.
     uint8_t payload[256];

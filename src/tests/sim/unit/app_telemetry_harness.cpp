@@ -1,5 +1,5 @@
 // app_telemetry_harness.cpp -- off-hardware acceptance harness for
-// App::Telemetry (src/firm/app/telemetry.{h,cpp}). Proves: the
+// Core::Telemetry (src/firm/app/telemetry.{h,cpp}). Proves: the
 // Types::RobotState -> wire msg::Telemetry projection via update()/emit()
 // (124-009, issue §B1 -- "one struct, filled once, consumed three times"),
 // the bounded ack ring's push/evict/persist behavior, flags derived from
@@ -40,9 +40,9 @@
 #include <cstring>
 #include <string>
 
-#include "app/comms.h"
-#include "app/drive.h"
-#include "app/telemetry.h"
+#include "core/comms.h"
+#include "core/differential_drive.h"
+#include "core/telemetry.h"
 #include "hal/motor.h"
 #include "firm/types/robot_state.h"
 #include "messages/envelope.h"
@@ -74,17 +74,17 @@ class StubMotor : public Hal::Motor {
   void rebaseline() override {}
 };
 
-// A single, never-ticked App::Drive -- every scenario below only needs
+// A single, never-ticked Core::DifferentialDrive -- every scenario below only needs
 // update()'s new Drive& parameter for its OBSERVABILITY accessors
 // (dutyPerSpeedLeft/Right()/biasLeft/Right()/pidLeft/Right()/
 // deficitLeft/Right()), all of which are safe to read on a freshly
 // constructed, uncalibrated Drive (they return their default-initialized
 // 0/0/false). Function-local statics so construction order relative to
 // this TU's other file-scope objects is never in question.
-App::Drive& testDrive() {
+Core::DifferentialDrive& testDrive() {
   static StubMotor left;
   static StubMotor right;
-  static App::Drive drive(left, right, /*trackWidth=*/200.0f);
+  static Core::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
   return drive;
 }
 
@@ -94,8 +94,8 @@ App::Drive& testDrive() {
 // takeCommand() pops from it). These scenarios each feed exactly one line
 // and want the one command it produced, so "pump then take" is the honest
 // local equivalent -- not a claim that pump() still stops after one line.
-App::Cmd pumpOne(App::Comms& comms, uint32_t now) {  // [ms]
-  App::Cmd cmd;
+Core::Cmd pumpOne(Core::Comms& comms, uint32_t now) {  // [ms]
+  Core::Cmd cmd;
   comms.pump(now);
   comms.takeCommand(cmd);  // leaves cmd at status kNone when nothing decoded
   return cmd;
@@ -151,7 +151,7 @@ void checkStrEq(const std::string& actual, const std::string& expected, const st
 // COBS, delimiter 0x0A) Comms::sendReply() itself builds, used here only to
 // construct scenario EXPECTATIONS independently of Telemetry's own send
 // path. `command` is REQUIRED and, for every scenario in this file, "TLM"
-// -- App::Telemetry never emits OK/ERR (envelope.proto's own doc comment:
+// -- Core::Telemetry never emits OK/ERR (envelope.proto's own doc comment:
 // no current firmware call site). The trailing '\n' terminator is a
 // transport concern, not included in this function's return value --
 // matches what a FakeTransport::sent() capture holds. ------
@@ -180,7 +180,7 @@ std::string armor(const uint8_t* raw, size_t rawLen, const char* command) {
 }
 
 std::string armorReply(const msg::ReplyEnvelope& env) {
-  uint8_t rawBuf[App::kMaxEnvelopeBytes];
+  uint8_t rawBuf[Core::kMaxEnvelopeBytes];
   uint16_t n = msg::wire::encode(env, rawBuf, sizeof(rawBuf));
   if (n == 0) return std::string();
   return armor(rawBuf, n, "TLM");
@@ -208,8 +208,8 @@ void scenarioUpdateProjectsWholeStateInOneCall() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   const uint32_t kNow = 1234;
 
@@ -278,10 +278,10 @@ void scenarioUpdateProjectsWholeStateInOneCall() {
   // this scenario stages both true for both sensors, so all four bits ride
   // the frame. (Production alternates the Fresh pair; that shape is covered
   // by scenarioParkedRobotWithAlternatingFreshLineColorStaysSilent().)
-  expected.flags = App::kFlagOtosPresent | App::kFlagOtosConnected | App::kFlagActive |
-                    App::kFlagConnLeft | App::kFlagConnRight |
-                    App::kFlagLinePresent | App::kFlagColorPresent |
-                    App::kFlagLineFresh | App::kFlagColorFresh;
+  expected.flags = Core::kFlagOtosPresent | Core::kFlagOtosConnected | Core::kFlagActive |
+                    Core::kFlagConnLeft | Core::kFlagConnRight |
+                    Core::kFlagLinePresent | Core::kFlagColorPresent |
+                    Core::kFlagLineFresh | Core::kFlagColorFresh;
   expected.enc_left = {msg::EncoderReading::packPosition(12.5f), msg::EncoderReading::packVelocity(100.0f),
                         /*age=*/111, /*position_epoch=*/0};
   expected.enc_right = {msg::EncoderReading::packPosition(-3.25f), msg::EncoderReading::packVelocity(-50.0f),
@@ -332,8 +332,8 @@ void scenarioAgeIsComputedIndependentlyPerReading() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   const uint32_t kNow = 1000;
 
@@ -350,7 +350,7 @@ void scenarioAgeIsComputedIndependentlyPerReading() {
   msg::Telemetry expected;
   expected.now = kNow;
   expected.seq = 0;
-  expected.flags = App::kFlagOtosPresent;
+  expected.flags = Core::kFlagOtosPresent;
   expected.enc_left.age = 8;
   expected.enc_right.age = 20;
   expected.otos.age = 35;
@@ -386,8 +386,8 @@ void scenarioAckRingCarriesEveryPushAndPersistsAcrossEmits() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   // Two acks land before the next emit() -- BOTH survive in the ring (no
   // single-slot overwrite any more, 124-008).
@@ -456,8 +456,8 @@ void scenarioFlagsAreFreshlyDerivedFromStateEveryUpdate() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   // Simulates the wheel/health-section publish point in RobotLoop::cycle()
   // (state_.health.wedgeLatch = motorL_.wedged() || motorR_.wedged();
@@ -472,7 +472,7 @@ void scenarioFlagsAreFreshlyDerivedFromStateEveryUpdate() {
   state.health.i2cSafetyNetCount = 1;
   state.health.wedgeLatch = true;
   telemetry.update(state, testDrive());
-  checkU64Eq(telemetry.flags(), App::kFlagFaultI2CSafetyNet | App::kFlagFaultWedgeLatch,
+  checkU64Eq(telemetry.flags(), Core::kFlagFaultI2CSafetyNet | Core::kFlagFaultWedgeLatch,
              "flags() reflects both bits set immediately after update()");
 
   telemetry.emit(0);
@@ -480,7 +480,7 @@ void scenarioFlagsAreFreshlyDerivedFromStateEveryUpdate() {
   msg::Telemetry expectedSet;
   expectedSet.now = 0;
   expectedSet.seq = 0;
-  expectedSet.flags = App::kFlagFaultI2CSafetyNet | App::kFlagFaultWedgeLatch;
+  expectedSet.flags = Core::kFlagFaultI2CSafetyNet | Core::kFlagFaultWedgeLatch;
   msg::ReplyEnvelope envSet;
   envSet.corr_id = 0;
   envSet.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
@@ -537,8 +537,8 @@ void scenarioWheelFrozenFlagsAreGatedAndIndependentOfWedgeLatch() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   Types::RobotState state;
   state.time.cycleStart = 0;
@@ -553,7 +553,7 @@ void scenarioWheelFrozenFlagsAreGatedAndIndependentOfWedgeLatch() {
   state.health.wheelFrozenLeft = false;
   state.health.wheelFrozenRight = false;
   telemetry.update(state, testDrive());
-  checkU64Eq(telemetry.flags(), App::kFlagFaultWedgeLatch,
+  checkU64Eq(telemetry.flags(), Core::kFlagFaultWedgeLatch,
              "idle-parked: wedgeLatch sets, neither wheel-frozen bit sets from the same idle condition");
 
   // LEFT wheel commanded and stuck -- only bit 19 sets, bit 20 and the raw
@@ -566,7 +566,7 @@ void scenarioWheelFrozenFlagsAreGatedAndIndependentOfWedgeLatch() {
   state.health.wheelFrozenLeft = true;
   state.health.wheelFrozenRight = false;
   telemetry.update(state, testDrive());
-  checkU64Eq(telemetry.flags(), App::kFlagFaultWheelFrozenLeft,
+  checkU64Eq(telemetry.flags(), Core::kFlagFaultWheelFrozenLeft,
              "left wheel frozen: only kFlagFaultWheelFrozenLeft sets");
 
   // Both wheels commanded and stuck (e.g. a wedged bus) -- both bits set
@@ -577,7 +577,7 @@ void scenarioWheelFrozenFlagsAreGatedAndIndependentOfWedgeLatch() {
   state.health.wheelFrozenLeft = true;
   state.health.wheelFrozenRight = true;
   telemetry.update(state, testDrive());
-  checkU64Eq(telemetry.flags(), App::kFlagFaultWheelFrozenLeft | App::kFlagFaultWheelFrozenRight,
+  checkU64Eq(telemetry.flags(), Core::kFlagFaultWheelFrozenLeft | Core::kFlagFaultWheelFrozenRight,
              "both wheels frozen: both bits set together");
 
   // Released -- both clear again via re-derivation, no caller-side un-set
@@ -608,8 +608,8 @@ void scenarioSetLiveFlagMutatesLiveFlagsIndependentlyOfUpdate() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   Types::RobotState state;
   state.time.cycleStart = 0;
@@ -620,8 +620,8 @@ void scenarioSetLiveFlagMutatesLiveFlagsIndependentlyOfUpdate() {
 
   // Simulates RobotLoop::cycle()'s own post-tick call site:
   // tlm_.setLiveFlag(kFlagFaultMoveTimeout, state_.health.moveTimeout);
-  telemetry.setLiveFlag(App::kFlagFaultMoveTimeout, true);
-  checkU64Eq(telemetry.flags(), App::kFlagFaultMoveTimeout,
+  telemetry.setLiveFlag(Core::kFlagFaultMoveTimeout, true);
+  checkU64Eq(telemetry.flags(), Core::kFlagFaultMoveTimeout,
              "setLiveFlag() sets the bit immediately, with no update()/emit() call in between");
 
   // A LATER update() call (the next cycle's own tlm_.update(state_)) must
@@ -634,14 +634,14 @@ void scenarioSetLiveFlagMutatesLiveFlagsIndependentlyOfUpdate() {
   nextState.wheelLeft.sampleTime = nextState.time.cycleStart;
   nextState.wheelRight.sampleTime = nextState.time.cycleStart;
   telemetry.update(nextState, testDrive());
-  checkU64Eq(telemetry.flags(), App::kFlagFaultMoveTimeout,
+  checkU64Eq(telemetry.flags(), Core::kFlagFaultMoveTimeout,
              "a later update() call leaves the setLiveFlag()-owned bit untouched");
 
   telemetry.emit(40);
   msg::Telemetry expected;
   expected.now = 40;
   expected.seq = 0;
-  expected.flags = App::kFlagFaultMoveTimeout;
+  expected.flags = Core::kFlagFaultMoveTimeout;
   msg::ReplyEnvelope env;
   env.corr_id = 0;
   env.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
@@ -652,7 +652,7 @@ void scenarioSetLiveFlagMutatesLiveFlagsIndependentlyOfUpdate() {
                "the frame after the later update() call still carries the setLiveFlag()-set bit");
   }
 
-  telemetry.setLiveFlag(App::kFlagFaultMoveTimeout, false);
+  telemetry.setLiveFlag(Core::kFlagFaultMoveTimeout, false);
   checkU64Eq(telemetry.flags(), 0, "setLiveFlag() clears the bit live too, level-set not a sticky latch");
 }
 
@@ -670,7 +670,7 @@ void scenarioSetLiveFlagMutatesLiveFlagsIndependentlyOfUpdate() {
 //    generator computed is actually achievable, not merely asserted.
 //    line/color are genuinely unbounded (any byte per channel can be 0xFF)
 //    and use the full uint32 range. Operates on msg::wire::encode()
-//    directly -- no App::Telemetry instance involved, unaffected by
+//    directly -- no Core::Telemetry instance involved, unaffected by
 //    124-009's API change.
 // ===========================================================================
 
@@ -699,8 +699,8 @@ void scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase() {
   // packed uint32, (max)=1048575 == (65535<<4)|15) -- proves the TRUE
   // worst case (not just one entry) still fits the budget below. This is
   // the engine's first real FieldKind::kRepeatedScalar use.
-  tlm.acks_count = App::kAckRingDepth;
-  for (uint8_t e = 0; e < App::kAckRingDepth; ++e) {
+  tlm.acks_count = Core::kAckRingDepth;
+  for (uint8_t e = 0; e < Core::kAckRingDepth; ++e) {
     tlm.acks_[e] = packAck(65535u, 15u);
   }
   tlm.cycle_busy = 200000u;
@@ -711,7 +711,7 @@ void scenarioFullyPopulatedPrimaryFrameFitsRecordedWorstCase() {
   env.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
   env.body.tlm = tlm;
 
-  uint8_t rawBuf[App::kMaxEnvelopeBytes];
+  uint8_t rawBuf[Core::kMaxEnvelopeBytes];
   uint16_t n = msg::wire::encode(env, rawBuf, sizeof(rawBuf));
   checkTrue(n > 0, "encode() succeeds for a fully-populated frame");
   checkTrue(n <= msg::wire::kReplyEnvelopeMaxEncodedSize,
@@ -751,8 +751,8 @@ void scenarioMeasuredCadenceReport() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   // A MOVING robot: the cadence target only applies when there is something
   // to say. Since 2026-07-29 emit() is gated on that (stakeholder directive:
@@ -760,7 +760,7 @@ void scenarioMeasuredCadenceReport() {
   // scenario has to put the robot in the state whose cadence it is measuring
   // -- an idle robot is now correctly near-silent, and measuring IT would be
   // measuring the wrong contract. No boot-boilerplate warm-up call of any
-  // kind is needed or permitted (125-002): App::Telemetry has no arming
+  // kind is needed or permitted (125-002): Core::Telemetry has no arming
   // state at all any more -- a freshly constructed instance behaves
   // identically to one that has run for an hour, so kFlagActive alone is
   // enough to start the stream under the default kAuto mode.
@@ -774,7 +774,7 @@ void scenarioMeasuredCadenceReport() {
     telemetry.emit(now);
   }
 
-  // The target is DERIVED from App::kPrimaryPeriod, never a hardcoded Hz.
+  // The target is DERIVED from Core::kPrimaryPeriod, never a hardcoded Hz.
   // This scenario drives emit() directly off a scripted clock with no loop
   // gating it, so the realized cadence is simply 1000/kPrimaryPeriod. The
   // bound used to be a literal "15..35 Hz around 25 Hz" written when
@@ -782,10 +782,10 @@ void scenarioMeasuredCadenceReport() {
   // 32ms cycle still clears the emit floor -- see telemetry.h's own comment)
   // the realized 40 Hz blew the stale ceiling and the scenario failed on a
   // constant it was never meant to pin.
-  const double targetHz = 1000.0 / static_cast<double>(App::kPrimaryPeriod);
+  const double targetHz = 1000.0 / static_cast<double>(Core::kPrimaryPeriod);
   double primaryHz = static_cast<double>(telemetry.primaryEmitCount()) / (static_cast<double>(kEndTime) / 1000.0);
   std::printf("  measured: primary %.2f Hz while MOVING (target ~%.1f Hz/%u ms) over %u ms\n", primaryHz,
-              targetHz, static_cast<unsigned>(App::kPrimaryPeriod), static_cast<unsigned>(kEndTime));
+              targetHz, static_cast<unsigned>(Core::kPrimaryPeriod), static_cast<unsigned>(kEndTime));
 
   // Not required to HIT the target exactly (ticket's own acceptance
   // criterion) -- only sane and in the right neighborhood for a
@@ -822,10 +822,10 @@ void scenarioMeasuredCadenceReport() {
 
 // ===========================================================================
 // 8. kFlagFaultCommsMalformed (originally 104-004, now flags bit 9): a
-//    malformed/undecodable inbound frame pumped through the SAME App::Comms
+//    malformed/undecodable inbound frame pumped through the SAME Core::Comms
 //    instance Telemetry's own Comms::sendReply() rides --
-//    App::Comms::malformedCount() rising above 0 -- sets
-//    App::kFlagFaultCommsMalformed in the NEXT telemetry frame, once
+//    Core::Comms::malformedCount() rising above 0 -- sets
+//    Core::kFlagFaultCommsMalformed in the NEXT telemetry frame, once
 //    RobotLoop's own health-section publish mirrors it into
 //    state.health.commsMalformedCount and update() derives the bit from
 //    it. Bit clears on a later frame if the state clears -- same
@@ -846,10 +846,10 @@ void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
   serialFake.enqueueInbound("*Xsomeunrecognizedarmor");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/0);
   checkU64Eq(comms.malformedCount(), 1, "malformedCount() incremented by the malformed line");
 
@@ -862,14 +862,14 @@ void scenarioMalformedFrameSetsCommsMalformedFlagBit() {
   state.wheelRight.sampleTime = state.time.cycleStart;
   state.health.commsMalformedCount = comms.malformedCount();
   telemetry.update(state, testDrive());
-  checkU64Eq(telemetry.flags(), App::kFlagFaultCommsMalformed, "flags() reflects kFlagFaultCommsMalformed");
+  checkU64Eq(telemetry.flags(), Core::kFlagFaultCommsMalformed, "flags() reflects kFlagFaultCommsMalformed");
 
   telemetry.emit(0);
 
   msg::Telemetry expectedSet;
   expectedSet.now = 0;
   expectedSet.seq = 0;
-  expectedSet.flags = App::kFlagFaultCommsMalformed;
+  expectedSet.flags = Core::kFlagFaultCommsMalformed;
   msg::ReplyEnvelope envSet;
   envSet.corr_id = 0;
   envSet.body_kind = msg::ReplyEnvelope::BodyKind::TLM;
@@ -923,16 +923,16 @@ void scenarioAckRingEvictsOldestPastDepthAndPreservesOrder() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   // Depth is 12 since the command-ingestion rework (command-ingestion-ring-
   // buffered-comms-subsystem-routing-two-stops.md §1): the ring is sized to
-  // App::kCmdRingDepth so a burst that fits the command ring also fits
+  // Core::kCmdRingDepth so a burst that fits the command ring also fits
   // here. The PROPERTY under test is unchanged -- push depth+1, watch the
   // oldest go -- so the scenario is driven off kAckRingDepth rather than a
   // hardcoded 4, and no longer needs updating when the depth moves again.
-  constexpr uint32_t kDepth = App::kAckRingDepth;
+  constexpr uint32_t kDepth = Core::kAckRingDepth;
   for (uint32_t i = 1; i <= kDepth + 1; ++i) telemetry.ack(i, 0);  // last push evicts corr=1
 
   telemetry.emit(0);
@@ -971,8 +971,8 @@ void scenarioAckRingPersistsAcrossEmitsBelowFullDepth() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   telemetry.ack(10, 0);
   telemetry.ack(20, static_cast<uint32_t>(msg::ErrCode::ERR_FULL));
@@ -1023,14 +1023,14 @@ void scenarioFreshConstructDefaultsAutoAndStaysSilentAtRest() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
-  checkTrue(telemetry.mode() == App::TlmMode::kAuto, "mode() defaults kAuto immediately after construction");
+  checkTrue(telemetry.mode() == Core::TlmMode::kAuto, "mode() defaults kAuto immediately after construction");
 
   // No update() call at all -- proves the class needs no priming: a
   // never-updated instance is exactly as silent as one mid-session.
-  for (uint32_t now = 0; now <= 2000; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
+  for (uint32_t now = 0; now <= 2000; now += Core::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
   checkU64Eq(telemetry.primaryEmitCount(), 0,
              "issue Part 8 #1: fresh construct + parked idling -> primaryEmitCount()==0, no boot-warm-up call "
              "of any kind preceded this");
@@ -1042,7 +1042,7 @@ void scenarioFreshConstructDefaultsAutoAndStaysSilentAtRest() {
   parked.wheelLeft.connected = true;
   parked.wheelRight.connected = true;
   telemetry.update(parked, testDrive());
-  for (uint32_t now = 2040; now <= 4000; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
+  for (uint32_t now = 2040; now <= 4000; now += Core::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
   checkU64Eq(telemetry.primaryEmitCount(), 0, "an update()d-but-parked robot is still silent in kAuto");
 }
 
@@ -1063,15 +1063,15 @@ void scenarioHandSpunWheelBeforeFirstMoveNeverWakesTheLink() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   Types::RobotState spun;  // moveActive stays false -- never a real Move
   spun.wheelLeft.velocity = 250.0f;   // hand-spun / bogus first-sample reading
   spun.wheelRight.velocity = 250.0f;
   telemetry.update(spun, testDrive());
 
-  for (uint32_t now = 0; now <= 4000; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
+  for (uint32_t now = 0; now <= 4000; now += Core::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
   checkU64Eq(telemetry.primaryEmitCount(), 0,
              "issue Part 8 #5: nonzero wheel velocity with everMoved_==false -> zero frames");
 }
@@ -1095,8 +1095,8 @@ void scenarioActivityWindowRefreshesOnActiveAndCoastsThenClosesAfterHoldoff() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   // A Move is active -- opens the window and latches everMoved_.
   Types::RobotState moving;
@@ -1136,7 +1136,7 @@ void scenarioActivityWindowRefreshesOnActiveAndCoastsThenClosesAfterHoldoff() {
 
   // Well past kCoastHoldoff (2000ms) from the last refresh (40) -- the
   // window has closed, and a stationary-wheel reading cannot reopen it.
-  telemetry.emit(40 + App::kCoastHoldoff + 100);
+  telemetry.emit(40 + Core::kCoastHoldoff + 100);
   checkU64Eq(telemetry.primaryEmitCount(), 3,
              "well past kCoastHoldoff: the link goes silent, and wheels alone (now reading zero) cannot "
              "reopen a closed window");
@@ -1159,29 +1159,29 @@ void scenarioSetModeControlsUnsolicitedStreamInOffAndOn() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
-  telemetry.setMode(App::TlmMode::kOff);
-  checkTrue(telemetry.mode() == App::TlmMode::kOff, "setMode(kOff) takes effect immediately");
+  telemetry.setMode(Core::TlmMode::kOff);
+  checkTrue(telemetry.mode() == Core::TlmMode::kOff, "setMode(kOff) takes effect immediately");
 
   Types::RobotState moving;
   moving.time.cycleStart = 0;
   moving.command.moveActive = true;
   telemetry.update(moving, testDrive());
-  for (uint32_t now = 0; now <= 400; now += App::kPrimaryPeriod) telemetry.emit(now);
+  for (uint32_t now = 0; now <= 400; now += Core::kPrimaryPeriod) telemetry.emit(now);
   checkU64Eq(telemetry.primaryEmitCount(), 0, "kOff: no unsolicited frames even though a Move is active");
 
   // Bare TLM/force still works in kOff -- reason 1, honored in every mode.
   telemetry.emit(440, /*force=*/true);
   checkU64Eq(telemetry.primaryEmitCount(), 1, "kOff: a forced request still gets exactly one frame");
 
-  telemetry.setMode(App::TlmMode::kOn);
+  telemetry.setMode(Core::TlmMode::kOn);
   Types::RobotState parked;
   parked.time.cycleStart = 440;
   telemetry.update(parked, testDrive());
   const uint64_t beforeOn = telemetry.primaryEmitCount();
-  for (uint32_t now = 480; now <= 800; now += App::kPrimaryPeriod) telemetry.emit(now);
+  for (uint32_t now = 480; now <= 800; now += Core::kPrimaryPeriod) telemetry.emit(now);
   checkTrue(telemetry.primaryEmitCount() > beforeOn, "kOn: unsolicited frames stream even though the robot "
                                                       "is parked");
 }
@@ -1213,8 +1213,8 @@ void scenarioParkedRobotWithAlternatingFreshLineColorStaysSilent() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   bool sawLineBitSet = false;
   bool sawLineBitClear = false;
@@ -1222,7 +1222,7 @@ void scenarioParkedRobotWithAlternatingFreshLineColorStaysSilent() {
   bool sawColorBitClear = false;
 
   bool tickedLine = true;  // mirrors robot_loop.cpp's own alternation flip-flop
-  for (uint32_t now = 0; now <= 5000; now += App::kPrimaryPeriod) {
+  for (uint32_t now = 0; now <= 5000; now += Core::kPrimaryPeriod) {
     Types::RobotState state;  // moveActive false, wheel velocities 0 -- genuinely parked, never moved
     state.time.cycleStart = now;
     state.wheelLeft.sampleTime = now;
@@ -1243,18 +1243,18 @@ void scenarioParkedRobotWithAlternatingFreshLineColorStaysSilent() {
     telemetry.update(state, testDrive());
 
     // The FRESH bits are the ones that alternate now; Present is latched.
-    if (telemetry.flags() & App::kFlagLineFresh) {
+    if (telemetry.flags() & Core::kFlagLineFresh) {
       sawLineBitSet = true;
     } else {
       sawLineBitClear = true;
     }
-    if (telemetry.flags() & App::kFlagColorFresh) {
+    if (telemetry.flags() & Core::kFlagColorFresh) {
       sawColorBitSet = true;
     } else {
       sawColorBitClear = true;
     }
-    checkTrue((telemetry.flags() & App::kFlagLinePresent) != 0 &&
-                  (telemetry.flags() & App::kFlagColorPresent) != 0,
+    checkTrue((telemetry.flags() & Core::kFlagLinePresent) != 0 &&
+                  (telemetry.flags() & Core::kFlagColorPresent) != 0,
               "both sensors stay PRESENT on every cycle -- the alternation moves the Fresh bits "
               "only, so neither reading is ever dropped from the frame");
 
@@ -1286,8 +1286,8 @@ void scenarioAckOnParkedRobotRidesExactlyKAckRepeatsFramesThenSilence() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   Types::RobotState parked;  // moveActive false, everMoved_ stays false -- purely at rest
   telemetry.update(parked, testDrive());
@@ -1297,7 +1297,7 @@ void scenarioAckOnParkedRobotRidesExactlyKAckRepeatsFramesThenSilence() {
 
   uint32_t firstFrameTime = 0;
   bool sawFirstFrame = false;
-  for (uint32_t now = kAckTime; now <= 5000; now += App::kPrimaryPeriod) {
+  for (uint32_t now = kAckTime; now <= 5000; now += Core::kPrimaryPeriod) {
     const uint64_t before = telemetry.primaryEmitCount();
     telemetry.emit(now, /*force=*/false);
     if (!sawFirstFrame && telemetry.primaryEmitCount() > before) {
@@ -1307,9 +1307,9 @@ void scenarioAckOnParkedRobotRidesExactlyKAckRepeatsFramesThenSilence() {
   }
 
   checkTrue(sawFirstFrame, "the ack produced at least one frame");
-  checkTrue(firstFrameTime <= kAckTime + 2 * App::kPrimaryPeriod,
+  checkTrue(firstFrameTime <= kAckTime + 2 * Core::kPrimaryPeriod,
             "the ack's first carrying frame arrives within 2x kPrimaryPeriod of the ack() call");
-  checkU64Eq(telemetry.primaryEmitCount(), App::kAckRepeats,
+  checkU64Eq(telemetry.primaryEmitCount(), Core::kAckRepeats,
              "exactly kAckRepeats frames carried the ack, then the parked/kAuto link fell silent again -- "
              "no further frames over 5s of continued cadence gating");
 }
@@ -1331,19 +1331,19 @@ void scenarioBareTlmForceOnParkedRobotProducesExactlyOneFrame() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   Types::RobotState parked;
   telemetry.update(parked, testDrive());
 
-  for (uint32_t now = 0; now <= 2000; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
+  for (uint32_t now = 0; now <= 2000; now += Core::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
   checkU64Eq(telemetry.primaryEmitCount(), 0, "setup: parked robot silent before the request");
 
   telemetry.emit(2040, /*force=*/true);
   checkU64Eq(telemetry.primaryEmitCount(), 1, "bare TLM/TLM:NOW: exactly one frame");
 
-  for (uint32_t now = 2080; now <= 4000; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
+  for (uint32_t now = 2080; now <= 4000; now += Core::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
   checkU64Eq(telemetry.primaryEmitCount(), 1, "no further unsolicited frames after the single requested one");
 }
 
@@ -1361,10 +1361,10 @@ void scenarioTlmOffThenMoveOnlyAckFramesNoStream() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
-  telemetry.setMode(App::TlmMode::kOff);
+  telemetry.setMode(Core::TlmMode::kOff);
 
   // Enqueue ack -- mirrors RobotLoop's own handleMove(), which acks the
   // instant a Move is accepted, before it starts moving.
@@ -1376,30 +1376,30 @@ void scenarioTlmOffThenMoveOnlyAckFramesNoStream() {
   // Many cycles of the Move actually running -- kOff must produce NO
   // unsolicited frames despite kFlagActive being set every one of them,
   // only the pending enqueue ack's own bounded kAckRepeats burst.
-  for (int i = 0; i < 20; ++i, now += App::kPrimaryPeriod) {
+  for (int i = 0; i < 20; ++i, now += Core::kPrimaryPeriod) {
     moving.time.cycleStart = now;
     telemetry.update(moving, testDrive());
     telemetry.emit(now, /*force=*/false);
   }
-  checkU64Eq(telemetry.primaryEmitCount(), App::kAckRepeats,
+  checkU64Eq(telemetry.primaryEmitCount(), Core::kAckRepeats,
              "kOff + moving: only the enqueue ack's own kAckRepeats burst, no stream");
 
   // Completion ack -- mirrors RobotLoop's own moveQueue completion
   // (tlm_.ack(moveId, 0)) call site.
   telemetry.ack(/*corrId=*/100, 0);
   Types::RobotState parked;  // the Move completed -- moveActive drops
-  for (int i = 0; i < 20; ++i, now += App::kPrimaryPeriod) {
+  for (int i = 0; i < 20; ++i, now += Core::kPrimaryPeriod) {
     parked.time.cycleStart = now;
     telemetry.update(parked, testDrive());
     telemetry.emit(now, /*force=*/false);
   }
-  checkU64Eq(telemetry.primaryEmitCount(), 2 * App::kAckRepeats,
+  checkU64Eq(telemetry.primaryEmitCount(), 2 * Core::kAckRepeats,
              "kOff: the completion ack adds exactly ANOTHER kAckRepeats frames, still no unsolicited stream");
 
   // A bare TLM request still answers with one frame, on top of the
   // ack-carried total -- reason 1 (force) is honored in EVERY mode.
   telemetry.emit(now, /*force=*/true);
-  checkU64Eq(telemetry.primaryEmitCount(), 2 * App::kAckRepeats + 1,
+  checkU64Eq(telemetry.primaryEmitCount(), 2 * Core::kAckRepeats + 1,
              "a bare TLM request in kOff still answers with exactly one frame");
 }
 
@@ -1417,34 +1417,34 @@ void scenarioTlmOnThenOffStopsWithinOnePeriodThenAutoRestoresModeTwoBehavior() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
   Types::RobotState parked;
   telemetry.update(parked, testDrive());
 
-  telemetry.setMode(App::TlmMode::kOn);
+  telemetry.setMode(Core::TlmMode::kOn);
   uint32_t now = 0;
-  for (; now <= 800; now += App::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
+  for (; now <= 800; now += Core::kPrimaryPeriod) telemetry.emit(now, /*force=*/false);
   const uint64_t onCount = telemetry.primaryEmitCount();
   checkTrue(onCount > 15, "kOn: a parked robot streams at cadence (roughly one frame per kPrimaryPeriod)");
 
-  telemetry.setMode(App::TlmMode::kOff);
-  now += App::kPrimaryPeriod;
+  telemetry.setMode(Core::TlmMode::kOff);
+  now += Core::kPrimaryPeriod;
   telemetry.emit(now, /*force=*/false);
   checkU64Eq(telemetry.primaryEmitCount(), onCount,
              "kOff: the very next cadence tick after the mode change produces no frame -- the stream "
              "stopped within one kPrimaryPeriod");
   for (int i = 0; i < 10; ++i) {
-    now += App::kPrimaryPeriod;
+    now += Core::kPrimaryPeriod;
     telemetry.emit(now, /*force=*/false);
   }
   checkU64Eq(telemetry.primaryEmitCount(), onCount, "kOff: stays silent, parked");
 
-  telemetry.setMode(App::TlmMode::kAuto);
+  telemetry.setMode(Core::TlmMode::kAuto);
   const uint64_t offCount = telemetry.primaryEmitCount();
   for (int i = 0; i < 20; ++i) {
-    now += App::kPrimaryPeriod;
+    now += Core::kPrimaryPeriod;
     telemetry.emit(now, /*force=*/false);
   }
   checkU64Eq(telemetry.primaryEmitCount(), offCount,
@@ -1455,7 +1455,7 @@ void scenarioTlmOnThenOffStopsWithinOnePeriodThenAutoRestoresModeTwoBehavior() {
 // ===========================================================================
 // 20. issue Part 8 #10: mode is not persistent. Set kOn (or kOff), then a
 //     FRESH Telemetry construction -- the only "reboot" semantics
-//     App::Telemetry has, since mode_ is a plain member with no persistence
+//     Core::Telemetry has, since mode_ is a plain member with no persistence
 //     store at all (issue Part 4's explicit "no persistence" decision) --
 //     reads back kAuto. See app_robot_loop_harness.cpp's own note (moved
 //     125-006) for the wire-level ("TLM:ON" then simulated reboot) version
@@ -1469,10 +1469,10 @@ void scenarioModeNotPersistedAcrossFreshConstruction() {
   FakeTransport serialFake1;
   FakeTransport radioFake1;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms1(serialFake1, radioFake1, banner);
-  App::Telemetry telemetry1(comms1);
-  telemetry1.setMode(App::TlmMode::kOn);
-  checkTrue(telemetry1.mode() == App::TlmMode::kOn, "setup: kOn took effect on the first instance");
+  Core::Comms comms1(serialFake1, radioFake1, banner);
+  Core::Telemetry telemetry1(comms1);
+  telemetry1.setMode(Core::TlmMode::kOn);
+  checkTrue(telemetry1.mode() == Core::TlmMode::kOn, "setup: kOn took effect on the first instance");
 
   // "Simulate reboot": a fresh Comms/Telemetry construction -- nothing
   // written to config, nothing carried over. This IS what a power cycle
@@ -1480,17 +1480,17 @@ void scenarioModeNotPersistedAcrossFreshConstruction() {
   // issue Part 3).
   FakeTransport serialFake2;
   FakeTransport radioFake2;
-  App::Comms comms2(serialFake2, radioFake2, banner);
-  App::Telemetry telemetry2(comms2);
-  checkTrue(telemetry2.mode() == App::TlmMode::kAuto,
+  Core::Comms comms2(serialFake2, radioFake2, banner);
+  Core::Telemetry telemetry2(comms2);
+  checkTrue(telemetry2.mode() == Core::TlmMode::kAuto,
             "a fresh boot always starts kAuto, regardless of the prior session's kOn/kOff");
 
-  telemetry1.setMode(App::TlmMode::kOff);
+  telemetry1.setMode(Core::TlmMode::kOff);
   FakeTransport serialFake3;
   FakeTransport radioFake3;
-  App::Comms comms3(serialFake3, radioFake3, banner);
-  App::Telemetry telemetry3(comms3);
-  checkTrue(telemetry3.mode() == App::TlmMode::kAuto, "same for kOff: a fresh boot forgets it too");
+  Core::Comms comms3(serialFake3, radioFake3, banner);
+  Core::Telemetry telemetry3(comms3);
+  checkTrue(telemetry3.mode() == Core::TlmMode::kAuto, "same for kOff: a fresh boot forgets it too");
 }
 
 // ===========================================================================
@@ -1508,36 +1508,36 @@ void scenarioApplyActionCoversEveryTlmActionArm() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Telemetry telemetry(comms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Telemetry telemetry(comms);
 
-  checkTrue(telemetry.mode() == App::TlmMode::kAuto, "setup: fresh Telemetry defaults to kAuto");
+  checkTrue(telemetry.mode() == Core::TlmMode::kAuto, "setup: fresh Telemetry defaults to kAuto");
 
-  checkTrue(!telemetry.applyAction(App::Comms::TlmAction::kSetOff), "kSetOff: not a force-frame request");
-  checkTrue(telemetry.mode() == App::TlmMode::kOff, "kSetOff -> mode() == kOff");
+  checkTrue(!telemetry.applyAction(Core::Comms::TlmAction::kSetOff), "kSetOff: not a force-frame request");
+  checkTrue(telemetry.mode() == Core::TlmMode::kOff, "kSetOff -> mode() == kOff");
 
-  checkTrue(!telemetry.applyAction(App::Comms::TlmAction::kSetOn), "kSetOn: not a force-frame request");
-  checkTrue(telemetry.mode() == App::TlmMode::kOn, "kSetOn -> mode() == kOn");
+  checkTrue(!telemetry.applyAction(Core::Comms::TlmAction::kSetOn), "kSetOn: not a force-frame request");
+  checkTrue(telemetry.mode() == Core::TlmMode::kOn, "kSetOn -> mode() == kOn");
 
-  checkTrue(!telemetry.applyAction(App::Comms::TlmAction::kSetAuto), "kSetAuto: not a force-frame request");
-  checkTrue(telemetry.mode() == App::TlmMode::kAuto, "kSetAuto -> mode() == kAuto");
+  checkTrue(!telemetry.applyAction(Core::Comms::TlmAction::kSetAuto), "kSetAuto: not a force-frame request");
+  checkTrue(telemetry.mode() == Core::TlmMode::kAuto, "kSetAuto -> mode() == kAuto");
 
   // kNone/kFrame/kUnrecognized never change mode -- set kOn first so a
   // spurious mode change would be visible, not masked by an already-matching
   // default.
-  telemetry.setMode(App::TlmMode::kOn);
-  checkTrue(!telemetry.applyAction(App::Comms::TlmAction::kNone), "kNone: not a force-frame request");
-  checkTrue(telemetry.mode() == App::TlmMode::kOn, "kNone: mode unchanged");
+  telemetry.setMode(Core::TlmMode::kOn);
+  checkTrue(!telemetry.applyAction(Core::Comms::TlmAction::kNone), "kNone: not a force-frame request");
+  checkTrue(telemetry.mode() == Core::TlmMode::kOn, "kNone: mode unchanged");
 
-  checkTrue(!telemetry.applyAction(App::Comms::TlmAction::kUnrecognized),
+  checkTrue(!telemetry.applyAction(Core::Comms::TlmAction::kUnrecognized),
             "kUnrecognized: not a force-frame request");
-  checkTrue(telemetry.mode() == App::TlmMode::kOn, "kUnrecognized: mode unchanged");
+  checkTrue(telemetry.mode() == Core::TlmMode::kOn, "kUnrecognized: mode unchanged");
 
   // kFrame is the ONE arm that answers true -- a bare TLM/TLM:NOW line --
   // and it too leaves mode_ untouched (issue Part 3: the force decision and
   // the mode-change decision are orthogonal).
-  checkTrue(telemetry.applyAction(App::Comms::TlmAction::kFrame), "kFrame: IS a force-frame request");
-  checkTrue(telemetry.mode() == App::TlmMode::kOn, "kFrame: mode unchanged");
+  checkTrue(telemetry.applyAction(Core::Comms::TlmAction::kFrame), "kFrame: IS a force-frame request");
+  checkTrue(telemetry.mode() == Core::TlmMode::kOn, "kFrame: mode unchanged");
 
   // The returned bool is exactly what the next emit() call needs to force a
   // frame past the mode gate -- proven end to end here rather than just
@@ -1546,13 +1546,13 @@ void scenarioApplyActionCoversEveryTlmActionArm() {
   // very next emit() call's own `force` argument").
   FakeTransport serialFake2;
   FakeTransport radioFake2;
-  App::Comms comms2(serialFake2, radioFake2, banner);
-  App::Telemetry telemetry2(comms2);
-  telemetry2.setMode(App::TlmMode::kOff);
+  Core::Comms comms2(serialFake2, radioFake2, banner);
+  Core::Telemetry telemetry2(comms2);
+  telemetry2.setMode(Core::TlmMode::kOff);
   Types::RobotState parked;
   parked.time.cycleStart = 0;
   telemetry2.update(parked, testDrive());
-  const bool force = telemetry2.applyAction(App::Comms::TlmAction::kFrame);
+  const bool force = telemetry2.applyAction(Core::Comms::TlmAction::kFrame);
   telemetry2.emit(0, force);
   checkU64Eq(telemetry2.primaryEmitCount(), 1,
              "end-to-end: applyAction(kFrame)'s returned bool forces exactly one frame even in kOff");
@@ -1585,9 +1585,9 @@ int main() {
   scenarioApplyActionCoversEveryTlmActionArm();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all App::Telemetry scenarios passed\n");
+    std::printf("OK: all Core::Telemetry scenarios passed\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the App::Telemetry scenarios\n", g_failureCount);
+  std::printf("FAILED: %d assertion(s) across the Core::Telemetry scenarios\n", g_failureCount);
   return 1;
 }

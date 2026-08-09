@@ -184,7 +184,7 @@ class NezhaMotor : public Hal::Motor {
   // succeeded (connected_ true) -- unlike lastTickUs_ above, which stamps
   // every tick() call regardless of collect outcome. sampleTime() (above)
   // returns THIS field, not lastTickUs_, so a caller's freshness/age
-  // computation (App::Drive's Stage B/C gates, drive.cpp; Telemetry's own
+  // computation (Core::DifferentialDrive's Stage B/C gates, drive.cpp; Telemetry's own
   // age fields) tells the truth about the last SUCCESSFUL read on a
   // disconnected/glitching bus, instead of reading "fresh" off a tick
   // that never actually collected anything.

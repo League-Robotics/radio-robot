@@ -1,8 +1,8 @@
-"""Off-hardware acceptance proof for ticket 103-005 (SUC-005), App::Telemetry
-(``src/firm/app/telemetry.{h,cpp}``).
+"""Off-hardware acceptance proof for ticket 103-005 (SUC-005), Core::Telemetry
+(``src/firm/core/telemetry.{h,cpp}``).
 
-Compiles ``app_telemetry_harness.cpp`` together with ``src/firm/app/telemetry.cpp``,
-``src/firm/app/comms.cpp``, ``src/firm/messages/wire.cpp``, and
+Compiles ``app_telemetry_harness.cpp`` together with ``src/firm/core/telemetry.cpp``,
+``src/firm/core/comms.cpp``, ``src/firm/messages/wire.cpp``, and
 ``src/firm/messages/wire_runtime.cpp`` with ``-DHOST_BUILD`` so
 ``comms.cpp``'s ``SerialTransport``/``RadioTransport`` ARM adapters (guarded
 ``#ifndef HOST_BUILD``) are compiled out entirely -- no ``MicroBit.h``
@@ -25,11 +25,11 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _TESTS_SIM_DIR = _REPO_ROOT / "src" / "tests" / "sim"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_telemetry_harness.cpp"
-_TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
-_COMMS_SRC = _SOURCE_DIR / "app" / "comms.cpp"
-# 130-005: Telemetry::update() takes a const App::Drive& now (its own
+_TELEMETRY_SRC = _SOURCE_DIR / "core" / "telemetry.cpp"
+_COMMS_SRC = _SOURCE_DIR / "core" / "comms.cpp"
+# 130-005: Telemetry::update() takes a const Core::DifferentialDrive& now (its own
 # observability accessors) -- drive.cpp must link too.
-_DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
+_DRIVE_SRC = _SOURCE_DIR / "core" / "differential_drive.cpp"
 _WIRE_SRC = _SOURCE_DIR / "messages" / "wire.cpp"
 _WIRE_RUNTIME_SRC = _SOURCE_DIR / "messages" / "wire_runtime.cpp"
 
@@ -52,7 +52,7 @@ def _find_cxx_compiler() -> str:
 
 
 def test_app_telemetry_harness_compiles_and_passes(tmp_path):
-    """Compile App::Telemetry + the harness (HOST_BUILD) and assert every scenario passes."""
+    """Compile Core::Telemetry + the harness (HOST_BUILD) and assert every scenario passes."""
     assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
     assert _TELEMETRY_SRC.is_file(), f"telemetry.cpp missing: {_TELEMETRY_SRC}"
     assert _COMMS_SRC.is_file(), f"comms.cpp missing: {_COMMS_SRC}"

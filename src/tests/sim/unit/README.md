@@ -1,6 +1,6 @@
 # src/tests/sim/unit/
 
-Per-module `App::`/`Devices::` host-build harnesses -- one `*_harness.cpp` +
+Per-module `Core::`/`Devices::` host-build harnesses -- one `*_harness.cpp` +
 `test_*.py` pair per module (e.g. `test_devices_motor.py`,
 `test_app_robot_loop.py`). Each `test_*.py` compiles its own throwaway
 binary via `subprocess` (no shared build step, no shared pytest fixture --
@@ -20,7 +20,7 @@ physics (`src/tests/sim/plant/`).
 A harness that needs a scenario SimPlant's own live physics can express
 directly (a twist ramping to a target velocity, a pivot's resulting heading,
 whole-loop boot+cycle+telemetry behavior) should compose a `TestSim::
-SimPlant` (or, for a whole `App::RobotLoop` graph, `TestSim::SimHarness`,
+SimPlant` (or, for a whole `Core::RobotLoop` graph, `TestSim::SimHarness`,
 `tests/_infra/sim/sim_harness.h`) and drive it live -- see
 `src/tests/sim/plant/plant_harness.cpp` and `src/tests/sim/system/` for that
 pattern, and `src/tests/testgui/test_sim_loop.py` for the equivalent pure-Python

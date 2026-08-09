@@ -20,7 +20,7 @@ root: ../../../docs/design/design.md
 > `DESIGN.md` to find here; it is kept, not deleted, because the
 > math/rationale below is unchanged and still authoritative, and several
 > other current docs
-> (`docs/design/design.md`, `src/firm/app/DESIGN.md`, `docs/protocol-v5.md`)
+> (`docs/design/design.md`, `src/firm/core/DESIGN.md`, `docs/protocol-v5.md`)
 > link to it by this path. **For current orientation, the module list,
 > the boundary contract, and the `motion_tests` build, see
 > [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md)** — this file is the
@@ -39,8 +39,8 @@ call. It is the safety-critical bound math sprint 116's MOVE protocol
 depends on: every `Move` the host sends is required to be self-bounding
 (a kind-specific stop condition, or the `timeout` backstop when the
 condition can't be reached), and this is the one place that decision gets
-made. It is split out of `App::MoveQueue` (which owns and drives it) for
-the same reason `BodyKinematics` is split out of `App::Drive`/`App::
+made. It is split out of `Core::MoveQueue` (which owns and drives it) for
+the same reason `BodyKinematics` is split out of `Core::DifferentialDrive`/`Core::
 Odometry`: it is pure comparison logic with no bus, no timing side
 effects, and no state beyond what's passed in — the one place in the
 firmware that can be trusted to compile, link, and be exercised
@@ -72,12 +72,12 @@ type — see §3): `Kind::Time`, `Kind::Distance`, `Kind::Angle`.
 - **Stateless comparison, no I2C, no globals, no heap, no owned
   collaborators.** `tick()` is `const` — it mutates nothing. Every
   reading it compares against (`now`, `pathLength`, `theta`) is a
-  parameter, never read from a held `Devices::Clock&`/`App::Odometry&`
+  parameter, never read from a held `Devices::Clock&`/`Core::Odometry&`
   reference. This is the whole reason the module is split out: it must
   compile and behave identically under `HOST_BUILD` and on ARM with no
   fakes or seams, and it must be constructible and testable with
   hand-fed numbers alone.
-- **Zero dependency on `App::MoveQueue`, `App::Drive`, or any `msg::*`
+- **Zero dependency on `Core::MoveQueue`, `Core::DifferentialDrive`, or any `msg::*`
   wire type.** `Kind`/`Outcome` are this module's own enums, not aliases
   of `msg::Move::StopKind` or any other generated type — `#include
   "motion/stop_condition.h"` pulls in nothing from `messages/` or
@@ -85,7 +85,7 @@ type — see §3): `Kind::Time`, `Kind::Distance`, `Kind::Angle`.
   (advance the queue, ack `Move.id`, set the timeout fault flag) is
   entirely `MoveQueue`'s job (ticket 005) — outside this module's
   boundary.
-- **`theta()` is unwrapped; no modulo here.** `App::Odometry::theta()` is
+- **`theta()` is unwrapped; no modulo here.** `Core::Odometry::theta()` is
   verified unwrapped (`theta_ += headingDelta`, no modulo anywhere in
   `odometry.cpp`) — the `Angle` kind diffs the caller's `theta` reading
   against its own activation baseline directly (`std::fabs(theta -
@@ -105,7 +105,7 @@ type — see §3): `Kind::Time`, `Kind::Distance`, `Kind::Angle`.
 
 **Baseline capture.** The constructor precomputes two `[us]` deadlines
 rather than storing `now` and a separate `[ms]` threshold/timeout to
-convert on every `tick()` call — mirrors the deleted `App::Deadman::
+convert on every `tick()` call — mirrors the deleted `Core::Deadman::
 arm()`'s own shape exactly (`deadline_ = clock_.nowMicros() + delta`,
 `clock_.nowMicros() >= deadline_`):
 
@@ -160,7 +160,7 @@ condition is ALSO clamped to 0 that same construction.
   depending on `kind` — Move.stop's own wire units. `timeout`: `[ms]`,
   the required safety backstop, independent of `kind`. `now`: `[us]`,
   `Devices::Clock::nowMicros()`'s own unit. `pathLength`/`theta`:
-  `[mm]`/`[rad]`, the caller's `App::Odometry::pathLength()`/`theta()`
+  `[mm]`/`[rad]`, the caller's `Core::Odometry::pathLength()`/`theta()`
   readings AT ACTIVATION.
 - **`tick(now, pathLength, theta)`** — the per-cycle comparison, `const`.
   Same units as the constructor's baseline arguments; returns
@@ -170,9 +170,9 @@ condition is ALSO clamped to 0 that same construction.
 ### Consumes
 
 Nothing — `stop_condition.h` includes only `<cstdint>`. Every reading it
-needs is a plain parameter the caller (eventually `App::MoveQueue`,
+needs is a plain parameter the caller (eventually `Core::MoveQueue`,
 ticket 005) supplies by reading its own `const Devices::Clock&` and
-`App::Odometry&` collaborators and passing the results in. `Motion::`
+`Core::Odometry&` collaborators and passing the results in. `Motion::`
 has no `#include` of `app/`, `devices/`, or `messages/` anywhere in this
 directory.
 
@@ -195,7 +195,7 @@ directory.
   nowMicros()`'s own doc comment). A `now` that goes backward (not
   possible with the real ARM clock or `TestSim::SimClock`, which never
   self-rewinds) is out of scope here, same as it is for the deleted
-  `App::Deadman`.
+  `Core::Deadman`.
 - **`MoveQueue`'s own construction cadence is out of this module's
   boundary.** Whether `MoveQueue` constructs a `StopCondition` on the
   stack, by value, or via some other storage strategy each time a `Move`
@@ -210,7 +210,7 @@ directory.
 ## 1. Purpose
 
 `Motion::VelocityShaper` answers one question, every tick, for whichever
-axis (linear or angular) `App::MoveQueue` asks it about: **given where I
+axis (linear or angular) `Core::MoveQueue` asks it about: **given where I
 am relative to the goal, how fast I'm going, and how hard I'm already
 accelerating, what speed should I command NEXT?** It is the direct
 follow-on to `StopCondition` above — `StopCondition` decides *when* a
@@ -264,8 +264,8 @@ the margins are required for physical correctness, not optional polish.
 
 - **Stateful, host-clean — the same "no I2C, no globals, no heap" shape
   `StopCondition` established, minus statelessness.** Zero dependency on
-  `App::MoveQueue`, `Motion::StopCondition`, or any `msg::*` wire type.
-  State lives in the INSTANCE, not a static/global — `App::MoveQueue` owns
+  `Core::MoveQueue`, `Motion::StopCondition`, or any `msg::*` wire type.
+  State lives in the INSTANCE, not a static/global — `Core::MoveQueue` owns
   one `VelocityShaper` per axis (`shaperVX_`/`shaperOmega_`/
   `shaperVLeft_`/`shaperVRight_`) so a chained/replaced Move's own ramp
   continues smoothly (SUC-051 seamless hand-off).
@@ -273,12 +273,12 @@ the margins are required for physical correctness, not optional polish.
   (`mm/s`, `mm/s^2`, `mm/s^3`) and an angular axis (`rad/s`, `rad/s^2`,
   `rad/s^3`) — the caller supplies matching units across every argument.
 - **`remaining = +infinity` disables the decel taper, not a special code
-  path.** `App::MoveQueue` passes `+infinity` for a `Kind::Time` Move —
+  path.** `Core::MoveQueue` passes `+infinity` for a `Kind::Time` Move —
   the decel-taper ceiling never binds, so the velocity-approach clamp
   alone governs the ramp-up. One code path; "no taper" is a parameter
   outcome, not a branch.
 - **`reset()`/`syncTo(speed)`** — explicit state-management entry points
-  `App::MoveQueue` calls at the moments raw floats used to just get
+  `Core::MoveQueue` calls at the moments raw floats used to just get
   reassigned: `reset()` zeroes BOTH fields (a genuine stop); `syncTo(speed)`
   sets `commandedSpeed_` and zeroes `commandedAccel_` (shaping disabled on
   this axis).
@@ -289,7 +289,7 @@ the margins are required for physical correctness, not optional polish.
 
 See `velocity_shaper.h`'s own doc comment for the full per-parameter
 contract and `velocity_shaper.cpp`'s own comment for the two-clamp
-derivation and the two one-line margin terms. `App::MoveQueue`'s own
+derivation and the two one-line margin terms. `Core::MoveQueue`'s own
 `shapeAndStage()` (`move_queue.cpp`) is the ONE caller — see that file's
 own doc comment for the per-`Move`-kind axis-selection policy.
 
@@ -435,13 +435,13 @@ not a tuned-around limitation.
 - **`VelocityShaper::reset()`**, **`VelocityShaper::syncTo(speed)`** —
   explicit state transitions, see §3 above.
 - **`VelocityShaper::commandedSpeed()`**, **`VelocityShaper::
-  commandedAccel()`** — const accessors `App::MoveQueue::activate()` reads
+  commandedAccel()`** — const accessors `Core::MoveQueue::activate()` reads
   when staging a chained Move's continuation point.
 
 ### Consumes
 
 Nothing — `velocity_shaper.h` includes no project header beyond what
-correctness needs (none). `App::MoveQueue` is the sole caller, owning one
+correctness needs (none). `Core::MoveQueue` is the sole caller, owning one
 instance per axis and supplying `aMax`/`aDecel`/`jMax` (or their angular
 siblings `alphaMax`/`alphaDecel`/`yawJerkMax`) from its own live-tunable
 `ShaperLimits` (`move_queue.h`, sourced fail-closed from

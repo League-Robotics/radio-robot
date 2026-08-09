@@ -30,7 +30,7 @@
 // Scope: exactly the message shapes actually exchanged over sim_api's own
 // two directions -- CommandEnvelope{corr_id, cmd=MOVE|STOP} outbound (host
 // -> firmware) and ReplyEnvelope{corr_id, body=TLM(Telemetry)} inbound
-// (firmware -> host, the only shape App::Telemetry::emit() ever actually
+// (firmware -> host, the only shape Core::Telemetry::emit() ever actually
 // sends -- see telemetry.cpp's emitPrimary(); TelemetrySecondary, this
 // decoder's other former shape, is DELETED, 124-009). The bounded ack ring
 // rides inside the Telemetry frame itself (acks/acks_count, packed
@@ -69,7 +69,7 @@ namespace TestSupport {
 
 // --- Outbound decode (firmware -> host) -----------------------------------
 
-// The one shape App::Telemetry ever actually emits (124-009:
+// The one shape Core::Telemetry ever actually emits (124-009:
 // TelemetrySecondary is DELETED -- telemetry.cpp's emitPrimary() is the
 // only outbound frame builder left) -- kUnknown covers anything else
 // (malformed armor, unrecognized bytes, a HELLO/PING plain-text reply
@@ -84,10 +84,10 @@ struct DecodedLine {
 
 // Dearmors (COBS+CRC, delimiter 0x0A -- 124-005) and decodes ONE outbound
 // LINE -- exactly what a FakeTransport::sent() entry holds: the full
-// `<COMMAND>':'<COBS+CRC bytes>` content App::Comms::sendReply() builds
+// `<COMMAND>':'<COBS+CRC bytes>` content Core::Comms::sendReply() builds
 // (the trailing '\n' terminator is a transport concern, never included).
 // Strips the `<COMMAND>':'` prefix (always "TLM" in practice --
-// App::Telemetry never emits OK/ERR) and verifies the CRC scoped over it,
+// Core::Telemetry never emits OK/ERR) and verifies the CRC scoped over it,
 // mirroring Comms::decodeBinaryFrame()'s own composition. Returns kind ==
 // kUnknown (all other fields default-constructed) on anything that isn't a
 // well-formed Telemetry frame -- a malformed/truncated/CRC-mismatched
@@ -100,7 +100,7 @@ DecodedLine decodeOutboundLine(const std::string& line);
 //
 // Builds a complete COBS+CRC-framed CommandEnvelope frame body (123-002 --
 // was armored "*B"+base64 pre-123), byte-for-byte what a real host would
-// send over serial/radio -- the reverse of App::Comms::decodeBinaryFrame().
+// send over serial/radio -- the reverse of Core::Comms::decodeBinaryFrame().
 // Push the result via TestSupport::FakeTransport::enqueueInboundBinary()
 // (NOT enqueueInbound(), which tags a frame kText). corrId == 0 is proto3's
 // own implicit-
@@ -125,7 +125,7 @@ std::string armorStopCommand(uint32_t corrId = 0, uint32_t id = 0);
 std::string armorEstopCommand(uint32_t corrId = 0);
 
 // armorWheelsCommand() -- the dumb teleop primitive (§2): a per-wheel
-// velocity pair held for `duration` ms, routed straight to App::Drive with
+// velocity pair held for `duration` ms, routed straight to Core::DifferentialDrive with
 // no planner involvement. `duration` must be positive (the firmware acks
 // ERR_BADARG otherwise -- a wheel command is always time-bounded). `id` is
 // the COMPLETION-ack key, echoed when the duration expires.
@@ -138,7 +138,7 @@ enum class MoveStopKind : uint8_t { kTime = 0, kDistance = 1, kAngle = 2 };
 
 // armorMoveCommand() -- builds a complete armored CommandEnvelope{move:
 // Move{...}} line (116-001, MOVE protocol cutover), byte-for-byte what a
-// real host would send, the reverse of App::Comms::decodeArmoredLine() --
+// real host would send, the reverse of Core::Comms::decodeArmoredLine() --
 // same convention armorTwistCommand()/armorStopCommand() established.
 // Two overloads cover Move's two velocity variants (MoveTwist/MoveWheels);
 // they never collide under overload resolution because `stopKind`
@@ -166,7 +166,7 @@ std::string armorMoveCommand(float v_left, float v_right,
 // ROBOT (envelope.proto's own GoTo.frame doc comment). `speed`/`arrive`
 // <= 0 fall open to the config default (Motion::NavigatorLimits::speed/
 // defaultArrivalTolerance) -- pass 0.0f for either to exercise that path.
-// `timeout` is REQUIRED positive (App::RobotLoop::handleGoto() acks
+// `timeout` is REQUIRED positive (Core::RobotLoop::handleGoto() acks
 // ERR_BADARG otherwise, mirroring Move's own required timeout).
 std::string armorGotoCommand(float x, float y, uint32_t frame, float speed, float arrive,
                               float timeout, uint32_t id, uint32_t corrId = 0);

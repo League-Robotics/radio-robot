@@ -5,7 +5,7 @@
 // PoseTracker (`pose_`), which used to blend a fresh OTOS heading
 // whenever `PlannerLimits::headingOtosWeight > 0` -- a second writer,
 // ordering-dependent on which of Odometry/Planner ran last a given cycle
-// (App::RobotLoop's own publishPose() vs. planner_.update(),
+// (Core::RobotLoop's own publishPose() vs. planner_.update(),
 // robot_loop.cpp). At the shipped default (headingOtosWeight == 0.0) the
 // two writers happened to agree closely enough that the bug was
 // invisible; a nonzero weight made telemetry's pose source silently flip.
@@ -21,7 +21,7 @@
 // writes state.pose, regardless of what state.otos carries -- which is
 // now true unconditionally rather than only at the shipped default.
 //
-// This test drives the SAME per-cycle order App::RobotLoop::cycle() uses
+// This test drives the SAME per-cycle order Core::RobotLoop::cycle() uses
 // -- Odometry integrates and publishes pose FIRST, the Planner
 // tick()s/update()s SECOND, both against one shared Types::RobotState --
 // with a fresh OTOS heading present every cycle, clearly divergent from
@@ -61,7 +61,7 @@ Move distanceMove(uint32_t id, float threshold, float v_x) {
   return m;
 }
 
-// Mirrors App::RobotLoop::publishPose()'s own write, minus the
+// Mirrors Core::RobotLoop::publishPose()'s own write, minus the
 // Kinematics::DifferentialKinematics::forward() twist (not needed for this test's
 // pose-ownership assertion, and pulling body_kinematics.h in here would
 // add a messages/ dependency this standalone planner test tree otherwise
@@ -98,7 +98,7 @@ void testPlannerNeverWritesStatePoseEvenWithOtosBlendConfigured() {
   CHECK(planner.move(distanceMove(1, 2000.0f, 150.0f), false));
 
   for (int i = 0; i < 200; ++i) {
-    // --- Odometry FIRST, exactly App::RobotLoop::cycle()'s own order. ---
+    // --- Odometry FIRST, exactly Core::RobotLoop::cycle()'s own order. ---
     odom.integrate(state.wheelLeft.position, state.wheelRight.position,
                    state.wheelLeft.positionEpoch, state.wheelRight.positionEpoch);
     publishPose(state, odom);

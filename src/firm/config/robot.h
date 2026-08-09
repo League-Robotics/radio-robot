@@ -10,13 +10,13 @@
 // 132-006 first built this struct inline inside app/configurator.h.
 // 132-007 (subsystem configure() entry points + derived-value methods)
 // moved it here, into its own header, for two reasons:
-//   1. Derived-value methods (below) are consumed by App::Drive/
+//   1. Derived-value methods (below) are consumed by Core::DifferentialDrive/
 //      RobotLoop/the boot_calibration.h Config::Robot-consuming adapters
-//      -- all of which configurator.h's own #include "app/drive.h" would
+//      -- all of which configurator.h's own #include "core/differential_drive.h" would
 //      put in a circular #include with configurator.h if Config::Robot
-//      stayed there (drive.h would need "app/configurator.h" for the
-//      type, configurator.h already needs "app/drive.h" for Drive&).
-//      A standalone header with no App:: dependency of its own breaks
+//      stayed there (drive.h would need "core/configurator.h" for the
+//      type, configurator.h already needs "core/differential_drive.h" for Drive&).
+//      A standalone header with no Core:: dependency of its own breaks
 //      the cycle for every current and future consumer, not just Drive.
 //   2. It is genuinely config/'s own data model (a sibling to
 //      config/boot_config.h), not something Configurator itself owns the
@@ -26,7 +26,7 @@
 //
 // Dependency floor: only messages/robot_config.h, which itself pulls in
 // only messages/common.h, which pulls in only <stdint.h> -- no heap, no
-// STL, no App::/Devices:: type in reach from this header, transitively.
+// STL, no Core::/Devices:: type in reach from this header, transitively.
 //
 // NOT extended to devices/: despite that dependency floor being exactly
 // what the issue's own "the one place this collides with layering"
@@ -40,11 +40,11 @@
 // invariant for this header would contradict that documented rationale
 // in place, not just add an exception next to it. 132-007 therefore
 // keeps Hal::Motor/Hal::Otos on their existing narrow structs and
-// gives the App:: layer (boot_calibration.h's configureMotor()/
+// gives the Core:: layer (boot_calibration.h's configureMotor()/
 // configureOtos(), alongside its existing toDeviceMotorConfig()) the
 // Config::Robot-consuming entry point instead -- see that file's own
 // header for the full rationale. src/firm/motion/planner/ is stricter still
-// (src/firm/motion/DESIGN.md §3: "No Devices::*, App::*, or bus/timing
+// (src/firm/motion/DESIGN.md §3: "No Devices::*, Core::*, or bus/timing
 // collaborator anywhere in this tree" -- Config::* included, explicitly,
 // by name, elsewhere in that same section) -- Motion::Planner::
 // configure() is therefore likewise NOT a member method; boot_
@@ -76,7 +76,7 @@ struct Robot {
   msg::Navigator navigator;  // live: Motion::NavigatorLimits' own group (135-004)
 
   // effectiveTrackWidth -- physical separation corrected for SCRUB. Ports
-  // App::effectiveTrackWidth()'s formula (boot_calibration.cpp:25-29)
+  // Core::effectiveTrackWidth()'s formula (boot_calibration.cpp:25-29)
   // onto this object exactly, as a METHOD rather than a stored field
   // (the-configuration-object.md's own worked example) -- read-back stays
   // meaningful because config() serialized only ever carries the raw
@@ -101,7 +101,7 @@ struct Robot {
   // on the wire/JSON side (what a human reads and what the camera
   // measurement produced) converted to RADIANS here -- matching
   // Motion::Move::threshold and RobotLoop::setRotationCalibration()'s
-  // own units. Ports App::installRotationCalibration()'s conversion
+  // own units. Ports Core::installRotationCalibration()'s conversion
   // (boot_calibration.cpp:77-81) exactly, one method per direction.
   float rotationOffsetPos() const {  // [rad]
     return geometry.rotation_offset * kDegToRad;
@@ -111,7 +111,7 @@ struct Robot {
   }
 
   // velocityFilterWeight -- EMA smoothing weight for the planner's plant
-  // velocity filter, floored per App::bootPlannerLimits()'s own
+  // velocity filter, floored per Core::bootPlannerLimits()'s own
   // long-standing sanity check (boot_calibration.cpp:63-65, ported here
   // verbatim as a method): a near-zero or unconfigured alpha would leave
   // the filter frozen at its first sample forever, so anything at or

@@ -11,7 +11,7 @@
 // loop, and report cumulative encoder counts. This interface is exactly
 // that contract, so swapping boards is one new implementation class
 // plus one line in the composition root -- no change to
-// Hardware::BoardMotor, App::Drive, the planner, or anything above.
+// Hardware::BoardMotor, Core::DifferentialDrive, the planner, or anything above.
 //
 // Deliberately NOT in the interface: register maps, I2C addresses,
 // motor-type configuration, unit scaling. Those are each board's own

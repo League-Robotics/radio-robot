@@ -15,7 +15,7 @@ void OtosPlant::step(float leftPosition, float rightPosition, float dt) {
   lastRight_ = rightPosition;
 
   // The SAME Kinematics::DifferentialKinematics::forward() call + midpoint-arc accumulation
-  // App::Odometry::integrate() performs (src/firm/app/odometry.cpp) -- see
+  // Core::Odometry::integrate() performs (src/firm/app/odometry.cpp) -- see
   // this file's header for why that duplication is deliberate, not a
   // second heading formula.
   float distance = 0.0f;       // [mm] this cycle's body-frame forward travel

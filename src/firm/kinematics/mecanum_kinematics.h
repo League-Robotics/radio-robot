@@ -8,7 +8,7 @@
 // `fwd_sign` (data/robots/*.json) still corrects mirror-mounted wheels
 // below this layer -- do not fold a mounting sign into these equations.
 //
-// NOT WIRED IN YET: nothing constructs this class. `App::Drive` is still
+// NOT WIRED IN YET: nothing constructs this class. `Core::DifferentialDrive` is still
 // differential-specific end to end (its constructor takes exactly two
 // Hal::Motor& and a scalar track width), so there is no four-wheel
 // drivetrain for a composition root to hand this to. It exists because an

@@ -3,7 +3,7 @@ square-wave step (no overshoot on the rise, no reversal on the stop).
 
 Drives a raw twist step in the zero-error sim, sets candidate gains via a
 SetConfigGroup{WHEEL_CONTROL} push (132-014: retargeted off the retired
-MotorConfigPatch/ConfigDelta, config.proto deleted 132-013 -- App::Drive's
+MotorConfigPatch/ConfigDelta, config.proto deleted 132-013 -- Core::DifferentialDrive's
 unified wheel-speed controller's Stage B fast-PID gains, not the old parked
 Motion::Planner M4 duty stage), and scores the per-wheel step response:
 overshoot above the commanded speed, and reverse spin after the deadman

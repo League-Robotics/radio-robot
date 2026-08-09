@@ -147,14 +147,14 @@ endif()
 
 # FAKE_OTOS (120-002; reshaped by the otos-fake-seam refactor): opt-in,
 # compile-time-only bench build variant. When ON, main.cpp binds the
-# Devices::Otos& the loop drives to an App::FakeOtos (app/fake_otos.h) --
+# Devices::Otos& the loop drives to an Core::FakeOtos (app/fake_otos.h) --
 # which reports the dead-reckoned Odometry pose + wheel-fused body twist as
 # if it were the chip -- instead of the real Devices::RealOtos I2C leaf.
 # The loop's own per-cycle OTOS call (applyOtosSample()) is IDENTICAL in
 # both builds; only which implementation backs the interface differs, chosen
 # once at the main.cpp composition root under #ifdef FAKE_OTOS. See
 # src/firm/devices/DESIGN.md's Otos interface/RealOtos-split paragraph and
-# src/firm/app/DESIGN.md's "Otos call site" note. OFF (default) is the real,
+# src/firm/core/DESIGN.md's "Otos call site" note. OFF (default) is the real,
 # table build. Select via `cmake .. -DFAKE_OTOS=ON`, or build.py's own
 # --fake-otos flag (which always passes an explicit ON/OFF so a stale
 # CMakeCache.txt can never leave this flag silently stuck) -- never a
@@ -167,10 +167,10 @@ endif()
 
 # ROBOT_DEBUG (129-003; issue 05-dbg-debug-message-channel-for-bench-and-
 # sim.md): opt-in, compile-time-only bench build variant, same shape as
-# FAKE_OTOS immediately above. When ON, App::debugf()/DBG_EVERY()/
-# DBG_MILLI() (src/firm/app/debug.h) and App::Comms::sendDebug()
+# FAKE_OTOS immediately above. When ON, Core::debugf()/DBG_EVERY()/
+# DBG_MILLI() (src/firm/core/debug.h) and Core::Comms::sendDebug()
 # (app/comms.h/.cpp) become real, and main.cpp wires the channel to its own
-# Comms via App::setDebugSink(). OFF (default) is the shipped build: those
+# Comms via Core::setDebugSink(). OFF (default) is the shipped build: those
 # same call sites compile to inline no-ops, so DBG costs zero flash and
 # emits zero wire traffic -- see debug.h's own header for the full
 # compile-gate contract (this option OR HOST_BUILD, which src/firm/platform/host/
@@ -179,10 +179,10 @@ endif()
 # build.py's own --robot-debug flag (which, like --fake-otos, always
 # passes an explicit ON/OFF so a stale CMakeCache.txt can never leave this
 # flag silently stuck) -- never a runtime/wire toggle.
-option(ROBOT_DEBUG "Bench variant: compile in the DBG debug message channel (App::debugf())" OFF)
+option(ROBOT_DEBUG "Bench variant: compile in the DBG debug message channel (Core::debugf())" OFF)
 if(ROBOT_DEBUG)
     add_definitions(-DROBOT_DEBUG)
-    message("${BoldMagenta}ROBOT_DEBUG bench variant ENABLED -- App::debugf() DBG: lines will be compiled in and sent over the wire.${ColourReset}")
+    message("${BoldMagenta}ROBOT_DEBUG bench variant ENABLED -- Core::debugf() DBG: lines will be compiled in and sent over the wire.${ColourReset}")
 endif()
 
 ####################

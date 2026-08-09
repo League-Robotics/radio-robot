@@ -51,7 +51,7 @@ void plannerUpdate(void* planner, Types::RobotState* state) {
 // per-tick capture is one FFI crossing.
 //
 // 130-005: this used to also return Motion::WheelTrim's trim/integrator
-// (deleted -- the wheel-speed controller now lives entirely in App::Drive,
+// (deleted -- the wheel-speed controller now lives entirely in Core::DifferentialDrive,
 // see drive.h's own header; its bias/fast-PID observability is on Drive's
 // own accessors, wired into the wire Telemetry frame instead of this
 // bench-only C API).

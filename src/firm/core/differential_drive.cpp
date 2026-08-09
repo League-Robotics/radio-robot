@@ -1,14 +1,14 @@
 #include <algorithm>
 #include <cmath>
 
-#include "app/drive.h"
+#include "core/differential_drive.h"
 
-namespace App {
+namespace Core {
 
-Drive::Drive(Hal::Motor& left, Hal::Motor& right, float trackWidth)
+DifferentialDrive::DifferentialDrive(Hal::Motor& left, Hal::Motor& right, float trackWidth)
     : left_(left), right_(right), trackWidth_(trackWidth) {}
 
-void Drive::configure(const Config::Robot& config) {
+void DifferentialDrive::configure(const Config::Robot& config) {
   setWheelCorrection(
       config.drive.wheel_gain_left_accel, config.drive.wheel_intercept_left_accel,
       config.drive.wheel_gain_left_decel, config.drive.wheel_intercept_left_decel,
@@ -38,7 +38,7 @@ void Drive::configure(const Config::Robot& config) {
   setAdaptationBounds(bounds);
 }
 
-void Drive::command(float vLeft, float vRight, float duration,
+void DifferentialDrive::command(float vLeft, float vRight, float duration,
                     uint32_t moveId, uint32_t now) {
   targetLeft_ = vLeft;
   targetRight_ = vRight;
@@ -47,14 +47,14 @@ void Drive::command(float vLeft, float vRight, float duration,
   commandActive_ = true;
 }
 
-void Drive::takeover() {
+void DifferentialDrive::takeover() {
   targetLeft_ = 0.0f;
   targetRight_ = 0.0f;
   commandActive_ = false;
 
 }
 
-void Drive::estop() {
+void DifferentialDrive::estop() {
   takeover();
 
   stopEnforceCountdown_ = kStopEnforceTicks;
@@ -73,14 +73,14 @@ void Drive::estop() {
   stallRight_ = false;
 }
 
-bool Drive::takeCompletion(uint32_t* moveId) {
+bool DifferentialDrive::takeCompletion(uint32_t* moveId) {
   if (!completionPending_) return false;
   completionPending_ = false;
   *moveId = completedMoveId_;
   return true;
 }
 
-void Drive::update(Types::RobotState& state, uint32_t now) {
+void DifferentialDrive::update(Types::RobotState& state, uint32_t now) {
   const bool owned = commandActive_;
 
   if (commandActive_ && static_cast<int32_t>(now - commandDeadline_) >= 0) {
@@ -114,7 +114,7 @@ void Drive::update(Types::RobotState& state, uint32_t now) {
   state.command.omega = (targetRight_ - targetLeft_) / trackWidth_;
 }
 
-void Drive::setWheelCorrection(float gLA, float iLA, float gLD, float iLD,
+void DifferentialDrive::setWheelCorrection(float gLA, float iLA, float gLD, float iLD,
                                float gRA, float iRA, float gRD, float iRD) {
   corrGain_[0][0] = gLA;  corrIntercept_[0][0] = iLA;
   corrGain_[0][1] = gLD;  corrIntercept_[0][1] = iLD;
@@ -122,7 +122,7 @@ void Drive::setWheelCorrection(float gLA, float iLA, float gLD, float iLD,
   corrGain_[1][1] = gRD;  corrIntercept_[1][1] = iRD;
 }
 
-float Drive::correctedCommand(float desired, float previous, bool leftWheel,
+float DifferentialDrive::correctedCommand(float desired, float previous, bool leftWheel,
                               float bias) const {
   if (desired == 0.0f) return 0.0f;  // stop is stop; never offset it (map OR bias)
   const int w = leftWheel ? 0 : 1;
@@ -135,7 +135,7 @@ float Drive::correctedCommand(float desired, float previous, bool leftWheel,
   return std::copysign(correctedMagnitude, desired);
 }
 
-float Drive::crawlDuty(float duty, float& carry) const {
+float DifferentialDrive::crawlDuty(float duty, float& carry) const {
   const float magnitude = std::fabs(duty);
   if (crawlPulse_ == 0.0f || magnitude >= crawlPulse_) return duty;
   if (magnitude == 0.0f) {
@@ -148,7 +148,7 @@ float Drive::crawlDuty(float duty, float& carry) const {
   return std::copysign(crawlPulse_, duty);
 }
 
-void Drive::applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
+void DifferentialDrive::applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
                             float& speedRight) const {
   speedLeft = rawLeft;
   speedRight = rawRight;
@@ -161,7 +161,7 @@ void Drive::applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
   speedRight = rawRight * scale;
 }
 
-float Drive::fastPid(float posError, float err, float aCmd) const {
+float DifferentialDrive::fastPid(float posError, float err, float aCmd) const {
   const float proportional = gains_.kp * err;
   const float feed = gains_.kaff * aCmd;
 
@@ -181,7 +181,7 @@ float Drive::fastPid(float posError, float err, float aCmd) const {
   return pid;
 }
 
-float Drive::positionError(float speed, const Types::RobotState::Wheel& wheel,
+float DifferentialDrive::positionError(float speed, const Types::RobotState::Wheel& wheel,
                            PositionRef& ref, float dt) const {
   if (speed == 0.0f || dt <= 0.0f || !wheel.connected ||
       wheel.positionEpoch != ref.epoch || !ref.armed) {
@@ -200,7 +200,7 @@ float Drive::positionError(float speed, const Types::RobotState::Wheel& wheel,
   return error;
 }
 
-void Drive::adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
+void DifferentialDrive::adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
                       bool fresh, float dt) const {
   if (bounds_.tauAdapt <= 0.0f || dt <= 0.0f || !fresh) return;
   if (std::fabs(aCmd) >= bounds_.aSteady) return;  // ramping, not steady
@@ -214,7 +214,7 @@ void Drive::adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
   }
 }
 
-void Drive::updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
+void DifferentialDrive::updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
                           bool& latched) const {
   if (bounds_.deficitThreshold <= 0.0f || bounds_.deficitWindow <= 0.0f ||
       !conditionNow) {
@@ -231,7 +231,7 @@ void Drive::updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
 // than merged with it: the two describe different faults, gate on different
 // config keys, and only this one causes the robot to be halted, so a future
 // change to either must not silently move the other.
-void Drive::updateStall(bool conditionNow, uint32_t now, uint32_t& since,
+void DifferentialDrive::updateStall(bool conditionNow, uint32_t now, uint32_t& since,
                         bool& latched) const {
   if (bounds_.stallWindow <= 0.0f || !conditionNow) {
     since = 0;
@@ -242,11 +242,11 @@ void Drive::updateStall(bool conditionNow, uint32_t now, uint32_t& since,
   latched = (now - since) >= static_cast<uint32_t>(bounds_.stallWindow);
 }
 
-uint32_t Drive::sampleAge(uint32_t now, uint32_t sampleTime) const {
+uint32_t DifferentialDrive::sampleAge(uint32_t now, uint32_t sampleTime) const {
   return (now < sampleTime) ? 0u : (now - sampleTime);
 }
 
-void Drive::tick(const Types::RobotState& state) {
+void DifferentialDrive::tick(const Types::RobotState& state) {
   if (!calibrated_) return;
 
   float speedLeft, speedRight;  // [mm/s] x2, post-floor
@@ -383,4 +383,4 @@ void Drive::tick(const Types::RobotState& state) {
   writtenRight_ = dutyRight;
 }
 
-}  // namespace App
+}  // namespace Core

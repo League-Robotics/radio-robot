@@ -9,7 +9,7 @@ drives.
 2. Set a nonzero raw OTOS linear scale error (``set_otos_raw_scale_err()``,
    109-007) against a known true pose (``set_true_pose()``).
 3. Confirm the firmware's own decoded OTOS reading (the primary TLM frame's
-   ``otos=`` field, ``App::Odometry``'s ``frame.hasOtos``/``frame.otos`` --
+   ``otos=`` field, ``Core::Odometry``'s ``frame.hasOtos``/``frame.otos`` --
    ``Devices::Otos::pose()`` read back over the real wire) diverges from
    truth by the injected fraction -- SimPlant's OTOS burst-read response is
    `truth * rawError`, exactly as sim_plant.h documents.
@@ -64,7 +64,7 @@ def _compensating_scale(raw_error: float) -> float:
     *raw_error*. 132-014: unlike the pre-132-010 live wire path (trap 3 --
     passed the config value straight through to a setter expecting the
     chip's raw int8 register, installing a 1-LSB scalar instead of the
-    intended multiplier), ``App::configureOtos()`` now converts this
+    intended multiplier), ``Core::configureOtos()`` now converts this
     multiplier through ``Devices::scaleToRegister()`` FIRMWARE-side before
     calling ``setLinearScalar()`` -- so the host pushes the multiplier
     directly, no int8 pre-encoding."""

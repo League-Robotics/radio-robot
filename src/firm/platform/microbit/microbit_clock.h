@@ -7,8 +7,8 @@
 // fiber_sleep(); MicroBitSleeper::yield() wraps schedule().
 //
 // Usage: one MicroBitClock and one MicroBitSleeper instance, owned by
-// main() and passed to App::RobotLoop (and the modules it composes:
-// App::Deadman, App::Preamble) as `Platform::Clock&`/`Platform::Sleeper&`.
+// main() and passed to Core::RobotLoop (and the modules it composes:
+// Core::Deadman, Core::Preamble) as `Platform::Clock&`/`Platform::Sleeper&`.
 #pragma once
 #include "MicroBit.h"  // system_timer_current_time_us(), fiber_sleep(), schedule()
 #include "platform/clock.h"

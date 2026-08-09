@@ -1,9 +1,9 @@
 // boot_wiring.cpp -- see boot_wiring.h for the composition-root contract.
-#include "app/boot_wiring.h"
+#include "core/boot_wiring.h"
 
-#include "app/debug.h"
+#include "core/debug.h"
 
-namespace App {
+namespace Core {
 
 RobotGraph::BootValues RobotGraph::bakeBootValues(const BootOverrides& overrides) {
   BootValues r;
@@ -95,7 +95,7 @@ RobotGraph::RobotGraph(Platform::I2CBus& bus, const Platform::Clock& clock, Plat
       planner_(bootValues_.plannerLimits),
       // navigatorLimits_ default-constructs (arc_solver.h's own struct
       // defaults); the real, baked values land via configurator_.install()
-      // below (App::configureNavigator()), same timing as PLANNER_SHAPER/
+      // below (Core::configureNavigator()), same timing as PLANNER_SHAPER/
       // DRIVE/OTOS -- see navigatorLimits_'s own doc comment (boot_wiring.h).
       navigator_(navigatorLimits_, planner_),
       preamble_(armorL_, armorR_, otos_, color_, line_, clock),
@@ -107,7 +107,7 @@ RobotGraph::RobotGraph(Platform::I2CBus& bus, const Platform::Clock& clock, Plat
   // a no-op call unless ROBOT_DEBUG is defined (app/debug.h's own compile
   // gate) or, for the host/sim build, always live (HOST_BUILD, per
   // src/firm/platform/host/CMakeLists.txt's own APP_SOURCES comment).
-  App::setDebugSink(&comms_);
+  Core::setDebugSink(&comms_);
 
   // 132-006 (the-configuration-object.md): loadBaked() + install() replace
   // the old resolve()-fed installShaperLimits()/installDriveCalibration()/
@@ -119,7 +119,7 @@ RobotGraph::RobotGraph(Platform::I2CBus& bus, const Platform::Clock& clock, Plat
   // 133-005: overrides.wheelCorrection (nullptr on hardware -- main.cpp
   // passes none, so a real robot still boots the JSON's own fitted gains)
   // is applied INSIDE loadBaked(), before install() fans config_ out to
-  // Drive::configure(). See BootOverrides::wheelCorrection's own doc
+  // DifferentialDrive::configure(). See BootOverrides::wheelCorrection's own doc
   // comment (boot_wiring.h) for why the sim needs it and what it cost to
   // find out.
   configurator_.loadBaked(overrides.wheelCorrection);
@@ -130,7 +130,7 @@ RobotGraph::RobotGraph(Platform::I2CBus& bus, const Platform::Clock& clock, Plat
   // file) is applied AFTER install() -- unlike wheelCorrection, there is
   // no Configurator::loadBaked() parameter for a single NavigatorLimits
   // field to ride in on; install() has already written navigatorLimits_
-  // from the baked config_.navigator by this point (App::
+  // from the baked config_.navigator by this point (Core::
   // configureNavigator()), so overwriting the one field here lands after
   // it, not before, with the identical net effect. See BootOverrides::
   // navigatorYawSign's own doc comment (boot_wiring.h) for why the sim
@@ -145,7 +145,7 @@ RobotGraph::RobotGraph(Platform::I2CBus& bus, const Platform::Clock& clock, Plat
   // only call site) -- resolving the "solve cleanly" note 132-006 left
   // here (see git history for the prior version of this comment).
   // RobotLoop::configure() takes the whole Config::Robot exactly like
-  // Drive/the boot_calibration.h adapters do, reading configurator_'s own
+  // DifferentialDrive/the boot_calibration.h adapters do, reading configurator_'s own
   // freshly-loaded object (loadBaked() above) rather than
   // bootValues_.drivetrainConfig (the old, separate msg::DrivetrainConfig
   // family) -- a direct call, not routed through Configurator::install():
@@ -177,4 +177,4 @@ RobotGraph composeRobot(Platform::I2CBus& bus, const Platform::Clock& clock, Pla
                     idLine, overrides);
 }
 
-}  // namespace App
+}  // namespace Core

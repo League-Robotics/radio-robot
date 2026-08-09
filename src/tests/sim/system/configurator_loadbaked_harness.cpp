@@ -1,6 +1,6 @@
 // configurator_loadbaked_harness.cpp -- ticket 132-006's own smoke test
 // (the-configuration-object.md, sprint 132 "configuration discipline"):
-// App::Configurator now owns the one Config::Robot instance --
+// Core::Configurator now owns the one Config::Robot instance --
 // RobotGraph's constructor calls configurator_.loadBaked() +
 // configurator_.install() in place of the old RobotGraph::Resolved +
 // install*Calibration() sequence (see boot_wiring.{h,cpp}/configurator.
@@ -9,7 +9,7 @@
 // identical boot is a ticket-018 concern) -- it is the "lighter smoke
 // test" the ticket's own Testing section calls for:
 //
-//   1. The sim composition root (TestSim::SimHarness -> App::composeRobot())
+//   1. The sim composition root (TestSim::SimHarness -> Core::composeRobot())
 //      constructs and boots without crashing, now that Configurator's own
 //      constructor body work (loadBaked()/install()) runs as part of that
 //      construction.
@@ -28,7 +28,7 @@
 //      133-005: drive.wheel_gain_*/wheel_intercept_*, which this harness's
 //      SimHarness deliberately overrides to identity (a real gearbox
 //      linearization has nothing to linearize in a linear plant) -- see
-//      that assertion's own comment below, and App::BootOverrides::
+//      that assertion's own comment below, and Core::BootOverrides::
 //      wheelCorrection (app/boot_wiring.h) for the regression that made
 //      the override explicit.
 //   4. (132-007) RobotLoop::configure(const Config::Robot&) -- the one
@@ -38,7 +38,7 @@
 //      config().geometry, read back via the new rotationGainPos()/
 //      rotationOffsetPos()/rotationGainNeg()/rotationOffsetNeg() getters
 //      (robot_loop.h). The other five 132-007 configure() entry points
-//      (Drive::configure(), App::configurePlanner()/configureMotor()/
+//      (Drive::configure(), Core::configurePlanner()/configureMotor()/
 //      configureOtos()) are covered by
 //      src/tests/sim/unit/configure_entry_points_harness.cpp instead,
 //      which needs no full composition root.
@@ -126,7 +126,7 @@ int main() {
   // 133-005: drive.wheel_gain_*/wheel_intercept_* are the ONE documented
   // exception to this scenario's bake-parity rule, and deliberately so.
   // This harness composes a TestSim::SimHarness, which declares an
-  // identity wheel correction through App::BootOverrides::wheelCorrection
+  // identity wheel correction through Core::BootOverrides::wheelCorrection
   // -- a real gearbox linearization has nothing to linearize in a linear
   // plant, so the sim must NOT inherit the file's fitted gains. Asserting
   // bake parity on them here would be asserting the very defect that cost

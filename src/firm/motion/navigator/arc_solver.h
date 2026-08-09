@@ -83,7 +83,7 @@ inline constexpr float kArcSolverSlewAccel = 2500.0f;  // [mm/s^2]
 // loop's cadence (planner.CYCLE_PERIOD = 0.1 s) -- but this port's own
 // caller, Motion::Navigator (135-003), re-solves on the FIRMWARE's own
 // 50 ms cycle (sprint 135 sprint.md Solution: "re-solving a tangent arc
-// every 50 ms cycle"; App::RobotLoop::kCycle = 50 ms, ~20 Hz). Re-deriving
+// every 50 ms cycle"; Core::RobotLoop::kCycle = 50 ms, ~20 Hz). Re-deriving
 // against the loop that actually spends this budget -- rather than
 // copying solver.py's numeric MAX_WHEEL_STEP verbatim -- is the whole
 // point of solver.py's own docstring warning: "if planner.CYCLE_PERIOD

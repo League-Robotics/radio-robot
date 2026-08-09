@@ -2,16 +2,19 @@
 root: ../../../docs/design/design.md
 ---
 
-# App — Loop and Passive App Modules
+# Core — Orchestration: the Loop and the Robot Composition
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-25 · **Status:** in-flux
+**Owner:** Eric Busboom · **Last reviewed:** 2026-08-09 · **Status:** in-flux
 
 ---
 
 ## 1. Purpose
 
-`app/` is the single cooperatively-timed control loop (`App::RobotLoop`) and
-the BASE-side passive modules it owns:
+`core/` (was `app/`; namespace `Core::`, was `App::`) is the firmware's
+**orchestration layer**: the single cooperatively-timed control loop
+(`Core::RobotLoop`), the Robot composition root
+(`Core::composeRobot()`/`Core::RobotGraph`), and the BASE-side passive
+modules the loop owns:
 
 * `Comms` (wire framing — protocol v5's uniform packet grammar,
   `<COMMAND>[':' <data>]'\n'`, dispatched by generated command-registry
@@ -22,7 +25,7 @@ the BASE-side passive modules it owns:
   loop-timing fields — now on the PRIMARY frame every cycle, 123-004;
   landed on the secondary frame as an interim placement at 122-003, see §4
   below),
-* `Drive` (current contract, 128 — see this section's own Drive bullet in
+* `DifferentialDrive` (was `Drive`; current contract, 128 — see this section's own Drive bullet in
   §5 Interfaces for the full two-lifecycle contract: a bounded WHEELS
   command lifecycle, `command()`/`estop()`/`owns()`/`takeCompletion()`,
   plus actuation, `tick()`/`update()`), and
@@ -36,7 +39,7 @@ self-bounding by construction, so there is no separate staleness gate),
 `Motion::Odometry` (dead reckoning, plus cumulative path length), and
 `Motion::StateEstimator` (117 — predict-to-now wheel/body peer estimates,
 zero-order-hold extrapolation, v1 complementary blend against OTOS).
-These live in `src/firm/motion/` (a sibling tree, not a child of `app/`) —
+These live in `src/firm/motion/` (a sibling of `core/` under `src/firm`, moved back in from `src/motion` by the platform/hardware/hal reorganization) —
 `RobotLoop` holds them by reference exactly like its own base-side
 modules (constructed at the composition root, `main.cpp`/`SimHarness`)
 and calls into them at specific points in its own schedule, but they are
@@ -76,11 +79,11 @@ longer exists. The command surface through this sprint (S1) is TWIST+STOP+
 CONFIG{motor,otos}+deadman only — S2 (sprint 116) replaces TWIST+deadman
 with the bounded MOVE protocol.
 
-**116-005/116-006 (S2, MOVE protocol cutover) — landed.** `App::Deadman`
+**116-005/116-006 (S2, MOVE protocol cutover) — landed.** `Core::Deadman`
 (`app/deadman.{h,cpp}`, both test harnesses) is deleted in turn — the
 same wholesale-deletion treatment 115-005 gave `Pilot`/`HeadingSource`
 above. `RobotLoop::handleTwist()` is replaced by `handleMove()`; a new,
-small `App::MoveQueue` (`app/move_queue.{h,cpp}`) owns the 1-active +
+small `Core::MoveQueue` (`app/move_queue.{h,cpp}`) owns the 1-active +
 4-pending queue and drives one `Motion::StopCondition`
 (`motion/stop_condition.{h,cpp}` — a fresh, much smaller `motion/`
 directory than the one S1 deleted, and NOT a revival of `Pilot`/
@@ -88,7 +91,7 @@ directory than the one S1 deleted, and NOT a revival of `Pilot`/
 MOVE+STOP+CONFIG{motor,otos} — no deadman.
 
 **117 (predict-to-now estimator v1) — landed.** A new passive module,
-`App::StateEstimator` (`app/state_estimator.{h,cpp}`), is added
+`Core::StateEstimator` (`app/state_estimator.{h,cpp}`), is added
 alongside `Odometry` — NOT a replacement for it: `Odometry`'s dead-
 reckoned `x_`/`y_`/`theta_` still feed `frame_.pose` exactly as before,
 and `StateEstimator` reads that same per-cycle `Frame` data as an
@@ -111,7 +114,7 @@ dispatched by `RobotLoop::handleConfig()`, mirroring the otos live-tuning
 message's existing merge-then-apply pattern — see §3/§4 below for the full
 detail (HISTORICAL as of 132-013, patch-surface retirement: `ConfigDelta`
 and every curated per-target live-tuning message it carried are deleted;
-`App::StateEstimator` itself was already deleted as dead code, 128-016).
+`Core::StateEstimator` itself was already deleted as dead code, 128-016).
 Pure
 computation: never touches the I2C bus, never sleeps, no `Devices::
 Clock&` collaborator of its own (every query takes an explicit `now`/`t`
@@ -256,7 +259,7 @@ threshold/timeout comparison remains the always-armed backstop
 all-zero `ShaperLimits` makes `shapeAndStage()` early-return, so the
 commanded speed never bleeds and the land-at-zero gate never fires).
 Scope is TWIST Angle/Distance stops only; TIME/WHEELS moves are
-unaffected. `App::StateEstimator`'s `bodyAt()` — the anticipation block's
+unaffected. `Core::StateEstimator`'s `bodyAt()` — the anticipation block's
 one call site — now has no firmware production consumer: the module,
 `update()`, and its tests are QUARANTINED (kept, not deleted) as the
 planned consumer for future fake-OTOS/fusion bench work, per the same
@@ -351,7 +354,7 @@ otos-fake-seam refactor** (see §2's "Otos call site" and
 `Devices::Otos::feedSyntheticSample()` method + a per-cycle `#ifdef
 FAKE_OTOS` branch in `RobotLoop::cycle()` is now `Devices::Otos` as an
 abstract interface with two implementations — `Devices::RealOtos` (the
-chip) and `App::FakeOtos` (the synthesizer) — selected once at the
+chip) and `Core::FakeOtos` (the synthesizer) — selected once at the
 `main.cpp` composition root. The bench property it established is
 unchanged: this is the first FIRMWARE PRODUCTION CONSUMER of the "OTOS is
 present and reads a meaningful pose on a stand" property the previous
@@ -389,11 +392,11 @@ design (including a real single-consumer-queue bug the bench script's
 first draft hit and fixed) are recorded in ticket 002's own file.
 
 **122 (motion-library extraction — landed, 2026-07-24, reconciled ticket
-004).** `App::MoveQueue`/`App::Odometry`/`App::StateEstimator` — all
+004).** `Core::MoveQueue`/`Core::Odometry`/`Core::StateEstimator` — all
 three described above and throughout this file's history as `app/`'s own
 modules through sprint 121 — MOVE to `src/firm/motion/` (a new sibling tree of
 `src/firm`, not a child of it) and are renamed `Motion::MoveQueue`/
-`Motion::Odometry`/`Motion::StateEstimator`. `App::Drive` narrows to the
+`Motion::Odometry`/`Motion::StateEstimator`. `Core::DifferentialDrive` narrows to the
 wheel-target sink only (`setWheels()`/`stop()`/`tick()`), losing
 `setTwist()`/its `BodyKinematics` dependency to `Motion::MoveQueue`,
 which now calls `BodyKinematics::inverse()` itself and hands already-
@@ -402,7 +405,7 @@ decomposed wheel targets down through a new boundary interface,
 nothing else in `app/` does. `BodyKinematics` itself moves out of
 `src/firm/kinematics/` to `src/firm/motion/body_kinematics.{h,cpp}` (flat, no
 nested `kinematics/` under `src/firm/motion`) for the same reason. Every
-mention of `App::MoveQueue`/`App::Odometry`/`App::StateEstimator`,
+mention of `Core::MoveQueue`/`Core::Odometry`/`Core::StateEstimator`,
 `app/move_queue.*`/`app/odometry.*`/`app/state_estimator.*`, or
 `src/firm/motion/`/`src/firm/kinematics/` earlier in this file's own
 history (115-121) is an accurate PRE-122 record of where that code lived
@@ -422,7 +425,7 @@ rewrite that would move them is deferred to sprint 2).
 `com/radio.*`) cut over from `*B<base64>\r\n` line armor to a
 binary-clean byte stream that demuxes a `0x00`-delimited COBS+CRC frame
 from the `\r`?`\n`-terminated HELLO/PING text rump on the same stream
-(`App::FrameKind`) — a flag-day cutover, no dual-stack, base64 armor
+(`Core::FrameKind`) — a flag-day cutover, no dual-stack, base64 armor
 call sites removed from `app/` entirely (`WireRuntime::base64Encode()`/
 `Decode()` themselves are retained only for an unrelated debug harness,
 see `messages/DESIGN.md` §3). `wire.h`'s envelope-size budget is
@@ -439,16 +442,16 @@ replaced by sprint 124's protocol v5 cutover, see this section's own
 "124-005"/"AS OF 124" paragraphs below).
 
 **124-005 (protocol v5 Part A, "framing grammar cutover") — landed.**
-123's own `App::FrameKind`-based transport-level demux (a heuristic
+123's own `Core::FrameKind`-based transport-level demux (a heuristic
 guess, per completed line, about which of two incompatible framings it
 was — a `0x00`-delimited binary frame or a `\r`?`\n`-terminated cleartext
 line) is DELETED wholesale, not adapted — the same "supersedes, does not
 port" treatment 115-005 gave `Pilot`/`HeadingSource` and 116-005 gave
-`App::Deadman`. In its place: ONE uniform packet grammar in both
+`Core::Deadman`. In its place: ONE uniform packet grammar in both
 directions, `<COMMAND>[':' <data>]'\n'` (issue
 `protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md` §1),
 made possible by 124-003's delimiter-parameterized COBS primitive now
-being called with `delimiter=0x0A` on the live wire (`App::
+being called with `delimiter=0x0A` on the live wire (`Core::
 kCobsDelimiter`, `comms.h`) — a COBS-encoded binary body can never
 contain a literal `0x0A` by construction, so `\n` is a genuine,
 unconditional line terminator for BOTH transports (see
@@ -530,7 +533,7 @@ size, `kMaxCommandPrefixBytes` itself derived at compile time from
 
 **125–127 (velocity-PID relocation + `Motion::Planner` integration) —
 landed.** 125-003 relocates the closed-loop velocity control law out of
-`Devices::NezhaMotor` into `src/firm/motion` as a standalone class — `App::Drive`
+`Devices::NezhaMotor` into `src/firm/motion` as a standalone class — `Core::DifferentialDrive`
 held interim instances for its own WHEELS-teleop path for one sprint, until
 122-002/125-002 reshaped `Drive` into a bare duty sink with no controller of
 its own; the relocated class was left with zero instantiations and 128-015
@@ -547,14 +550,14 @@ WheelSink`.
 
 **128 (complexity reduction: delete dead `WheelSink`/`MoveQueue`
 generation) — landed, SUC-002 Decision 1.** With `Motion::Planner::
-update()`/`App::Drive::update()` confirmed as the only two writers of
+update()`/`Core::DifferentialDrive::update()` confirmed as the only two writers of
 `cmdVelocity` and `RobotLoop::cycle()` confirmed as its only reader,
 `Motion::WheelSink`, `Motion::MoveQueue`, `Motion::StopCondition`, and
 `Motion::VelocityShaper` (~1,500 lines, zero callers) are deleted
-outright, along with `App::Drive`'s own `WheelSink` overrides
+outright, along with `Core::DifferentialDrive`'s own `WheelSink` overrides
 (`setDuty()`/`stop()` — narrowed to the current `command()`/`estop()`/
 `owns()`/`takeCompletion()`/`tick()`/`update()` contract, §5 below) and
-`main.cpp`'s `#include "motion/move_queue.h"`. Every mention of `App::
+`main.cpp`'s `#include "motion/move_queue.h"`. Every mention of `Core::
 MoveQueue`/`Motion::MoveQueue`/`Motion::WheelSink`/`Motion::
 StopCondition`/`Motion::VelocityShaper` earlier in this file's own
 history (115–124) is an accurate record of where that code lived and
@@ -591,7 +594,7 @@ settle(borrow: command-ring drain/`routeCommand()`)/collect/PID for the
 right motor (immediately followed by the wheel section's own `state_`
 publish — 124-009, see below), then a trailing pace block that integrates
 odometry (`Odometry::integrate`), samples OTOS inline (uniform across
-builds; the sensor behind it is a real chip or an `App::FakeOtos`, chosen
+builds; the sensor behind it is a real chip or an `Core::FakeOtos`, chosen
 at construction), polls line/color at a rate-limited, alternating cadence,
 refreshes `Motion::StateEstimator`'s predict-to-now estimates from that
 same cycle's published `state_` (117), and ONLY THEN calls
@@ -634,7 +637,7 @@ blackboard into the wire frame AND derives every flag (replacing both the
 old `updateTlm()`-style field staging and the ten scattered
 `tlm_.setFlag()` calls with one method) — `RobotLoop::cycle()` itself
 never calls `tlm_.setFlag()` at all any more (grep-enforceable:
-`grep setFlag src/firm/app/robot_loop.cpp` returns nothing).
+`grep setFlag src/firm/core/robot_loop.cpp` returns nothing).
 `kFlagFaultMoveTimeout`/`kFlagFaultShapingDisabled` are the one documented
 exception (their defining condition, `Motion::Planner::tick()`'s own
 outcome via `RobotLoop::publishMoveResult()`, isn't known until after
@@ -709,7 +712,7 @@ some point") semantics.
 **Otos call site (uniform across builds; `FAKE_OTOS` chosen at
 construction).** Runs once per cycle from the trailing `kPace` block,
 immediately after `odom_.integrate()`/`state_.pose` staging (this pair is
-hoisted to run BEFORE the Otos call so an `App::FakeOtos` reports THIS
+hoisted to run BEFORE the Otos call so an `Core::FakeOtos` reports THIS
 cycle's fresh pose — a side-effect-free reorder for the real leaf, since
 `Odometry::integrate()` reads neither `otos_` nor any `state_.otos*`
 field and vice versa). There is **no `#ifdef` here** anymore: the loop
@@ -722,7 +725,7 @@ is now the single place that translates `otos_`'s own
 `connected()`/`present()`/`poseFresh()`/`pose()`/`sampleTime()` into the
 blackboard). Which implementation backs `otos_` — the real SparkFun leaf
 (`Devices::RealOtos`, a rate-limited I2C burst read) or the bench
-synthesizer (`App::FakeOtos`, which reports the dead-reckoned `Odometry`
+synthesizer (`Core::FakeOtos`, which reports the dead-reckoned `Odometry`
 pose + `BodyKinematics`-fused wheel twist) — is chosen ONCE at the
 `main.cpp` composition root under `#ifdef FAKE_OTOS`, the only place that
 macro appears (otos-fake-seam refactor, superseding 120-002's per-cycle
@@ -783,7 +786,7 @@ same block.
   once the active `Move`'s stop condition or `timeout` fires and nothing
   is pending — an emergent property of every queued `Move` carrying its
   own bound, not a second, independently-timed staleness timer.
-  `App::Deadman` does not exist in this tree. Do not add an ad hoc
+  `Core::Deadman` does not exist in this tree. Do not add an ad hoc
   watchdog anywhere in `app/`.
 - **Telemetry always carries the last staged snapshot, not a diff:** a
   cycle that doesn't update a `Frame` field still sends whatever was last
@@ -832,7 +835,7 @@ same block.
   SUPERSEDED, 132-013 (patch-surface retirement): `ConfigDelta` and every
   message this bullet names are deleted outright, replaced by
   `robot_config.proto`'s group/field wire arms (`SetConfigGroup`/
-  `applyGroup()`, `SetConfigField`/`applyField()`); `App::StateEstimator`
+  `applyGroup()`, `SetConfigField`/`applyField()`); `Core::StateEstimator`
   itself was already deleted as dead code (128-016), so the ESTIMATOR
   group now has no live consumer at all regardless of wire shape.
 
@@ -1144,7 +1147,7 @@ is corrected to cite this trace.), bit 7
 aggregate exists yet), bit 9 `kFlagFaultCommsMalformed`
 (`Comms::malformedCount() > 0`), bit 10 `kFlagEventDeadmanExpired` (116:
 ORPHANED — its producer, `Deadman::expired()`, was deleted along with
-`App::Deadman`; nothing sets this bit any more, see §6), bit 11 RESERVED
+`Core::Deadman`; nothing sets this bit any more, see §6), bit 11 RESERVED
 (125-002, telemetry-emit-policy-rebuild-spec.md Part 1 item 8: formerly the
 boot-ready event bit, `Preamble::done()`'s first-true transition — deleted
 outright, not merely orphaned like bit 10: it was a one-shot latch whose
@@ -1173,7 +1176,7 @@ Declaring a
 bit before it is wired is deliberate — it reserves the bit number for a
 future caller without renumbering. As of 124-009, `RobotLoop` never calls
 a flag-setting method directly at all (grep-enforceable:
-`grep setFlag src/firm/app/robot_loop.cpp` returns nothing) — `Telemetry::
+`grep setFlag src/firm/core/robot_loop.cpp` returns nothing) — `Telemetry::
 update(state)` derives every bit it can know from `Types::RobotState` in
 one place (superseding the former "`RobotLoop` assembles every bit ...
 via `Telemetry::setFlag(bit, active)` at the point in the cycle each
@@ -1242,7 +1245,7 @@ called with real elapsed time between calls).
   `sendStatus()` formats from, in one call — replaces the loop's own
   former field-by-field `Comms::Status` assembly. See the same §4
   paragraph.
-- **`App::Drive` — two responsibilities, two independent lifecycles**
+- **`Core::DifferentialDrive` — two responsibilities, two independent lifecycles**
   (current contract; supersedes every `setDuty()`/`Motion::WheelSink`
   description below, which described a 122–127-era interim shape now
   deleted — sprint 128 ticket 014):
@@ -1270,7 +1273,7 @@ called with real elapsed time between calls).
      `Motion::Planner::update()` in the cycle (`robot_loop.cpp`'s own
      ordering is what enforces "exactly one decider per cycle"). The full
      invariant is **one decider plus one zero-only safety arbiter**
-     (133-001): `App::RobotLoop` also writes this field, restricted to
+     (133-001): `Core::RobotLoop` also writes this field, restricted to
      `0.0f`, from `zeroUnownedMotion()` (every cycle, whenever neither
      decider owns motion — Drive's `update()` deliberately stops
      publishing after its command expires, and covering that gap is the
@@ -1331,7 +1334,7 @@ called with real elapsed time between calls).
   122-002 — see [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) and
   `state_estimator.h`'s own doc comment for the current, exact contract;
   `update()` now takes a plain `Motion::StateEstimator::Input` struct
-  instead of `App::Telemetry::Frame`, since this tree may not depend on
+  instead of `Core::Telemetry::Frame`, since this tree may not depend on
   `app/` — `RobotLoop` copies the same fields it always read off
   `frame_` into an `Input` and passes that instead, values unchanged):
   `update()` — call once per cycle from the trailing `kPace` block, after
@@ -1351,8 +1354,8 @@ called with real elapsed time between calls).
   for a live curated Estimator live-tuning message (§3 above, HISTORICAL/SUPERSEDED as of 132-013 — see that section's own note) — a plain in-memory update,
   not a bus transaction. All of the above are pure computation: no I2C
   access, no sleep, bounded per call.
-- **`App::debugf(fmt, ...)`/`DBG_EVERY(n, ...)`/`DBG_MILLI(x)`
-  (`app/debug.h`/`.cpp`) + `App::setDebugSink(Comms*)` + `Comms::
+- **`Core::debugf(fmt, ...)`/`DBG_EVERY(n, ...)`/`DBG_MILLI(x)`
+  (`app/debug.h`/`.cpp`) + `Core::setDebugSink(Comms*)` + `Comms::
   sendDebug(line)`** (129-003, `DBG`=18 — issue 05-dbg-debug-message-
   channel-for-bench-and-sim.md; stakeholder, 2026-07-31: "Can we add
   another response field so that you can send debug messages? ... It only
@@ -1475,7 +1478,7 @@ called with real elapsed time between calls).
   an active `Move` ends via `timeout` rather than its stop condition.
 - **`kFlagEventDeadmanExpired` (bit 10) is orphaned by 116, not
   reassigned.** Its sole producer, `Deadman::expired()`, was deleted along
-  with `App::Deadman`; the bit constant still exists in `telemetry.h` (no
+  with `Core::Deadman`; the bit constant still exists in `telemetry.h` (no
   wire-shape change) but nothing in the tree calls
   `Telemetry::setFlag(kFlagEventDeadmanExpired, ...)` any more, so it now
   reads permanently 0. Left as declared-dead rather than deleted or
@@ -1511,17 +1514,74 @@ called with real elapsed time between calls).
   default. This precedent (ESTIMATOR never persists) carries forward
   unchanged into the 132-013 reshape (`config/persisted_tuning.h`'s own
   doc comment) — still true today, now for the independent reason that
-  `install(ESTIMATOR)` has no live consumer at all (`App::StateEstimator`
+  `install(ESTIMATOR)` has no live consumer at all (`Core::StateEstimator`
   deleted, 128-016). Revisit once fake-OTOS/external-pose fusion (future
   sprints) give these weights real, nonzero, bench-validated values worth
   persisting.
-- **`App::debugf()`'s installed sink is a single process-global pointer,
+- **`Core::debugf()`'s installed sink is a single process-global pointer,
   not per-instance.** Fine on real hardware (one board, one `Comms`) and
   in every current Sim/host-test caller (one `TestSim::SimHarness` per
   process). If a future test ever constructs more than one `SimHarness`
   concurrently in the same process, only the most recently constructed
-  one's `App::setDebugSink()` call wins — `debugf()` output from the
+  one's `Core::setDebugSink()` call wins — `debugf()` output from the
   others is silently misrouted or dropped, not duplicated or errored.
   Tickets 006/007 (the first real `debugf()` call sites) should keep this
   in mind if they ever add multi-harness test scenarios; no such scenario
   exists yet.
+
+
+---
+
+## Appendix — the platform/hardware/hal reorganization
+
+Three things changed here, and one deliberately did not.
+
+**`app/` → `core/`, `App::` → `Core::`.** "App" said nothing about what
+this layer does; "orchestration core" does. Pure rename, no file content
+beyond names.
+
+**`Drive` → `DifferentialDrive`.** The class took a scalar `trackWidth` in
+its constructor and computed `(targetRight_ - targetLeft_) / trackWidth_`
+— it was differential-drive-specific in everything but its name. The
+rename makes the constraint visible instead of leaving `MecanumDrive`
+looking like it could just be dropped in beside a generic-sounding
+`Drive`.
+
+**No `Drivetrain` interface was extracted, on purpose.** The proposal
+describes `DifferentialDrive` implementing "a small common drivetrain
+interface (tick, command a body twist, report wheel state)" that
+`MecanumDrive` implements alongside it. Two things block that here, and
+neither is fixed by writing the interface first:
+
+1. **The surface is not small.** `Core::RobotLoop` and
+   `Core::Configurator` drive this class through far more than three
+   verbs: `setControlGains()`, `setAdaptationBounds()`,
+   `setWheelCorrection()`, `setCrawlPulse()`, `setPositionErrorMax()`,
+   `setSpeedFloor()`, `setASteady()`, `biasLeft()`/`biasRight()`,
+   `pidLeft()`/`pidRight()`, `deficitLeft()`/`deficitRight()`,
+   `stallLeft()`/`stallRight()`, `calibrated()`, `trackWidth()`,
+   `owns()`, `takeover()`, `takeCompletion()`, `estop()`. An "interface"
+   with twenty-odd virtuals is the concrete class with extra steps.
+2. **There is no second implementation to write it against.**
+   `MecanumDrive` cannot exist until `Motion::Planner` stops inlining
+   differential algebra against a scalar track width (see
+   [`../kinematics/DESIGN.md`](../kinematics/DESIGN.md) §4 — roughly
+   fifteen sites in `planner.cpp`). An interface designed with no second
+   implementer is a guess about what the second one needs.
+
+The order that works is: generalize the planner, write `MecanumDrive`,
+and let the interface fall out of what the two genuinely share. What this
+reorganization delivers toward that is `Kinematics::Model` — the seam
+that project needs — and a name on this class that no longer hides the
+constraint.
+
+**`Core::FakeOtos` stays here** rather than moving to
+`hardware/generic/`, where the proposal expected it. It is a synthetic
+`Hal::Otos` composed from `Motion::Odometry` and two `Hal::Motor&`s —
+motion is two layers ABOVE hardware, so filing it under `hardware/` would
+invert the layering. Rebasing it onto `Types::RobotState::pose` would fix
+the layering and change behavior: `RobotLoop::cycle()` calls
+`odom_.integrate()` and then `otos_.tick()`, while `state_.pose` is not
+written until later in the cycle, so it would start reporting the
+previous cycle's pose. Full reasoning in
+[`../hal/DESIGN.md`](../hal/DESIGN.md) §4.

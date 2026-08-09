@@ -1,7 +1,7 @@
 """src/tests/tools/one_step_ahead.py -- sprint 117 ticket 006: a pure-Python,
 independently-testable reference implementation of the SAME zero-order-hold
-(ZOH) one-step-ahead prediction math ``App::StateEstimator`` ships in C++
-(ticket 002, ``src/firm/app/state_estimator.{h,cpp}``).
+(ZOH) one-step-ahead prediction math ``Core::StateEstimator`` ships in C++
+(ticket 002, ``src/firm/core/state_estimator.{h,cpp}``).
 
 This is NOT a wrapper calling into the C++ estimator -- a genuinely separate
 reimplementation, so a cross-check against it (ticket 007's notebook; ticket
@@ -119,15 +119,15 @@ def one_step_ahead_walk(times: "Sequence[float]", positions: "Sequence[float]",
 # call `shift` ms before this sample's own instant, using whatever basis was
 # current AT that earlier instant (never a basis from AFTER it -- no
 # look-ahead), how far off would it have been by the time this sample's own
-# instant arrived?" This is exactly the question App::StateEstimator::
+# instant arrived?" This is exactly the question Core::StateEstimator::
 # bodyAt(now + shift)/wheelAt(..., now + shift) answers for what USED to be
-# App::MoveQueue's own time-lead anticipation stop-condition evaluation
+# Core::MoveQueue's own time-lead anticipation stop-condition evaluation
 # (Phase B) -- DELETED, 118 ticket 004, land-at-zero-completion-delete-
 # stop-lead.md: the completion mechanism this predicted for no longer
-# exists (App::MoveQueue::tick()'s own doc comment has the land-at-zero
+# exists (Core::MoveQueue::tick()'s own doc comment has the land-at-zero
 # predicate that replaces it). This module's own ZOH math and its
 # characterization utility remain valid and are kept for the planned
-# fake-OTOS/fusion bench work (App::StateEstimator itself is QUARANTINED,
+# fake-OTOS/fusion bench work (Core::StateEstimator itself is QUARANTINED,
 # not deleted, same ticket) -- the RMS of this walk's residuals, swept over
 # shift, is the curve that says how far ahead the SAME ZOH math can be
 # trusted, independent of what (if anything) consumes that answer.

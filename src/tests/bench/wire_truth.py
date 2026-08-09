@@ -86,7 +86,7 @@ step at a time so it can distinguish, the way 123's methodology did:
 
 The `#`/`!`/`?` counting bias (124-010):
 -----------------------------------------
-124-010 taught `App::Comms::dispatchLine()` (firmware, inbound
+124-010 taught `Core::Comms::dispatchLine()` (firmware, inbound
 command-plane) to silently drop -- BEFORE incrementing
 `malformedCount_` -- any line whose first byte is `#`, `!`, or `?`
 (leaked radio-relay control-plane sigils: `# entering data plane`,

@@ -1,5 +1,5 @@
 // app_comms_harness.cpp -- off-hardware acceptance harness for ticket
-// 103-004 (SUC-004), App::Comms (src/firm/app/comms.{h,cpp}). Proves the
+// 103-004 (SUC-004), Core::Comms (src/firm/app/comms.{h,cpp}). Proves the
 // CRC-then-COBS binary armor/dearmor sequence (123-002 -- supersedes the
 // "*B"+base64 armor transcribed from the deleted
 // src/firm/commands/binary_channel.cpp, sprint 102's transcription note,
@@ -19,7 +19,7 @@
 // MicroBit.h anywhere in this graph under HOST_BUILD -- comms.h/comms.cpp's
 // SerialTransport/RadioTransport adapters are compiled out).
 //
-// FakeTransport (App::Transport) is TestSupport::FakeTransport
+// FakeTransport (Core::Transport) is TestSupport::FakeTransport
 // (src/tests/sim/support/fake_transport.h, ticket 105-002) -- the ONE canonical
 // scripted queue of inbound lines plus a log of every send()/sendReliable()
 // call, so scenarios can feed input and assert exactly what got sent. This
@@ -30,9 +30,9 @@
 #include <cstring>
 #include <string>
 
-#include "app/comms.h"
-#include "app/drive.h"
-#include "app/telemetry.h"
+#include "core/comms.h"
+#include "core/differential_drive.h"
+#include "core/telemetry.h"
 #include "hal/motor.h"
 #include "firm/types/robot_state.h"
 #include "messages/envelope.h"
@@ -63,10 +63,10 @@ class StubMotor : public Hal::Motor {
   void rebaseline() override {}
 };
 
-App::Drive& testDrive() {
+Core::DifferentialDrive& testDrive() {
   static StubMotor left;
   static StubMotor right;
-  static App::Drive drive(left, right, /*trackWidth=*/200.0f);
+  static Core::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
   return drive;
 }
 
@@ -76,8 +76,8 @@ App::Drive& testDrive() {
 // takeCommand() pops from it). These scenarios each feed exactly one line
 // and want the one command it produced, so "pump then take" is the honest
 // local equivalent -- not a claim that pump() still stops after one line.
-App::Cmd pumpOne(App::Comms& comms, uint32_t now) {  // [ms]
-  App::Cmd cmd;
+Core::Cmd pumpOne(Core::Comms& comms, uint32_t now) {  // [ms]
+  Core::Cmd cmd;
   comms.pump(now);
   comms.takeCommand(cmd);  // leaves cmd at status kNone when nothing decoded
   return cmd;
@@ -234,12 +234,12 @@ void scenarioMoveRoundTrip() {
   serialFake.enqueueInboundBinary(line);
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/0);
 
-  checkTrue(cmd.status == App::CmdStatus::kDecoded, "cmd.status == kDecoded");
+  checkTrue(cmd.status == Core::CmdStatus::kDecoded, "cmd.status == kDecoded");
   checkU64Eq(cmd.env.corr_id, 7, "corr_id round-trips");
   checkTrue(cmd.env.cmd_kind == msg::CommandEnvelope::CmdKind::MOVE, "cmd_kind == MOVE");
   checkTrue(cmd.env.cmd.move.velocity_kind == msg::Move::VelocityKind::TWIST,
@@ -271,12 +271,12 @@ void scenarioMalformedUnrecognizedTextLineRejected() {
   serialFake.enqueueInbound("*Xsomeunrecognizedarmor");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/0);
 
-  checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone");
+  checkTrue(cmd.status == Core::CmdStatus::kNone, "cmd.status stays kNone");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
 }
 
@@ -299,12 +299,12 @@ void scenarioMalformedCobsFrameRejected() {
   serialFake.enqueueInboundBinary(badFrame);
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/0);
 
-  checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone");
+  checkTrue(cmd.status == Core::CmdStatus::kNone, "cmd.status stays kNone");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
 }
 
@@ -336,12 +336,12 @@ void scenarioMalformedCrcMismatchRejected() {
   serialFake.enqueueInboundBinary(line);
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/0);
 
-  checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone -- corrupted frame never decodes");
+  checkTrue(cmd.status == Core::CmdStatus::kNone, "cmd.status stays kNone -- corrupted frame never decodes");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once (CRC mismatch detected, not mis-parsed)");
 }
 
@@ -368,12 +368,12 @@ void scenarioMalformedCorruptProtobufRejected() {
   serialFake.enqueueInboundBinary(line);
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/0);
 
-  checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone");
+  checkTrue(cmd.status == Core::CmdStatus::kNone, "cmd.status stays kNone");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
 }
 
@@ -392,12 +392,12 @@ void scenarioHelloRepliesWithBannerViaSendReliable() {
   serialFake.enqueueInbound("HELLO");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/0);
 
-  checkTrue(cmd.status == App::CmdStatus::kNone, "HELLO never decodes a Cmd");
+  checkTrue(cmd.status == Core::CmdStatus::kNone, "HELLO never decodes a Cmd");
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
   if (!serialFake.sentReliable().empty()) {
     checkStrEq(serialFake.sentReliable()[0], banner, "sendReliable() carried the banner verbatim");
@@ -414,13 +414,13 @@ void scenarioPingRepliesOkPongViaSendReliable() {
   serialFake.enqueueInbound("PING");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
   // A specific, nonzero `now` -- proves the reply carries THIS call's own
   // argument, not a hardcoded/zero placeholder (117 ticket 001's own AC:
   // "t= followed by the now value passed into Comms::pump()/
   // pumpTransport() for that call").
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/123456);
 
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
@@ -457,9 +457,9 @@ void scenarioPumpBoundedToOneTransportPerCall() {
   radioFake.enqueueInbound("PING");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/1000);
 
   checkU64Eq(serialFake.inboundSize(), 0, "serial's queued line was drained this call");
@@ -475,7 +475,7 @@ void scenarioPumpBoundedToOneTransportPerCall() {
   // t=<ms> reply shape on the OTHER transport, not just serial (117 ticket
   // 001's own AC: "Verified on both the serial and radio-relay
   // transports").
-  App::Cmd cmd2;
+  Core::Cmd cmd2;
   cmd2 = pumpOne(comms, /*now=*/2000);
   checkU64Eq(radioFake.inboundSize(), 0, "radio's queued line is drained on the NEXT call");
   checkU64Eq(radioFake.sentReliable().size(), 1, "radio received the PING reply on the second call");
@@ -506,7 +506,7 @@ void scenarioSendReplyBroadcastsIdenticalLineOnBothTransports() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
   comms.sendReply(reply);
 
@@ -528,7 +528,7 @@ void scenarioSendReplyBroadcastsIdenticalLineOnBothTransports() {
   // sendReply() derives the wire verb name from body_kind INTERNALLY, so
   // the independent re-encode here must use the same mapping to compare
   // like-for-like.
-  uint8_t rawBuf[App::kMaxEnvelopeBytes];
+  uint8_t rawBuf[Core::kMaxEnvelopeBytes];
   uint16_t n = msg::wire::encode(reply, rawBuf, sizeof(rawBuf));
   checkTrue(n > 0, "independent encode() succeeds");
   std::string expected = armor(rawBuf, n, "OK");
@@ -566,12 +566,12 @@ void scenarioSendReplyVerbNameTracksBodyKind() {
 
   FakeTransport serialFakeOk;
   FakeTransport radioFakeOk;
-  App::Comms commsOk(serialFakeOk, radioFakeOk, banner);
+  Core::Comms commsOk(serialFakeOk, radioFakeOk, banner);
   commsOk.sendReply(okReply);
 
   FakeTransport serialFakeErr;
   FakeTransport radioFakeErr;
-  App::Comms commsErr(serialFakeErr, radioFakeErr, banner);
+  Core::Comms commsErr(serialFakeErr, radioFakeErr, banner);
   commsErr.sendReply(errReply);
 
   checkU64Eq(serialFakeOk.sent().size(), 1, "OK reply produced exactly one line");
@@ -618,12 +618,12 @@ void scenarioDecodeBinaryFrameRejectsMismatchedCommandScope() {
   serialFake.enqueueInboundBinary(line);
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/0);
 
-  checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone -- scope-mismatched frame never decodes");
+  checkTrue(cmd.status == Core::CmdStatus::kNone, "cmd.status stays kNone -- scope-mismatched frame never decodes");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once (CRC-scope mismatch detected)");
 }
 
@@ -641,12 +641,12 @@ void scenarioIdRepliesWithConfiguredIdentity() {
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   static char idLine[] = "ID:differential:tovez_nocal:0.20260724.2";
-  App::Comms comms(serialFake, radioFake, banner, idLine);
+  Core::Comms comms(serialFake, radioFake, banner, idLine);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/0);
 
-  checkTrue(cmd.status == App::CmdStatus::kNone, "ID never decodes a Cmd");
+  checkTrue(cmd.status == Core::CmdStatus::kNone, "ID never decodes a Cmd");
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
   if (!serialFake.sentReliable().empty()) {
     checkStrEq(serialFake.sentReliable()[0], idLine, "sendReliable() carried the configured idLine_ verbatim");
@@ -662,9 +662,9 @@ void scenarioVerRepliesWithBuildVersion() {
   serialFake.enqueueInbound("VER");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/0);
 
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
@@ -689,9 +689,9 @@ void scenarioStrayTrailingColonOnNoDataVerbHandledGracefully() {
   serialFake.enqueueInbound("PING:");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/777);
 
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one sendReliable() call");
@@ -710,12 +710,12 @@ void scenarioTruncatedBinaryLineCountsMalformedNotCrash() {
   serialFake.enqueueInbound("MOVE:");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/0);
 
-  checkTrue(cmd.status == App::CmdStatus::kNone, "cmd.status stays kNone -- no crash, no partial decode");
+  checkTrue(cmd.status == Core::CmdStatus::kNone, "cmd.status stays kNone -- no crash, no partial decode");
   checkU64Eq(comms.malformedCount(), 1, "malformedCount increments exactly once");
 }
 
@@ -746,12 +746,12 @@ void scenarioDataContainingColonAndZeroRoundTripsCorrectly() {
   serialFake.enqueueInboundBinary(line);
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   cmd = pumpOne(comms, /*now=*/0);
 
-  checkTrue(cmd.status == App::CmdStatus::kDecoded,
+  checkTrue(cmd.status == Core::CmdStatus::kDecoded,
             "decodes cleanly despite ':' and 0x00 embedded in the COBS-encoded data");
   checkU64Eq(cmd.env.corr_id, 55, "corr_id round-trips despite the embedded ':'/0x00 in a sibling field");
   checkU64Eq(comms.malformedCount(), 0, "not counted malformed");
@@ -804,7 +804,7 @@ void scenarioRelayHandshakeChatterNeverCountsAsMalformed() {
     radioFake.enqueueInbound("!GO");
     radioFake.enqueueInbound("# entering data plane");
 
-    App::Comms comms(serialFake, radioFake, banner);
+    Core::Comms comms(serialFake, radioFake, banner);
 
     // Drain every queued line (the "~1 s settle window" the issue's own
     // repro waits out before inspecting fault_bits). ONE pump() call now
@@ -813,8 +813,8 @@ void scenarioRelayHandshakeChatterNeverCountsAsMalformed() {
     // scenario still proves repeated pumping is idempotent on empty
     // transports, and that no relay-chatter line ever leaves a Cmd behind.
     for (int i = 0; i < 5; ++i) {
-      App::Cmd cmd = pumpOne(comms, /*now=*/static_cast<uint32_t>(i));
-      checkTrue(cmd.status == App::CmdStatus::kNone, "no relay chatter line ever decodes a Cmd");
+      Core::Cmd cmd = pumpOne(comms, /*now=*/static_cast<uint32_t>(i));
+      checkTrue(cmd.status == Core::CmdStatus::kNone, "no relay chatter line ever decodes a Cmd");
     }
 
     checkU64Eq(radioFake.inboundSize(), 0, "every queued relay-chatter line was drained this trial");
@@ -853,7 +853,7 @@ void scenarioRelayCarveOutIsNarrowAndDoesNotAffectSubsequentRealCommand() {
   radioFake.enqueueInbound("PING");
 
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
   // ONE pump() call consumes all three queued lines (command-ingestion-
   // ring-buffered-comms-subsystem-routing-two-stops.md §1: pump() drains
@@ -863,7 +863,7 @@ void scenarioRelayCarveOutIsNarrowAndDoesNotAffectSubsequentRealCommand() {
   // if the carve-out left residual parser state behind, draining all three
   // back-to-back inside one call is exactly where it would show.
   comms.pump(/*now=*/999);
-  App::Cmd cmd;
+  Core::Cmd cmd;
   checkTrue(!comms.takeCommand(cmd), "none of the three lines decodes into a command");
   checkU64Eq(comms.malformedCount(), 1,
              "exactly one malformed count: the non-sigil garbage line. Relay chatter is carved out, "
@@ -891,17 +891,17 @@ void scenarioBareTlmAndTlmNowBothProduceKFrameNoModeChange() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
   serialFake.enqueueInbound("TLM");
   comms.pump(/*now=*/0);
-  checkTrue(comms.takeTlmAction() == App::Comms::TlmAction::kFrame, "bare TLM -> kFrame");
+  checkTrue(comms.takeTlmAction() == Core::Comms::TlmAction::kFrame, "bare TLM -> kFrame");
 
   serialFake.enqueueInbound("TLM:NOW");
   comms.pump(/*now=*/0);
-  checkTrue(comms.takeTlmAction() == App::Comms::TlmAction::kFrame, "TLM:NOW -> kFrame, same as bare TLM");
+  checkTrue(comms.takeTlmAction() == Core::Comms::TlmAction::kFrame, "TLM:NOW -> kFrame, same as bare TLM");
 
-  App::Cmd cmd;
+  Core::Cmd cmd;
   checkTrue(!comms.takeCommand(cmd), "neither line ever enters the command ring");
   checkU64Eq(comms.malformedCount(), 0, "neither line counts as malformed");
 }
@@ -911,20 +911,20 @@ void scenarioTlmModeTokensCaseInsensitiveProduceCorrectAction() {
 
   struct Row {
     const char* line;
-    App::Comms::TlmAction expected;
+    Core::Comms::TlmAction expected;
   };
   const Row rows[] = {
-      {"TLM:ON", App::Comms::TlmAction::kSetOn},     {"TLM:on", App::Comms::TlmAction::kSetOn},
-      {"TLM:On", App::Comms::TlmAction::kSetOn},     {"TLM:AUTO", App::Comms::TlmAction::kSetAuto},
-      {"TLM:auto", App::Comms::TlmAction::kSetAuto}, {"TLM:AuTo", App::Comms::TlmAction::kSetAuto},
-      {"TLM:OFF", App::Comms::TlmAction::kSetOff},   {"TLM:off", App::Comms::TlmAction::kSetOff},
+      {"TLM:ON", Core::Comms::TlmAction::kSetOn},     {"TLM:on", Core::Comms::TlmAction::kSetOn},
+      {"TLM:On", Core::Comms::TlmAction::kSetOn},     {"TLM:AUTO", Core::Comms::TlmAction::kSetAuto},
+      {"TLM:auto", Core::Comms::TlmAction::kSetAuto}, {"TLM:AuTo", Core::Comms::TlmAction::kSetAuto},
+      {"TLM:OFF", Core::Comms::TlmAction::kSetOff},   {"TLM:off", Core::Comms::TlmAction::kSetOff},
   };
 
   for (const Row& row : rows) {
     FakeTransport serialFake;
     FakeTransport radioFake;
     static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-    App::Comms comms(serialFake, radioFake, banner);
+    Core::Comms comms(serialFake, radioFake, banner);
     serialFake.enqueueInbound(row.line);
     comms.pump(/*now=*/0);
     checkTrue(comms.takeTlmAction() == row.expected, std::string(row.line) + " parses to the expected TlmAction");
@@ -937,11 +937,11 @@ void scenarioTlmGarbageArgProducesUnrecognizedNotMalformed() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
   serialFake.enqueueInbound("TLM:BOGUS");
   comms.pump(/*now=*/0);
-  checkTrue(comms.takeTlmAction() == App::Comms::TlmAction::kUnrecognized, "TLM:BOGUS -> kUnrecognized");
+  checkTrue(comms.takeTlmAction() == Core::Comms::TlmAction::kUnrecognized, "TLM:BOGUS -> kUnrecognized");
   checkU64Eq(comms.malformedCount(), 0, "an unrecognized TLM: argument is not counted malformed");
 }
 
@@ -952,11 +952,11 @@ void scenarioTlmWithSpaceNotColonFallsThroughToMalformed() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
   serialFake.enqueueInbound("TLM ON");
   comms.pump(/*now=*/0);
-  checkTrue(comms.takeTlmAction() == App::Comms::TlmAction::kNone, "\"TLM ON\" (no colon) never stages a TlmAction");
+  checkTrue(comms.takeTlmAction() == Core::Comms::TlmAction::kNone, "\"TLM ON\" (no colon) never stages a TlmAction");
   checkU64Eq(comms.malformedCount(), 1,
              "\"TLM ON\" does not match the registered \"TLM\" verb name -- malformedCount increments");
 }
@@ -969,21 +969,21 @@ void scenarioTlmModeChangeRepliesWithStatusLineOnOriginatingTransport() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
   // Radio, not serial -- proves the reply transport is remembered per-line,
   // not hardcoded to serialLink_.
   radioFake.enqueueInbound("TLM:ON");
   comms.pump(/*now=*/0);
-  const App::Comms::TlmAction action = comms.takeTlmAction();
-  checkTrue(action == App::Comms::TlmAction::kSetOn, "setup: TLM:ON parses to kSetOn");
+  const Core::Comms::TlmAction action = comms.takeTlmAction();
+  checkTrue(action == Core::Comms::TlmAction::kSetOn, "setup: TLM:ON parses to kSetOn");
 
   // Mirrors RobotLoop::cycle()'s own ordering: apply the mode (not modeled
   // here -- Comms holds no Telemetry&), THEN refresh Comms::Status with the
   // NEW mode, THEN reply -- sendTlmReply() must be called in that order.
-  App::Comms::Status status;
+  Core::Comms::Status status;
   status.ready = true;
-  status.tlmMode = 2;  // App::TlmMode::kOn
+  status.tlmMode = 2;  // Core::TlmMode::kOn
   comms.setStatus(status);
   comms.sendTlmReply(action);
 
@@ -1002,11 +1002,11 @@ void scenarioTlmGarbageRepliesWithHelpLineListingTlmArgumentGrammar() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
   serialFake.enqueueInbound("TLM:BOGUS");
   comms.pump(/*now=*/0);
-  const App::Comms::TlmAction action = comms.takeTlmAction();
+  const Core::Comms::TlmAction action = comms.takeTlmAction();
   comms.sendTlmReply(action);
 
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one reply");
@@ -1026,11 +1026,11 @@ void scenarioBareTlmProducesNoSendTlmReplyOutputOfItsOwn() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
   serialFake.enqueueInbound("TLM:NOW");
   comms.pump(/*now=*/0);
-  const App::Comms::TlmAction action = comms.takeTlmAction();
+  const Core::Comms::TlmAction action = comms.takeTlmAction();
   comms.sendTlmReply(action);
 
   checkU64Eq(serialFake.sentReliable().size(), 0, "sendTlmReply(kFrame) sends no reliable reply of its own");
@@ -1054,15 +1054,15 @@ void scenarioStatusLineCarriesTlmFieldForEveryMode() {
     FakeTransport serialFake;
     FakeTransport radioFake;
     static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-    App::Comms comms(serialFake, radioFake, banner);
+    Core::Comms comms(serialFake, radioFake, banner);
 
-    App::Comms::Status status;
+    Core::Comms::Status status;
     status.tlmMode = row.tlmMode;
     comms.setStatus(status);
 
     serialFake.enqueueInbound("STATUS");
-    App::Cmd cmd = pumpOne(comms, /*now=*/0);
-    checkTrue(cmd.status == App::CmdStatus::kNone, "STATUS never decodes a Cmd");
+    Core::Cmd cmd = pumpOne(comms, /*now=*/0);
+    checkTrue(cmd.status == Core::CmdStatus::kNone, "STATUS never decodes a Cmd");
     checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one STATUS reply");
     if (!serialFake.sentReliable().empty()) {
       checkTrue(serialFake.sentReliable()[0].find(row.expected) != std::string::npos,
@@ -1079,11 +1079,11 @@ void scenarioStatusDefaultsTlmAutoBeforeAnySetStatusCall() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
   serialFake.enqueueInbound("STATUS");
-  App::Cmd cmd = pumpOne(comms, /*now=*/0);
-  checkTrue(cmd.status == App::CmdStatus::kNone, "STATUS never decodes a Cmd");
+  Core::Cmd cmd = pumpOne(comms, /*now=*/0);
+  checkTrue(cmd.status == Core::CmdStatus::kNone, "STATUS never decodes a Cmd");
   if (!serialFake.sentReliable().empty()) {
     checkTrue(serialFake.sentReliable()[0].find("tlm=auto") != std::string::npos,
               "default STATUS (no setStatus() call yet) reports tlm=auto");
@@ -1096,11 +1096,11 @@ void scenarioHelpLineListsTlmArgumentGrammar() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
   serialFake.enqueueInbound("HELP");
-  App::Cmd cmd = pumpOne(comms, /*now=*/0);
-  checkTrue(cmd.status == App::CmdStatus::kNone, "HELP never decodes a Cmd");
+  Core::Cmd cmd = pumpOne(comms, /*now=*/0);
+  checkTrue(cmd.status == Core::CmdStatus::kNone, "HELP never decodes a Cmd");
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one HELP reply");
   if (!serialFake.sentReliable().empty()) {
     const std::string& line = serialFake.sentReliable()[0];
@@ -1113,7 +1113,7 @@ void scenarioHelpLineListsTlmArgumentGrammar() {
 // ===========================================================================
 // 13. updateStatus() (128-012: absorbs RobotLoop::cycle()'s previous inline
 //     field-by-field STATUS assembly). Drives it directly with a
-//     synthesized Types::RobotState + a real App::Telemetry (for the two
+//     synthesized Types::RobotState + a real Core::Telemetry (for the two
 //     Telemetry-sourced fields, flags/tlmMode) -- no RobotLoop, no full
 //     loop tick -- then reads the projection back off the wire via a
 //     "STATUS" query, the same black-box observable every other STATUS
@@ -1130,15 +1130,15 @@ void scenarioUpdateStatusProjectsAllEightFieldsFromSynthesizedState() {
   FakeTransport tlmSerialFake;
   FakeTransport tlmRadioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
   // Telemetry's own Comms& is a SEPARATE instance from `comms` above --
   // updateStatus() only ever reads tlm.flags()/tlm.mode(), never anything
   // that would route a frame through this second Comms, so the two are
   // deliberately decoupled here (this scenario tests updateStatus()'s own
   // projection, not Telemetry's send path).
-  App::Comms tlmComms(tlmSerialFake, tlmRadioFake, banner);
-  App::Telemetry tlm(tlmComms);
-  tlm.setMode(App::TlmMode::kOn);
+  Core::Comms tlmComms(tlmSerialFake, tlmRadioFake, banner);
+  Core::Telemetry tlm(tlmComms);
+  tlm.setMode(Core::TlmMode::kOn);
 
   Types::RobotState state;
   state.health.ready = true;
@@ -1158,8 +1158,8 @@ void scenarioUpdateStatusProjectsAllEightFieldsFromSynthesizedState() {
   comms.updateStatus(state, tlm);
 
   serialFake.enqueueInbound("STATUS");
-  App::Cmd cmd = pumpOne(comms, /*now=*/0);
-  checkTrue(cmd.status == App::CmdStatus::kNone, "STATUS never decodes a Cmd");
+  Core::Cmd cmd = pumpOne(comms, /*now=*/0);
+  checkTrue(cmd.status == Core::CmdStatus::kNone, "STATUS never decodes a Cmd");
   checkU64Eq(serialFake.sentReliable().size(), 1, "exactly one STATUS reply");
   if (!serialFake.sentReliable().empty()) {
     const std::string& line = serialFake.sentReliable()[0];
@@ -1184,17 +1184,17 @@ void scenarioUpdateStatusReadyFalseBeforeBoot() {
   FakeTransport tlmSerialFake;
   FakeTransport tlmRadioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
-  App::Comms comms(serialFake, radioFake, banner);
-  App::Comms tlmComms(tlmSerialFake, tlmRadioFake, banner);
-  App::Telemetry tlm(tlmComms);
+  Core::Comms comms(serialFake, radioFake, banner);
+  Core::Comms tlmComms(tlmSerialFake, tlmRadioFake, banner);
+  Core::Telemetry tlm(tlmComms);
 
   Types::RobotState state;  // health.ready defaults to false (robot_state.h)
   tlm.update(state, testDrive());
   comms.updateStatus(state, tlm);
 
   serialFake.enqueueInbound("STATUS");
-  App::Cmd cmd = pumpOne(comms, /*now=*/0);
-  checkTrue(cmd.status == App::CmdStatus::kNone, "STATUS never decodes a Cmd");
+  Core::Cmd cmd = pumpOne(comms, /*now=*/0);
+  checkTrue(cmd.status == Core::CmdStatus::kNone, "STATUS never decodes a Cmd");
   if (!serialFake.sentReliable().empty()) {
     checkTrue(serialFake.sentReliable()[0].find("ready=0") != std::string::npos,
                "ready=0 -- a default-constructed RobotState (pre-boot()) reports not-ready");
@@ -1217,11 +1217,11 @@ void scenarioUpdateStatusReadyFalseBeforeBoot() {
 
 // takeOneDbg -- feed one cleartext line and return the single DbgAction it
 // staged (kNone when it staged nothing).
-App::Comms::DbgAction takeOneDbg(const char* line) {
+Core::Comms::DbgAction takeOneDbg(const char* line) {
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   FakeTransport serialFake;
   FakeTransport radioFake;
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
   serialFake.enqueueInbound(line);
   comms.pump(/*now=*/0);
   return comms.takeDbgAction();
@@ -1240,21 +1240,21 @@ void scenarioDbgTuningVerbsStageTheirOwnArmWithTheParsedValue() {
 
   struct Row {
     const char* line;
-    App::Comms::DbgActionKind expected;
+    Core::Comms::DbgActionKind expected;
     float value;
   };
   const Row rows[] = {
-      {"DBG:vmin 60", App::Comms::DbgActionKind::kVmin, 60.0f},
-      {"DBG:vmin 0", App::Comms::DbgActionKind::kVmin, 0.0f},
-      {"DBG:vmin 99.7", App::Comms::DbgActionKind::kVmin, 99.7f},
-      {"DBG:asteady 250", App::Comms::DbgActionKind::kASteady, 250.0f},
-      {"DBG:asteady 1200.5", App::Comms::DbgActionKind::kASteady, 1200.5f},
-      {"DBG:pos 5", App::Comms::DbgActionKind::kPos, 5.0f},
-      {"DBG:pos 0", App::Comms::DbgActionKind::kPos, 0.0f},
+      {"DBG:vmin 60", Core::Comms::DbgActionKind::kVmin, 60.0f},
+      {"DBG:vmin 0", Core::Comms::DbgActionKind::kVmin, 0.0f},
+      {"DBG:vmin 99.7", Core::Comms::DbgActionKind::kVmin, 99.7f},
+      {"DBG:asteady 250", Core::Comms::DbgActionKind::kASteady, 250.0f},
+      {"DBG:asteady 1200.5", Core::Comms::DbgActionKind::kASteady, 1200.5f},
+      {"DBG:pos 5", Core::Comms::DbgActionKind::kPos, 5.0f},
+      {"DBG:pos 0", Core::Comms::DbgActionKind::kPos, 0.0f},
   };
 
   for (const Row& row : rows) {
-    const App::Comms::DbgAction action = takeOneDbg(row.line);
+    const Core::Comms::DbgAction action = takeOneDbg(row.line);
     checkTrue(action.kind == row.expected,
               std::string(row.line) + " stages the expected arm");
     checkTrue(nearlyEqual(action.value, row.value),
@@ -1265,16 +1265,16 @@ void scenarioDbgTuningVerbsStageTheirOwnArmWithTheParsedValue() {
 void scenarioDbgGainStagesBothMultipliersIndependently() {
   beginScenario("pump(): DBG:gain <L> <R> stages kGain with the two multipliers in value/value2");
 
-  const App::Comms::DbgAction action = takeOneDbg("DBG:gain 1.02 0.98");
-  checkTrue(action.kind == App::Comms::DbgActionKind::kGain, "DBG:gain -> kGain");
+  const Core::Comms::DbgAction action = takeOneDbg("DBG:gain 1.02 0.98");
+  checkTrue(action.kind == Core::Comms::DbgActionKind::kGain, "DBG:gain -> kGain");
   checkTrue(nearlyEqual(action.value, 1.02f), "left multiplier lands in value");
   checkTrue(nearlyEqual(action.value2, 0.98f), "right multiplier lands in value2");
 
   // The two operands must not be transposed or shared -- an L/R imbalance
   // trim applied to the wrong wheel doubles the imbalance instead of
   // cancelling it, and reads as a much worse robot rather than as a bug.
-  const App::Comms::DbgAction identity = takeOneDbg("DBG:gain 1 1");
-  checkTrue(identity.kind == App::Comms::DbgActionKind::kGain, "DBG:gain 1 1 -> kGain");
+  const Core::Comms::DbgAction identity = takeOneDbg("DBG:gain 1 1");
+  checkTrue(identity.kind == Core::Comms::DbgActionKind::kGain, "DBG:gain 1 1 -> kGain");
   checkTrue(nearlyEqual(identity.value, 1.0f) && nearlyEqual(identity.value2, 1.0f),
             "DBG:gain 1 1 is the identity push");
 }
@@ -1304,8 +1304,8 @@ void scenarioDbgTuningVerbsRejectMalformedOperands() {
   };
 
   for (const char* line : rejected) {
-    const App::Comms::DbgAction action = takeOneDbg(line);
-    checkTrue(action.kind == App::Comms::DbgActionKind::kUnrecognized,
+    const Core::Comms::DbgAction action = takeOneDbg(line);
+    checkTrue(action.kind == Core::Comms::DbgActionKind::kUnrecognized,
               std::string(line) + " -> kUnrecognized");
   }
 }
@@ -1317,7 +1317,7 @@ void scenarioDbgTuningVerbsAreNotCountedMalformed() {
   static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
   FakeTransport serialFake;
   FakeTransport radioFake;
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
   serialFake.enqueueInbound("DBG:vmin 60");
   serialFake.enqueueInbound("DBG:gain 1.02 0.98");
@@ -1330,11 +1330,11 @@ void scenarioDbgTuningVerbsAreNotCountedMalformed() {
   // fail for a reason that has nothing to do with the link.
   checkU64Eq(comms.malformedCount(), 0,
              "three DBG tuning lines, one of them rejected, leave malformedCount() at 0");
-  checkTrue(comms.takeDbgAction().kind == App::Comms::DbgActionKind::kVmin,
+  checkTrue(comms.takeDbgAction().kind == Core::Comms::DbgActionKind::kVmin,
             "the ring preserves order: first line out first");
-  checkTrue(comms.takeDbgAction().kind == App::Comms::DbgActionKind::kGain,
+  checkTrue(comms.takeDbgAction().kind == Core::Comms::DbgActionKind::kGain,
             "second line out second");
-  checkTrue(comms.takeDbgAction().kind == App::Comms::DbgActionKind::kUnrecognized,
+  checkTrue(comms.takeDbgAction().kind == Core::Comms::DbgActionKind::kUnrecognized,
             "the rejected line is still STAGED (so it can be echoed back), just not applied");
 }
 
@@ -1342,15 +1342,15 @@ void scenarioDbgFaultInjectionArmsStillParseUnchanged() {
   beginScenario("pump(): 129-era mark/ping/wedge/clear arms are unchanged by the "
                 "tuning arms sharing their parser");
 
-  checkTrue(takeOneDbg("DBG:mark leg1a").kind == App::Comms::DbgActionKind::kMark,
+  checkTrue(takeOneDbg("DBG:mark leg1a").kind == Core::Comms::DbgActionKind::kMark,
             "DBG:mark still -> kMark");
-  checkTrue(takeOneDbg("DBG:ping").kind == App::Comms::DbgActionKind::kPing,
+  checkTrue(takeOneDbg("DBG:ping").kind == Core::Comms::DbgActionKind::kPing,
             "DBG:ping still -> kPing");
-  checkTrue(takeOneDbg("DBG:clear").kind == App::Comms::DbgActionKind::kClear,
+  checkTrue(takeOneDbg("DBG:clear").kind == Core::Comms::DbgActionKind::kClear,
             "DBG:clear still -> kClear");
 
-  const App::Comms::DbgAction wedge = takeOneDbg("DBG:wedge left 500");
-  checkTrue(wedge.kind == App::Comms::DbgActionKind::kWedge, "DBG:wedge still -> kWedge");
+  const Core::Comms::DbgAction wedge = takeOneDbg("DBG:wedge left 500");
+  checkTrue(wedge.kind == Core::Comms::DbgActionKind::kWedge, "DBG:wedge still -> kWedge");
   checkU64Eq(wedge.port, 1, "wedge port survives");
   checkU64Eq(wedge.duration, 500, "wedge duration survives");
 
@@ -1400,9 +1400,9 @@ int main() {
   scenarioDbgFaultInjectionArmsStillParseUnchanged();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all App::Comms scenarios passed\n");
+    std::printf("OK: all Core::Comms scenarios passed\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the App::Comms scenarios\n", g_failureCount);
+  std::printf("FAILED: %d assertion(s) across the Core::Comms scenarios\n", g_failureCount);
   return 1;
 }

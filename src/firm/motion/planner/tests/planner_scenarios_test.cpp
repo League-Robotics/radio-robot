@@ -209,7 +209,7 @@ void testOrthogonalChainExact() {
 // The shortfall is injected the same way the real robot injects it: by
 // giving the first Move a `threshold` (the actuation-sized command the
 // profiler plans against) that differs from its `requestedThreshold` (what
-// the caller asked for). App::RobotLoop::handleMove()'s rotation-
+// the caller asked for). Core::RobotLoop::handleMove()'s rotation-
 // calibration inversion is exactly that rewrite, and reproducing it here
 // -- rather than reaching for a lagging plant -- keeps the arithmetic
 // exact on a PerfectPlant, so the assertion is a hard equality rather than
@@ -670,7 +670,7 @@ void testCurvatureReversalStillLandsAtRest() {
 // cmdAccel round-trips through Types::RobotState (130-003,
 // wheel-speed-controller-moves-into-drive.md): Planner::update() publishes
 // cmdAccel as the finite difference of the staged command across the ONE
-// control period that just elapsed, so App::Drive's forthcoming unified
+// control period that just elapsed, so Core::DifferentialDrive's forthcoming unified
 // controller (ticket 004) can read it straight off the same blackboard
 // tick() already hands Drive. This is plumbing-only smoke coverage -- it
 // proves the wire-up, not any control law (there is none yet).

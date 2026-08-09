@@ -2,7 +2,7 @@
 architecture-update.md (103) Decisions 2/3). Telemetry encode-side fuzz
 cases rewritten 115-009 for the frame-v2 shape (115-003).
 
-***Part of the correctness gate the `src/firm/app/` tickets (004+) are built
+***Part of the correctness gate the `src/firm/core/` tickets (004+) are built
 on top of -- see test_wire_differential.py's module docstring for the full
 "this is a blocking regression, not an xfail" statement, which applies
 equally here.***

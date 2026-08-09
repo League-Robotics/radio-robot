@@ -83,7 +83,7 @@ guarantee without duplicating the algorithm:
 - ``wait_for_ack(corr_id, timeout)`` -- the ack-ring matcher.
   ``move``/``stop``/``config`` commands get no synchronous reply; their
   outcome rides ``Telemetry.acks`` (a bounded, depth-4 ring of real
-  ``App::Telemetry::ack()`` pushes, telemetry.proto) inside a subsequent
+  ``Core::Telemetry::ack()`` pushes, telemetry.proto) inside a subsequent
   ``Telemetry`` push (``_binary_tlm_queue``). This method polls that queue
   (via ``drain_binary_tlm()``) for a ring entry matching ``corr_id``,
   bounded by ``timeout``, returning on the FIRST match. 120
@@ -238,7 +238,7 @@ def _split_wire_line(line: bytes) -> tuple[str | None, bytes]:
     """Parse one raw wire LINE into ``(verb, data)`` under protocol v5's
     uniform grammar (124-005, issue §1: the FIRST ``':'`` ends the command;
     everything after is data) -- the host-side mirror of
-    ``App::Comms::dispatchLine()`` (comms.cpp). ``verb`` is looked up
+    ``Core::Comms::dispatchLine()`` (comms.cpp). ``verb`` is looked up
     against the generated registry (``robot_radio.io.wire_commands`` --
     messages/commands.h's mirror); returns ``(None, b"")`` if the command
     bytes are not valid ASCII or are not a registered verb at all.
@@ -364,7 +364,7 @@ def _match_ack_in_frames(
     bit 5 / ``ack_fresh``, both DELETED 124-008 issue §B4) this function
     used to scan with a scan over each frame's bounded ``acks`` ring (depth
     ``kAckRingDepth``=12, telemetry.proto) -- a corr_id present ANYWHERE in
-    the ring was genuinely acked by ``App::Telemetry::ack()`` at some
+    the ring was genuinely acked by ``Core::Telemetry::ack()`` at some
     point. No freshness bit is needed to disambiguate a ring entry from a
     stale leftover value the way ``ack_fresh`` was needed for the single
     slot -- an entry is either genuinely in the ring (real) or it is not
@@ -510,7 +510,7 @@ class SerialConnection:
         # 123-003: counted-fault surface for a binary frame that fails to
         # decode (malformed COBS, CRC mismatch, or bytes that do not decode
         # as a well-formed ReplyEnvelope) -- the host-side counterpart of
-        # firmware's own App::Comms::malformedCount_. Never raises; a
+        # firmware's own Core::Comms::malformedCount_. Never raises; a
         # caller that wants fault visibility reads this counter.
         self.malformed_frame_count: int = 0
 
@@ -914,7 +914,7 @@ class SerialConnection:
         123-002/003/124-005: reads raw bytes (``_ser.read()``, never
         ``_ser.readline()``) and demuxes them through a ``ByteStreamDemuxer``
         (``robot_radio.io.wire_codec``) into complete wire LINES -- mirroring
-        firmware's own ``App::Transport::readLine()`` contract exactly. A raw
+        firmware's own ``Core::Transport::readLine()`` contract exactly. A raw
         ``readline()`` call IS now safe against this wire (protocol v5's
         uniform grammar makes ``'\\n'`` an unconditional terminator -- see
         ``ByteStreamDemuxer``'s own docstring); this class keeps using the
@@ -923,7 +923,7 @@ class SerialConnection:
 
         Each demuxed line is parsed under the uniform grammar
         (``_split_wire_line()``) and routed by its own verb, mirroring
-        ``App::Comms::dispatchLine()``'s registry-driven dispatch (comms.cpp)
+        ``Core::Comms::dispatchLine()``'s registry-driven dispatch (comms.cpp)
         -- see ``_handle_wire_line()``.
         """
         demux = ByteStreamDemuxer()
@@ -945,7 +945,7 @@ class SerialConnection:
     def _handle_wire_line(self, line: bytes) -> None:
         """Parse one demuxed wire LINE under protocol v5's uniform grammar
         (124-005, issue §1: ``<COMMAND>[':' <data>]``) and route it by verb
-        -- the reader-thread's own mirror of ``App::Comms::dispatchLine()``
+        -- the reader-thread's own mirror of ``Core::Comms::dispatchLine()``
         (comms.cpp). The registry (``wire_commands.VERB_BY_NAME``) is the
         SOLE discriminator for binary vs. cleartext data.
 
@@ -954,7 +954,7 @@ class SerialConnection:
           dropped silently, unchanged from pre-124.
         - An unrecognized/non-ASCII ``<COMMAND>`` → counted in
           ``malformed_frame_count`` (the host-side counterpart of
-          firmware's own ``App::Comms::malformedCount_``), dropped.
+          firmware's own ``Core::Comms::malformedCount_``), dropped.
         - A registered BINARY verb (``TLM``/``OK``/``ERR``) →
           ``_handle_binary_reply()`` (COBS-decode, CRC-verify -- scoped over
           the parsed verb -- then parse as a ``ReplyEnvelope``).
@@ -1012,7 +1012,7 @@ class SerialConnection:
 
         129-003 (bench/Sim-only DBG debug channel): ``DBG`` is intercepted
         HERE, before ``_text_queue`` -- it is an unsolicited, unbounded
-        diagnostic stream (``App::debugf()``, ``app/debug.h``), not a
+        diagnostic stream (``Core::debugf()``, ``app/debug.h``), not a
         request/reply verb a blocked ``send_cleartext()`` caller is waiting
         on, so it never enters that queue. Routed to ``on_debug`` instead,
         wrapped in its own try/except so a bug in a CALLER-supplied
@@ -1705,7 +1705,7 @@ class SerialConnection:
         at-40ms.md): every ``CommandEnvelope`` oneof arm (``move``/``stop``/
         ``config``) gets no synchronous ``ReplyEnvelope`` of its own on the
         P4 wire -- its outcome rides ``Telemetry.acks`` (a bounded, depth-4
-        ring of real ``App::Telemetry::ack()`` pushes, oldest evicted first)
+        ring of real ``Core::Telemetry::ack()`` pushes, oldest evicted first)
         inside the next one or more regular ``Telemetry`` pushes after the
         command reaches the firmware (103-009 Decision 2's "telemetry-only
         return path"). This matcher returns on the FIRST (frame, ring-entry)

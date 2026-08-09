@@ -2,7 +2,7 @@
 
 Whole-robot scenario tests against the new `src/firm/` tree's simulator —
 composed via `TestSim::SimHarness` (`tests/_infra/sim/sim_harness.h`,
-108-003), which wires the REAL `App::RobotLoop` against `TestSim::SimPlant`
+108-003), which wires the REAL `Core::RobotLoop` against `TestSim::SimPlant`
 (`tests/_infra/sim/sim_plant.{h,cpp}`, 108-002) -- a REAL `Devices::I2CBus`
 implementation that parses the actual Nezha/OTOS wire protocol and
 integrates real wheel/OTOS physics (`src/tests/sim/plant/`), no ARM hardware
@@ -34,7 +34,7 @@ notes.
   SUC-021; MOVE protocol cutover 116-006/116-008) — the off-hardware
   acceptance proof for the SimHarness/SimPlant composition itself: boot, a
   MOVE-driven ramp, an explicit STOP, a MOVE's own TIME stop condition
-  ending it with no STOP ever sent (replaces the deleted App::Deadman's own
+  ending it with no STOP ever sent (replaces the deleted Core::Deadman's own
   expiry scenario), and the virtual-cycle-timing diagnostic.
 - **`move_protocol_harness.cpp` / `test_move_protocol.py`** (116-008) —
   the sim-executable half of the protocol set-point issue's own

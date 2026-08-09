@@ -18,7 +18,7 @@ namespace {
 // completion tests `plannedRemaining <= epsilon` on a SIGNED residual, so
 // a move that OVERSHOOTS completes instantly while one that UNDERSHOOTS by
 // more than the epsilon never completes at all. Real wheels stop short --
-// the profile's final decel step falls below App::Drive's dead-zone
+// the profile's final decel step falls below Core::DifferentialDrive's dead-zone
 // intercept, correctedCommand() returns exactly 0, and the wheel parks a
 // fraction of a mm out. With the wheels stopped the in-flight prediction
 // that would otherwise carry plannedRemaining negative is also 0, so the
@@ -840,7 +840,7 @@ TickResult Planner::tick(const Types::RobotState& state) {
         // turn. 134-001 restores the projection 130-010 had to give up,
         // and the reason it can is Move::requestedThreshold -- the
         // caller's own request, captured in
-        // App::RobotLoop::handleMove() BEFORE that function's
+        // Core::RobotLoop::handleMove() BEFORE that function's
         // rotation-calibration inversion rewrites `threshold` into an
         // actuation-sized command. 130-010 was right that `threshold`
         // could no longer be read as intent; it was wrong only in
@@ -1967,7 +1967,7 @@ void Planner::rampCommandsToZero(float decelStep) {  // [mm/s] per interval
 void Planner::update(Types::RobotState& state) const {
   // 130-005: this used to be "the ONE place the closed loop is summed into
   // the open loop" (stagedLeft = cmdLeft_ + trimLeft_, Motion::WheelTrim's
-  // correction). That closed loop is deleted -- App::Drive is now the ONE
+  // correction). That closed loop is deleted -- Core::DifferentialDrive is now the ONE
   // wheel-speed controller every cmdVelocity writer shares (drive.h's own
   // header) -- so Motion::Planner publishes the bare profiled command,
   // untouched, and Drive does 100% of the correction on the way to duty.
@@ -1984,11 +1984,11 @@ void Planner::update(Types::RobotState& state) const {
   // generation rollCommandHistory() already aged for it.
   //
   // limits_.plant.controlPeriod (this baked/configured value) and
-  // App::Drive's own per-cycle MEASURED state.time.cyclePeriod
+  // Core::DifferentialDrive's own per-cycle MEASURED state.time.cyclePeriod
   // (drive.cpp's own tick(), Stage B's dt) now agree BY CONSTRUCTION
-  // (131-005): App::RobotLoop::cycle()'s trailing pacing block targets an
+  // (131-005): Core::RobotLoop::cycle()'s trailing pacing block targets an
   // absolute end-of-cycle deadline, so the delivered period converges to
-  // App::RobotLoop::kCycle -- the same nominal controlPeriod is baked
+  // Core::RobotLoop::kCycle -- the same nominal controlPeriod is baked
   // from (data/robots/*.json's own control_period, now simply "=
   // kCycle") -- rather than the two drifting apart by whatever the
   // pacer's own fixed-gap rounding happened to leak (130-011 measured an
@@ -2017,7 +2017,7 @@ void Planner::update(Types::RobotState& state) const {
   // block used to also write state.pose.* from pose_ (PoseTracker, this
   // class's own internal working estimate, OTOS-blended whenever
   // limits_.headingOtosWeight > 0) -- a SECOND writer of RobotState::pose
-  // alongside Motion::Odometry::integrate()/App::RobotLoop::publishPose(),
+  // alongside Motion::Odometry::integrate()/Core::RobotLoop::publishPose(),
   // ordering-dependent on which ran last a given cycle. Deleted: Odometry
   // is now pose's ONE writer (robot_state.h's own Pose section doc
   // comment). pose_ remains this class's own internal working estimate --

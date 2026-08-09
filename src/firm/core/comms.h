@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstddef>
-#include "app/debug.h"
+#include "core/debug.h"
 #include <cstdint>
 
 #include "firm/types/robot_state.h"
@@ -14,7 +14,7 @@ class SerialPort;
 class Radio;
 #endif
 
-namespace App {
+namespace Core {
 
 class Telemetry;
 
@@ -232,4 +232,4 @@ class Comms {
   uint8_t cmdCount_ = 0;
 };
 
-}  // namespace App
+}  // namespace Core

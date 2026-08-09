@@ -121,7 +121,7 @@ struct PlannerBootConfig {
   int32_t alignMaxNudges = 0;    // corrective pivots one Move may spend
 };
 
-// Commanded->actual values App::Drive::setWheelCorrection() installs.
+// Commanded->actual values Core::DifferentialDrive::setWheelCorrection() installs.
 struct WheelCorrection {
   float gainLeftAccel = 1.0f;
   float interceptLeftAccel = 0.0f;   // [mm/s]

@@ -23,7 +23,7 @@
  * because COBS is keyed on 0x0A (wire_runtime.h item 8): a binary line's
  * own bytes never contain a literal 0x0A, so '\n' is a genuine,
  * unconditional terminator -- there is no text-vs-binary distinction for
- * `poll()` to make at this layer at all (App::Comms decides that from the
+ * `poll()` to make at this layer at all (Core::Comms decides that from the
  * parsed `<COMMAND>` prefix once it has a complete line -- see comms.h's
  * own file header). `poll()` simply strips the trailing '\n' off the
  * reassembled message. No dependency on `app/`, per this directory's own
@@ -50,7 +50,7 @@ public:
 
     // Non-blocking. Returns false until a complete reassembled message is
     // ready. On success, buf holds *outLen raw bytes (the line content --
-    // text or binary, whichever App::Comms determines from its own parsed
+    // text or binary, whichever Core::Comms determines from its own parsed
     // `<COMMAND>` prefix -- the trailing '\n' delimiter consumed, not
     // included), NUL-terminated as a convenience. Only one message is
     // buffered — a second message completing before poll() drains the
@@ -62,7 +62,7 @@ public:
     // -- the ONE terminator every outbound line uses, text or binary.
     // Safe for binary content because COBS is keyed on 0x0A
     // (wire_runtime.h item 8): `data`/`len` never contains a literal 0x0A
-    // by construction (App::Transport::send()'s own contract), so this
+    // by construction (Core::Transport::send()'s own contract), so this
     // appended '\n' is unambiguous. RadioRelay §5 framing alone delimits a
     // message on the wire, but after `!GO` the link becomes a transparent
     // byte pipe with no per-message boundary of its own; without the

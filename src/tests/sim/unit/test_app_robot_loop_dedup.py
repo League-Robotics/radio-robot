@@ -1,7 +1,7 @@
 """Off-hardware acceptance proof for sprint 127 ticket 002 (SUC-002):
-verifies the ``Move.id`` dedup short-circuit ``App::RobotLoop::handleMove()``
+verifies the ``Move.id`` dedup short-circuit ``Core::RobotLoop::handleMove()``
 already ships (``alreadyAccepted()``/``recordAccepted()``/
-``acceptedMoveIds_``, ``src/firm/app/robot_loop.cpp`` ~216-258) against the
+``acceptedMoveIds_``, ``src/firm/core/robot_loop.cpp`` ~216-258) against the
 four rules the source issue's own Verification section names
 (``clasi/sprints/127-host-side-path-planner-goto-and-path-following/issues/
 duplicate-move-enqueue-on-ack-loss-retry.md``): ordinary duplicate
@@ -10,15 +10,15 @@ completion, and ``ERR_FULL`` rejections not being recorded.
 
 CHARACTERIZATION, NOT A FIX: ``test_app_robot_loop_dedup_harness.cpp``
 writes tests against EXISTING firmware behavior. It does not modify
-``src/firm/app/robot_loop.{h,cpp}``, any wire message, or any ``.proto``
+``src/firm/core/robot_loop.{h,cpp}``, any wire message, or any ``.proto``
 definition.
 
 Compiles the harness against the SAME full ``HOST_BUILD`` ``RobotLoop``
 dependency graph ``test_app_robot_loop_replace.py`` compiles for its own
 ``scenarioDuplicateIdSanityNoOp()`` (``TestSim::SimHarness`` composes the
-real ``App::RobotLoop`` graph -- see ``sim_harness.h``'s own header) --
+real ``Core::RobotLoop`` graph -- see ``sim_harness.h``'s own header) --
 this file's dedup short-circuit lives one layer above
-``Motion::Planner``, in ``App::RobotLoop::handleMove()`` itself, so it
+``Motion::Planner``, in ``Core::RobotLoop::handleMove()`` itself, so it
 needs the whole graph, not a bare ``Motion::Planner``.
 
 Mirrors ``test_app_robot_loop_replace.py``'s shape: compile with the
@@ -57,35 +57,35 @@ _BENCH_TEST_CONFIG_SRC = _SUPPORT_DIR / "bench_test_config.cpp"
 # it (every scenario here drives TestSim::SimHarness, none drive a bare
 # Motion::Planner).
 _APP_SOURCES = [
-    _SOURCE_DIR / "app" / "robot_loop.cpp",
-    _SOURCE_DIR / "app" / "comms.cpp",
-    # debug.cpp (129-003): App::debugf()'s only implementation --
+    _SOURCE_DIR / "core" / "robot_loop.cpp",
+    _SOURCE_DIR / "core" / "comms.cpp",
+    # debug.cpp (129-003): Core::debugf()'s only implementation --
     # TestSim::SimHarness's constructor always calls
-    # App::setDebugSink(&comms_) now (HOST_BUILD is defined below,
+    # Core::setDebugSink(&comms_) now (HOST_BUILD is defined below,
     # so the real, non-stub setDebugSink()/debugf() are what this
     # graph links), mirroring src/firm/platform/host/CMakeLists.txt's own
     # APP_SOURCES entry.
-    _SOURCE_DIR / "app" / "debug.cpp",
-    _SOURCE_DIR / "app" / "configurator.cpp",
-    _SOURCE_DIR / "app" / "telemetry.cpp",
+    _SOURCE_DIR / "core" / "debug.cpp",
+    _SOURCE_DIR / "core" / "configurator.cpp",
+    _SOURCE_DIR / "core" / "telemetry.cpp",
     _MOTION_PLANNER_DIR / "profile.cpp",
     _MOTION_PLANNER_DIR / "estimation.cpp",
     _MOTION_PLANNER_DIR / "shape.cpp",
     _MOTION_PLANNER_DIR / "planner.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
-    _SOURCE_DIR / "app" / "drive.cpp",
+    _SOURCE_DIR / "core" / "differential_drive.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
-    _SOURCE_DIR / "app" / "preamble.cpp",
-    # 130-002 -- the shared composition root (App::composeRobot()/
+    _SOURCE_DIR / "core" / "preamble.cpp",
+    # 130-002 -- the shared composition root (Core::composeRobot()/
     # RobotGraph) sim_harness.h now boots through, plus its
     # Config::boot_config-reading calibration helpers (the "four-source-
     # list trap" this ticket's own note calls out).
-    _SOURCE_DIR / "app" / "boot_wiring.cpp",
-    _SOURCE_DIR / "app" / "boot_calibration.cpp",
+    _SOURCE_DIR / "core" / "boot_wiring.cpp",
+    _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 # 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
-# entry here) is gone outright -- zero instantiations; App::Drive holds no
+# entry here) is gone outright -- zero instantiations; Core::DifferentialDrive holds no
 # controller of its own (open-loop duty from calibrated speed, drive.h's
 # own header). See src/firm/motion/DESIGN.md's "wheel control generations" note.
 # Kept as an empty list (rather than removed) so the `+ _MOTION_SOURCES`

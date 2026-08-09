@@ -1,9 +1,9 @@
 """src/tests/unit/test_one_step_ahead.py -- sprint 117 ticket 006.
 
 Unit tests for ``src/tests/tools/one_step_ahead.py`` -- the pure-Python,
-independently-testable reference implementation of ``App::StateEstimator``'s
+independently-testable reference implementation of ``Core::StateEstimator``'s
 zero-order-hold (ZOH) one-step-ahead prediction math (ticket 002,
-``src/firm/app/state_estimator.{h,cpp}``). Fully offline -- no serial port,
+``src/firm/core/state_estimator.{h,cpp}``). Fully offline -- no serial port,
 no hardware, no sim lib.
 
 Test plan (mirrors this ticket's own Acceptance Criteria):

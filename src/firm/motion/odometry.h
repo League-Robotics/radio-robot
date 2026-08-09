@@ -6,7 +6,7 @@
 // Kinematics::DifferentialKinematics::forward(), accumulating x/y/theta. Outside -- reading the
 // leaves themselves (the base's job -- src/firm/app/robot_loop.cpp reads
 // Hal::Motor::position() and passes the two floats in), fusing with
-// OTOS/camera (the host's job), and OTOS sampling itself (App::
+// OTOS/camera (the host's job), and OTOS sampling itself (Core::
 // applyOtosSample(), src/firm/app/otos_sample.{h,cpp} -- base-side, since it
 // needs Hal::Otos& and Telemetry::Frame&, neither of which src/firm/motion may
 // depend on; sprint 122 ticket 002 split it out of this file, which used to
@@ -17,13 +17,13 @@
 // class no longer holds a Hal::Motor& -- integrate()/the constructor
 // take the CURRENT wheel positions as plain float parameters instead, the
 // same values Hal::Motor::position() already returns, read by the
-// caller (App::RobotLoop) at the exact point in the cycle this class used to
+// caller (Core::RobotLoop) at the exact point in the cycle this class used to
 // read them itself. Zero behavior change: the values flowing into
 // integrate() are identical, just handed in rather than pulled.
 //
 // 131-004 (position-rebaseline-destroys-the-pose.md): integrate() now also
 // takes each wheel's positionEpoch (Types::RobotState::Wheel::positionEpoch)
-// -- App::RobotLoop::publishWheel() bumps a wheel's epoch the same cycle it
+// -- Core::RobotLoop::publishWheel() bumps a wheel's epoch the same cycle it
 // calls Hal::Motor::rebaseline(), which re-anchors that wheel's raw
 // position (a ~30,000mm software-only jump). Before this ticket, integrate()
 // differenced blindly across that jump -- a wheel's positionEpoch changing

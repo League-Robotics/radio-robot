@@ -32,9 +32,9 @@ _UNIT_DIR = pathlib.Path(__file__).resolve().parent
 _HARNESS_SRC = _UNIT_DIR / "configurator_applygroup_harness.cpp"
 
 _APP_SOURCES = [
-    _SOURCE_DIR / "app" / "configurator.cpp",
-    _SOURCE_DIR / "app" / "drive.cpp",
-    _SOURCE_DIR / "app" / "boot_calibration.cpp",
+    _SOURCE_DIR / "core" / "configurator.cpp",
+    _SOURCE_DIR / "core" / "differential_drive.cpp",
+    _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 _MOTION_SOURCES = [
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "profile.cpp",

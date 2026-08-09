@@ -13,14 +13,14 @@ half of this file's original golden-parity coverage (SUC-001's own
 `PlannerConfig` half, and SUC-004's `model_tau_lin`/`model_tau_ang` check)
 is DELETED, not ported -- `msg::PlannerConfig` itself, and the
 `SimLoop.read_planner_config()` readback this file drove, went with
-`Motion::Executor`/`App::Pilot` (115-003). Only the MOTOR half of the
+`Motion::Executor`/`Core::Pilot` (115-003). Only the MOTOR half of the
 Tier-2 golden-parity mechanism (`sim_configure_motor()`/
 `sim_read_motor_config()` -- unaffected by the gut) survives.
 
 Rewritten AGAIN 125-003 (Devices::MotorConfig::velFiltAlpha deleted --
 sprint.md Decision 2, "protection vs. control": the EMA velocity estimator
 it fed was measurement conditioning, deleted outright pending ticket 004's
-App::WheelObserver, not relocated with a config surface of its own yet).
+Core::WheelObserver, not relocated with a config surface of its own yet).
 `vel_filt_alpha` was this file's ONLY discriminating field for BOTH the
 golden-parity check and the robot-switch replace-not-merge proof (SUC-003)
 -- `fwd_sign` is identical across every port on both `tovez_nocal.json` and
@@ -29,7 +29,7 @@ replacement discriminator. `test_robot_switch_replaces_not_merges` is
 therefore DELETED, not adapted -- exactly the precedent this file's own
 history already set for `PlannerConfig`'s `heading_kp`/`distance_kp`
 discriminators above. Golden-parity (`test_golden_parity_motor_config`)
-survives, narrowed to `fwd_sign` only. If ticket 004's App::WheelObserver
+survives, narrowed to `fwd_sign` only. If ticket 004's Core::WheelObserver
 (or a later ticket) introduces its own live Tier-2 config surface, THAT
 ticket should add its own golden-parity/robot-switch coverage here rather
 than resurrecting `vel_filt_alpha`'s.

@@ -148,7 +148,7 @@ _HERE = pathlib.Path(__file__).parent
 _DEFAULT_LIB_PATH = (_HERE / "../../../../src/firm/platform/host/build" / _LIB_NAME).resolve()
 
 # One sim cycle == 32ms of sim/firmware time (TestSim::SimHarness::kCycleDtUs,
-# sim_harness.h -- itself derived from firmware's own App::RobotLoop::kCycle,
+# sim_harness.h -- itself derived from firmware's own Core::RobotLoop::kCycle,
 # robot_loop.h; 118 ticket 003, sim-cycle-must-match-firmware-period.md;
 # 130-007 raised kCycle 40ms -> 50ms, one control period everywhere; lowered
 # again 50ms -> 32ms on 2026-08-07 against the loop's measured work floor).
@@ -209,7 +209,7 @@ _IDLE_GRACE_S = 1.5  # [s]
 _TLM_DRAIN_BUFFER = 16384
 
 # Same idea as _TLM_DRAIN_BUFFER, sized down: DBG lines (129-003) are rare
-# (one App::debugf() call per diagnostic, not a per-cycle telemetry push)
+# (one Core::debugf() call per diagnostic, not a per-cycle telemetry push)
 # and individually short (app/debug.cpp's own kDebugMsgMaxBytes=200 bound),
 # so a much smaller scratch buffer comfortably covers a burst. Retried once,
 # sized exactly, if a single drain call ever needs more (same convention as
@@ -378,7 +378,7 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     # for how this is called. `sim_configure_planner()`/
     # `sim_read_planner_config()` -- DELETED (115-003, gut S1 motion-stack
     # excision): `msg::PlannerConfig` and its `SimHarness::configurePlanner()`
-    # one-shot loader went with `Motion::Executor`/`App::Pilot`.
+    # one-shot loader went with `Motion::Executor`/`Core::Pilot`.
     lib.sim_configure_motor.argtypes = [
         ctypes.c_void_p, ctypes.c_int, ctypes.c_float, ctypes.c_int]
     lib.sim_configure_motor.restype = None
@@ -388,14 +388,14 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
         ctypes.POINTER(ctypes.c_float), ctypes.POINTER(ctypes.c_int)]
     lib.sim_read_motor_config.restype = None
 
-    # 125-007: Tier-2 boot-only turn-calibration load -- App::RobotLoop::
+    # 125-007: Tier-2 boot-only turn-calibration load -- Core::RobotLoop::
     # setRotationCalibration() passthrough, offsets in RADIANS (see
     # sim_ctypes.cpp's own doc comment on sim_configure_drivetrain()).
     lib.sim_configure_drivetrain.argtypes = [
         ctypes.c_void_p, ctypes.c_float, ctypes.c_float, ctypes.c_float, ctypes.c_float]
     lib.sim_configure_drivetrain.restype = None
 
-    # Tier-2 boot-only App::Drive calibration -- setDutyPerSpeed()/
+    # Tier-2 boot-only Core::DifferentialDrive calibration -- setDutyPerSpeed()/
     # setCrawlPulse() passthrough (see sim_ctypes.cpp's own doc comment on
     # sim_configure_drive(), and drive_boot_config_for() for why the wheel
     # correction main.cpp also installs is not mirrored into the sim).
@@ -614,16 +614,16 @@ class SimLoop:
           the S1 minimal firmware reads a boot-loaded ``msg::PlannerConfig``
           any more.) Also calls ``drivetrain_boot_config_for(config)``
           (125-007) and passes the result to the ``sim_configure_drivetrain()``
-          ctypes export -- ``App::RobotLoop::setRotationCalibration()``'s
+          ctypes export -- ``Core::RobotLoop::setRotationCalibration()``'s
           own one-shot runtime-load surface, the sim-side counterpart of
           ``main.cpp``'s real-hardware boot seam. Before 125-007 this tier
           never touched turn calibration at all, so the sim's own
-          ``App::RobotLoop`` stayed at the identity default (gain 1, offset
+          ``Core::RobotLoop`` stayed at the identity default (gain 1, offset
           0) regardless of a robot JSON's own
           ``calibration.rotation_gain``/``rotation_offset_deg`` values.
         - **Tier 3** (119 ticket 001,
           kill-the-silent-off-shaping-config-boundary.md, RETARGETED
-          132-014): ``App::StateEstimator``'s fusion weights plus
+          132-014): ``Core::StateEstimator``'s fusion weights plus
           ``Motion::VelocityShaper``'s accel/jerk ceilings
           (``push.estimator_kwargs(config)``, the SAME field selection the
           TestGUI's own connect-time ``_push_estimator_config()`` uses),
@@ -639,7 +639,7 @@ class SimLoop:
 
           ``ESTIMATOR`` is a HONEST DEAD END: it decodes but
           ``install(ESTIMATOR)`` permanently returns ``ERR_UNIMPLEMENTED``
-          (``App::StateEstimator`` was already deleted as dead code before
+          (``Core::StateEstimator`` was already deleted as dead code before
           this sprint, sprint 128 ticket 016 -- configurator.h's own
           re-appliability table). ``PLANNER_SHAPER`` -- FIXED, 132-017
           (JSON reshape ticket, stakeholder-sanctioned mid-sprint scope
@@ -701,7 +701,7 @@ class SimLoop:
                 ctypes.c_float(motor_cfg["vel_filt_alpha"]),
                 ctypes.c_int(motor_cfg["fwd_sign"]))
 
-        # 125-007: turn calibration -- the sim's own App::RobotLoop otherwise
+        # 125-007: turn calibration -- the sim's own Core::RobotLoop otherwise
         # keeps the identity default (gain 1, offset 0) forever, regardless
         # of what a robot JSON's calibration.rotation_gain/
         # rotation_offset_deg say. See sim_configure_drivetrain()'s own
@@ -714,7 +714,7 @@ class SimLoop:
             ctypes.c_float(drivetrain_cfg["rot_gain_neg"]),
             ctypes.c_float(drivetrain_cfg["rot_offset_neg"]))
 
-        # App::Drive's own boot calibration -- the sim's Drive is constructed
+        # Core::DifferentialDrive's own boot calibration -- the sim's Drive is constructed
         # uncalibrated by TestSim::SimHarness and, without this call, refuses
         # to write a duty at all (drive.h's fail-closed gate). See
         # drive_boot_config_for()'s own docstring for what used to stand in
@@ -779,7 +779,7 @@ class SimLoop:
     # expected values, field-for-field. `read_planner_config()` -- DELETED
     # (115-003, gut S1 motion-stack excision): `msg::PlannerConfig` and its
     # `sim_read_planner_config()` ctypes export went with `Motion::Executor`/
-    # `App::Pilot`.
+    # `Core::Pilot`.
     # ------------------------------------------------------------------
 
     def read_motor_config(self, port: int) -> "dict[str, float | int]":
@@ -842,7 +842,7 @@ class SimLoop:
     def wheels(self, v_left: float, v_right: float, duration: float,  # [mm/s] x2 [ms]
                ) -> int:
         """The WHEELS teleop primitive -- per-wheel velocity held for a bounded
-        `duration`, routed firmware-side straight to ``App::Drive`` after
+        `duration`, routed firmware-side straight to ``Core::DifferentialDrive`` after
         ``planner_.estop()``. No profile, no shaping, no planner stop condition.
 
         Deliberately the SAME signature and the same wire command as
@@ -853,7 +853,7 @@ class SimLoop:
         backends drifted into different commands for the same button, which is
         precisely the divergence the Sim exists to rule out.
 
-        Bounded by construction: ``App::Drive`` arms it until
+        Bounded by construction: ``Core::DifferentialDrive`` arms it until
         ``commandDeadline_ = now + duration``, so a host that stops re-arming
         stops the robot within one lease.
         """
@@ -987,7 +987,7 @@ class SimLoop:
 
     def drain_debug_lines(self) -> "list[str]":
         """Non-blocking drain of every currently-queued ``DBG:`` line
-        (129-003, bench/Sim-only debug channel -- ``App::debugf()``,
+        (129-003, bench/Sim-only debug channel -- ``Core::debugf()``,
         ``app/debug.h``). Same shape as ``read_pending_binary_tlm_frames()``:
         a pure queue read, populated by the tick thread's own per-iteration
         ``sim_drain_debug()`` drain (or, with no tick thread running, by
@@ -1167,7 +1167,7 @@ class SimLoop:
     # set_lead_compensation() -- DELETED (115-003, gut S1 motion-stack
     # excision): `msg::PlannerConfig`'s lead-compensation fields and
     # `SimHarness::setLeadCompensation()`/`sim_set_lead_compensation()` went
-    # with `Motion::Executor`/`App::Pilot`.
+    # with `Motion::Executor`/`Core::Pilot`.
 
     def set_pid_enabled(self, enabled: bool) -> None:
         """Enable/disable the velocity PID on BOTH firmware motors
@@ -1186,7 +1186,7 @@ class SimLoop:
 
     # set_yaw_rate_max() -- DELETED (115-003, gut S1 motion-stack excision):
     # `PlannerConfig.yaw_rate_max` and `SimHarness::setYawRateMax()`/
-    # `sim_set_yaw_rate_max()` went with `Motion::Executor`/`App::Pilot`.
+    # `sim_set_yaw_rate_max()` went with `Motion::Executor`/`Core::Pilot`.
 
     # ------------------------------------------------------------------
     # Manual stepping (no tick thread required -- ticket 009's shape)

@@ -1,14 +1,14 @@
 """src/tests/sim/unit/test_trap1_persisted_otos_ordering.py -- 132-015's own
 regression proof for trap 1 (the-configuration-object.md): persisted OTOS
 tuning must reach the chip-level calibration-scalar register, which only
-happens when App::RobotGraph::loadPersistedTuning() runs AFTER
-App::RobotLoop::boot() -- never before (every Devices::RealOtos setter is a
+happens when Core::RobotGraph::loadPersistedTuning() runs AFTER
+Core::RobotLoop::boot() -- never before (every Devices::RealOtos setter is a
 no-op until begin() sets initialized_ = true, and begin() itself only runs
 inside boot()'s own Preamble loop).
 
 Compiles ``trap1_persisted_otos_ordering_harness.cpp`` together with the same
 full HOST_BUILD dependency graph every other post-gut sim/unit harness
-compiles (SimHarness composes the real App::RobotLoop graph -- see
+compiles (SimHarness composes the real Core::RobotLoop graph -- see
 sim_harness.h's own header). Mirrors test_sim_harness_configure.py's own
 source-list shape exactly (same composition root, same dependency graph).
 
@@ -36,24 +36,24 @@ _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 
 # Same dependency graph as test_sim_harness_configure.py -- both harnesses
-# compose the real App::RobotGraph via sim_harness.h's TestSim::SimHarness.
+# compose the real Core::RobotGraph via sim_harness.h's TestSim::SimHarness.
 _APP_SOURCES = [
-    _SOURCE_DIR / "app" / "robot_loop.cpp",
-    _SOURCE_DIR / "app" / "comms.cpp",
-    _SOURCE_DIR / "app" / "debug.cpp",
-    _SOURCE_DIR / "app" / "configurator.cpp",
-    _SOURCE_DIR / "app" / "telemetry.cpp",
+    _SOURCE_DIR / "core" / "robot_loop.cpp",
+    _SOURCE_DIR / "core" / "comms.cpp",
+    _SOURCE_DIR / "core" / "debug.cpp",
+    _SOURCE_DIR / "core" / "configurator.cpp",
+    _SOURCE_DIR / "core" / "telemetry.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "profile.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "estimation.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "shape.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "planner.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
-    _SOURCE_DIR / "app" / "drive.cpp",
+    _SOURCE_DIR / "core" / "differential_drive.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
-    _SOURCE_DIR / "app" / "preamble.cpp",
-    _SOURCE_DIR / "app" / "boot_wiring.cpp",
-    _SOURCE_DIR / "app" / "boot_calibration.cpp",
+    _SOURCE_DIR / "core" / "preamble.cpp",
+    _SOURCE_DIR / "core" / "boot_wiring.cpp",
+    _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",

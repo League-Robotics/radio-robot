@@ -1,8 +1,8 @@
-"""Off-hardware acceptance proof for ticket 103-006 (SUC-006), App::Odometry
-+ applyOtosSample() (``src/firm/app/odometry.{h,cpp}``).
+"""Off-hardware acceptance proof for ticket 103-006 (SUC-006), Core::Odometry
++ applyOtosSample() (``src/firm/core/odometry.{h,cpp}``).
 
 Compiles ``app_odometry_harness.cpp`` together with the HOST_BUILD
-implementations it needs (``src/firm/app/odometry.cpp``,
+implementations it needs (``src/firm/core/odometry.cpp``,
 ``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
 physics dependencies, ``src/firm/hardware/nezha/nezha_motor.cpp``,
@@ -14,7 +14,7 @@ compiler, run the resulting binary, assert it exits 0.
 125-003: ``devices/velocity_pid.cpp`` is no longer a NezhaMotor link
 dependency (its embedded PID was deleted outright, relocated to a
 motion-local wheel-velocity PID class that 128-015 later deleted -- this
-harness doesn't touch App::Drive, so it needs neither).
+harness doesn't touch Core::DifferentialDrive, so it needs neither).
 
 Migrated by sprint 108 ticket 009 off the deleted ``src/firm/devices/
 i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see
@@ -38,7 +38,7 @@ _INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_odometry_harness.cpp"
 _ODOMETRY_SRC = _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp"
-# 122-002: App::applyOtosSample() split out of odometry.cpp into this new
+# 122-002: Core::applyOtosSample() split out of odometry.cpp into this new
 # base-side file -- this harness calls it directly (scenario 4/5).
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
@@ -64,7 +64,7 @@ def _find_cxx_compiler() -> str:
 
 
 def test_app_odometry_harness_compiles_and_passes(tmp_path):
-    """Compile App::Odometry + its Devices leaf dependencies + SimPlant +
+    """Compile Core::Odometry + its Devices leaf dependencies + SimPlant +
     the harness; assert every scenario passes."""
     sources = [
         _HARNESS_SRC,

@@ -1,10 +1,10 @@
-"""Off-hardware acceptance proof for App::FakeOtos
-(``src/firm/app/fake_otos.{h,cpp}``) -- the bench implementation of the
+"""Off-hardware acceptance proof for Core::FakeOtos
+(``src/firm/core/fake_otos.{h,cpp}``) -- the bench implementation of the
 Devices::Otos interface introduced by the otos-fake-seam refactor.
 
 Compiles ``app_fake_otos_harness.cpp`` together with the HOST_BUILD
-implementations it needs (``src/firm/app/fake_otos.cpp``,
-``src/firm/app/odometry.cpp``,
+implementations it needs (``src/firm/core/fake_otos.cpp``,
+``src/firm/core/odometry.cpp``,
 ``src/firm/kinematics/differential_kinematics.cpp``) with ``-DHOST_BUILD``, against
 the SAME headers every ARM build compiles. Mirrors ``test_app_odometry.py``'s
 shape: compile with the system C++ compiler, run the binary, assert exit 0.
@@ -23,7 +23,7 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_fake_otos_harness.cpp"
-_FAKE_OTOS_SRC = _SOURCE_DIR / "app" / "fake_otos.cpp"
+_FAKE_OTOS_SRC = _SOURCE_DIR / "core" / "fake_otos.cpp"
 _ODOMETRY_SRC = _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp"
 _BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "kinematics" / "differential_kinematics.cpp"
 # otos.cpp carries the abstract Devices::Otos base's out-of-line anchor
@@ -47,7 +47,7 @@ def _find_cxx_compiler() -> str:
 
 
 def test_app_fake_otos_harness_compiles_and_passes(tmp_path):
-    """Compile App::FakeOtos + App::Odometry + BodyKinematics + the harness;
+    """Compile Core::FakeOtos + Core::Odometry + BodyKinematics + the harness;
     assert every scenario passes."""
     sources = [
         _HARNESS_SRC,

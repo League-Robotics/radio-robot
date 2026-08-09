@@ -237,7 +237,7 @@ def _run_sim(args: argparse.Namespace) -> int:
     from robot_radio.io.sim_loop import SimLoop
 
     # A freshly-constructed SimLoop's own RobotLoop starts UNCONFIGURED
-    # (App::RobotLoop::isConfigured() == false) -- sprint 114's fail-closed
+    # (Core::RobotLoop::isConfigured() == false) -- sprint 114's fail-closed
     # configuration-completeness gate makes handleMove() refuse EVERY Move
     # with ERR_NOT_CONFIGURED until configure_from_robot() has run (see that
     # method's own docstring, sim_loop.py). Skipping this call doesn't raise
@@ -246,7 +246,7 @@ def _run_sim(args: argparse.Namespace) -> int:
     # trace (discovered exactly this way verifying this ticket's own sim
     # capture -- see this ticket's completion notes). ``SimLoop(track_width=
     # ...)`` is constructed from the SAME robot config's own trackwidth so
-    # SimPlant's OtosPlant and the firmware's own App::Odometry describe the
+    # SimPlant's OtosPlant and the firmware's own Core::Odometry describe the
     # same physical wheelbase (sim_plant.h's own "MUST match" comment).
     robot_config = load_robot_config(args.robot_json)
     track_width = robot_config.trackwidth if robot_config.trackwidth is not None else 128.0

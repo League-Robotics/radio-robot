@@ -2,7 +2,7 @@
 // sprint 117 ticket 001 (SUC-056)'s host-side activation proof. NOT a
 // scenario-assertion harness like the other *_harness.cpp files in this
 // directory -- this one has no assertions of its own. Its ONLY job is to
-// exercise the REAL, compiled App::Comms::pumpTransport() PING handler (the
+// exercise the REAL, compiled Core::Comms::pumpTransport() PING handler (the
 // exact same comms.cpp this sprint's app_comms_harness.cpp/test_app_comms.py
 // pair also compiles) for a burst of PING exchanges, printing each reply
 // line verbatim to stdout, one per line -- so a Python test
@@ -27,7 +27,7 @@
 #include <cstdint>
 #include <cstdio>
 
-#include "app/comms.h"
+#include "core/comms.h"
 #include "support/fake_transport.h"
 
 // pumpOne() -- the pre-ring `Comms::pump(Cmd&, now)` shape, rebuilt on the
@@ -36,8 +36,8 @@
 // takeCommand() pops from it). These scenarios each feed exactly one line
 // and want the one command it produced, so "pump then take" is the honest
 // local equivalent -- not a claim that pump() still stops after one line.
-App::Cmd pumpOne(App::Comms& comms, uint32_t now) {  // [ms]
-  App::Cmd cmd;
+Core::Cmd pumpOne(Core::Comms& comms, uint32_t now) {  // [ms]
+  Core::Cmd cmd;
   comms.pump(now);
   comms.takeCommand(cmd);  // leaves cmd at status kNone when nothing decoded
   return cmd;
@@ -57,13 +57,13 @@ int main() {
   FakeTransport serialFake;
   FakeTransport radioFake;
   static char banner[] = "DEVICE:NEZHA2:robot:sim:1234";
-  App::Comms comms(serialFake, radioFake, banner);
+  Core::Comms comms(serialFake, radioFake, banner);
 
   uint32_t now = kStartNowMs;
   for (int i = 0; i < kPingCount; ++i) {
     serialFake.enqueueInbound("PING");
 
-    App::Cmd cmd;
+    Core::Cmd cmd;
     cmd = pumpOne(comms, now);
 
     // One real "PONG:t=<now>" reply per PING -- print it verbatim so the

@@ -454,7 +454,7 @@ AlignWatch runAlignment(Planner& planner, Types::RobotState& state, Plant& plant
 // Entry, the held-back ack, and a nudge that actually closes the residual.
 //
 // The residual is made the way a real corner makes one: `threshold` is the
-// ACTUATION-sized command (what App::RobotLoop::handleMove()'s rotation-
+// ACTUATION-sized command (what Core::RobotLoop::handleMove()'s rotation-
 // calibration inversion produces) and `requestedThreshold` is the caller's
 // own intent (134-001). A perfect plant lands the command exactly, so the
 // gap between the two IS the residual the trim must close -- 0.05 rad, or

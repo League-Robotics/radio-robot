@@ -33,7 +33,7 @@ Three layers, in dependency order:
    `odometer.h`). `motion.proto`/`motion.h` and `planner.proto`/`planner.h`
    no longer exist (115-002/115-003, gut-to-minimal-firmware S1
    motion-stack excision deleted their only consumers — the motion stack
-   and `App::Pilot`'s `PlannerConfig`). Each remaining header declares plain
+   and `Core::Pilot`'s `PlannerConfig`). Each remaining header declares plain
    standard-layout `msg::*` structs with default member initializers — no
    heap, no STL containers, no virtual functions. `envelope.h` is the root:
    it declares `CommandEnvelope`/`ReplyEnvelope`, the two message types
@@ -164,7 +164,7 @@ firmware runtime; the device itself never sees protobuf. It also emits
   COBS-encoded body is `0x0A`-free but MAY legitimately contain an
   embedded `0x00` byte — the inverse of the sprint-123-era statement this
   bullet originally made (`0x00`-free, `0x0A` reserved as the two-terminator
-  demux's OWN split byte). `App::FrameKind` (`src/firm/app/comms.h`,
+  demux's OWN split byte). `Core::FrameKind` (`src/firm/core/comms.h`,
   cited by the pre-124-005 wording here) no longer exists — see
   [`../app/DESIGN.md`](../app/DESIGN.md) §1 and
   [`../com/DESIGN.md`](../com/DESIGN.md) §2 for the uniform-grammar
@@ -179,7 +179,7 @@ firmware runtime; the device itself never sees protobuf. It also emits
   delimiter` iff `b == 0`, which never occurs, so the XOR-ed stream can
   never contain `delimiter` either. 124-003 itself only landed the
   parameterized primitive — every call site still keyed on `0x00`.
-  **124-005 (grammar cutover — landed):** `App::kCobsDelimiter` (`comms.h`)
+  **124-005 (grammar cutover — landed):** `Core::kCobsDelimiter` (`comms.h`)
   is now `0x0A`, and every `cobsEncode()`/`cobsDecode()` call site in
   `Comms` (`sendReply()`, `decodeBinaryFrame()`, `Telemetry::
   emitSecondary()`) and in `wire_codec.py` (`encode_frame()`/
@@ -397,7 +397,7 @@ firmware runtime; the device itself never sees protobuf. It also emits
   `encodeScalarValue()` in `wire.cpp`) is completely scale-agnostic — it
   only ever moves a raw zigzag `int32_t` on and off the wire; `(scale)` is
   purely a header-generation-time concept, applied by every CALLER (e.g.
-  `App::RobotLoop::assembleFrame()`, `robot_loop.cpp`) via these generated
+  `Core::RobotLoop::assembleFrame()`, `robot_loop.cpp`) via these generated
   pack/unpack methods, never inline division/multiplication by a
   hand-copied constant. `gen_messages.py` raises `GenMessagesError` if
   `(scale)` is declared on any non-`sint32` field — the option only makes
@@ -416,7 +416,7 @@ firmware runtime; the device itself never sees protobuf. It also emits
   ceiling `ERR_NOT_CONFIGURED` = 8 needs exactly 4 bits), the remaining 28
   bits for `corr_id`/`Move.id` (in practice these need at most 16 bits on
   the wire, `envelope.proto`'s own `CommandEnvelope.corr_id`/`Move.id`
-  doc comments — but see the caution below). `App::Telemetry::
+  doc comments — but see the caution below). `Core::Telemetry::
   pushAckRing()` (`telemetry.cpp`) is the one packer; `AckEntry::
   from_ring_entry()` (`src/host/robot_radio/robot/protocol.py`) is the
   one host-side unpacker — both duplicate the exact same `kAckErrBits=4`/
@@ -456,7 +456,7 @@ firmware runtime; the device itself never sees protobuf. It also emits
   side, `Devices::NezhaMotor::encOffset_`, is ~121km capacity and never
   needs it), and `EncoderReading.position_epoch` (ADDITIVE, field 4,
   `uint32` on the wire but 8 bits of real storage suffice per Decision
-  6's own sizing call) is the counter `App::RobotLoop` owns and increments
+  6's own sizing call) is the counter `Core::RobotLoop` owns and increments
   each time it software-rebaselines a wheel via the EXISTING, unmodified
   `Devices::Motor::rebaseline()` — never `Motor::resetPosition()`, which
   can still choose a real bus-touching hard reset and is forbidden
@@ -584,7 +584,7 @@ that conversion — it only defines the wire-side shape.
   generated schema layer.
 - **Generated `msg::*` structs:** the wire-schema shape itself — every
   field, enum, and nested oneof union other subsystems construct, read, and
-  pass to `App::Comms`/`App::Telemetry`. Authoritative source for these
+  pass to `Core::Comms`/`Core::Telemetry`. Authoritative source for these
   shapes is the corresponding `protos/*.proto` file, not this document.
 
 ### Consumes
@@ -594,7 +594,7 @@ that conversion — it only defines the wire-side shape.
   truth; see [`../../protos/DESIGN.md`](../../protos/DESIGN.md) and
   [`../../scripts/DESIGN.md`](../../scripts/DESIGN.md) "Build-time
   generators."
-- **`app/` (via `App::Comms`/`App::Telemetry`):** the only consumer of the
+- **`app/` (via `Core::Comms`/`Core::Telemetry`):** the only consumer of the
   decode/encode entry points at runtime — see
   [app/DESIGN.md](../app/DESIGN.md) for how a decoded `CommandEnvelope`
   reaches the loop's dispatch and how a `ReplyEnvelope` gets

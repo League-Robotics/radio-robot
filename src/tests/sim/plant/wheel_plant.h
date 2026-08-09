@@ -80,7 +80,7 @@ constexpr float kDefaultDutyVelMax = 500.0f;   // [mm/s] velocity at |duty|==1.0
 // Devices::MotorVelocityPid::compute() only freezes the INTEGRAL in the
 // deadband, never the kp*err term itself, src/firm/devices/velocity_pid.cpp),
 // produced a REAL, sustained ~4mm/s phantom velocity reading every single
-// tick -- and App::Drive::tick() (src/firm/app/drive.cpp) calls
+// tick -- and Core::DifferentialDrive::tick() (src/firm/app/drive.cpp) calls
 // left_/right_.setVelocity(0) unconditionally every cycle from boot, so
 // Mode::Active's PID chases that phantom reading continuously, even with no
 // twist ever commanded. Once anything (e.g. a test's write hook) stops

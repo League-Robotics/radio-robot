@@ -1,7 +1,7 @@
-// configurator.h -- App::Configurator: the CONFIG command's whole
+// configurator.h -- Core::Configurator: the CONFIG command's whole
 // lifecycle (command-ingestion-ring-buffered-comms-subsystem-routing-two-
-// stops.md §6). One of the four routing destinations App::RobotLoop::
-// routeCommand() dispatches to, alongside App::Drive (WHEELS) and
+// stops.md §6). One of the four routing destinations Core::RobotLoop::
+// routeCommand() dispatches to, alongside Core::DifferentialDrive (WHEELS) and
 // Motion::Planner (MOVE/STOP).
 //
 // 132-006 (the-configuration-object.md, sprint 132 "configuration
@@ -16,7 +16,7 @@
 //
 // 132-008 adds the LIVE wire push path: `applyGroup(target, wire, len)`
 // decodes a whole group straight into `config_` (no patch, no presence
-// flags, no merge -- ticket 002's generated msg::Geometry/Motors/Drive/
+// flags, no merge -- ticket 002's generated msg::Geometry/Motors/DifferentialDrive/
 // WheelControl/Planner/Otos/Estimator structs ARE the wire codec targets,
 // decoded through gen_messages.py-emitted `msg::wire::decode(<Group>&, ...)`
 // overloads, wire.h/wire.cpp) and `install(target)` fans out just that one
@@ -38,16 +38,16 @@
 //
 //   | target        | live? | install(target) reaches                        | notes |
 //   |---------------|-------|--------------------------------------------------|-------|
-//   | GEOMETRY      | NO    | -- (ERR_NOT_LIVE)                                 | trackWidth has no post-construction setter anywhere (Drive/Odometry/Planner all bake it in at construction); rotation calibration installs once, at boot, via RobotLoop::configure() called directly from boot_wiring.cpp, not through this class |
+//   | GEOMETRY      | NO    | -- (ERR_NOT_LIVE)                                 | trackWidth has no post-construction setter anywhere (DifferentialDrive/Odometry/Planner all bake it in at construction); rotation calibration installs once, at boot, via RobotLoop::configure() called directly from boot_wiring.cpp, not through this class |
 //   | PLANNER       | NO    | -- (ERR_NOT_LIVE)                                 | vMax/omegaMax/controlPeriod/actuationDelay/landing.*/headingHoldGain have no post-construction setter -- the ONLY reason this group is boot-only. SPLIT (132-017) from the shaper ceilings below, which used to sit in this SAME group and were dragged down to boot-only by that coarse grouping even though they have their own re-appliable setter |
 //   | PLANNER_SHAPER| yes   | `Motion::Planner::applyShaperLimits()` (132-017)  | a_max/a_decel/alpha_max/alpha_decel/jerk_max/yaw_jerk_max -- split OUT of PLANNER (132-017, JSON reshape ticket, stakeholder-sanctioned mid-sprint scope addition) because this exact setter was ALREADY one of the-configuration-object.md's eight safely-re-appliable setters; the boot-time no-arg install() also still calls this same setter, so a wire push and a boot bake use the identical code path. NOT persisted -- same "no old curated live-tuning message for this field set" reasoning as DRIVE below; a live-pushed shaper ceiling reverts to the baked JSON default on reboot until re-pushed |
-//   | DRIVE         | yes   | `Drive::configure(config_)` (132-007)             | Stage A per-wheel gain/intercept + crawl pulse, via the existing `setWheelCorrection()`/`setCrawlPulse()`. NOT persisted (132-013) -- no old curated live-tuning wire message ever existed for these fields, so the persistence precedent leaves them boot-only-persisted (i.e. reset to the baked JSON default every reboot until live-tuned again) |
-//   | WHEEL_CONTROL | yes   | `Drive::configure(config_)` (132-007)             | SAME call as DRIVE -- Drive::configure() pulls Stage B/C gains/bounds from `config_.wheelControl` in the same pass it reads `config_.drive` from; one re-appliable unit from Drive's own point of view, two ConfigGroupTargets on the wire. PERSISTED (132-013) -- these 5 fields (pid_kp/pid_ki/pid_i_max/pid_kaff/pid_max) are the direct successor of the old curated Motor live-tuning message's kp/ki/i_max/kff/kaw, which already persisted |
-//   | MOTORS        | yes   | `App::configureMotor()` x2 (132-007), GUARDED     | refuses (returns false, applies nothing) while that side reports itself in motion -- surfaced as `ERR_BUSY`, never swallowed, so a caller can retry at rest. PARTIALLY PERSISTED (132-013) -- only travel_calib_left/travel_calib_right (the one MotorConfig field App::configureMotor() still live-applies, boot_calibration.h's own doc comment), matching the old curated Motor live-tuning message's travel_calib precedent exactly; fwd_sign/output_deadband/reversal_dwell/vel_* never persisted before and still don't |
-//   | OTOS          | yes   | `App::configureOtos()` (132-007/010)              | trap 3 CLOSED (132-010): `linear_scale`/`angular_scale` are converted through `Hardware::scaleToRegister()` before reaching `setLinearScalar()`/`setAngularScalar()`, matching `RealOtos::begin()`'s own boot-time conversion -- a live push and a boot bake now agree on what a given multiplier means. PERSISTED IN FULL (132-013) -- offset_x/offset_y/offset_yaw/linear_scale/angular_scale mirror the old curated Otos live-tuning message's own 5 scale/offset fields exactly (its 6th field, `init`, was a fire-and-forget trigger with no Config::Robot-shaped successor and was never persisted either) |
-//   | ESTIMATOR     | yes   | -- (`ERR_UNIMPLEMENTED`, PERMANENT)               | trap 2 CLOSED (132-010) by making the dead end EXPLICIT rather than inventing a consumer: `App::StateEstimator` was deleted outright as dead code (sprint 128 ticket 016), and its one candidate successor -- `Motion::PoseTracker::blendHeading()` (`src/firm/motion/planner/estimation.h`) -- had its only call site AND its own config fields (`PlannerLimits::headingOtosWeight`/`otosStaleness`) deleted outright by 130-009, in favor of a from-scratch fusion redesign tracked at `clasi/issues/later/estimator-v2-otos-fusion-sim-first.md`. Building a real consumer today would mean either resurrecting logic 130-009 deliberately retired, or building estimator-v2 itself -- both out of this ticket's scope (and the latter explicitly deferred by its own tracked issue). `Configurator` therefore holds NO estimator-shaped reference; `config_.estimator` still decodes correctly for read-back (`applyGroup()` never skips the decode for a live-classified target), but `install(ESTIMATOR)` returns `ERR_UNIMPLEMENTED` permanently until estimator-v2 gives it something real to call. NEVER PERSISTED (132-013, following the old curated Estimator live-tuning message's own explicit precedent -- "a reboot always reverts to the baked JSON default") -- unaffected by ESTIMATOR's own permanent ERR_UNIMPLEMENTED above; the two are independent facts that happen to agree |
+//   | DRIVE         | yes   | `DifferentialDrive::configure(config_)` (132-007)             | Stage A per-wheel gain/intercept + crawl pulse, via the existing `setWheelCorrection()`/`setCrawlPulse()`. NOT persisted (132-013) -- no old curated live-tuning wire message ever existed for these fields, so the persistence precedent leaves them boot-only-persisted (i.e. reset to the baked JSON default every reboot until live-tuned again) |
+//   | WHEEL_CONTROL | yes   | `DifferentialDrive::configure(config_)` (132-007)             | SAME call as DRIVE -- DifferentialDrive::configure() pulls Stage B/C gains/bounds from `config_.wheelControl` in the same pass it reads `config_.drive` from; one re-appliable unit from DifferentialDrive's own point of view, two ConfigGroupTargets on the wire. PERSISTED (132-013) -- these 5 fields (pid_kp/pid_ki/pid_i_max/pid_kaff/pid_max) are the direct successor of the old curated Motor live-tuning message's kp/ki/i_max/kff/kaw, which already persisted |
+//   | MOTORS        | yes   | `Core::configureMotor()` x2 (132-007), GUARDED     | refuses (returns false, applies nothing) while that side reports itself in motion -- surfaced as `ERR_BUSY`, never swallowed, so a caller can retry at rest. PARTIALLY PERSISTED (132-013) -- only travel_calib_left/travel_calib_right (the one MotorConfig field Core::configureMotor() still live-applies, boot_calibration.h's own doc comment), matching the old curated Motor live-tuning message's travel_calib precedent exactly; fwd_sign/output_deadband/reversal_dwell/vel_* never persisted before and still don't |
+//   | OTOS          | yes   | `Core::configureOtos()` (132-007/010)              | trap 3 CLOSED (132-010): `linear_scale`/`angular_scale` are converted through `Hardware::scaleToRegister()` before reaching `setLinearScalar()`/`setAngularScalar()`, matching `RealOtos::begin()`'s own boot-time conversion -- a live push and a boot bake now agree on what a given multiplier means. PERSISTED IN FULL (132-013) -- offset_x/offset_y/offset_yaw/linear_scale/angular_scale mirror the old curated Otos live-tuning message's own 5 scale/offset fields exactly (its 6th field, `init`, was a fire-and-forget trigger with no Config::Robot-shaped successor and was never persisted either) |
+//   | ESTIMATOR     | yes   | -- (`ERR_UNIMPLEMENTED`, PERMANENT)               | trap 2 CLOSED (132-010) by making the dead end EXPLICIT rather than inventing a consumer: `Core::StateEstimator` was deleted outright as dead code (sprint 128 ticket 016), and its one candidate successor -- `Motion::PoseTracker::blendHeading()` (`src/firm/motion/planner/estimation.h`) -- had its only call site AND its own config fields (`PlannerLimits::headingOtosWeight`/`otosStaleness`) deleted outright by 130-009, in favor of a from-scratch fusion redesign tracked at `clasi/issues/later/estimator-v2-otos-fusion-sim-first.md`. Building a real consumer today would mean either resurrecting logic 130-009 deliberately retired, or building estimator-v2 itself -- both out of this ticket's scope (and the latter explicitly deferred by its own tracked issue). `Configurator` therefore holds NO estimator-shaped reference; `config_.estimator` still decodes correctly for read-back (`applyGroup()` never skips the decode for a live-classified target), but `install(ESTIMATOR)` returns `ERR_UNIMPLEMENTED` permanently until estimator-v2 gives it something real to call. NEVER PERSISTED (132-013, following the old curated Estimator live-tuning message's own explicit precedent -- "a reboot always reverts to the baked JSON default") -- unaffected by ESTIMATOR's own permanent ERR_UNIMPLEMENTED above; the two are independent facts that happen to agree |
 //
-//   | NAVIGATOR     | yes   | writes `config_.navigator`'s fields directly into the `Motion::NavigatorLimits` this class holds a reference to (135-004) | NOT a setter call -- `Motion::Navigator` holds its `NavigatorLimits` by const reference (navigator.h), so `tick()` sees a live push on its very next call with no re-apply step to invoke. `App::configureNavigator()` (app/boot_calibration.h) does the field-by-field copy, sourcing `trackWidth` from `config_.effectiveTrackWidth()` rather than a `config_.navigator` field (robot_config.proto's Navigator message deliberately has none). NOT persisted -- same "no old curated live-tuning message for this field set" reasoning DRIVE/PLANNER_SHAPER's own rows give |
+//   | NAVIGATOR     | yes   | writes `config_.navigator`'s fields directly into the `Motion::NavigatorLimits` this class holds a reference to (135-004) | NOT a setter call -- `Motion::Navigator` holds its `NavigatorLimits` by const reference (navigator.h), so `tick()` sees a live push on its very next call with no re-apply step to invoke. `Core::configureNavigator()` (app/boot_calibration.h) does the field-by-field copy, sourcing `trackWidth` from `config_.effectiveTrackWidth()` rather than a `config_.navigator` field (robot_config.proto's Navigator message deliberately has none). NOT persisted -- same "no old curated live-tuning message for this field set" reasoning DRIVE/PLANNER_SHAPER's own rows give |
 //
 // PERSISTENCE SCOPE (132-013, patch-surface retirement -- sprint.md Out of
 // Scope's own explicit ticket-013 acceptance criterion): the reshaped
@@ -82,7 +82,7 @@
 //      own doc comment for the full reshape and the re-appliability
 //      table's own PERSISTENCE SCOPE note above for WHICH groups.
 //   3. Pushing values into the subsystems that OWN them: motor gains and
-//      per-wheel calibration -> App::Drive and the two Hal::Motor
+//      per-wheel calibration -> Core::DifferentialDrive and the two Hal::Motor
 //      leaves, shaper ceilings -> Motion::Planner, OTOS scalars and
 //      offsets -> the OTOS leaf. The OLD curated Estimator live-tuning
 //      message's own weight_heading_otos/weight_omega_otos/staleness_ms
@@ -102,7 +102,7 @@
 // name would collide with it.
 //
 // Boundary: inside -- what a decoded SetConfigGroup/SetConfigField MEANS
-// and where its values land; outside -- decoding it (App::Comms), routing
+// and where its values land; outside -- decoding it (Core::Comms), routing
 // it (RobotLoop), and acking it (RobotLoop, from this class's returned
 // error code).
 #pragma once
@@ -110,7 +110,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "app/drive.h"
+#include "core/differential_drive.h"
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
 #include "config/robot.h"
@@ -132,7 +132,7 @@
 // Configurator::applyGroup() (132-008, below); applyField() (single-field
 // push) is 132-012.
 
-namespace App {
+namespace Core {
 
 class Configurator {
  public:
@@ -144,7 +144,7 @@ class Configurator {
   // Motion::Navigator was constructed with a reference to (boot_wiring.h's
   // RobotGraph) -- install(NAVIGATOR) writes straight into it, per this
   // class's own re-appliability table NAVIGATOR row above.
-  Configurator(Drive& drive, Hal::Motor& motorL, Hal::Motor& motorR,
+  Configurator(DifferentialDrive& drive, Hal::Motor& motorL, Hal::Motor& motorR,
                Hal::Otos& otos, Motion::Planner& planner,
                Motion::NavigatorLimits& navigatorLimits,
                Config::TuningStore* tuningStore = nullptr);
@@ -176,11 +176,11 @@ class Configurator {
   // default): when non-null, config_.drive's eight wheel_gain_*/
   // wheel_intercept_* fields are replaced by it AFTER the bake lands, so
   // the whole downstream fan-out -- install(DRIVE) here, and every later
-  // Drive::configure(config_) -- sees the override rather than the baked
+  // DifferentialDrive::configure(config_) -- sees the override rather than the baked
   // robot-JSON value. This is the ONE seam that decides what a given
-  // composition root's Drive is calibrated with, which is exactly why the
+  // composition root's DifferentialDrive is calibrated with, which is exactly why the
   // override belongs here and not at a post-construction setter a
-  // refactor can forget to re-apply. Only App::composeRobot() passes one,
+  // refactor can forget to re-apply. Only Core::composeRobot() passes one,
   // and only for the reason BootOverrides::wheelCorrection documents
   // (app/boot_wiring.h).
   void loadBaked(const Config::WheelCorrection* wheelCorrectionOverride = nullptr);
@@ -208,10 +208,10 @@ class Configurator {
   //
   // dutyPerSpeed (132-009): now sourced from config_.drive.duty_per_speed_
   // left/right (the active robot JSON) instead of the hardcoded
-  // Drive::kDutyPerSpeed literal -- see configurator.cpp's own doc comment
+  // DifferentialDrive::kDutyPerSpeed literal -- see configurator.cpp's own doc comment
   // on this method for the full reversal reasoning (a stakeholder decision
   // change, not an implementation detail). Still boot-only: neither
-  // Drive::configure() nor install(DRIVE) touch dutyPerSpeed live -- the
+  // DifferentialDrive::configure() nor install(DRIVE) touch dutyPerSpeed live -- the
   // wire's DRIVE group never carried it and still does not.
   //
   // This is the BOOT-TIME fan-out (every group, once, at construction) --
@@ -357,7 +357,7 @@ class Configurator {
   // Flash write policy: save only when the serialized snapshot changed.
   void persistTuningIfChanged();
 
-  Drive& drive_;
+  DifferentialDrive& drive_;
   Hal::Motor& motorL_;
   Hal::Motor& motorR_;
   Hal::Otos& otos_;
@@ -391,4 +391,4 @@ class Configurator {
   msg::ConfigSource groupSource_[kGroupSourceSlots] = {};
 };
 
-}  // namespace App
+}  // namespace Core

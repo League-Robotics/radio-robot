@@ -1,8 +1,8 @@
-"""Off-hardware acceptance proof for ticket 103-007 (SUC-007), App::Preamble
-(``src/firm/app/preamble.{h,cpp}``).
+"""Off-hardware acceptance proof for ticket 103-007 (SUC-007), Core::Preamble
+(``src/firm/core/preamble.{h,cpp}``).
 
 Compiles ``app_preamble_harness.cpp`` together with the HOST_BUILD
-implementations it needs (``src/firm/app/preamble.cpp``,
+implementations it needs (``src/firm/core/preamble.cpp``,
 ``src/firm/devices/{nezha_motor,otos,color_sensor,
 line_sensor}.cpp``, ``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's
 real Devices::I2CBus implementation -- ``src/firm/platform/host/sim_clock.cpp``
@@ -15,7 +15,7 @@ binary, assert it exits 0.
 
 125-003: ``devices/velocity_pid.cpp`` is no longer a NezhaMotor link
 dependency (its embedded PID was deleted outright) -- this harness doesn't
-touch App::Drive, so it needs neither that nor
+touch Core::DifferentialDrive, so it needs neither that nor
 ``motion/wheel_velocity_pid.cpp``.
 
 Migrated by sprint 108 ticket 009 off the deleted ``src/firm/devices/
@@ -39,7 +39,7 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_preamble_harness.cpp"
-_PREAMBLE_SRC = _SOURCE_DIR / "app" / "preamble.cpp"
+_PREAMBLE_SRC = _SOURCE_DIR / "core" / "preamble.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "hardware" / "nezha" / "nezha_motor.cpp"
 _OTOS_SRC = _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp"
 _COLOR_SENSOR_SRC = _SOURCE_DIR / "hardware" / "planetx" / "color_sensor.cpp"
@@ -67,7 +67,7 @@ def _find_cxx_compiler() -> str:
 
 
 def test_app_preamble_harness_compiles_and_passes(tmp_path):
-    """Compile App::Preamble + its Devices leaf dependencies + SimPlant +
+    """Compile Core::Preamble + its Devices leaf dependencies + SimPlant +
     the harness; assert every scenario passes."""
     sources = [
         _HARNESS_SRC,

@@ -1,5 +1,5 @@
 // robot_loop_tlm_harness.cpp -- off-hardware, end-to-end acceptance harness
-// for the TLM wire-command surface driven through the REAL App::RobotLoop
+// for the TLM wire-command surface driven through the REAL Core::RobotLoop
 // (125-006, telemetry-emit-policy-rebuild-spec.md Part 8, sim criteria
 // #8/#9/#10).
 //
@@ -32,9 +32,9 @@
 // but that harness was ALREADY broken before sprint 125 even started --
 // an unrelated, independent motion-library rework ("Planner integration",
 // dated 2026-07-26 per src/firm/platform/host/sim_harness.h's own comments) changed
-// App::RobotLoop's constructor from 15 to 16 arguments (adding
-// App::Configurator, and replacing the Motion::MoveQueue& slot with
-// Motion::Planner&), and removed App::Drive::gainsLeft()/gainsRight().
+// Core::RobotLoop's constructor from 15 to 16 arguments (adding
+// Core::Configurator, and replacing the Motion::MoveQueue& slot with
+// Motion::Planner&), and removed Core::DifferentialDrive::gainsLeft()/gainsRight().
 // app_robot_loop_harness.cpp hand-builds its own RobotLoop graph inline in
 // ~20 places and was never updated for that change -- it is currently
 // -DHOST_BUILD compile-broken (~28 errors) and quarantined behind

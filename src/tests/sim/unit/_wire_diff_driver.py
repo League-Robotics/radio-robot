@@ -190,8 +190,8 @@ def encode_err(binary: pathlib.Path, corr_id: int, code_name: str, field_num: in
 
 
 # 4 -> 12 (command-ingestion-ring-buffered-comms-subsystem-routing-two-stops.md
-# §1): the ack ring is sized to App::kCmdRingDepth so a burst that fits the
-# firmware's new command ring also fits here. Mirrors App::kAckRingDepth
+# §1): the ack ring is sized to Core::kCmdRingDepth so a burst that fits the
+# firmware's new command ring also fits here. Mirrors Core::kAckRingDepth
 # (app/telemetry.h) / telemetry.proto's Telemetry.acks max_count -- change together.
 _ACK_RING_DEPTH = 12
 

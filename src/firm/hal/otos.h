@@ -5,7 +5,7 @@
 //   - Hardware::RealOtos (hardware/generic/real_otos.h) -- the SparkFun
 //     OTOS chip over I2C. A commercial, publicly-documented part, hence
 //     hardware/generic/ rather than a named-family directory.
-//   - App::FakeOtos (app/fake_otos.h) -- the FAKE_OTOS build variant, which
+//   - Core::FakeOtos (app/fake_otos.h) -- the FAKE_OTOS build variant, which
 //     reports the dead-reckoned Odometry pose as if it were the chip. It is
 //     NOT a sim-only construct: it is how a real micro:bit robot built
 //     WITHOUT a physical OTOS runs.

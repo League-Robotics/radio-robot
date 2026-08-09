@@ -7,7 +7,7 @@
  * Design/rationale: DESIGN.md.
  *
  * readLine() reads to an UNCONDITIONAL '\n' terminator -- no heuristic, no
- * recognizer, no text/binary distinction at this layer at all (App::Comms
+ * recognizer, no text/binary distinction at this layer at all (Core::Comms
  * decides text-vs-binary from the parsed `<COMMAND>` prefix, once the
  * transport hands it a complete line -- see comms.h's own file header).
  * This is safe because COBS is keyed on 0x0A (wire_runtime.h item 8): a
@@ -15,7 +15,7 @@
  * genuine, unconditional terminator in both directions. Bytes are
  * accumulated UNFILTERED (no '\r' stripping here -- under one uniform rule
  * '\r' is legal binary content; a caller that has already classified a
- * line as cleartext strips it, App::Comms::dispatchLine()). The host's
+ * line as cleartext strips it, Core::Comms::dispatchLine()). The host's
  * mirror, wire_codec.py's `ByteStreamDemuxer`, splits on '\n' alone.
  *
  * Non-blocking: readLine() drains the CODAL ASYNC receive buffer each call
@@ -53,7 +53,7 @@ public:
 
     // ASYNC, WHOLE-FRAME drop-on-full — for telemetry. `data`/`len` is a
     // COBS+CRC frame body (0x00-free by construction, per
-    // App::Transport::send()'s own contract); this appends the trailing
+    // Core::Transport::send()'s own contract); this appends the trailing
     // 0x00 delimiter itself and sends the raw buffer (never a
     // ManagedString/strlen-based path -- the content is not necessarily
     // printable ASCII). Checks free TX-buffer space FIRST -- if the

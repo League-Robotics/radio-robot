@@ -2,13 +2,13 @@
 
 #include <cstdint>
 
-#include "app/comms.h"
+#include "core/comms.h"
 #include "firm/types/robot_state.h"
 #include "messages/telemetry.h"
 
-namespace App {
+namespace Core {
 
-class Drive;
+class DifferentialDrive;
 
 
 constexpr uint32_t kFlagOtosPresent = 1u << 0;
@@ -47,7 +47,7 @@ constexpr uint32_t kFlagFaultWheelDeficitRight = 1u << 22;
 constexpr uint32_t kFlagColorFresh = 1u << 23;  // see kFlagLineFresh (bit 5)
 // Bits 24/25 -- STALL. The drivetrain was commanded to move, the encoders say
 // it did not, and the encoders were healthy enough to be believed, so
-// App::RobotLoop halted the robot. Distinct from bits 19/20 (kFlagFaultWheelFrozen*,
+// Core::RobotLoop halted the robot. Distinct from bits 19/20 (kFlagFaultWheelFrozen*,
 // an ENCODER fault where the wheel may be spinning fine) and bits 21/22
 // (kFlagFaultWheelDeficit*, where the wheel IS turning but under its target).
 // These are the only wheel-fault bits that mean the robot stopped itself.
@@ -55,7 +55,7 @@ constexpr uint32_t kFlagColorFresh = 1u << 23;  // see kFlagLineFresh (bit 5)
 constexpr uint32_t kFlagFaultStallLeft = 1u << 24;
 constexpr uint32_t kFlagFaultStallRight = 1u << 25;
 
-// [ms] primary-frame emit floor, deliberately BELOW App::RobotLoop::kCycle
+// [ms] primary-frame emit floor, deliberately BELOW Core::RobotLoop::kCycle
 // (32) so every cycle clears it and telemetry stays ONE FRAME PER CYCLE
 // (~31 fps). It was 40 against the old 50 ms kCycle for exactly the same
 // reason -- the value tracks kCycle down, it is not an independent rate.
@@ -136,7 +136,7 @@ class Telemetry {
 
   explicit Telemetry(Comms& comms);
 
-  void update(const Types::RobotState& state, const Drive& drive);
+  void update(const Types::RobotState& state, const DifferentialDrive& drive);
 
   void setLiveFlag(uint32_t bit, bool active);
 

@@ -1,7 +1,7 @@
 // test_app_robot_loop_goto_harness.cpp -- 135-004's own acceptance proof:
-// App::RobotLoop::handleGoto()/routeCommand()'s GOTO case/cycle()'s
+// Core::RobotLoop::handleGoto()/routeCommand()'s GOTO case/cycle()'s
 // Navigator-vs-Planner ownership dispatch, exercised end to end against the
-// REAL App::RobotLoop graph (TestSim::SimHarness, composeRobot() -- the
+// REAL Core::RobotLoop graph (TestSim::SimHarness, composeRobot() -- the
 // SAME composition root main.cpp uses, baking data/robots/tovez.json's
 // real navigator block: yaw_sign=-1.0, align_tol/align_max_nudges, etc.).
 //
@@ -22,7 +22,7 @@
 //
 // Compiled by test_app_robot_loop_goto.py against the same full HOST_BUILD
 // dependency graph test_sim_harness_configure.py/test_app_robot_loop_replace.py
-// compile -- SimHarness composes the real App::RobotLoop graph.
+// compile -- SimHarness composes the real Core::RobotLoop graph.
 #include <cmath>
 #include <cstdio>
 #include <string>

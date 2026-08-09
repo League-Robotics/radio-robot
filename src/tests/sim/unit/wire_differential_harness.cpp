@@ -66,7 +66,7 @@
 //     cycle_busy/cycle_period loop-timing fields. The single "freshest
 //     ack" slot (ack_corr/ack_err, fields 5/6) is DELETED -- ring
 //     membership already means "really acked." The trailing 5 args are
-//     the bounded ack ring: `acks_count` (0..App::kAckRingDepth=4) then
+//     the bounded ack ring: `acks_count` (0..Core::kAckRingDepth=4) then
 //     exactly kAckRingDepth PACKED uint32 slots (`corr_id<<4|err`, not a
 //     (corr_id, err) pair) -- slots at or past `acks_count` are still
 //     parsed (keeps this verb's own argv shape fixed) but never copied
@@ -373,7 +373,7 @@ int cmdEncodeTelemetry(int argc, char** argv) {
   t.cycle_period = static_cast<uint32_t>(std::strtoul(argv[i++], nullptr, 10));
 
   // Bounded ack ring (120, ADDITIVE -- telemetry.proto's Telemetry.acks doc
-  // comment). kRingDepth mirrors App::kAckRingDepth (app/telemetry.h) --
+  // comment). kRingDepth mirrors Core::kAckRingDepth (app/telemetry.h) --
   // duplicated as a local literal rather than an #include of app/
   // telemetry.h, which would pull in app/comms.h's Transport interfaces
   // this standalone wire-only harness (wire.cpp + wire_runtime.cpp, no

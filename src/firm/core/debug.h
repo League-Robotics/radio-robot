@@ -10,29 +10,29 @@
 // always have it, per src/firm/platform/host/CMakeLists.txt's `-DHOST_BUILD=1`). The
 // shipped ARM release build defines neither, so debugf()/DBG_EVERY()/
 // DBG_MILLI() are inline no-ops there instead -- zero flash cost, zero
-// wire traffic. The same macro gates App::Comms::sendDebug() (comms.h/.cpp,
-// this module's ONLY caller into App::Comms) and debug.cpp's own function
+// wire traffic. The same macro gates Core::Comms::sendDebug() (comms.h/.cpp,
+// this module's ONLY caller into Core::Comms) and debug.cpp's own function
 // bodies, so there is never a mismatch between what this header declares
 // and what debug.cpp defines.
 //
 // debugf() formats a printf-style line and hands it to the installed sink
-// as one cleartext "DBG:<line>" wire line (App::Comms::sendDebug()).
+// as one cleartext "DBG:<line>" wire line (Core::Comms::sendDebug()).
 // setDebugSink() wires the sink: main.cpp passes &comms on the robot,
 // TestSim::SimHarness does the same with its own comms_ member -- both
-// already construct an App::Comms, so this is a one-line addition at each
+// already construct an Core::Comms, so this is a one-line addition at each
 // composition root, not a second communications channel.
 //
 // newlib-nano (the ARM libc this firmware links) has NO printf float
 // support -- a bare "%f" silently emits nothing. Any debugf()/DBG_EVERY()
 // call that needs to report a float value must convert it to an integer
 // milli-unit first with DBG_MILLI() and format it with %ld, e.g.
-// `App::debugf("v=%ld", DBG_MILLI(velocity))` prints "v=1234" for
+// `Core::debugf("v=%ld", DBG_MILLI(velocity))` prints "v=1234" for
 // velocity == 1.234f.
 #pragma once
 
 #include <cstdint>
 
-namespace App {
+namespace Core {
 
 class Comms;
 
@@ -66,9 +66,9 @@ inline void debugf(const char*, ...) {}
 
 #endif  // ROBOT_DEBUG || HOST_BUILD
 
-}  // namespace App
+}  // namespace Core
 
-// DBG_EVERY(n, ...) -- call App::debugf(__VA_ARGS__) on every Nth
+// DBG_EVERY(n, ...) -- call Core::debugf(__VA_ARGS__) on every Nth
 // invocation of this macro AT THIS CALL SITE (a function-local static
 // counter, one per macro expansion, not a shared global -- throttling one
 // call site never affects another's cadence). `n` must be a positive
@@ -81,7 +81,7 @@ inline void debugf(const char*, ...) {}
   do {                                        \
     static uint32_t dbgEveryCount = 0;         \
     if ((dbgEveryCount % (n)) == 0) {           \
-      App::debugf(__VA_ARGS__);                  \
+      Core::debugf(__VA_ARGS__);                  \
     }                                             \
     ++dbgEveryCount;                                \
   } while (0)

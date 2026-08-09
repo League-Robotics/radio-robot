@@ -36,7 +36,7 @@ envelope.proto -- 0=WORLD, 1=ROBOT):
     goto W  -- a point in WORLD coordinates (the playfield frame)
     goto R  -- a point in the ROBOT's own frame at the moment the GO_TO is
                ACCEPTED: +x straight ahead, +y to the left. Resolved to
-               world once, firmware-side, at acceptance (App::RobotLoop::
+               world once, firmware-side, at acceptance (Core::RobotLoop::
                handleGoto()) -- not by this script, and not continuously,
                so the target does not chase the robot as it turns.
 
@@ -73,7 +73,7 @@ CAM_TAG_INFLATION = 1.1212
 
 # GoTo.frame (envelope.proto) -- 0=WORLD (OTOS/SEED frame), 1=ROBOT
 # (resolved once at acceptance, firmware-side). Matches
-# App::RobotLoop::handleGoto()'s own goTo.frame check exactly.
+# Core::RobotLoop::handleGoto()'s own goTo.frame check exactly.
 FRAME_WORLD = 0
 FRAME_ROBOT = 1
 
@@ -291,7 +291,7 @@ def goto(bot, dc, target, label, frame=FRAME_WORLD, *,
     enc_start = enc_last = None
     otos_last = None
 
-    # Telemetry.acks is a PERSISTENT ring snapshot (App::Telemetry::
+    # Telemetry.acks is a PERSISTENT ring snapshot (Core::Telemetry::
     # pushAckRing()/assembleFrame(), telemetry.cpp): every frame
     # re-serializes whatever currently sits in the depth-4 ring, so the
     # SAME ack entry legitimately repeats across many consecutive frames
@@ -385,7 +385,7 @@ def main() -> int:
     print(f"dots: { {k: (round(v[0]), round(v[1])) for k, v in sorted(dots.items())} }")
 
     # A waypoint is (label, target, frame). A ROBOT-frame target is resolved
-    # to world coordinates by the FIRMWARE at acceptance (App::RobotLoop::
+    # to world coordinates by the FIRMWARE at acceptance (Core::RobotLoop::
     # handleGoto()), not here: "400mm ahead" means ahead of wherever the
     # robot is when that GO_TO is accepted, which this script does not need
     # to compute -- it only estimates it, below, for a pre-flight fence

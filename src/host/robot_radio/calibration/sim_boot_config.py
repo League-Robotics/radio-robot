@@ -11,7 +11,7 @@ functions, don't re-derive the mapping").
 module's ``msg::PlannerConfig`` half (``planner_boot_config_for()`` /
 ``_heading_source_wire_value()``) wholesale -- ``msg::PlannerConfig``
 itself, and every ``gen_boot_config.py`` mapping function it called, went
-with the deleted ``App::Pilot``/``Motion::Executor`` subsystems (ticket
+with the deleted ``Core::Pilot``/``Motion::Executor`` subsystems (ticket
 003's proto surgery). ``motor_boot_config_for()`` below is the sole
 survivor.
 
@@ -131,7 +131,7 @@ def _is_grouped_robot_config(config: Any) -> bool:
 # lead_compensation_for_config/actuation_lag_for_config/
 # distance_gains_for_config/model_tau_for_config) was deleted wholesale by
 # ticket 003 alongside msg::PlannerConfig itself (planner.proto, deleted in
-# the same ticket) and the App::Pilot/Motion::Executor subsystems that read
+# the same ticket) and the Core::Pilot/Motion::Executor subsystems that read
 # it. There is no msg::PlannerConfig left to boot-initialize in the S1
 # minimal firmware and no telemetry_pb2 (or other) type that now serves
 # this role -- confirmed per this ticket's own acceptance criterion; the
@@ -186,7 +186,7 @@ def motor_boot_config_for(config: Any, port: int) -> "dict[str, float | int]":
 
 
 def drive_boot_config_for(config: Any) -> "dict[str, float]":
-    """Return ``App::Drive``'s own boot calibration -- the duty-per-speed
+    """Return ``Core::DifferentialDrive``'s own boot calibration -- the duty-per-speed
     pair, the eight commanded->actual wheel-correction values, and the crawl
     amplitude -- for ``sim_configure_drive()``, the sim-side counterpart of
     ``main.cpp``'s own ``setDutyPerSpeed()``/``setWheelCorrection()``/
@@ -197,10 +197,10 @@ def drive_boot_config_for(config: Any) -> "dict[str, float]":
     Before this function (and its ctypes call site,
     ``SimLoop.configure_from_robot()``) existed, NOTHING in the sim path ever
     installed a drive calibration: ``TestSim::SimHarness``'s composition root
-    constructs ``App::Drive`` and never calls any of the three setters, so
+    constructs ``Core::DifferentialDrive`` and never calls any of the three setters, so
     the sim's own Drive sat permanently uncalibrated (``calibrated_ ==
     false``, ``tick()`` returns without writing a duty). What made it move
-    anyway was an accident: ``App::Configurator::applyMotorConfigPatch()``
+    anyway was an accident: ``Core::Configurator::applyMotorConfigPatch()``
     used to route the ``pid.kff`` wire key into ``setDutyPerSpeed()``, so the
     connect-time calibration push doubled as the sim's only calibration
     install -- with the WRONG quantity (``control.vel_kff``, the velocity
@@ -264,12 +264,12 @@ def drivetrain_boot_config_for(config: Any) -> "dict[str, float]":
     the identical four ``calibration.rotation_gain``/``rotation_offset_deg``/
     ``rotation_gain_neg``/``rotation_offset_deg_neg`` JSON keys via
     ``gen_boot_config.py``'s ``rotation_calibration_for_config()`` and calls
-    ``App::RobotLoop::setRotationCalibration()`` once at boot.
+    ``Core::RobotLoop::setRotationCalibration()`` once at boot.
 
     Before this function (and its ctypes call site,
     ``SimLoop.configure_from_robot()``) existed, nothing in the sim path
     ever called ``setRotationCalibration()`` -- the sim's own
-    ``App::RobotLoop`` kept the identity default (gain 1, offset 0)
+    ``Core::RobotLoop`` kept the identity default (gain 1, offset 0)
     permanently, so editing a robot JSON's rotation calibration fields was a
     silent no-op for ``square_tour.py --sim``.
 

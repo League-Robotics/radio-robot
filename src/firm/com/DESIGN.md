@@ -29,7 +29,7 @@ own two-terminator demux described below).** `SerialPort` wraps the CODAL
 `NRF52Serial` ASYNC API into a non-blocking reader (`readLine()`) that
 accumulates bytes UNFILTERED (no `\r` stripping at this layer — under one
 uniform rule `\r` is legal binary content; a caller that has already
-classified a line as cleartext strips it, `App::Comms::dispatchLine()`)
+classified a line as cleartext strips it, `Core::Comms::dispatchLine()`)
 until a single, UNCONDITIONAL `\n` (0x0A) ends the line. `readLine()`
 returns `bool` — `true` with `buf`/`*outLen` holding the line content
 (delimiter consumed), `false` when nothing complete is ready yet. This is
@@ -39,7 +39,7 @@ the LIVE wire delimiter to it): a binary line's own bytes never contain a
 literal 0x0A by construction, so `\n` is a genuine, unconditional
 terminator in both directions — there is no more text-vs-binary
 distinction for `readLine()`/`poll()` to make at this layer at all.
-`App::Comms` decides text vs. binary one layer up, by parsing the
+`Core::Comms` decides text vs. binary one layer up, by parsing the
 `<COMMAND>` prefix off the complete line and looking it up in the
 generated command registry (`messages/commands.h`'s `kVerbTable[]`) — see
 [../app/DESIGN.md](../app/DESIGN.md) §1/§4. Two senders keep their
@@ -68,10 +68,10 @@ unrelated to either transport's byte path — it just persists which nRF
 frequency band the radio uses across reboots.
 
 `app/comms.h`'s `SerialTransport`/`RadioTransport` are the only consumers:
-thin adapters that implement `App::Transport` by forwarding to a
+thin adapters that implement `Core::Transport` by forwarding to a
 `SerialPort&` or `Radio&`. Pre-124-005 these adapters also mapped this
-directory's own `FrameKind` onto `App::FrameKind` at the one seam allowed
-to know both; `App::FrameKind` no longer exists (both types collapsed
+directory's own `FrameKind` onto `Core::FrameKind` at the one seam allowed
+to know both; `Core::FrameKind` no longer exists (both types collapsed
 to `bool` — see `app/comms.h`'s own `Transport::readLine()` doc comment),
 so the adapters now just forward the `bool` return value straight
 through. `com/` itself has no dependency on `app/`, `messages/`, or any
@@ -98,11 +98,11 @@ entire reason to exist no longer holds.
   CALL-SITE CADENCE, not by content kind any more (124-005 — pre-124 this
   was ALSO a binary-vs-text split; see the sprint-123-history note in §2).**
   `send()` is ASYNC and drop-on-full — used for the telemetry flood and
-  every binary reply (`App::Comms::sendReply()`), where a lost frame is
+  every binary reply (`Core::Comms::sendReply()`), where a lost frame is
   harmless (the next cycle's frame supersedes it) and a stalled loop is
   not. `sendReliable()` bounded-waits (5 ms cap on serial) for TX-buffer
   room before handing off — used only for the HELLO/PING/ID/VER cleartext
-  replies (`App::Comms::dispatchCleartext()`, rare, one-off), where
+  replies (`Core::Comms::dispatchCleartext()`, rare, one-off), where
   silently dropping the reply would defeat the safety rump's purpose. Both
   now append the SAME trailing `\n` delimiter (§2); the split that
   survives is bounded-wait-vs-drop-on-full by how often and how critically
@@ -236,7 +236,7 @@ hardware to catch up, not a scheduling primitive).
   `.claude/rules/coding-standards.md`'s "external/vendor function names
   are excluded" clause — vendor names are exempt from project naming
   rules.
-- **`App::Transport` (from `app/`):** `com/` is consumed BY `app/comms.h`'s
+- **`Core::Transport` (from `app/`):** `com/` is consumed BY `app/comms.h`'s
   `SerialTransport`/`RadioTransport` adapters, not the other way around;
   `com/` has no include on `app/`. See [../app/DESIGN.md](../app/DESIGN.md).
 

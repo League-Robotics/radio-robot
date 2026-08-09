@@ -12,9 +12,9 @@ command through the REAL host-side byte-level codec
 ``SimLoop.move()``/``serial_conn.py`` use for every wire-bound command,
 never a stub or a hand-rolled substitute), pushes the resulting bytes
 into the REAL compiled firmware (``TestSim::SimHarness`` -> the real
-``App::Comms::pump()``/``decodeBinaryFrame()`` -> the real generated
+``Core::Comms::pump()``/``decodeBinaryFrame()`` -> the real generated
 ``msg::wire::decode()`` -> real dispatch), and reads the reply back out
-through the REAL firmware encoder (``App::Telemetry::emit()`` -> real
+through the REAL firmware encoder (``Core::Telemetry::emit()`` -> real
 ``msg::wire::encode()`` + real ``WireRuntime`` COBS/CRC) and the REAL host
 decoder (``robot_radio.io.wire_codec.decode_frame()`` + real
 ``pb2.ReplyEnvelope.FromString()``) -- ``SimLoop._decode_reply_frame()``,
@@ -246,7 +246,7 @@ def _build_set_field_frame(corr_id: int, *, kp: float) -> "tuple[bytes, bytes, b
     branch, acks unconditionally: no configuration-completeness gate
     guards CONFIG/SET_FIELD the way one guards MOVE (that gate is
     ``handleMove()``-only, robot_loop.cpp:217). ``kp`` maps onto
-    ``WheelControl.pid_kp`` (App::Drive's unified wheel-speed controller,
+    ``WheelControl.pid_kp`` (Core::DifferentialDrive's unified wheel-speed controller,
     130-005) -- the direct successor of the old MotorConfigPatch.kp this
     function pushed."""
     from robot_radio.io.wire_codec import encode_frame
@@ -500,7 +500,7 @@ def test_move_completion_ack_arrives_on_a_later_frame_with_ack_corr_equal_to_mov
 def test_ack_ring_carries_a_four_command_burst_without_loss():
     """124-011: 008's own encoding-layer test
     (``scenarioAckRingEvictsOldestPastDepthAndPreservesOrder``,
-    app_telemetry_harness.cpp) already proves ``App::Telemetry``'s ring
+    app_telemetry_harness.cpp) already proves ``Core::Telemetry``'s ring
     itself evicts oldest-first past depth 4 -- this is the END-TO-END
     counterpart the issue's Testing section asks for: four DISTINCT STOP
     commands (depth-4, the ring's own declared capacity, telemetry.proto's
@@ -514,7 +514,7 @@ def test_ack_ring_carries_a_four_command_burst_without_loss():
     silently lost to a same-cycle-adjacent burst the way the issue's
     original (denied) claim alleged for enqueue acks specifically."""
     corr_ids = [70001, 70002, 70003, 70004]
-    assert len(corr_ids) == 4, "matches App::kAckRingDepth (telemetry.h) -- update together if it changes"
+    assert len(corr_ids) == 4, "matches Core::kAckRingDepth (telemetry.h) -- update together if it changes"
 
     loop = _make_loop()
     try:
@@ -546,7 +546,7 @@ def test_ack_ring_carries_a_four_command_burst_without_loss():
 
 def test_ack_corr_id_near_28_bit_packed_ceiling_round_trips_without_truncation():
     """124-011 (ticket's own "check for other corr_id sources that could
-    exceed 28 bits" instruction): ``App::Telemetry::pushAckRing()``
+    exceed 28 bits" instruction): ``Core::Telemetry::pushAckRing()``
     (telemetry.cpp) packs ``(corrId << kAckErrBits) | errCode`` into a bare
     ``uint32_t`` -- ``kAckErrBits == 4``, so ``corrId`` genuinely has a
     28-bit ceiling (``corrId < 2**28``) before the left-shift itself

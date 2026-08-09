@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """move_protocol_bench.py -- ticket 116-010's own bench-gate script for the
-MOVE-protocol queue/stop-condition/response surface (`App::MoveQueue`,
+MOVE-protocol queue/stop-condition/response surface (`Core::MoveQueue`,
 `Motion::StopCondition`, `RobotLoop::handleMove()`/`handleStop()`/
 `handleConfig()`) that `twist_drive.py` (110-007's single-shot smoke test)
 does not exercise: distance/angle stop conditions, the `wheels` velocity
@@ -18,7 +18,7 @@ STREAM arm to arm -- see `protocol.py`'s own module docstring).
 
 Distance/angle stop conditions and the "encoders track sign/magnitude"
 checks in this file depend on a LIVE motor bus (`Telemetry.flags` bits
-3/4, `conn_left`/`conn_right`) -- `App::Odometry::pathLength()`/`theta()`
+3/4, `conn_left`/`conn_right`) -- `Core::Odometry::pathLength()`/`theta()`
 are both derived from real encoder deltas, so a disconnected bus makes a
 DISTANCE/ANGLE `Move` fall back to ending via its `timeout` backstop
 instead of its nominal stop condition (never a false pass: this script

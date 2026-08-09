@@ -661,14 +661,14 @@ void scenarioSampleTimeReflectsLastRealReadAttemptNotCurrentNow() {
 
 // (The former scenario 9 exercised Hal::Otos::feedSyntheticSample() --
 // the 120-002 FAKE_OTOS build seam. That method is deleted: synthesis now
-// lives in App::FakeOtos (app/fake_otos.h), covered by its own harness
+// lives in Core::FakeOtos (app/fake_otos.h), covered by its own harness
 // app_fake_otos_harness.cpp / test_app_fake_otos.py. The real leaf below no
 // longer has any synthetic-sample surface.)
 
 // 10. scaleToRegister() (132-010, trap 3, the-configuration-object.md):
 //     pure math, no bus traffic -- exercised directly now that it is a
 //     Devices::-namespace-scope free function (moved out of RealOtos's
-//     private section so App::configureOtos(), app/boot_calibration.cpp,
+//     private section so Core::configureOtos(), app/boot_calibration.cpp,
 //     can share this EXACT conversion with RealOtos::begin() below,
 //     otos.cpp). Before this move, a test could only reach this formula by
 //     duplicating it (this project's established fallback for a private

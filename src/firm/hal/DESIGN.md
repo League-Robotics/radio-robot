@@ -35,7 +35,7 @@ hal/
 
 Implementations all live in `hardware/` (or, for a part physically welded
 to one compute board, in `platform/<target>/hardware/`). The one deliberate
-exception is `App::FakeOtos` — see §4.
+exception is `Core::FakeOtos` — see §4.
 
 `device_types.h`/`device_config.h` are the vocabulary this whole layer
 speaks in: plain aggregates, HAL-local counterparts of the equivalent
@@ -71,7 +71,7 @@ before:
 1. **`Hal::Motor` is duty-commanded, not angular.** Its one command verb is
    `setDuty()` (open loop, `[-1, 1]`). There is no closed-loop
    angular-velocity entry point to build `Wheel` on top of.
-2. **The wheel-speed control law lives in `App::Drive`** — `fastPid()`
+2. **The wheel-speed control law lives in `Core::DifferentialDrive`** — `fastPid()`
    plus the Stage A/B/C correction, adaptation and stall machinery in
    `app/drive.cpp`. `Motion::WheelVelocityPid`, which CLAUDE.md's
    architecture note still names as the owner, **does not exist**: sprint
@@ -81,13 +81,13 @@ before:
    this is the resolution, and CLAUDE.md is the stale one.
 
 So `Hal::Wheel` is not a new interface next to these; it is the
-destination of a migration that moves `App::Drive`'s control law down a
+destination of a migration that moves `Core::DifferentialDrive`'s control law down a
 layer and re-scopes it per wheel. Adding an empty `Wheel` interface now
 would create a second, competing home for wheel control while the real one
 keeps running in `app/` — the exact ambiguity this reorganization exists to
 remove.
 
-**`App::FakeOtos` implements `Hal::Otos` from `app/`, not `hardware/`.**
+**`Core::FakeOtos` implements `Hal::Otos` from `app/`, not `hardware/`.**
 The proposal expected it to land in `hardware/generic/` on the grounds that
 it has "zero bus or board dependency (pure math over `Odometry` +
 trackWidth)". That is true about the *bus* and wrong about the

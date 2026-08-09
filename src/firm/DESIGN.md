@@ -19,7 +19,7 @@ integration, or sprint 128's deletion of the resulting dead `Motion::
 WheelSink`/`Motion::MoveQueue`/`Motion::StopCondition`/`Motion::
 VelocityShaper` generation (`docs/design/design.md` §2/§5) — its module
 list and dependency diagram below still describe the pre-122 shape
-(`App::MoveQueue`/`App::Odometry`/`App::StateEstimator`,
+(`Core::MoveQueue`/`Core::Odometry`/`Core::StateEstimator`,
 `src/firm/kinematics/`, a small `src/firm/motion/`); `docs/design/design.md`
 is the current, reconciled source for all of that restructuring. Only
 this file's wire-framing content (§4) is kept current — updated again
@@ -36,7 +36,7 @@ and no jerk-limited trajectory solver on this side: sprint 115
 ("MOVE protocol cutover", S2) replaced the interim TWIST+deadman surface
 with the bounded, queued `Move` command rather than reviving it, and
 every motion is now structurally self-bounding. Sprint 117
-("predict-to-now estimator v1") added `App::StateEstimator`, a passive
+("predict-to-now estimator v1") added `Core::StateEstimator`, a passive
 module that extrapolates wheel/body state from the telemetered readings
 but does **not** yet drive motion (the trajectory controller that will
 consume it is a later sprint, gated on this one being bench-proven).
@@ -62,7 +62,7 @@ One row per one-level-down directory, each linking to its own co-located
 
 | Subsystem | Role |
 |---|---|
-| [`app/`](app/DESIGN.md) | The single cooperatively-timed control loop (`App::RobotLoop`) and its passive modules: Comms, Telemetry, Drive, Odometry, MoveQueue, StateEstimator, Preamble. |
+| [`app/`](app/DESIGN.md) | The single cooperatively-timed control loop (`Core::RobotLoop`) and its passive modules: Comms, Telemetry, Drive, Odometry, MoveQueue, StateEstimator, Preamble. |
 | [`com/`](com/DESIGN.md) | ARM-only raw transports: USB CDC serial, the micro:bit radio, persisted radio-channel storage. |
 | [`config/`](config/DESIGN.md) | Generated boot configuration — per-robot calibration baked at build time from `data/robots/active_robot.json`. |
 | [`devices/`](devices/DESIGN.md) | I2C-attached device leaves (Nezha motors, OTOS, color/line sensors), the shared `MotorArmor` policy, the velocity PID, and the pure `I2CBus`/`Clock`/`Sleeper` hardware seams. |
@@ -79,24 +79,24 @@ for the rule change that made it obsolete.)
 
 ## 3. Architecture — One Cooperatively-Timed Loop
 
-A single cooperatively-timed loop (`App::RobotLoop`) owns **all** I2C bus
+A single cooperatively-timed loop (`Core::RobotLoop`) owns **all** I2C bus
 access and **all** timing, calling into passive modules that never sleep
 and never touch the bus on their own. This replaced an earlier
 subsystem/message-dispatch stack (deleted in sprints 102–107).
 
 Flow of one cycle, at orientation altitude:
 
-1. **Comms in** — `App::Comms` polls the two transports (serial, radio)
+1. **Comms in** — `Core::Comms` polls the two transports (serial, radio)
    for one complete `\n`-terminated line, parses its `<COMMAND>` prefix
    and dispatches by the generated registry's binary/cleartext flag
    (sprint 124 protocol v5 — supersedes the pre-124 `0x00`-delimited
    frame-vs-HELLO/PING-text-rump demux this step used to describe), then
    decodes a binary command line into a `msg::CommandEnvelope`.
 2. **Dispatch** — the loop's own switch acts on the command: a `Move`
-   enqueues onto `App::MoveQueue` (1 active + 4 pending; `replace=true`
+   enqueues onto `Core::MoveQueue` (1 active + 4 pending; `replace=true`
    flushes pending and preempts the active `Move`, `replace=false`
    enqueues or acks `ERR_FULL` past 4 pending), which stages the active
-   motion's velocity onto `App::Drive` and drives its own
+   motion's velocity onto `Core::DifferentialDrive` and drives its own
    `Motion::StopCondition`; a `Stop` flushes the queue and halts `Drive`
    immediately; config/queries reply via the primary telemetry frame's
    bounded ack ring (sprint 124 ticket 008 deleted the older single
@@ -107,10 +107,10 @@ Flow of one cycle, at orientation altitude:
    `runAndWait(gap, body)` blocks whose wait time is borrowed for other
    bounded work (OTOS sampling, odometry integration, telemetry
    assembly).
-4. **State out** — `App::Odometry` integrates encoder deltas through
-   `BodyKinematics::forward()`; `App::StateEstimator` (117) ingests the
+4. **State out** — `Core::Odometry` integrates encoder deltas through
+   `BodyKinematics::forward()`; `Core::StateEstimator` (117) ingests the
    same cycle's staged `Types::RobotState` and refreshes its wheel/body
-   zero-order-hold predict-to-now estimates; `App::Telemetry` projects
+   zero-order-hold predict-to-now estimates; `Core::Telemetry` projects
    `RobotState` and emits the ONE primary TLM frame through Comms — there
    is no second/secondary frame any more (`msg::TelemetrySecondary` is
    deleted, sprint 124 ticket 009).
@@ -121,7 +121,7 @@ Flow of one cycle, at orientation altitude:
    block alternates line/colour by cycle parity, so a longer emit floor
    aliases with it and one sensor stops being reported (`app/telemetry.h`).
 
-Boot is a separate loop: `App::Preamble` steps per-device detection (one
+Boot is a separate loop: `Core::Preamble` steps per-device detection (one
 bounded probe per pass) while telemetry frames report detection status;
 command consumption starts only when `preamble.done()`.
 
@@ -228,11 +228,11 @@ below are the firmware-tree-specific ones.)
   files must compile under `-DHOST_BUILD` with no `MicroBit.h` anywhere
   in the translation unit (§4). Hardware seams are plain virtual bases.
 - **No deadman — every `Move` is structurally self-bounding:**
-  `App::MoveQueue::tick()` runs unconditionally every cycle and drains
+  `Core::MoveQueue::tick()` runs unconditionally every cycle and drains
   to `Drive::stop()` once the active `Move`'s stop condition or
   `timeout` fires and nothing is pending — an emergent property of every
   queued command carrying its own bound, not a second, independently
-  timed staleness timer. `App::Deadman` does not exist in this tree, and
+  timed staleness timer. `Core::Deadman` does not exist in this tree, and
   no ad hoc watchdog belongs anywhere in the firmware.
 - **Wire compatibility outranks naming:** wire key strings, TLM field
   tokens, reply tag strings, and the `DEVICE:NEZHA2:…` banner format are
@@ -258,22 +258,22 @@ below are the firmware-tree-specific ones.)
 **Landed (the current shape of this tree):**
 
 - **115 (gut-to-minimal-firmware S1):** `Motion::Executor`/
-  `Motion::JerkTrajectory`/`vendor/ruckig`, `App::Pilot`, and
-  `App::HeadingSource` were DELETED wholesale, along with
+  `Motion::JerkTrajectory`/`vendor/ruckig`, `Core::Pilot`, and
+  `Core::HeadingSource` were DELETED wholesale, along with
   `msg::PlannerConfig`/its own curated live-tuning message (`planner.proto` deleted).
   Tagged `pre-gut-motion-stack` for full recoverability — read that tag
   and sprint 115's own `architecture-update.md` for the pre-gut
   architecture, not this doc.
 - **116 (MOVE protocol cutover, S2):** `Twist` (arm 19) and
-  `ConfigDelta.watchdog` (field 4) are `reserved`, not reused; `App::
+  `ConfigDelta.watchdog` (field 4) are `reserved`, not reused; `Core::
   Deadman` is deleted. The new `Move` arm (21) carries its own velocity
   (twist or wheels variant), a stop condition, and a required `timeout`,
-  dispatched through `App::MoveQueue` (1 active + 4 pending) driving one
+  dispatched through `Core::MoveQueue` (1 active + 4 pending) driving one
   `Motion::StopCondition` per active `Move`. `motion/` was recreated as a
   fresh, tiny directory holding only that pure comparison logic.
   `kFlagFaultMoveTimeout` (bit 15) is wired (set on the cycle an active
   `Move` ends via `timeout` rather than its stop condition).
-- **117 (predict-to-now estimator v1):** `App::StateEstimator` ticks once
+- **117 (predict-to-now estimator v1):** `Core::StateEstimator` ticks once
   per cycle reading the same staged `Frame` — no new on-chip measurement
   storage, no bus access of its own. It holds per-wheel and body state as
   independently-valid/stale peer estimates, extrapolated
@@ -284,7 +284,7 @@ below are the firmware-tree-specific ones.)
   default). Its predictions are not exposed on the wire; validation runs
   host-side against the raw `EncoderReading`/`OtosReading` fields via a
   captured TLM-log CSV. HISTORICAL as of 132-013 (patch-surface
-  retirement) / 128-016 (App::StateEstimator itself deleted as dead
+  retirement) / 128-016 (Core::StateEstimator itself deleted as dead
   code): the ESTIMATOR group (robot_config.proto's `Estimator`) still
   decodes on the wire for read-back but reaches no live consumer
   (Configurator::install(ESTIMATOR) permanently returns

@@ -525,7 +525,7 @@ def rotation_calibration_for_config(cfg: dict):
 def estimator_config_for_config(cfg: dict):
     """Return (heading_otos, omega_otos, staleness) for the
     EstimatorBootConfig struct (117, predict-to-now estimator v1) --
-    App::StateEstimator's fail-closed boot-time fusion-weight defaults.
+    Core::StateEstimator's fail-closed boot-time fusion-weight defaults.
 
     REQUIRED as of ticket 003 -- the SAME fail-closed discipline sprint 114
     established for output_deadband_for_config()/reversal_dwell_for_config()
@@ -561,7 +561,7 @@ def wheel_correction_for_config(cfg: dict):
     Config::DriveBootConfig.
 
     measured = gain*commanded + intercept, per wheel per direction of
-    approach, from docs/design/wheel-speed-command-mapping.md. App::Drive
+    approach, from docs/design/wheel-speed-command-mapping.md. Core::DifferentialDrive
     inverts it to seed the feedforward: command = (desired-intercept)/gain.
 
     The correction is defined RELATIVE to the duty_per_speed constant it was
@@ -589,11 +589,11 @@ def wheel_correction_for_config(cfg: dict):
 def drive_config_for_config(cfg: dict):
     """Return (duty_per_speed_left, duty_per_speed_right, crawl_pulse) for
     Config::DriveBootConfig (command-ingestion-ring-buffered-comms-
-    subsystem-routing-two-stops.md §6) -- App::Drive's open-loop wheel
+    subsystem-routing-two-stops.md §6) -- Core::DifferentialDrive's open-loop wheel
     calibration and its crawl-shaper amplitude.
 
     These were HARD-CODED in C++ before this change: the duty-per-speed pair
-    as member initializers on App::Drive itself, the crawl amplitude as a
+    as member initializers on Core::DifferentialDrive itself, the crawl amplitude as a
     bare setCrawlPulse() call in main.cpp. That made one robot's gearboxes,
     on one battery, measured on one evening, the compiled-in default every
     other robot silently inherited -- and changing it meant editing a class
@@ -605,7 +605,7 @@ def drive_config_for_config(cfg: dict):
     All three REQUIRED, same fail-closed posture as every other field this
     generator bakes: a robot JSON missing any of them fails codegen loudly
     rather than shipping a boot image whose wheel calibration came from a
-    different robot. App::Drive itself now carries NO calibration defaults
+    different robot. Core::DifferentialDrive itself now carries NO calibration defaults
     at all -- an unconfigured Drive refuses to drive (drive.h), the same
     posture RobotLoop's `configured_` gate already takes for motion
     commands.
@@ -631,7 +631,7 @@ def wheel_controller_config_for_config(cfg: dict) -> dict:
     named `wheel_control` (matching robot_config.proto's WheelControl
     message field names exactly).
 
-    App::Drive's unified three-timescale wheel-speed controller: Stage
+    Core::DifferentialDrive's unified three-timescale wheel-speed controller: Stage
     B's wire-tunable fast-PID gains (pid_kp/ki/i_max/kaff/max, plus
     133-002's pos_err_max) and Stage C/deficit-flag's generated-constant
     bounds (v_min/bias_max/tau_adapt/a_steady/deficit_threshold/
@@ -749,7 +749,7 @@ def navigator_config_for_config(cfg: dict) -> dict:
     carries (robot_config.proto's Navigator message, 135-004), read from
     the robot JSON's `navigator` block. `track_width` is deliberately NOT
     read/returned here -- NavigatorLimits::trackWidth is sourced from
-    Config::Robot::effectiveTrackWidth() at App::configureNavigator() time
+    Config::Robot::effectiveTrackWidth() at Core::configureNavigator() time
     (config/robot.h), not duplicated as a second, independently-tunable
     copy of the trackwidth/rotational_slip pair Geometry already owns
     (configuration-discipline.md: "one file, one truth").
@@ -1215,7 +1215,7 @@ msg::Otos defaultOtosGroup() {{
     // geometry.odometry_offset_mm.{{x,y,yaw_rad}}, calibration.
     // otos_linear_scale/otos_angular_scale -- otos_boot_config_values()
     // above. These are the config MULTIPLIER domain (1.0 = no correction),
-    // same as the robot JSON -- App::configureOtos() (app/boot_calibration.
+    // same as the robot JSON -- Core::configureOtos() (app/boot_calibration.
     // cpp) converts through Devices::scaleToRegister() before reaching the
     // chip, the SAME conversion RealOtos::begin() applies to this baked
     // value at boot (132-010 closed the live/boot domain mismatch, trap 3,
@@ -1242,7 +1242,7 @@ msg::Estimator defaultEstimatorGroup() {{
 msg::Navigator defaultNavigatorGroup() {{
     // navigator.* (navigator_config_for_config() above) -- Motion::
     // NavigatorLimits' own configuration group (135-004). track_width is
-    // NOT baked here -- App::configureNavigator() (app/boot_calibration.cpp)
+    // NOT baked here -- Core::configureNavigator() (app/boot_calibration.cpp)
     // sources it from Config::Robot::effectiveTrackWidth() instead, the
     // SAME derived value Drive/Odometry/PlannerLimits already use.
     msg::Navigator cfg;

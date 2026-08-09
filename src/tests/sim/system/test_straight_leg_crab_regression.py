@@ -6,7 +6,7 @@ used to root-cause and confirm the straight-leg-crab fix (see
 and ``docs/code_review/2026-07-22-turn-execution-review.md`` §9).
 
 118-001's schedule restore (commit ``3189086f``) introduced two coupled
-defects in ``src/firm/app/robot_loop.cpp``'s ``RobotLoop::cycle()``:
+defects in ``src/firm/core/robot_loop.cpp``'s ``RobotLoop::cycle()``:
 
 - **A -- one-cycle L/R actuation skew.** ``drive_.tick()`` sat BETWEEN
   ``motorL_.tick()`` and ``motorR_.tick()``, so L always wrote duty from a

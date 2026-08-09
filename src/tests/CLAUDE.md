@@ -18,7 +18,7 @@ one CI gate:
   of history, not a real domain boundary). 077-006 created only the skeleton
   (`unit/`, `system/`, `conftest.py`); sprint 105 built the real harness on
   top of it:
-  - `unit/` — per-module `App::`/`Devices::` host-build harnesses (one
+  - `unit/` — per-module `Core::`/`Devices::` host-build harnesses (one
     `*_harness.cpp` + `test_*.py` pair per module, e.g.
     `test_app_robot_loop.py`, `test_devices_motor.py`) — each compiles its
     own throwaway binary via `subprocess`, no shared build step.
@@ -28,10 +28,10 @@ one CI gate:
     fault-injection knobs (motor disconnect, encoder wedge, encoder
     dropout — 105-005, SUC-022).
   - `support/` — `TestSim::SimApi` (`sim_api.h`, 105-004, SUC-021): wires
-    the REAL `App::RobotLoop` against the REAL plant and a scripted
+    the REAL `Core::RobotLoop` against the REAL plant and a scripted
     `Devices::I2CBus` into one reusable, steppable harness other test
     binaries link against, plus `TestSupport::FakeTransport` (the
-    `App::Transport` HOST_BUILD double, 105-002) and a hand-written wire
+    `Core::Transport` HOST_BUILD double, 105-002) and a hand-written wire
     codec (`wire_test_codec.h`) for decoding outbound telemetry / encoding
     inbound commands in tests.
   - `system/` — whole-robot scenario tests built on `SimApi`: the

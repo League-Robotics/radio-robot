@@ -182,7 +182,7 @@ void NezhaMotor::writeRawDuty(float duty)
 
     // SIGMA-DELTA on the rounding residual (133-002; measured on vevov
     // 2026-08-03). The brick takes an INTEGER PERCENT, and at
-    // App::Drive::kDutyPerSpeed = 0.001182 one count is 8.46 mm/s -- 5.6%
+    // Core::DifferentialDrive::kDutyPerSpeed = 0.001182 one count is 8.46 mm/s -- 5.6%
     // of a 150 mm/s command. Measured: plateau velocity clusters at
     // exactly -1/0/+1 counts (sd 8.0 mm/s against an 8.46 mm/s step), and
     // the residual left/right distance imbalance being chased was 0.43 of
@@ -193,7 +193,7 @@ void NezhaMotor::writeRawDuty(float duty)
     // Carrying the rounding residual into the next tick makes the
     // TIME-AVERAGED percent equal the fractional duty actually wanted, so
     // the loop gets sub-count resolution out of the same integer wire
-    // field. Same idea as App::Drive::crawlDuty()'s Bresenham
+    // field. Same idea as Core::DifferentialDrive::crawlDuty()'s Bresenham
     // accumulator, applied to EVERY duty rather than only sub-deadband
     // ones.
     //
@@ -221,7 +221,7 @@ void NezhaMotor::writeRawDuty(float duty)
         return;
     }
 
-    // [us] App::RobotLoop::kCycle (32 ms) - 5 ms jitter margin. HAND-SYNCED:
+    // [us] Core::RobotLoop::kCycle (32 ms) - 5 ms jitter margin. HAND-SYNCED:
     // devices/ may not include app/ headers (src/firm/DESIGN.md's devices-
     // isolation invariant), so this literal must be updated whenever kCycle
     // is -- see kCycle's own doc comment, which lists this as one of the

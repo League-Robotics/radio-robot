@@ -148,7 +148,7 @@ def test_configure_from_robot_tovez_nocal_changes_measurable_drive_behavior():
     all (Decision 3, sprint.md) -- there is no more "the sim's own hardcoded
     defaults" for an unconfigured ``SimLoop`` to fall back to. An
     unconfigured loop's every TWIST/MOVE is refused (``ACK_STATUS_ERR`` /
-    ``ERR_NOT_CONFIGURED`` -- App::RobotLoop's new config-completeness
+    ``ERR_NOT_CONFIGURED`` -- Core::RobotLoop's new config-completeness
     gate), so its plant NEVER moves off the origin. This test now proves the
     more direct, and more load-bearing, half of that same claim:
     ``configure_from_robot()`` is what actually flips a ``SimLoop`` from

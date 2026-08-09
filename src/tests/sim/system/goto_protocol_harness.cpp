@@ -8,13 +8,13 @@
 // NEW binary command-plane arm ticket 004 landed (GO_TO/Motion::Navigator)
 // instead of MOVE/Motion::Planner.
 //
-// Exercises the REAL App::RobotLoop (now including Motion::Navigator)
+// Exercises the REAL Core::RobotLoop (now including Motion::Navigator)
 // against the REAL TestSim::SimPlant, through the actual GO_TO wire codec
 // (TestSim::SimHarness::injectGoto() -> TestSupport::armorGotoCommand()) --
 // no ARM hardware, no internal accessor peeked out of process for any
 // LOAD-BEARING assertion. Every scenario below asserts ONLY on DECODED
 // telemetry: the bounded ack ring (acks_/acks_count, packed
-// corr_id<<4|err), the flags word (App::kFlagActive/kFlagOtosConnected/
+// corr_id<<4|err), the flags word (Core::kFlagActive/kFlagOtosConnected/
 // kFlagFaultMoveTimeout), and the decoded otos/pose fields -- ticket 005's
 // own acceptance criterion, matching move_protocol_harness.cpp's own
 // discipline for ITS primary assertions (a handful of scenarios there also
@@ -31,7 +31,7 @@
 //      PRECEDING plain MOVE (bypassing the Navigator entirely) turns the
 //      robot's heading well away from zero and lands it at rest; the
 //      ROBOT-frame target is then computed independently here, mirroring
-//      App::RobotLoop::handleGoto()'s own world-resolution formula against
+//      Core::RobotLoop::handleGoto()'s own world-resolution formula against
 //      the acceptance-time OTOS reading (captured from decoded telemetry,
 //      not sim ground truth); the robot's final decoded OTOS position is
 //      asserted against THAT fixed point -- a continuously re-resolved
@@ -61,7 +61,7 @@
 #include <string>
 #include <vector>
 
-#include "app/telemetry.h"
+#include "core/telemetry.h"
 #include "bench_test_config.h"
 #include "sim_harness.h"
 #include "wire_test_codec.h"
@@ -215,12 +215,12 @@ void scenarioWorldFrameGotoArrivesAndSettles() {
   checkTrue(sawCompletionAck, "the goto's own completion ack (id == kGotoId) reached the ack ring");
   checkUintEq(completionErr, 0, "the completion ack's err is OK (arrival, not an aborted/faulted goto)");
 
-  checkTrue((frames.back().telemetry.flags & App::kFlagActive) == 0,
+  checkTrue((frames.back().telemetry.flags & Core::kFlagActive) == 0,
             "the robot is at rest (kFlagActive clear) by the end of the run");
-  checkTrue((frames.back().telemetry.flags & App::kFlagFaultMoveTimeout) == 0,
+  checkTrue((frames.back().telemetry.flags & Core::kFlagFaultMoveTimeout) == 0,
             "kFlagFaultMoveTimeout stayed clear -- the goto ended by arrival, not a safety-backstop "
             "abort");
-  checkTrue((frames.back().telemetry.flags & App::kFlagOtosConnected) != 0,
+  checkTrue((frames.back().telemetry.flags & Core::kFlagOtosConnected) != 0,
             "OTOS stayed connected -- the decoded otos reading below is valid");
 
   const float finalOtosX = msg::OtosReading::unpackX(frames.back().telemetry.otos.x);
@@ -249,7 +249,7 @@ void scenarioRobotFrameGotoResolvedOnceAtAcceptance() {
   sim.step(3);
   (void)sim.drainTelemetry();
 
-  // Step 1: a PRECEDING plain MOVE -- App::RobotLoop::handleMove(), never
+  // Step 1: a PRECEDING plain MOVE -- Core::RobotLoop::handleMove(), never
   // the Navigator -- turns the robot's heading well away from zero and
   // lands it fully at rest BEFORE the ROBOT-frame goto is ever sent. Only
   // with a genuinely nonzero heading change first do "resolved once at
@@ -272,13 +272,13 @@ void scenarioRobotFrameGotoResolvedOnceAtAcceptance() {
     for (const auto& f : onlyTelemetry(sim.drainTelemetry())) turnFrames.push_back(f);
   }
   checkTrue(!turnFrames.empty(), "telemetry decoded across the preceding turn");
-  checkTrue((turnFrames.back().telemetry.flags & App::kFlagActive) == 0,
+  checkTrue((turnFrames.back().telemetry.flags & Core::kFlagActive) == 0,
             "the preceding turn landed and the robot is at rest before the ROBOT-frame goto is "
             "sent");
-  checkTrue((turnFrames.back().telemetry.flags & App::kFlagOtosConnected) != 0,
+  checkTrue((turnFrames.back().telemetry.flags & Core::kFlagOtosConnected) != 0,
             "OTOS stayed connected through the turn -- the acceptance-time reading below is valid");
 
-  // The EXACT OTOS reading App::RobotLoop::handleGoto() will read at
+  // The EXACT OTOS reading Core::RobotLoop::handleGoto() will read at
   // acceptance -- captured from DECODED telemetry, not sim ground truth,
   // per this ticket's own "decoded telemetry only" discipline. Heading is
   // genuinely fixed at this point (the robot is at rest, not turning), so
@@ -289,7 +289,7 @@ void scenarioRobotFrameGotoResolvedOnceAtAcceptance() {
   const float acceptHeadingRaw = msg::OtosReading::unpackHeading(turnFrames.back().telemetry.otos.heading);
 
   // Step 2: a ROBOT-frame goto, (dx, dy) relative to the CURRENT facing.
-  // Independently mirrors App::RobotLoop::handleGoto()'s own ROBOT-frame
+  // Independently mirrors Core::RobotLoop::handleGoto()'s own ROBOT-frame
   // formula (robot_loop.cpp) byte for byte: world = otos.{x,y} +
   // dx*cos(h) -+ dy*sin(h), using the SAME raw (un-negated) otos.heading
   // handleGoto() itself reads (robot_loop.cpp's own comment: "a pure
@@ -336,8 +336,8 @@ void scenarioRobotFrameGotoResolvedOnceAtAcceptance() {
   checkTrue(sawEnqueueAck, "the ROBOT-frame goto's own enqueue ack reached the wire");
   checkTrue(sawCompletionAck, "the ROBOT-frame goto's own completion ack reached the wire");
   checkUintEq(completionErr, 0, "the completion ack's err is OK");
-  checkTrue((frames.back().telemetry.flags & App::kFlagActive) == 0, "the robot settled at rest");
-  checkTrue((frames.back().telemetry.flags & App::kFlagOtosConnected) != 0,
+  checkTrue((frames.back().telemetry.flags & Core::kFlagActive) == 0, "the robot settled at rest");
+  checkTrue((frames.back().telemetry.flags & Core::kFlagOtosConnected) != 0,
             "OTOS stayed connected -- the decoded otos reading below is valid");
 
   const float finalOtosX = msg::OtosReading::unpackX(frames.back().telemetry.otos.x);
@@ -392,7 +392,7 @@ void scenarioStreamedTargetsNeverRestBeforeFinal() {
                                                // inherits a shrinking budget from an earlier target.
 
   // "At rest" here is measured off decoded ENCODER VELOCITY, not
-  // App::kFlagActive. Measured directly against this exact scenario:
+  // Core::kFlagActive. Measured directly against this exact scenario:
   // kFlagActive tracks Planner Move-SLOT occupancy, not motion -- every
   // internal-segment replace this file's own streamed updates provoke
   // (and every ordinary material-change/half-arc-refresh reissue the
@@ -432,7 +432,7 @@ void scenarioStreamedTargetsNeverRestBeforeFinal() {
         if (!atRest) hasStartedMoving = true;
         if (!sawFinalCompletion && hasStartedMoving && atRest) everRestedDuringStream = true;
 
-        if ((f.telemetry.flags & App::kFlagFaultMoveTimeout) != 0) sawFaultFlag = true;
+        if ((f.telemetry.flags & Core::kFlagFaultMoveTimeout) != 0) sawFaultFlag = true;
         for (uint8_t a = 0; a < f.telemetry.acks_count; ++a) {
           const uint32_t packed = f.telemetry.acks_[a];
           const uint32_t key = packed >> kAckErrBits;
@@ -512,7 +512,7 @@ void scenarioStreamedTargetsNeverRestBeforeFinal() {
                                 "err == 0) reached the ack ring");
   checkUintEq(finalCompletionErr, 0, "the final completion ack's err is OK");
   checkTrue(!frames.empty(), "telemetry decoded across the whole streamed run");
-  checkTrue((frames.back().telemetry.flags & App::kFlagActive) == 0,
+  checkTrue((frames.back().telemetry.flags & Core::kFlagActive) == 0,
             "the robot is at rest (kFlagActive clear too) once it reaches the FINAL target -- and, "
             "per every check above, not before");
 }

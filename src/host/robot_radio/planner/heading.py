@@ -18,7 +18,7 @@ Reads `robot_config.geometry.otos_untrusted` ONCE, at construction, to fix
 the measured-heading source for the corrector's entire lifetime:
 
 - `otos_untrusted=True`  -> `TLMFrame.pose` (encoder-derived dead-reckoned
-  heading, `App::Odometry::integrate()` on the firmware side -- see that
+  heading, `Core::Odometry::integrate()` on the firmware side -- see that
   method's own header for the midpoint-arc integration it performs). This
   is the bench-rig case ("rig = encoder heading") -- the rig's OTOS sensor
   sits on a mechanically decoupled 360-degree servo mount, so its reported

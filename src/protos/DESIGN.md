@@ -47,7 +47,7 @@ unbounded wire surface.
 (the `Move` command, jerk-trajectory profile parameters, `PlannerConfig`)
 — are **deleted**, not merely unused: 115-002/115-003
 (gut-to-minimal-firmware S1) removed them along with their only
-consumers (`Motion::Executor`, `App::Pilot`). `envelope.proto`'s
+consumers (`Motion::Executor`, `Core::Pilot`). `envelope.proto`'s
 `CommandEnvelope.cmd` oneof `reserved`s field number `20` (the old `Move`
 arm) rather than reusing it — sprint 116's planned MOVE protocol
 reintroduces a `Move`-shaped arm at a fresh number, never 20.
@@ -91,7 +91,7 @@ reintroduces a `Move`-shaped arm at a fresh number, never 20.
 **Why a curated `ConfigDelta`, not the full generated config messages.**
 `config.proto`'s header comment explains the shape decision directly:
 the wire config plane exposes only the ~15 keys
-`src/firm/app/robot_loop.cpp`'s `handleConfig` actually understands
+`src/firm/core/robot_loop.cpp`'s `handleConfig` actually understands
 (`MotorConfigPatch`/`OtosConfigPatch`/`DrivetrainConfigPatch`/
 `WatchdogConfigPatch`), each field `optional` so presence signals "set
 this," rather than the full generated `MotorConfig`/`DrivetrainConfig`

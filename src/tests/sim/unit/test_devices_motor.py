@@ -14,7 +14,7 @@ assert it exits 0.
 125-003: ``devices/velocity_pid.cpp`` is no longer compiled into this
 harness — ``Devices::NezhaMotor``'s embedded velocity PID was deleted
 outright (relocated to a motion-local wheel-velocity PID class, itself
-deleted outright by 128-015 -- App::Drive holds no controller of its own;
+deleted outright by 128-015 -- Core::DifferentialDrive holds no controller of its own;
 see ``src/firm/motion/DESIGN.md``'s "wheel control generations" note).
 
 Migrated by sprint 108 ticket 009 off the deleted ``src/firm/devices/

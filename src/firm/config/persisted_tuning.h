@@ -31,7 +31,7 @@
 //
 // Mirrors com/radio_channel.h's own MicroBitStorage precedent, except that
 // precedent #includes MicroBit.h directly and is not host-testable at
-// all. This module instead follows app/comms.h's App::Transport pattern
+// all. This module instead follows app/comms.h's Core::Transport pattern
 // -- a plain virtual TuningStore base (never an #ifdef HOST_BUILD fork)
 // plus ONE concrete ARM-only adapter, itself guarded -- so
 // persisted_tuning.h/.cpp never drag in MicroBit.h under HOST_BUILD, only
@@ -42,7 +42,7 @@
 //      deserializeSnapshot(), shouldWipe() -- pure, no I/O, no
 //      MicroBitStorage dependency at all. Host-testable
 //      (src/tests/sim/unit/persisted_tuning_harness.cpp).
-//   2. TuningStore -- the abstract persistence seam App::RobotLoop saves
+//   2. TuningStore -- the abstract persistence seam Core::RobotLoop saves
 //      through and main.cpp's boot sequence loads/wipes through. Also
 //      host-testable via a trivial mock (app_robot_loop_harness.cpp's own
 //      write-policy scenario) -- it is a plain interface, no hardware.
@@ -113,7 +113,7 @@ constexpr uint32_t kConfigSchemaVersion = 3;
 //
 //   MOTORS -- travel_calib_left/travel_calib_right ONLY, matching the old
 //   curated Motor live-tuning message's travel_calib precedent exactly
-//   (the one MotorConfig field App::configureMotor() still live-applies
+//   (the one MotorConfig field Core::configureMotor() still live-applies
 //   post-construction, boot_calibration.h's own doc comment).
 //   fwd_sign/output_deadband/reversal_dwell/vel_* never persisted before
 //   and still don't.
@@ -199,14 +199,14 @@ TuningSnapshot deserializeSnapshot(const Blob& blob);
 // inline `!=` wherever it is needed.
 bool shouldWipe(uint32_t storedVersion, uint32_t currentVersion);
 
-// TuningStore -- the persistence seam App::Configurator::persistIfEligible()
+// TuningStore -- the persistence seam Core::Configurator::persistIfEligible()
 // saves through and main.cpp's boot sequence loads/wipes through. Plain
-// virtual base (not an #ifdef HOST_BUILD fork) -- mirrors App::Transport
+// virtual base (not an #ifdef HOST_BUILD fork) -- mirrors Core::Transport
 // (app/comms.h): this header/its .cpp never drag in MicroBit.h under
 // HOST_BUILD; only the concrete ARM adapter below is guarded.
 //
 // No sim/host implementation of this interface exists anywhere in this
-// tree, by design -- the sim has no flash to persist to. App::RobotLoop
+// tree, by design -- the sim has no flash to persist to. Core::RobotLoop
 // treats a null TuningStore* as "persistence disabled," which is every
 // sim/test composition root's own case. A test that DOES want to observe
 // the write-policy seam (app_robot_loop_harness.cpp's own debounce

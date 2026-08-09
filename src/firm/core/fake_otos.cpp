@@ -1,8 +1,8 @@
-#include "app/fake_otos.h"
+#include "core/fake_otos.h"
 
 #include "kinematics/differential_kinematics.h"
 
-namespace App {
+namespace Core {
 
 FakeOtos::FakeOtos(const Motion::Odometry& odom, Hal::Motor& left, Hal::Motor& right,
                     float trackWidth)
@@ -20,7 +20,7 @@ void FakeOtos::getOffset(float& x, float& y, float& heading)
 void FakeOtos::tick(uint64_t nowUs)
 {
     // Body twist from the wheel velocities -- the SAME Kinematics::DifferentialKinematics::forward()
-    // fusion App::RobotLoop::updateTlm() uses to stage frame_.twist. v_y stays
+    // fusion Core::RobotLoop::updateTlm() uses to stage frame_.twist. v_y stays
     // 0: forward() reports only (v, omega) for a differential drive.
     float v_x = 0.0f;
     float omega = 0.0f;
@@ -36,4 +36,4 @@ void FakeOtos::tick(uint64_t nowUs)
     sampleTimeUs_ = nowUs;
 }
 
-}  // namespace App
+}  // namespace Core

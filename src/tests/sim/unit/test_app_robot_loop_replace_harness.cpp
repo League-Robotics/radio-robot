@@ -46,7 +46,7 @@
 //   and the question those two cases characterized no longer has a
 //   subject. Removed together (case 4 measured itself against case 3's
 //   own peak, so neither survives alone) rather than repointed: the
-//   equivalent question for App::Drive's OWN bias/fast-PID state
+//   equivalent question for Core::DifferentialDrive's OWN bias/fast-PID state
 //   surviving a Move replace is a different scenario, against a
 //   different (RobotLoop-level) harness tier, and is not part of this
 //   ticket's acceptance criteria -- see app_drive_harness.cpp for Drive's
@@ -55,7 +55,7 @@
 //   The duplicate-id sanity check (scenarioDuplicateIdSanityNoOp) drives
 //   the real TestSim::SimHarness (src/firm/platform/host/sim_harness.h) instead, because
 //   the dedup short-circuit it exercises is NOT inside Motion::Planner at
-//   all -- it lives one layer up, in App::RobotLoop::handleMove()
+//   all -- it lives one layer up, in Core::RobotLoop::handleMove()
 //   (alreadyAccepted()/recordAccepted(), src/firm/app/robot_loop.cpp
 //   ~216-247), and a bare Planner has no id memory whatsoever to exercise.
 //
@@ -324,7 +324,7 @@ void scenarioHighRateReplacement() {
 // Duplicate-id sanity check (precondition smoke check only -- the FULL
 // four-rule dedup verification contract is ticket 002's scope). Resends an
 // already-accepted Move.id and confirms no additional plan change results.
-// This is App::RobotLoop::handleMove()'s own dedup short-circuit
+// This is Core::RobotLoop::handleMove()'s own dedup short-circuit
 // (alreadyAccepted()/recordAccepted(), robot_loop.cpp ~216-247) -- NOT
 // inside Motion::Planner at all, so this scenario drives the real
 // TestSim::SimHarness (the RobotLoop graph), unlike cases 1-5 above.

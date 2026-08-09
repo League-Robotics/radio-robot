@@ -21,7 +21,7 @@
 // this Navigator) is the ONE thing that may call planner_.tick() in a
 // given cycle -- two calls in one cycle would corrupt Planner-internal
 // per-cycle accounting (stallTicks, cmdLeftPrevious_, ...). The caller
-// (ticket 004's App::RobotLoop::cycle()) is expected to call EITHER
+// (ticket 004's Core::RobotLoop::cycle()) is expected to call EITHER
 // navigator_.tick(state) (a goto owns Drive) OR its own direct
 // planner_.tick(state)/update(state) pair (a plain MOVE/WHEELS owns
 // Drive) -- never both in the same cycle.

@@ -6,11 +6,11 @@
 #include "hal/motor.h"
 #include "firm/types/robot_state.h"
 
-namespace App {
+namespace Core {
 
-class Drive {
+class DifferentialDrive {
  public:
-  Drive(Hal::Motor& left, Hal::Motor& right, float trackWidth);
+  DifferentialDrive(Hal::Motor& left, Hal::Motor& right, float trackWidth);
 
   static constexpr float kDutyPerSpeed = 0.001182f;  // [duty/(mm/s)]
 
@@ -66,7 +66,7 @@ class Drive {
 
   // A stall is the drivetrain being ASKED to move and not moving -- the robot
   // is jammed against something. Unlike deficit() (the wheel turns, just too
-  // slowly) this is a HALT condition: App::RobotLoop stops the robot on it.
+  // slowly) this is a HALT condition: Core::RobotLoop stops the robot on it.
   // See robot_config.proto's WheelControl for the three-way distinction
   // against deficit and wheelFrozen.
   bool stallLeft() const { return stallLeft_; }
@@ -201,4 +201,4 @@ class Drive {
   static constexpr float kRestVelocity = 8.0f;  // [mm/s]
 };
 
-}  // namespace App
+}  // namespace Core

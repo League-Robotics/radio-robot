@@ -50,7 +50,7 @@ Four tails, each measured the same way (`--tails`, default all four):
 
     silent    the host issues one bounded `wheels()` and then STOPS TALKING.
               Nothing halts the robot but the command's own duration
-              expiring inside App::Drive -- the exact case that produced
+              expiring inside Core::DifferentialDrive -- the exact case that produced
               936 mm. "Silent" means no COMMANDS; telemetry is still read,
               which is passive and cannot influence the robot.
     estop     one `estop()`, mid-leg.
@@ -390,7 +390,7 @@ def run_tail_trial(proto: NezhaProtocol, tail: str, trial: int,
     label = f"{tail} tail, trial {trial}"
 
     # `wheels()` for every tail, not `move_wheels()`: it routes straight to
-    # App::Drive with no planner, no ramps and no odometry stop condition,
+    # Core::DifferentialDrive with no planner, no ramps and no odometry stop condition,
     # which is the path the runaway was measured on. The planner's own queue
     # would add a second thing that could stop the robot and make the tail
     # unattributable.

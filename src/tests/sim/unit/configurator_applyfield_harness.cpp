@@ -50,9 +50,9 @@
 #include <limits>
 #include <string>
 
-#include "app/boot_calibration.h"
-#include "app/configurator.h"
-#include "app/drive.h"
+#include "core/boot_calibration.h"
+#include "core/configurator.h"
+#include "core/differential_drive.h"
 #include "config/boot_config.h"
 #include "config/robot.h"
 #include "hal/motor.h"
@@ -174,11 +174,11 @@ int main() {
 
   RecordingMotor motorL, motorR;
   RecordingOtos otos;
-  App::Drive drive(motorL, motorR, /*trackWidth=*/128.0f);
+  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/128.0f);
   Motion::PlannerLimits limits;
   Motion::Planner planner(limits);
   Motion::NavigatorLimits navigatorLimits;
-  App::Configurator configurator(drive, motorL, motorR, otos, planner, navigatorLimits, /*tuningStore=*/nullptr);
+  Core::Configurator configurator(drive, motorL, motorR, otos, planner, navigatorLimits, /*tuningStore=*/nullptr);
 
   // config_ starts default-constructed (all-zero) -- applyField() is
   // exercised directly, without loadBaked(), so every scenario's
@@ -319,7 +319,7 @@ int main() {
                 "config().drive.wheel_gain_left_accel UNCHANGED by a WHEEL_CONTROL push -- "
                 "confirms the two groups are not aliased");
 
-    const App::Drive::ControlGains& gains = drive.controlGains();
+    const Core::DifferentialDrive::ControlGains& gains = drive.controlGains();
     checkFloatEq(gains.kp, 0.33f, "controlGains().kp reflects the WHEEL_CONTROL push via install(target)");
   }
 
@@ -327,7 +327,7 @@ int main() {
 
   beginScenario(
       "MOTORS field push while that side is in motion returns ERR_BUSY -- "
-      "install(target)'s existing per-side guard (App::configureMotor(), "
+      "install(target)'s existing per-side guard (Core::configureMotor(), "
       "132-007) is reached the SAME way through applyField() as it is "
       "through applyGroup()");
   {

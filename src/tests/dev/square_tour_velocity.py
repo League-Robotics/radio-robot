@@ -9,7 +9,7 @@ closed loop:
         -> motor / gearbox / wheel                        [mm/s]
 
 Per `wheel-speed-controller-moves-into-drive.md` Phase 3 (DECIDED,
-stakeholder 2026-08-01), that controller moved wholesale into App::Drive --
+stakeholder 2026-08-01), that controller moved wholesale into Core::DifferentialDrive --
 Motion::Planner sheds ALL wheel-actuation code, `Motion::WheelTrim` is
 deleted outright (no redirect stub), and its `applyTrimGains()`/
 `trimLeft()`/`trimRight()`/`trimIntegralLeft()`/`trimIntegralRight()` are
@@ -23,7 +23,7 @@ its own docstring claims to measure. Retired rather than left running:
     captured (`square_tour_velocity_trim.csv`/`_trim_sym.csv`, this
     directory) IS the historical A/B comparison point ticket 130-006's
     bench acceptance needs -- they are kept, not deleted.
-  - A successor bench script exercising App::Drive's Stage B/C controller
+  - A successor bench script exercising Core::DifferentialDrive's Stage B/C controller
     directly (bias/fast-PID observability, now on Drive's own accessors
     and the wire Telemetry frame -- see drive.h/telemetry.proto) is
     ticket 130-006's job, on real hardware.
@@ -31,7 +31,7 @@ its own docstring claims to measure. Retired rather than left running:
 Historical docstring (for context, no longer accurate as a usage guide):
 WHY A SECOND TOUR SCRIPT. square_tour_sim.py drives the plant from the
 planner's DUTY output, which the robot does not use -- RobotLoop stages
-`state.wheel*.cmdVelocity` and App::Drive converts it through its own
+`state.wheel*.cmdVelocity` and Core::DifferentialDrive converts it through its own
 calibrated map. THE DISTURBANCE. Drive was given ONE shared duty-per-speed
 constant while the two gearboxes differ (+-4.8% here, deliberately larger
 than the ~2% measured on the real robot) so the effect is visible in one
@@ -85,7 +85,7 @@ STOP_ID = 99         # move id of the tour's closing planned stop
 # so it arrives at each boundary already slow instead of coasting past.
 DECEL_LEEWAY = 0.4   # [1]
 
-# --- App::Drive's velocity -> duty map, mirrored ------------------------
+# --- Core::DifferentialDrive's velocity -> duty map, mirrored ------------------------
 # Drive holds ONE shared duty-per-speed constant plus a per-wheel,
 # per-direction affine correction. Here the correction is identity (a
 # freshly calibrated robot) and the shared constant is the mean of the two
@@ -102,7 +102,7 @@ OUTPUT_DEADBAND = 0.03  # [-1,1] data/robots/tovez.json control.output_deadband
 
 
 def driveDuty(desired: float, previous: float) -> float:
-    """App::Drive::tick() + NezhaMotor::writeShapedDuty()'s deadband boost,
+    """Core::DifferentialDrive::tick() + NezhaMotor::writeShapedDuty()'s deadband boost,
     for one wheel. `previous` selects the accel vs decel correction row
     exactly as Drive does."""
     if desired == 0.0:
@@ -493,7 +493,7 @@ def main() -> None:
     sys.exit(
         "square_tour_velocity.py is RETIRED (130-005): it exercised "
         "Motion::WheelTrim, deleted outright when the wheel-speed "
-        "controller moved into App::Drive. See this file's own module "
+        "controller moved into Core::DifferentialDrive. See this file's own module "
         "docstring for the historical baseline CSVs and the ticket "
         "130-006 successor. Not run.")
 

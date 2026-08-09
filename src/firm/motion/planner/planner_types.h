@@ -44,7 +44,7 @@ struct Move {
   // What the CALLER asked for, before any upstream rewrite of `threshold`
   // (134-001). `threshold` is the ACTUATION-sized command the profiler
   // plans against; an ingestion-side corrector may legitimately size it to
-  // something other than the request -- App::RobotLoop::handleMove()'s
+  // something other than the request -- Core::RobotLoop::handleMove()'s
   // rotation-calibration inversion does exactly that, turning a 90 deg
   // request into whatever command lands 90 deg on this plant. Both readers
   // are right and they want different numbers: the PROFILER wants the
@@ -101,7 +101,7 @@ struct Move {
 // one other reader of `settleWindow` and now falls back to its built-in
 // default allowance); `trimKp`/`trimKi`/`trimIMax`/`trimKaff`/`trimMax`
 // (the planner-side velocity trim, superseded and left dead by 130-005's
-// move of wheel actuation into App::Drive -- see above).
+// move of wheel actuation into Core::DifferentialDrive -- see above).
 struct PlannerLimits {
   // Profile ceilings: the ideal-plant magnitude bounds the trapezoid/
   // S-curve profiler plans against, body-frame linear and angular.

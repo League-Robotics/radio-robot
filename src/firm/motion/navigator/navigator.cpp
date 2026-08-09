@@ -316,7 +316,7 @@ void Navigator::issuePivotMove(const Pose& worldPose) {
   // -- see NavigatorLimits::yawSign's own comment in navigator.h.
   //
   // 135-004 "Landmine 3": this Move is issued straight into planner_.
-  // move() below, never through App::RobotLoop::handleMove() -- so it
+  // move() below, never through Core::RobotLoop::handleMove() -- so it
   // never sees that function's own per-direction rotation-calibration
   // correction (robot_loop.cpp, "the per-direction rotation gain/offset
   // is an OPEN-LOOP correction"). Correct on purpose, not a gap: that
@@ -324,7 +324,7 @@ void Navigator::issuePivotMove(const Pose& worldPose) {
   // open-loop, scrub-limited wheel estimate; with OTOS present the loop
   // already closes on optical truth and pre-distorting would make it
   // stop at the wrong place), and a Navigator pivot only ever happens
-  // with OTOS CONNECTED (App::RobotLoop::handleGoto()'s own acceptance
+  // with OTOS CONNECTED (Core::RobotLoop::handleGoto()'s own acceptance
   // gate) -- exactly the condition under which the correction would
   // already be a no-op if it were somehow reached. Do not add it here.
   const BodyOffset toTarget = bodyOffset(worldPose, target_.x, target_.y);

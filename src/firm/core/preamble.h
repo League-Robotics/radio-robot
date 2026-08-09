@@ -1,4 +1,4 @@
-// preamble.h -- App::Preamble: the boot-time device-detection driver. A
+// preamble.h -- Core::Preamble: the boot-time device-detection driver. A
 // flat sequencer over each bare leaf's OWN already-existing detection
 // entry point (NezhaMotor::begin(), Otos::begin(),
 // ColorSensorLeaf::beginStep(nowUs), LineSensorLeaf::beginStep(nowUs)) to a
@@ -78,7 +78,7 @@
 #include "hal/motor.h"
 #include "hardware/generic/real_otos.h"
 
-namespace App {
+namespace Core {
 
 class Preamble {
  public:
@@ -164,4 +164,4 @@ class Preamble {
   uint64_t otosLastAttemptUs_ = 0;  // [us]
 };
 
-}  // namespace App
+}  // namespace Core

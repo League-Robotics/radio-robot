@@ -862,7 +862,7 @@ def _emit_verb_registry_cpp(ed, lines: list[str]) -> None:
     """Append the firmware-side VerbEntry table to `lines`, following the
     `enum class Verb` _emit_enum() already appended.
 
-    `App::Comms` looks this table up by name (a linear scan over
+    `Core::Comms` looks this table up by name (a linear scan over
     `kVerbCount` rows -- the registry is small and firmware has no hash-map
     primitive) to get a verb's `(binary)` flag; ticket 005 wires that
     lookup in, not this ticket (see this file's own header comment)."""

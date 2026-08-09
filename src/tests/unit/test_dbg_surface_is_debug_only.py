@@ -34,8 +34,8 @@ import re
 import pytest
 
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
-_COMMS_CPP = _REPO_ROOT / "src" / "firm" / "app" / "comms.cpp"
-_ROBOT_LOOP_CPP = _REPO_ROOT / "src" / "firm" / "app" / "robot_loop.cpp"
+_COMMS_CPP = _REPO_ROOT / "src" / "firm" / "core" / "comms.cpp"
+_ROBOT_LOOP_CPP = _REPO_ROOT / "src" / "firm" / "core" / "robot_loop.cpp"
 _ROBOT_LOOP_H = _REPO_ROOT / "src" / "firm" / "app" / "robot_loop.h"
 _DRIVE_H = _REPO_ROOT / "src" / "firm" / "app" / "drive.h"
 

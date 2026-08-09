@@ -8,8 +8,8 @@
 // Cannot construct a REAL Platform::MicroBitI2CBus host-side (CODAL-only),
 // so this harness does not build two full RobotGraphs and diff them
 // end-to-end. Instead it proves the property that actually matters: the
-// SAME boot_calibration.h functions (App::bootPlannerLimits(),
-// App::effectiveTrackWidth(), Config::defaultDriveConfig()) are what BOTH
+// SAME boot_calibration.h functions (Core::bootPlannerLimits(),
+// Core::effectiveTrackWidth(), Config::defaultDriveConfig()) are what BOTH
 // composeRobot() call sites (src/firm/main.cpp with no overrides, and
 // this harness computing the "hardware-equivalent" values directly) would
 // read -- so comparing a freshly-booted TestSim::SimHarness's actual
@@ -20,7 +20,7 @@
 #include <cstdio>
 #include <string>
 
-#include "app/boot_calibration.h"
+#include "core/boot_calibration.h"
 #include "sim_harness.h"
 
 namespace {
@@ -68,8 +68,8 @@ int main() {
   // composeRobot() call (no overrides) would install, computed via the
   // SAME boot_calibration.h functions, independent of any I2CBus.
   const msg::DrivetrainConfig drivetrainConfig = Config::defaultDrivetrainConfig();
-  const float hwTrackWidth = App::effectiveTrackWidth(drivetrainConfig);
-  const Motion::PlannerLimits hw = App::bootPlannerLimits(drivetrainConfig, hwTrackWidth);
+  const float hwTrackWidth = Core::effectiveTrackWidth(drivetrainConfig);
+  const Motion::PlannerLimits hw = Core::bootPlannerLimits(drivetrainConfig, hwTrackWidth);
 
   TestSim::SimHarness sim;
   const Motion::PlannerLimits& simLimits = sim.planner().limits();
@@ -125,12 +125,12 @@ int main() {
                 "point (one period, not two)");
   checkFloatEq(hw.plant.controlPeriod, simLimits.plant.controlPeriod,
                "plant.controlPeriod: hw and sim now coincide (both honestly 50ms, 130-007)");
-  checkFloatEq(simLimits.plant.controlPeriod, static_cast<float>(App::RobotLoop::kCycle),
-               "sim plant.controlPeriod equals App::RobotLoop::kCycle (the sim's own delivered cycle time)");
+  checkFloatEq(simLimits.plant.controlPeriod, static_cast<float>(Core::RobotLoop::kCycle),
+               "sim plant.controlPeriod equals Core::RobotLoop::kCycle (the sim's own delivered cycle time)");
   checkFloatEq(hw.plant.actuationDelay, simLimits.plant.actuationDelay,
                "plant.actuationDelay: hw and sim now coincide (both honestly 50ms, 130-007)");
-  checkFloatEq(simLimits.plant.actuationDelay, static_cast<float>(App::RobotLoop::kCycle),
-               "sim plant.actuationDelay equals App::RobotLoop::kCycle (the sim's own delivered cycle time)");
+  checkFloatEq(simLimits.plant.actuationDelay, static_cast<float>(Core::RobotLoop::kCycle),
+               "sim plant.actuationDelay equals Core::RobotLoop::kCycle (the sim's own delivered cycle time)");
 
   std::printf("\n");
   if (g_failureCount == 0) {

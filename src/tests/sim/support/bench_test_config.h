@@ -5,7 +5,7 @@
 //
 // 115-006 (gut S1 sim lockstep): benchTestPlannerConfig() DELETED --
 // msg::PlannerConfig and SimHarness::configurePlanner() no longer exist
-// (Motion::Executor/App::Pilot/App::HeadingSource were deleted by 115-002's
+// (Motion::Executor/Core::Pilot/Core::HeadingSource were deleted by 115-002's
 // motion-stack excision). configureSimForBenchTest() below now pushes only
 // the two benchTestMotorConfig() calls -- there is no planner half left to
 // push.
@@ -14,7 +14,7 @@
 // (its own now-deleted private makeExecutorConfig()/makeMotorConfig() --
 // src/firm/platform/host/sim_harness.h), so every freshly-constructed harness was always
 // already configured. Ticket 114-001 built a configuration-completeness gate
-// (App::RobotLoop::isConfigured()/markConfigured()) that makes "unconfigured"
+// (Core::RobotLoop::isConfigured()/markConfigured()) that makes "unconfigured"
 // a real, refusable state -- SimHarness itself must not carry a hardcoded
 // behavioral default anymore. These values move here (114-006 aligned the
 // one field that had drifted -- velGains.kp -- to data/robots/*.json's own
@@ -52,8 +52,8 @@ namespace TestSupport {
 // Gains -- a plain kff/kp/ki/iMax carrier for benchTestGains() below, local
 // to this test-tree-only header. 128-015: this used to be the motion
 // library's own Motion::Gains (wheel_velocity_pid.h, the interim closed-
-// loop velocity-PID class App::Drive briefly held) -- that class is deleted
-// outright (zero instantiations; App::Drive holds no controller of its own,
+// loop velocity-PID class Core::DifferentialDrive briefly held) -- that class is deleted
+// outright (zero instantiations; Core::DifferentialDrive holds no controller of its own,
 // drive.h's own header), so this struct is redeclared here. 130-007: the
 // kp/ki/iMax fields' one-time destination, Motion::Planner::applyVelGains(),
 // is deleted with the M4 duty stage -- only kff (the duty-per-speed scale

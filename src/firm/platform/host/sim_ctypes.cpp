@@ -63,7 +63,7 @@
 //     raw outbound LINE (`<COMMAND>':'<COBS+CRC bytes>`, e.g. "TLM:...")
 //     captured since the LAST sim_drain_tlm() call on this handle -- 0x0A-free
 //     by COBS construction (COBS is keyed on 0x0A now, wire_runtime.h item 8),
-//     exactly what App::Transport::send() received per line -- and copies
+//     exactly what Core::Transport::send() received per line -- and copies
 //     them into `buf` with EXACTLY one '\n' (0x0A) byte appended after each
 //     line -- the SAME trailing-delimiter convention the real wire itself
 //     uses now (comms.h's Transport::send() doc comment), reproduced here
@@ -108,7 +108,7 @@
 //     SimHarness::drainReliable() (the cleartext-plane capture READY/
 //     STATUS/HELP/DEVICE/PONG already ride, comms.h's own Transport doc
 //     comment) filtered down to ONLY lines starting "DBG:" -- the one
-//     cleartext verb this sprint's App::debugf() (app/debug.h) ever emits
+//     cleartext verb this sprint's Core::debugf() (app/debug.h) ever emits
 //     unsolicited, at an unbounded rate, that a Python caller (SimLoop.
 //     drain_debug_lines()) wants to poll. A non-DBG reliable line (e.g. a
 //     STATUS reply to some other test's own query) is silently NOT
@@ -116,9 +116,9 @@
 //     through this C ABI, so nothing else's traffic is lost by this
 //     filtering.
 //   void sim_test_emit_debug(SimHandle h, const char* msg);
-//     TEST-ONLY escape hatch: calls App::debugf("%s", msg) directly against
+//     TEST-ONLY escape hatch: calls Core::debugf("%s", msg) directly against
 //     this handle's own installed sink (SimHarness's constructor already
-//     wires App::setDebugSink(&comms_)), with no real subsystem call site
+//     wires Core::setDebugSink(&comms_)), with no real subsystem call site
 //     involved. Exists because this ticket lands the DBG CHANNEL itself,
 //     ahead of tickets 006/007's actual debugf() call sites -- proves the
 //     full setDebugSink()/debugf()/Comms::sendDebug()/sim_drain_debug()
@@ -166,7 +166,7 @@
 // sim_set_lead_compensation()/sim_set_yaw_rate_max()/sim_debug_heading_lead()
 // -- DELETED (115-006, gut S1): msg::PlannerConfig and
 // SimHarness::configurePlanner()/plannerConfig() no longer exist
-// (Motion::Executor/App::Pilot/App::HeadingSource were deleted by 115-002's
+// (Motion::Executor/Core::Pilot/Core::HeadingSource were deleted by 115-002's
 // motion-stack excision) -- there is nothing left for any of these
 // call-throughs to reach.
 //   void sim_configure_motor(SimHandle h, int port, float velFiltAlpha, int fwdSign);
@@ -229,7 +229,7 @@
 #include <string>
 #include <vector>
 
-#include "app/debug.h"
+#include "core/debug.h"
 #include "sim_harness.h"
 
 // Firmware version compiled into THIS shared library -- exported so the host
@@ -290,14 +290,14 @@ const char* sim_firmware_version() { return FIRMWARE_VERSION_STR; }
 
 // sim_cycle_dt_us -- 118 ticket 003 (sim-cycle-must-match-firmware-period.md):
 // exposes TestSim::SimHarness::kCycleDtUs (itself derived from firmware's own
-// App::RobotLoop::kCycle, robot_loop.h) to Python so a ctypes caller can
+// Core::RobotLoop::kCycle, robot_loop.h) to Python so a ctypes caller can
 // derive its OWN cadence constants from this one compiled-in value instead of
 // an independently-hardcoded matching literal that can drift apart silently.
 // Stateless -- needs no SimHandle (kCycleDtUs is a compile-time constant, not
 // per-instance state).
 int sim_cycle_dt_us() { return static_cast<int>(TestSim::SimHarness::kCycleDtUs); }
 
-// Commanded per-wheel velocity (the interim PID SETPOINT App::Drive stages
+// Commanded per-wheel velocity (the interim PID SETPOINT Core::DifferentialDrive stages
 // -- 125-003: read from Drive's own driveTargetVelLeft/Right() accessor now,
 // NOT Hal::Motor::velocityTarget(), which is deleted -- the velocity
 // PID moved off NezhaMotor entirely, see drive.h's own header). cmd_vel is
@@ -316,7 +316,7 @@ float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->driveTargetVelRight(
 // longer exists on the Motor interface at all (Decision 2, sprint.md -- PID
 // is a control decision, not hardware protection, and relocated to a
 // motion-local wheel-velocity PID class -- itself deleted outright by
-// 128-015, zero instantiations; App::Drive holds no controller of its own,
+// 128-015, zero instantiations; Core::DifferentialDrive holds no controller of its own,
 // see src/firm/motion/DESIGN.md's "wheel control generations" note). This C ABI
 // export is kept (not deleted) purely so host/robot_radio/io/sim_loop.py's
 // ctypes symbol lookup at import time does not break -- it has no effect on
@@ -332,7 +332,7 @@ void sim_step(SimHandle h, int cycles) { asHarness(h)->step(cycles); }
 // ---- Command injection ----
 
 // sim_inject_twist -- BEHAVIOR-PRESERVING TRANSLATION (116-006, MOVE
-// protocol cutover): App::Deadman and SimHarness::injectTwist() are both
+// protocol cutover): Core::Deadman and SimHarness::injectTwist() are both
 // deleted -- every motion is now a bounded MOVE (arm 21), no separate
 // deadman lease (protocol-set-point issue). This C ABI export's NAME and
 // SIGNATURE stay unchanged (sim_loop.py's own ctypes binding needs no
@@ -364,7 +364,7 @@ void sim_inject_twist(SimHandle h, float v_x, float omega, float duration, uint3
 void sim_inject_stop(SimHandle h, uint32_t corr) { asHarness(h)->injectEstop(corr); }
 
 // sim_inject_wheels -- the dumb teleop primitive (§2), straight to
-// App::Drive. `corr` doubles as the envelope corr_id and the command's own
+// Core::DifferentialDrive. `corr` doubles as the envelope corr_id and the command's own
 // completion id, matching sim_inject_twist()'s established convention here.
 void sim_inject_wheels(SimHandle h, float vLeft, float vRight, float duration, uint32_t corr) {
   asHarness(h)->injectWheels(vLeft, vRight, duration, /*id=*/corr, corr);
@@ -425,15 +425,15 @@ int sim_drain_debug(SimHandle h, char* buf, int buflen) {
 
 // TEST-ONLY: see this file's own header comment on sim_drain_debug()'s
 // section for why this exists ahead of tickets 006/007's real debugf()
-// call sites. `msg` is passed through App::debugf()'s own "%s" formatting
+// call sites. `msg` is passed through Core::debugf()'s own "%s" formatting
 // -- NOT %-interpreted itself, so a test string containing a literal '%'
 // cannot be misread as a format specifier.
 void sim_test_emit_debug(SimHandle h, const char* msg) {
-  (void)h;  // App::debugf() routes through the process-global sink
-            // App::setDebugSink() installed -- SimHarness's constructor
+  (void)h;  // Core::debugf() routes through the process-global sink
+            // Core::setDebugSink() installed -- SimHarness's constructor
             // already did this for THIS handle's own comms_ (there is
             // only ever one live handle per test process in practice).
-  App::debugf("%s", msg);
+  Core::debugf("%s", msg);
 }
 
 // ---- True pose ----
@@ -483,7 +483,7 @@ void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm) {
 // sim_set_lead_compensation()/sim_set_yaw_rate_max()/sim_debug_heading_lead()
 // -- DELETED (115-006, gut S1): SimHarness::setLeadCompensation()/
 // setYawRateMax()/debugHeadingLead() no longer exist -- Motion::Executor/
-// App::Pilot/App::HeadingSource were deleted by 115-002's motion-stack
+// Core::Pilot/Core::HeadingSource were deleted by 115-002's motion-stack
 // excision. See sim_harness.h's own header.
 
 // ---- Tier-2 config-load surface (113-002) ----
@@ -542,7 +542,7 @@ void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm) {
 // `velFiltAlpha` (the parameter, kept for C ABI/ctypes-argtypes
 // compatibility with host/robot_radio/io/sim_loop.py) is now UNUSED --
 // 125-003 deleted Hal::MotorConfig::velFiltAlpha along with the EMA
-// velocity estimator it fed (pending ticket 004's App::WheelObserver,
+// velocity estimator it fed (pending ticket 004's Core::WheelObserver,
 // which will need its own config surface for whatever replaces it).
 void sim_configure_motor(SimHandle h, int port, float /*velFiltAlpha*/, int fwdSign) {
   TestSim::SimHarness* harness = asHarness(h);
@@ -575,13 +575,13 @@ void sim_read_motor_config(SimHandle h, int port, float* velFiltAlpha, int* fwdS
 }
 
 // 125-007 (adjacent-sim-plant-rotation-calibration-for-angle-stop-move-
-// overshoot.md): thin call-through to App::RobotLoop::setRotationCalibration()
+// overshoot.md): thin call-through to Core::RobotLoop::setRotationCalibration()
 // (robot_loop.h), the SAME boot-only turn-calibration seam main.cpp uses for
 // real hardware (main.cpp reads drivetrainConfig.rotation_gain_pos/
 // rotation_offset/rotation_gain_neg/rotation_offset_neg, converts the
 // offsets deg->rad, and calls this exact method once at boot). Before this
 // export existed, nothing in the sim path ever called
-// setRotationCalibration() at all -- SimHarness's own App::RobotLoop kept
+// setRotationCalibration() at all -- SimHarness's own Core::RobotLoop kept
 // the identity default (gain 1, offset 0) permanently, regardless of what a
 // robot JSON's calibration.rotation_gain/rotation_offset_deg said, which is
 // why editing those JSON fields alone was a silent no-op for
@@ -601,7 +601,7 @@ void sim_configure_drivetrain(SimHandle h, float gainPos, float offsetPos,  // [
   asHarness(h)->robotLoop().setRotationCalibration(gainPos, offsetPos, gainNeg, offsetNeg);
 }
 
-// App::Drive's own boot calibration -- the sim-side counterpart of main.cpp's
+// Core::DifferentialDrive's own boot calibration -- the sim-side counterpart of main.cpp's
 // setDutyPerSpeed()/setCrawlPulse() seam, which reads the same values out of
 // Config::defaultDriveConfig(). That generated config is deliberately absent
 // from the sim CMake target (src/firm/platform/host/CMakeLists.txt bakes the active robot
@@ -616,7 +616,7 @@ void sim_configure_drivetrain(SimHandle h, float gainPos, float offsetPos,  // [
 // public accessor (sim_harness.h) -- no new SimHarness method needed.
 void sim_configure_drive(SimHandle h, float dutyPerSpeedLeft, float dutyPerSpeedRight,
                          float crawlPulse) {
-  App::Drive& drive = asHarness(h)->drive();
+  Core::DifferentialDrive& drive = asHarness(h)->drive();
   drive.setDutyPerSpeed(dutyPerSpeedLeft, dutyPerSpeedRight);
   drive.setCrawlPulse(crawlPulse);
 }

@@ -1,5 +1,5 @@
 """Off-hardware, end-to-end acceptance proof for the TLM wire-command
-surface driven through the REAL App::RobotLoop (ticket 125-006,
+surface driven through the REAL Core::RobotLoop (ticket 125-006,
 telemetry-emit-policy-rebuild-spec.md Part 8, sim criteria #8/#9/#10).
 
 Compiles ``robot_loop_tlm_harness.cpp`` against TestSim::SimHarness
@@ -46,35 +46,35 @@ _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 # this pytest file is a fifth copy, keep it in lockstep with test_sim_api.py
 # if the Planner/RobotLoop dependency graph ever changes again).
 _APP_SOURCES = [
-    _SOURCE_DIR / "app" / "robot_loop.cpp",
-    _SOURCE_DIR / "app" / "comms.cpp",
-    # debug.cpp (129-003): App::debugf()'s only implementation --
+    _SOURCE_DIR / "core" / "robot_loop.cpp",
+    _SOURCE_DIR / "core" / "comms.cpp",
+    # debug.cpp (129-003): Core::debugf()'s only implementation --
     # TestSim::SimHarness's constructor always calls
-    # App::setDebugSink(&comms_) now (HOST_BUILD is defined below,
+    # Core::setDebugSink(&comms_) now (HOST_BUILD is defined below,
     # so the real, non-stub setDebugSink()/debugf() are what this
     # graph links), mirroring src/firm/platform/host/CMakeLists.txt's own
     # APP_SOURCES entry.
-    _SOURCE_DIR / "app" / "debug.cpp",
-    _SOURCE_DIR / "app" / "configurator.cpp",
-    _SOURCE_DIR / "app" / "telemetry.cpp",
+    _SOURCE_DIR / "core" / "debug.cpp",
+    _SOURCE_DIR / "core" / "configurator.cpp",
+    _SOURCE_DIR / "core" / "telemetry.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "profile.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "estimation.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "shape.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "planner.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
-    _SOURCE_DIR / "app" / "drive.cpp",
+    _SOURCE_DIR / "core" / "differential_drive.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
-    _SOURCE_DIR / "app" / "preamble.cpp",
-    # 130-002 -- the shared composition root (App::composeRobot()/
+    _SOURCE_DIR / "core" / "preamble.cpp",
+    # 130-002 -- the shared composition root (Core::composeRobot()/
     # RobotGraph) sim_harness.h now boots through, plus its
     # Config::boot_config-reading calibration helpers (the "four-source-
     # list trap" this ticket's own note calls out).
-    _SOURCE_DIR / "app" / "boot_wiring.cpp",
-    _SOURCE_DIR / "app" / "boot_calibration.cpp",
+    _SOURCE_DIR / "core" / "boot_wiring.cpp",
+    _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 # 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
-# entry here) is gone outright -- zero instantiations; App::Drive holds no
+# entry here) is gone outright -- zero instantiations; Core::DifferentialDrive holds no
 # controller of its own (open-loop duty from calibrated speed, drive.h's
 # own header). See src/firm/motion/DESIGN.md's "wheel control generations" note.
 _MOTION_SOURCES = []

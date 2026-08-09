@@ -59,7 +59,7 @@ _requires_sim_lib = pytest.mark.skipif(
 # MotorConfigPatch (pid.*/ml/mr) -- every other ConfigDelta patch kind
 # (DrivetrainConfigPatch, PlannerConfigPatch, the watchdog arm) replies
 # ERR_UNIMPLEMENTED unconditionally, a documented scope boundary
-# (src/firm/app/DESIGN.md §3), not something 109-002 could fix (it is
+# (src/firm/core/DESIGN.md §3), not something 109-002 could fix (it is
 # host-only scope). Concretely: `rotSlip`/`tw` (DrivetrainConfigPatch) have
 # NO firmware consumer on any transport this sprint, so "GET rotSlip
 # reflects a pushed value" can never legitimately pass again -- the four
@@ -154,7 +154,7 @@ def test_calibration_commands_pushes_pid_gains_when_present() -> None:
     Values formatted ``:g``.
 
     130-005 (wheel-speed-controller-moves-into-drive.md Phase 3): ``pid.*``
-    targets App::Drive's unified wheel-speed controller. 132-014 (patch-
+    targets Core::DifferentialDrive's unified wheel-speed controller. 132-014 (patch-
     surface retirement, host migration): the SOURCE moved from
     ``config.control.wheel_pid_*`` to ``config.wheel_control.pid_*``
     (robot_config.proto's WheelControl group, 132-020's grouped
@@ -208,13 +208,13 @@ def test_real_tovez_nocal_json_pushes_neutral_gains_via_real_model() -> None:
     UPDATE (115-003, gut-to-minimal-firmware S1 motion-stack excision):
     113-003's own ``minSpeed``/``distanceKp``/``arriveDwell``/``headingKp``/
     ``headingKd`` pushes (``PlannerConfigPatch`` wire keys) are DELETED, not
-    ported -- ``PlannerConfigPatch`` itself, and the ``App::Pilot`` that
+    ported -- ``PlannerConfigPatch`` itself, and the ``Core::Pilot`` that
     applied it, are gone; none of these five keys are valid ``set_config()``
     wire keys any more (see ``calibration_kwargs()``'s own docstring).
 
     UPDATE (130-005, wheel-speed-controller-moves-into-drive.md Phase 3):
     ``pid.*`` is REPOINTED from ``control.vel_*`` onto
-    ``control.wheel_pid_*`` (App::Drive's unified wheel-speed controller).
+    ``control.wheel_pid_*`` (Core::DifferentialDrive's unified wheel-speed controller).
     ``tovez_nocal.json`` ships every ``wheel_pid_*`` field at 0.0 (ticket
     130-004's own decision: the no-calibration profile ships Stage B fully
     inert, pending ticket 006's bench tuning on hardware) -- every
@@ -753,7 +753,7 @@ def test_robot_combo_change_while_connected_repushes_and_overwrites(
 # 118 ticket 004 (land-at-zero-completion-delete-stop-lead.md): a former
 # fourth ``estimator.*`` field (a boot-time/live-tunable time-lead
 # anticipation constant) is DELETED -- the completion mechanism it fed no
-# longer exists (see App::MoveQueue::tick()'s own doc comment for the
+# longer exists (see Core::MoveQueue::tick()'s own doc comment for the
 # land-at-zero predicate that replaces it), so estimator_kwargs() still
 # selects nine fields, not ten.
 # ---------------------------------------------------------------------------

@@ -1,11 +1,11 @@
 """Grep-based regression guard for ticket 125-006 (telemetry-emit-policy-
 rebuild-spec.md Part 8, sim acceptance criterion #12).
 
-125-002 (issue Part 1, items 1-4) DELETED App::Telemetry's whole boot-
+125-002 (issue Part 1, items 1-4) DELETED Core::Telemetry's whole boot-
 arming lifecycle: ``kBootStableCycles``, ``markBootComplete()``,
 ``tickBootSettle()``, and the hidden ``changeReportingArmed_``/
 ``bootSettling_``/``stableCycles_``/``lastSeenFlags_`` members. A freshly
-constructed ``App::Telemetry`` now behaves identically to one that has run
+constructed ``Core::Telemetry`` now behaves identically to one that has run
 for an hour -- there is no "arm the reporting" call left anywhere, in
 production OR in tests. Criterion #12 requires this to be enforced as a
 literal, automated check ("so this stays true going forward, not just at
@@ -56,14 +56,14 @@ def _grep(root: pathlib.Path) -> str:
 
 def test_no_telemetry_boot_lifecycle_calls_in_tests():
     """issue Part 8 #12: no test under src/tests/ may call markBootComplete()
-    or tickBootSettle() -- both were deleted outright by 125-002; App::
+    or tickBootSettle() -- both were deleted outright by 125-002; Core::
     Telemetry has no boot-arming lifecycle left to re-invoke."""
     hits = _grep(_TESTS_DIR)
     assert hits == "", (
         "found a re-added Telemetry boot-lifecycle call under src/tests/ -- "
         "125-002 deleted markBootComplete()/tickBootSettle() outright "
         "(telemetry-emit-policy-rebuild-spec.md Part 1, items 2-3); a "
-        "freshly constructed App::Telemetry needs no warm-up call at all:\n"
+        "freshly constructed Core::Telemetry needs no warm-up call at all:\n"
         f"{hits}"
     )
 

@@ -1,6 +1,6 @@
 // boot_calibration.cpp -- see boot_calibration.h for why this is a
 // separate TU from boot_wiring.cpp.
-#include "app/boot_calibration.h"
+#include "core/boot_calibration.h"
 
 #include <cmath>
 
@@ -12,7 +12,7 @@
 // DriveBootConfig/WheelControllerBootConfig are deleted.
 #include "config/boot_config.h"
 
-namespace App {
+namespace Core {
 
 namespace {
 
@@ -152,4 +152,4 @@ void configureNavigator(Motion::NavigatorLimits& limits, const Config::Robot& co
   limits.yawSign = config.navigator.yaw_sign;
 }
 
-}  // namespace App
+}  // namespace Core

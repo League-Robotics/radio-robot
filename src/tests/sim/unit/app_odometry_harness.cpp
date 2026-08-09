@@ -347,7 +347,7 @@ void scenarioPathLengthNotZeroedByReset() {
 // 4. 131-004 (position-rebaseline-destroys-the-pose.md): a per-wheel
 //    positionEpoch change re-anchors THAT wheel's delta baseline (crediting
 //    zero delta for the rebaseline call), instead of differencing across
-//    App::RobotLoop::publishWheel()'s ~30,000mm software rebaseline jump.
+//    Core::RobotLoop::publishWheel()'s ~30,000mm software rebaseline jump.
 //    Left and right are tracked independently -- one wheel rebaselining
 //    does not perturb the other's normal diff the same cycle.
 // ===========================================================================
@@ -372,7 +372,7 @@ void scenarioEpochChangeReAnchorsThatWheelOnlyLeavesTheOtherDiffingNormally() {
   odom.integrate(left.position(), right.position(), 0, 0);
   checkNear(odom.x(), 40.0f, 1e-3f, "ordinary cycle: x accumulates the real 40mm common delta");
 
-  // Left wheel "rebaselines" -- App::RobotLoop::publishWheel() re-anchors
+  // Left wheel "rebaselines" -- Core::RobotLoop::publishWheel() re-anchors
   // Hal::Motor::position() near 0 the SAME cycle it bumps positionEpoch
   // (odometry.h's own file header); driveToPosition() here stands in for
   // that (this harness's real NezhaMotor leaves have no rebaseline concept

@@ -35,9 +35,9 @@ e.g.:
         src/tests/sim/system/scripted_twist_demo_harness.cpp \\
         src/firm/platform/host/sim_plant.cpp src/tests/sim/support/wire_test_codec.cpp \\
         src/tests/sim/plant/wheel_plant.cpp src/tests/sim/plant/otos_plant.cpp \\
-        src/firm/app/robot_loop.cpp src/firm/app/comms.cpp src/firm/app/telemetry.cpp \\
-        src/firm/app/deadman.cpp src/firm/app/drive.cpp src/firm/app/odometry.cpp \\
-        src/firm/app/preamble.cpp src/firm/platform/host/sim_clock.cpp \\
+        src/firm/core/robot_loop.cpp src/firm/core/comms.cpp src/firm/core/telemetry.cpp \\
+        src/firm/core/deadman.cpp src/firm/core/differential_drive.cpp src/firm/core/odometry.cpp \\
+        src/firm/core/preamble.cpp src/firm/platform/host/sim_clock.cpp \\
         src/firm/hardware/nezha/nezha_motor.cpp src/firm/hardware/generic/real_otos.cpp \\
         src/firm/hardware/planetx/color_sensor.cpp src/firm/hardware/planetx/line_sensor.cpp \\
         src/firm/messages/wire.cpp src/firm/messages/wire_runtime.cpp src/firm/kinematics/differential_kinematics.cpp \\
@@ -72,21 +72,21 @@ _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 # those sources are compiled into this harness any more (mirrors
 # test_sim_harness_configure.py's own identical note).
 _APP_SOURCES = [
-    _SOURCE_DIR / "app" / "robot_loop.cpp",
-    _SOURCE_DIR / "app" / "comms.cpp",
-    # debug.cpp (129-003): App::debugf()'s only implementation --
+    _SOURCE_DIR / "core" / "robot_loop.cpp",
+    _SOURCE_DIR / "core" / "comms.cpp",
+    # debug.cpp (129-003): Core::debugf()'s only implementation --
     # TestSim::SimHarness's constructor always calls
-    # App::setDebugSink(&comms_) now (HOST_BUILD is defined below,
+    # Core::setDebugSink(&comms_) now (HOST_BUILD is defined below,
     # so the real, non-stub setDebugSink()/debugf() are what this
     # graph links), mirroring src/firm/platform/host/CMakeLists.txt's own
     # APP_SOURCES entry.
-    _SOURCE_DIR / "app" / "debug.cpp",
-    # configurator.cpp -- App::Configurator (command-ingestion-ring-buffered-
+    _SOURCE_DIR / "core" / "debug.cpp",
+    # configurator.cpp -- Core::Configurator (command-ingestion-ring-buffered-
     # comms-subsystem-routing-two-stops.md §6): the CONFIG lifecycle moved
     # out of RobotLoop into its own module, which RobotLoop now holds a
     # reference to -- so this graph must link it.
-    _SOURCE_DIR / "app" / "configurator.cpp",
-    _SOURCE_DIR / "app" / "telemetry.cpp",
+    _SOURCE_DIR / "core" / "configurator.cpp",
+    _SOURCE_DIR / "core" / "telemetry.cpp",
     # Planner integration (2026-07-26): the on-robot Motion::Planner now
     # drives the loop -- its library core joins every RobotLoop-linking
     # dependency graph.
@@ -96,18 +96,18 @@ _APP_SOURCES = [
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "planner.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
-    _SOURCE_DIR / "app" / "drive.cpp",
+    _SOURCE_DIR / "core" / "differential_drive.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
-    _SOURCE_DIR / "app" / "preamble.cpp",
-    # 130-002 -- the shared composition root (App::composeRobot()/
+    _SOURCE_DIR / "core" / "preamble.cpp",
+    # 130-002 -- the shared composition root (Core::composeRobot()/
     # RobotGraph) sim_harness.h now boots through, plus its
     # Config::boot_config-reading calibration helpers (the "four-source-
     # list trap" this ticket's own note calls out).
-    _SOURCE_DIR / "app" / "boot_wiring.cpp",
-    _SOURCE_DIR / "app" / "boot_calibration.cpp",
+    _SOURCE_DIR / "core" / "boot_wiring.cpp",
+    _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 # 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
-# entry here) is gone outright -- zero instantiations; App::Drive holds no
+# entry here) is gone outright -- zero instantiations; Core::DifferentialDrive holds no
 # controller of its own (open-loop duty from calibrated speed, drive.h's
 # own header). See src/firm/motion/DESIGN.md's "wheel control generations" note.
 _MOTION_SOURCES = []

@@ -17,7 +17,7 @@ measurement artifact behind it, and the two surviving copies disagree on
 WHERE the loss happens (one blames the DAPLink USB bridge, another the
 radio relay), which is itself evidence nobody measured it. This script is
 the first to actually measure it, and the first to consult the firmware's
-own dropped-command signal (`App::Comms::commandsDroppedCount()`,
+own dropped-command signal (`Core::Comms::commandsDroppedCount()`,
 telemetry `flags` bit 18, `kFlagFaultCommandsDropped`) at all.
 
 **What this script measures, precisely.** It streams N id-distinct
@@ -31,7 +31,7 @@ is evidence the command reached the firmware and was answered. Both counts
 (`acks_observed` = arrived at all, `acks_ok` = arrived AND accepted) are
 reported so the two are never conflated.
 
-**Distinguishing link loss from firmware ring overflow.** `App::Comms`
+**Distinguishing link loss from firmware ring overflow.** `Core::Comms`
 drops (and counts) a well-formed command only when its 12-deep ring is
 already full when a new one arrives (`docs/protocol-v5.md` Sec 3.2) -- a
 DIFFERENT failure mode from a byte-level loss on the wire itself, with a
@@ -107,7 +107,7 @@ ACK_GRACE_S = 1.0            # [s] extra drain after the last send, to catch a l
 _MOVE_ID_BASE = 9700
 
 # telemetry.proto Telemetry.flags bit 18 (kFlagFaultCommandsDropped) --
-# App::Comms's 12-deep command ring was full when a well-formed command
+# Core::Comms's 12-deep command ring was full when a well-formed command
 # arrived (docs/protocol-v5.md Sec 3.2). NOT yet decoded as a TLMFrame
 # property (protocol.py's own comment: "declared in telemetry.h, not yet
 # decoded here ... reserved for a future ticket to fill in the gap") --
@@ -126,7 +126,7 @@ _FLAG_FAULT_COMMANDS_DROPPED = 1 << 18
 # drain could route it)". Checked here as a second, already-available
 # attribution signal: a burst-leg loss with BOTH bits clean throughout
 # points at neither firmware failure mode -- i.e. the loss happened before
-# a frame ever reached App::Comms at all (a dropped/corrupted byte on the
+# a frame ever reached Core::Comms at all (a dropped/corrupted byte on the
 # wire that never assembled into a decodable line, or a host-side send-path
 # limitation) -- worth flagging honestly rather than leaving unattributed.
 _FLAG_FAULT_MALFORMED_FRAME = 1 << 9
@@ -274,7 +274,7 @@ class LegResult:
             if not self.bit18_after and not self.bit9_after:
                 attribution = (" -- ATTRIBUTION: neither firmware fault bit set "
                               "(ring never full, no malformed frame counted); the "
-                              "loss happened before a frame reached App::Comms at "
+                              "loss happened before a frame reached Core::Comms at "
                               "all (wire/host-send-path, not firmware backpressure)")
             elif self.bit18_after and not self.bit18_before:
                 attribution = " -- ATTRIBUTION: firmware command ring overflowed during this leg"

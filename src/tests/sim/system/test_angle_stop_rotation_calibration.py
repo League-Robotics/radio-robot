@@ -10,9 +10,9 @@ WheelPlant`'s first-order duty->velocity model (`kDefaultTau = 0.13s`,
 matching the bench-characterized actuation-lag range) means the wheels keep
 coasting for a beat after an ANGLE stop condition fires, the same physical
 mechanism real hardware's own actuation lag produces -- a genuine plant
-artifact, not a stop-condition bug (`App::RobotLoop::handleMove()`'s ANGLE
+artifact, not a stop-condition bug (`Core::RobotLoop::handleMove()`'s ANGLE
 threshold math is unmodified by this ticket). What WAS broken: nothing in
-the sim path ever called `App::RobotLoop::setRotationCalibration()` at all
+the sim path ever called `Core::RobotLoop::setRotationCalibration()` at all
 -- `SimLoop.configure_from_robot()`'s Tier 2 never touched turn calibration,
 so a robot JSON's own `calibration.rotation_gain`/`rotation_offset_deg`
 values were a silent no-op for the sim, identical to real hardware's own
@@ -54,7 +54,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 _TRACK_WIDTH = 128.0  # [mm] matches tovez_nocal.json's own geometry.trackwidth
-_CYCLE_S = 0.04       # [s] one SimLoop.step() -- App::RobotLoop::kCycle
+_CYCLE_S = 0.04       # [s] one SimLoop.step() -- Core::RobotLoop::kCycle
 _OMEGA = 2.0          # [rad/s] matches square_tour.py's runTurnMove()
 _STOP_DEG = 90.0      # [deg] every square_tour.py corner is exactly this
 

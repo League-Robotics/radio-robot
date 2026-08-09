@@ -158,7 +158,7 @@ class SimConfigConn:
         read_pending_binary_tlm_frames()`` hands back adapted ``TLMFrame``/
         ``AckEntry`` dataclasses, one layer past the wire's own packed
         ints, so the word is reconstructed here with the same packing
-        ``App::Telemetry::pushAckRing()`` uses.
+        ``Core::Telemetry::pushAckRing()`` uses.
         """
         entry = self.poll_ack(corr_id, timeout=timeout)
         if entry is None:

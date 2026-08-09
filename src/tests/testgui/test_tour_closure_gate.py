@@ -138,7 +138,7 @@ _TURN_TOLERANCE_IDEAL_DEG = 0.05      # "EXACT" -- negligible-epsilon, not "with
 #
 # 121 ticket 003 (land-at-zero-at-orthogonal-chain-boundaries.md) RE-
 # MEASURED these against the new orthogonal-boundary land-at-zero split
-# (App::MoveQueue::landAtZero()'s own kStoppingMarginFactorOrthogonal,
+# (Core::MoveQueue::landAtZero()'s own kStoppingMarginFactorOrthogonal,
 # move_queue.cpp) -- both TOUR_1 and TOUR_2 alternate Distance/Angle
 # unconditionally, so EVERY chain boundary in either tour is orthogonal,
 # and this is now the FIRST re-measurement of these tolerances under that
@@ -200,7 +200,7 @@ _BOUNDARY_MIN_FRACTION = 0.9          # matches boundary_velocity_harness.cpp's 
 # turn-prediction campaign's own live time-lead anticipation constant
 # (formerly pushed here alongside the taper fields below, re-swept twice
 # as the taper's own stages landed) is DELETED -- the completion mechanism
-# it drove no longer exists (App::MoveQueue::tick()'s own doc comment has
+# it drove no longer exists (Core::MoveQueue::tick()'s own doc comment has
 # the land-at-zero predicate that replaces it: completion emerges from the
 # taper's own remaining/commanded-speed convergence, not a tuned guess).
 # This gate is re-measured against the land-at-zero regime with NO lead
@@ -242,7 +242,7 @@ def _compensating_scale(raw_error: float) -> float:
     133-005: was ``_compensating_register()``, which additionally encoded
     the multiplier into the OTOS chip's raw int8 register value
     (0.1%-per-LSB, the pre-132 ``OL``/``OA`` text-verb domain). That
-    encoding moved FIRMWARE-side in 132-010 -- ``App::configureOtos()``
+    encoding moved FIRMWARE-side in 132-010 -- ``Core::configureOtos()``
     runs the multiplier through ``Devices::scaleToRegister()`` itself now,
     so a live push and a boot bake finally agree on what a given
     multiplier means (see ``push.otos_kwargs()``'s own docstring). Pushing
@@ -297,7 +297,7 @@ class _SteppedClock:
     """A fake clock in lockstep with `_make_stepper()`'s own step count.
     `run_tour()`'s timeout/poll-interval math is written in real seconds --
     this reports "seconds" too (one sim cycle == 0.04s == firmware's own
-    `App::RobotLoop::kCycle`, `SimLoop.step()`'s own documented per-cycle
+    `Core::RobotLoop::kCycle`, `SimLoop.step()`'s own documented per-cycle
     virtual-time advance -- 118 ticket 003) even though no wall clock is
     read at all, so `move_timeout`/`poll_interval`/`final_settle` keep their
     existing meaning."""
@@ -384,8 +384,8 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
     # decel-into-the-goal campaign: a_max/a_decel/alpha_max/alpha_decel/
     # j_max/yaw_jerk_max ride the EstimatorConfigPatch/estimator_config()
     # call (config.proto's own "smallest coherent path" doc comment) --
-    # App::MoveQueue leaves ShaperLimits at its own constructor default
-    # (every field 0, shaping OFF; see App::ShaperLimits's own doc comment)
+    # Core::MoveQueue leaves ShaperLimits at its own constructor default
+    # (every field 0, shaping OFF; see Core::ShaperLimits's own doc comment)
     # unless pushed -- SimHarness itself deliberately does not source it
     # from boot config (sim_harness.h's own "sim/production boundary"
     # comment); as of 119 ticket 001, configure_from_robot() above already
@@ -397,7 +397,7 @@ def _make_loop(*, realistic_errors: bool, deterministic: bool = True,
     # (land-at-zero-completion-delete-stop-lead.md): this used to also push
     # a live time-lead anticipation constant alongside the taper fields --
     # DELETED, the completion mechanism it drove no longer exists
-    # (App::MoveQueue::tick()'s own doc comment has the land-at-zero
+    # (Core::MoveQueue::tick()'s own doc comment has the land-at-zero
     # predicate that replaces it), so there is nothing left to push for it.
     shaper_fields = {}
     if a_max is not None:
@@ -851,7 +851,7 @@ def test_tour_2_realistic_errors_turns_within_one_degree():
         "test now shows is a DIFFERENT, independently-diagnosed mechanism -- a clean, "
         "monotonic velocity dip from ~149mm/s to ~24mm/s at the leg boundary followed "
         "by a smooth accel/jerk-limited ramp back to cruise over ~8 cycles (~320ms), "
-        "not an erratic oscillation. Root cause: App::MoveQueue::tick() "
+        "not an erratic oscillation. Root cause: Core::MoveQueue::tick() "
         "(move_queue.cpp) unconditionally hard-resets the completing axis's shaper to "
         "(0, 0) at EVERY completion boundary (118 ticket 003's own kept decision), "
         "even when the incoming chained Move commands that SAME axis -- so this "
@@ -934,7 +934,7 @@ def test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tou
 
     # 119-002: the contract (motion/DESIGN.md Sec 4, "Chain-advance leg
     # hand-off contract") documents the KNOWN mechanism the no-dip
-    # assertion below currently xfails on: App::MoveQueue::tick()'s own
+    # assertion below currently xfails on: Core::MoveQueue::tick()'s own
     # unconditional completing-axis reset produces ONE contiguous decel-
     # then-accel/jerk-limited-recovery dip, not the RETIRED reorder
     # experiment's own erratic, non-monotonic oscillation (see the

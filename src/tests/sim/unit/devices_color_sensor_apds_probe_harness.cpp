@@ -20,7 +20,7 @@
 // this exact ticket as one of its consumers). ticket 108-008's own
 // acceptance criteria call for a "Python hook test," but as of this ticket
 // nothing in src/firm/app/ surfaces ColorSensorLeaf::present()/connected() to
-// telemetry (grepped: no color-sensor field reaches App::Telemetry or the
+// telemetry (grepped: no color-sensor field reaches Core::Telemetry or the
 // wire), so there is no host-observable signal a Python/ctypes-level SimLoop
 // test could assert on without scope-creeping a telemetry change into this
 // ticket. Per this ticket's own "what this ticket does" fallback (b): a
@@ -37,7 +37,7 @@
 // the same "compile a throwaway subprocess binary" pattern every other
 // src/tests/sim/{unit,plant,system} harness uses (see test_plant.py, this
 // ticket's own header comment, for the closest precedent: SimPlant plus a
-// handful of src/firm/devices/*.cpp files, no full App::RobotLoop needed).
+// handful of src/firm/devices/*.cpp files, no full Core::RobotLoop needed).
 
 #include <cstdint>
 #include <cstdio>

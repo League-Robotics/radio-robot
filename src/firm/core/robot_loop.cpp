@@ -1,5 +1,5 @@
-#include "app/robot_loop.h"
-#include "app/debug.h"
+#include "core/robot_loop.h"
+#include "core/debug.h"
 
 #include <cmath>
 #include <cstdio>
@@ -7,7 +7,7 @@
 #include "messages/envelope.h"
 #include "kinematics/differential_kinematics.h"
 
-namespace App {
+namespace Core {
 
 namespace {
 
@@ -74,7 +74,7 @@ uint32_t packColor(const Hal::ColorReading& reading, uint32_t fullScale) {  // [
 RobotLoop::RobotLoop(Platform::I2CBus& bus, Hal::Motor& motorL,
                       Hal::Motor& motorR, Hal::Otos& otos,
                       Hal::ColorSensor& color, Hal::LineSensor& line,
-                      Comms& comms, Telemetry& tlm, Drive& drive,
+                      Comms& comms, Telemetry& tlm, DifferentialDrive& drive,
                       Configurator& configurator, Motion::Odometry& odom,
                       Motion::Planner& planner, Motion::Navigator& navigator,
                       Preamble& preamble, const Platform::Clock& clock,
@@ -364,7 +364,7 @@ void RobotLoop::handleWheels(const msg::CommandEnvelope& env) {
   // goto is active.
   navigator_.cancel();
 
-  planner_.estop();  // Drive takes over motion (one owner at a time)
+  planner_.estop();  // DifferentialDrive takes over motion (one owner at a time)
   drive_.command(wheels.v_left, wheels.v_right, wheels.duration, wheels.id,
                  state_.time.cycleStart);
   tlm_.ack(env.corr_id, 0);
@@ -453,7 +453,7 @@ void RobotLoop::handleGoto(const msg::CommandEnvelope& env) {
     target.y = goTo.y;
   }
 
-  // 135-004 ownership rule: GO_TO cancels active Drive teleop, the same
+  // 135-004 ownership rule: GO_TO cancels active DifferentialDrive teleop, the same
   // call handleMove() already makes. Does NOT also planner_.estop(): the
   // Navigator's own first replace=true issue (navigator.cpp's tick())
   // flushes whatever the Planner was doing within one cycle, the same
@@ -529,7 +529,7 @@ void RobotLoop::zeroUnownedMotion() {
 // haltOnStall() -- stakeholder directive 2026-08-08, after the robot repeatedly
 // drove into the playfield rails and ground there. Nothing in the firmware
 // noticed that a commanded motion was not happening: the wheels kept pushing
-// against the obstacle until a human intervened. App::Drive now detects the
+// against the obstacle until a human intervened. Core::DifferentialDrive now detects the
 // condition (drive.cpp's updateStall) and this stops the robot on it.
 //
 // This is a HALT, not a report, and it is deliberately the SAME halt ESTOP
@@ -539,7 +539,7 @@ void RobotLoop::zeroUnownedMotion() {
 // ended, which is the grinding this exists to stop.
 //
 // Called BEFORE drive_.tick() in cycle() so the zeroed command reaches the
-// motors on this very cycle -- Drive::tick() is what writes duty, so halting
+// motors on this very cycle -- DifferentialDrive::tick() is what writes duty, so halting
 // after it would spend one more cycle (~32ms) driving into the obstacle.
 // It acts on the stall the PREVIOUS cycle's tick() latched, which is the
 // correct pairing: that tick compared its command against the encoder reading
@@ -549,7 +549,7 @@ void RobotLoop::haltOnStall() {
   const bool right = drive_.stallRight();
   if (!left && !right) return;
 
-  // Latch into health BEFORE the halt clears Drive's own detector state. The
+  // Latch into health BEFORE the halt clears DifferentialDrive's own detector state. The
   // halt erases the condition within a cycle (cmdVelocity drops to zero, so
   // the demand falls below stallDemand), so without this the robot would stop
   // for no reason the host could ever see.
@@ -721,7 +721,7 @@ void RobotLoop::publishMoveResult(const Motion::TickResult& moveResult) {
 
 // publishGotoResult() -- 135-004, NavResult's own counterpart to
 // publishMoveResult() above, called instead of it on a cycle a goto owns
-// Drive (cycle()'s own if/navigator_.active() branch). Mirrors both of
+// DifferentialDrive (cycle()'s own if/navigator_.active() branch). Mirrors both of
 // publishMoveResult()'s fault computations exactly, computed every cycle
 // (not just on completion) so neither flag can linger stale from an
 // earlier, unrelated ordinary Move for this goto's entire duration:
@@ -812,7 +812,7 @@ void RobotLoop::cycle() {
     // planner_.tick()/update() this cycle -- navigator.h's own "one
     // owner" doc comment (Navigator::tick() calls both ITSELF,
     // internally). navigator_.active() is Navigator's own "does a goto
-    // currently own Drive" signal, already correct by this point in the
+    // currently own DifferentialDrive" signal, already correct by this point in the
     // schedule: handleGoto()/navigator_.start() (if a GO_TO arrived this
     // cycle) already ran inside routeCommand(), earlier in cycle(), and
     // navigator_.cancel() (if a MOVE/WHEELS/ESTOP preempted a goto
@@ -858,17 +858,17 @@ void RobotLoop::applyDbgAction(uint32_t now) {
     case Comms::DbgActionKind::kNone:
       break;
     case Comms::DbgActionKind::kMark:
-      App::debugf("%s", action.text);
+      Core::debugf("%s", action.text);
       break;
     case Comms::DbgActionKind::kPing:
-      App::debugf("pong");
+      Core::debugf("pong");
       break;
     case Comms::DbgActionKind::kWedge: {
       const uint32_t until =
           action.duration == 0 ? UINT32_MAX : now + action.duration;
       if (action.port & 1) { motorL_.setForcedWedge(true); dbgWedgeUntilL_ = until; }
       if (action.port & 2) { motorR_.setForcedWedge(true); dbgWedgeUntilR_ = until; }
-      App::debugf("wedge armed port=%u dur=%lu", action.port,
+      Core::debugf("wedge armed port=%u dur=%lu", action.port,
                   static_cast<unsigned long>(action.duration));
       break;
     }
@@ -876,21 +876,21 @@ void RobotLoop::applyDbgAction(uint32_t now) {
       captureTuningBaseline();
       drive_.setSpeedFloor(action.value);
       const long milli = DBG_MILLI(action.value);
-      App::debugf("vmin %ld.%03ld applied", milli / 1000, milli % 1000);
+      Core::debugf("vmin %ld.%03ld applied", milli / 1000, milli % 1000);
       break;
     }
     case Comms::DbgActionKind::kASteady: {
       captureTuningBaseline();
       drive_.setASteady(action.value);
       const long milli = DBG_MILLI(action.value);
-      App::debugf("asteady %ld.%03ld applied", milli / 1000, milli % 1000);
+      Core::debugf("asteady %ld.%03ld applied", milli / 1000, milli % 1000);
       break;
     }
     case Comms::DbgActionKind::kPos: {
       captureTuningBaseline();
       drive_.setPositionErrorMax(action.value);
       const long milli = DBG_MILLI(action.value);
-      App::debugf("pos %ld.%03ld applied", milli / 1000, milli % 1000);
+      Core::debugf("pos %ld.%03ld applied", milli / 1000, milli % 1000);
       break;
     }
     case Comms::DbgActionKind::kGain: {
@@ -899,7 +899,7 @@ void RobotLoop::applyDbgAction(uint32_t now) {
                              dbgDutyPerSpeedBaseRight_ * action.value2);
       const long milliLeft = DBG_MILLI(action.value);
       const long milliRight = DBG_MILLI(action.value2);
-      App::debugf("gain L=%ld.%03ld R=%ld.%03ld applied",
+      Core::debugf("gain L=%ld.%03ld R=%ld.%03ld applied",
                   milliLeft / 1000, milliLeft % 1000,
                   milliRight / 1000, milliRight % 1000);
       break;
@@ -914,29 +914,29 @@ void RobotLoop::applyDbgAction(uint32_t now) {
         drive_.setDutyPerSpeed(dbgDutyPerSpeedBaseLeft_,
                                dbgDutyPerSpeedBaseRight_);
         dbgTuningBaselined_ = false;
-        App::debugf("clear (tuning restored to boot)");
+        Core::debugf("clear (tuning restored to boot)");
       } else {
-        App::debugf("clear");
+        Core::debugf("clear");
       }
       break;
     case Comms::DbgActionKind::kOtos: {
       // begin() latches initialized_ once at boot, so a re-probe here is the
       // only way to see the raw id or whether a later probe would succeed.
-      App::debugf("otos before: present=%d connected=%d probeId=0x%02X",
+      Core::debugf("otos before: present=%d connected=%d probeId=0x%02X",
                   otos_.present() ? 1 : 0, otos_.connected() ? 1 : 0,
                   static_cast<unsigned>(otos_.lastProbeId()));
       otos_.begin();
-      App::debugf("otos after: present=%d connected=%d probeId=0x%02X",
+      Core::debugf("otos after: present=%d connected=%d probeId=0x%02X",
                   otos_.present() ? 1 : 0, otos_.connected() ? 1 : 0,
                   static_cast<unsigned>(otos_.lastProbeId()));
       break;
     }
     case Comms::DbgActionKind::kUnrecognized:
-      App::debugf("unrecognized dbg: %s", action.text);
+      Core::debugf("unrecognized dbg: %s", action.text);
       break;
   }
   }
 }
 #endif  // ROBOT_DEBUG
 
-}  // namespace App
+}  // namespace Core

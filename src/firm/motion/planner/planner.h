@@ -90,7 +90,7 @@ class Planner {
   // Which regime the active Move is in -- 130-005: no longer gates any
   // trim integrator here (Motion::WheelTrim/stageTrim() are deleted; the
   // wheel-speed controller's own fast-PID steady gate now lives in
-  // App::Drive::fastPid(), keyed off cmdAccel, not MovePhase -- see
+  // Core::DifferentialDrive::fastPid(), keyed off cmdAccel, not MovePhase -- see
   // drive.h's own header) -- kept for what the bench charts still shade
   // behind the velocity traces and for Move-lifecycle observability.
   MovePhase phase() const {
@@ -108,7 +108,7 @@ class Planner {
   //
   // 130-007: applyVelGains() (the M4 duty stage's own gains setter) is
   // deleted with the stage -- the `pid.*` CONFIG wire keys it used to
-  // (silently) target were already repointed onto App::Drive's unified
+  // (silently) target were already repointed onto Core::DifferentialDrive's unified
   // wheel-speed controller by ticket 005
   // (wheel-speed-controller-moves-into-drive.md Phase 3); this deletion
   // just removes the dead destination those keys no longer reach.
@@ -119,9 +119,9 @@ class Planner {
   // No Config::Robot-consuming configure() on THIS class (132-007, the-
   // configuration-object.md, sprint 132 "configuration discipline"):
   // src/firm/motion's own dependency rule (src/firm/motion/DESIGN.md §3) forbids
-  // ANY Config::*/App::*/Devices::* dependency in this tree, no
+  // ANY Config::*/Core::*/Devices::* dependency in this tree, no
   // exception -- stricter than the (already strict) devices isolation
-  // invariant this project also has. App::configurePlanner(Motion::
+  // invariant this project also has. Core::configurePlanner(Motion::
   // Planner&, const Config::Robot&) (src/firm/app/boot_calibration.h)
   // is the Config::Robot-consuming entry point instead, calling
   // applyShaperLimits() above.

@@ -5,7 +5,7 @@ turn is a host-shaped trapezoid streamed as plain ``wheels()`` commands.
 The firmware has no profile feature on this path and needs none: the host
 samples each segment's trapezoid every --tick seconds and re-arms a bounded
 ``WHEELS`` command (the same staircase idiom velocity_profile_gate.py
-proved). ``App::Drive`` actuates each step; ``Motion::Planner`` never runs.
+proved). ``Core::DifferentialDrive`` actuates each step; ``Motion::Planner`` never runs.
 This is the control arm against planner_square_tour.py -- same square, same
 closure metric, opposite command path.
 

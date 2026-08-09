@@ -16,7 +16,7 @@
 // DELETED, not adapted — those mechanisms are gone from NezhaMotor
 // (relocated to a motion-local wheel-velocity PID class -- itself deleted
 // outright by 128-015, see src/firm/motion/DESIGN.md's "wheel control
-// generations" note -- / pending ticket 004's App::WheelObserver, see
+// generations" note -- / pending ticket 004's Core::WheelObserver, see
 // nezha_motor.cpp's own file header). What survives: protocol/bus-hygiene/
 // dwell/deadband/clamp scenarios (unchanged
 // behavior) plus a NEW duty-passthrough scenario (scenario 5 below)
@@ -944,7 +944,7 @@ void scenarioExplicitZeroWriteShapingIsPassThrough() {
 }
 
 // 10b. SIGMA-DELTA duty quantizer (133-002). The brick takes an INTEGER
-//      PERCENT, and at App::Drive::kDutyPerSpeed = 0.001182 one count is
+//      PERCENT, and at Core::DifferentialDrive::kDutyPerSpeed = 0.001182 one count is
 //      8.46 mm/s -- 5.6% of a 150 mm/s command, and roughly twenty times
 //      the left/right imbalance the wheel controller was being tuned to
 //      close. Plain rounding cannot represent a command between two
@@ -1054,7 +1054,7 @@ void scenarioSigmaDeltaRepresentsSubCountDutyAndDropsCarryOnStop() {
 // scenario's own assertions are unchanged; see
 // scenarioSampleTimeHoldsLastSuccessfulCollectAcrossFailedCollects() below
 // for the failed-collect contrast. This is the accessor the wire's
-// `enc_left`/`enc_right` age fields read; ticket 004's App::WheelObserver
+// `enc_left`/`enc_right` age fields read; ticket 004's Core::WheelObserver
 // will restore a real per-sample estimator on top of it.
 void scenarioSampleTimeReflectsMostRecentTick() {
   beginScenario("sampleTime() reflects the most recent tick() call's own nowUs (healthy path)");
@@ -1154,7 +1154,7 @@ void scenarioSampleTimeHoldsLastSuccessfulCollectAcrossFailedCollects() {
 // zero velocity() -- this is a SOFTWARE-only re-anchor of the position
 // baseline mid-motion, not a real stop, and velocity_ already holds THIS
 // cycle's own genuinely-computed rate (tick() always runs before
-// App::RobotLoop::publishWheel() calls rebaseline() the same cycle).
+// Core::RobotLoop::publishWheel() calls rebaseline() the same cycle).
 // Before this ticket, softRebaseline() also wrote velocity_ = 0.0f, so a
 // wheel reported 0 mm/s for 1-2 cycles purely because of the re-anchor --
 // which Stage B would act on as a genuine stop
@@ -1180,7 +1180,7 @@ void scenarioRebaselinePreservesVelocityAcrossTheBoundary() {
   checkFloatEq(motor.velocity(), 500.0f, "velocity established pre-rebaseline (10mm / 20ms)",
                1e-6f);
 
-  // Simulates App::RobotLoop::publishWheel() calling rebaseline() this same
+  // Simulates Core::RobotLoop::publishWheel() calling rebaseline() this same
   // cycle, once this tick's own already-collected position crosses the
   // rebaseline margin.
   motor.rebaseline();

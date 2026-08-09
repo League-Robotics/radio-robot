@@ -65,7 +65,7 @@ void configureSimForBenchTest(TestSim::SimHarness& sim) {
   // 130-007 REMOVAL NOTE: this used to also push benchTestGains() onto
   // Motion::Planner's own M4 duty stage (sim.planner().applyVelGains(...))
   // -- that stage is deleted outright (WheelPid/stageDuty(), reversing
-  // sprint 128 Decision 2's PARK now that App::Drive's own controller is
+  // sprint 128 Decision 2's PARK now that Core::DifferentialDrive's own controller is
   // the proven, shipped law); the call site is gone with it. Only the
   // duty-per-speed scale below survives -- see its own comment.
   {
@@ -76,7 +76,7 @@ void configureSimForBenchTest(TestSim::SimHarness& sim) {
   }
   // SIM OVERRIDE (130-002, unify-sim-and-robot-composition-roots.md): the
   // sim now boots its shaper ceilings through the SAME composeRobot() path
-  // hardware does (App::RobotGraph), which bakes the REAL robot JSON's
+  // hardware does (Core::RobotGraph), which bakes the REAL robot JSON's
   // measured ramp/jerk ceilings (aMax 300 mm/s^2, alphaMax 6 rad/s^2, etc)
   // -- replacing the OLD sim-only TestSim::simPlannerLimits() literals,
   // which were "effectively UNSHAPED" (aMax 1e6) on purpose: every
@@ -98,7 +98,7 @@ void configureSimForBenchTest(TestSim::SimHarness& sim) {
   // transient, CORRECT correction. Motion::WheelTrim is deleted outright
   // (wheel-speed-controller-moves-into-drive.md Phase 3): Motion::Planner
   // now publishes cmdVelocity bit-for-bit as the profiled command, always,
-  // with no correction of any kind ever added to it -- App::Drive's own
+  // with no correction of any kind ever added to it -- Core::DifferentialDrive's own
   // Stage B/C controller corrects duty, a layer downstream of this field,
   // so there is nothing left here to zero.
 }

@@ -141,7 +141,7 @@ def test_default_drive_group_matches_tovez_json():
 
     duty_per_speed_left/right corrected 0.00187325 -> 0.001182 (132-009,
     the-configuration-object.md): the JSON field now matches
-    App::Drive::kDutyPerSpeed's own measured constant -- the value that has
+    Core::DifferentialDrive::kDutyPerSpeed's own measured constant -- the value that has
     actually been running on hardware since 2026-07-31 -- rather than the
     stale figure the-configuration-object.md's Cause section cites as the
     ~1.6x host-vs-firmware disagreement. See tovez.json's own
@@ -211,7 +211,7 @@ def test_default_planner_group_matches_tovez_json():
 
     assert "cfg.v_max = 400.0f;" in content
     # control_period/actuation_delay are read FROM tovez.json rather than
-    # frozen as literals here. Both are "= App::RobotLoop::kCycle" by
+    # frozen as literals here. Both are "= Core::RobotLoop::kCycle" by
     # construction (see robot_loop.h's kCycle doc comment), so they move
     # every time the loop period does -- they were 40, then 50, and became
     # 32 on 2026-08-07, and a hardcoded literal turns each of those

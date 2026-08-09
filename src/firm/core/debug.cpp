@@ -1,19 +1,19 @@
-// debug.cpp -- App::debugf()'s only implementation. See debug.h's own file
+// debug.cpp -- Core::debugf()'s only implementation. See debug.h's own file
 // header for the ROBOT_DEBUG/HOST_BUILD compile gate: this whole file's
 // body is guarded by the identical condition the header uses, so a
 // shipped ARM release build (neither macro defined) compiles this
-// translation unit down to nothing -- no App::debugf_/App::setDebugSink_
+// translation unit down to nothing -- no Core::debugf_/Core::setDebugSink_
 // symbols at all, not merely unused ones a linker has to garbage-collect.
-#include "app/debug.h"
+#include "core/debug.h"
 
 #if defined(ROBOT_DEBUG) || defined(HOST_BUILD)
 
 #include <cstdarg>
 #include <cstdio>
 
-#include "app/comms.h"
+#include "core/comms.h"
 
-namespace App {
+namespace Core {
 
 namespace {
 
@@ -46,6 +46,6 @@ void debugf(const char* fmt, ...) {
   debugSink->sendDebug(buf);
 }
 
-}  // namespace App
+}  // namespace Core
 
 #endif  // ROBOT_DEBUG || HOST_BUILD

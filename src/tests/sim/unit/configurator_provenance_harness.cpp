@@ -47,9 +47,9 @@
 #include <cstring>
 #include <string>
 
-#include "app/boot_calibration.h"
-#include "app/configurator.h"
-#include "app/drive.h"
+#include "core/boot_calibration.h"
+#include "core/configurator.h"
+#include "core/differential_drive.h"
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
 #include "config/robot.h"
@@ -140,7 +140,7 @@ const char* groupName(msg::ConfigGroupTarget target) {
 // checkEveryGroupExcept() -- assert every group EXCEPT the named exceptions
 // reports `expected`. `exceptions`/`exceptionCount` name the groups a
 // scenario deliberately touched.
-void checkEveryGroupExcept(const App::Configurator& configurator, msg::ConfigSource expected,
+void checkEveryGroupExcept(const Core::Configurator& configurator, msg::ConfigSource expected,
                            const msg::ConfigGroupTarget* exceptions, size_t exceptionCount,
                            const std::string& what) {
   for (const msg::ConfigGroupTarget target : kAllGroups) {
@@ -227,11 +227,11 @@ int main() {
 
   RecordingMotor motorL, motorR;
   RecordingOtos otos;
-  App::Drive drive(motorL, motorR, /*trackWidth=*/128.0f);
+  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/128.0f);
   Motion::PlannerLimits limits;
   Motion::Planner planner(limits);
   Motion::NavigatorLimits navigatorLimits;
-  App::Configurator configurator(drive, motorL, motorR, otos, planner, navigatorLimits, /*tuningStore=*/nullptr);
+  Core::Configurator configurator(drive, motorL, motorR, otos, planner, navigatorLimits, /*tuningStore=*/nullptr);
 
   // --- 1. Before loadBaked(): UNSPECIFIED, which is the honest answer ----
 
@@ -426,7 +426,7 @@ int main() {
       "remove (a robot running tuned values its read-back denies)");
   {
     Motion::NavigatorLimits freshNavigatorLimits;
-    App::Configurator fresh(drive, motorL, motorR, otos, planner, freshNavigatorLimits, /*tuningStore=*/nullptr);
+    Core::Configurator fresh(drive, motorL, motorR, otos, planner, freshNavigatorLimits, /*tuningStore=*/nullptr);
     fresh.loadBaked();
 
     Config::TuningSnapshot snapshot;

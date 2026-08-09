@@ -5,7 +5,7 @@
 // (hardware/planetx/color_sensor.h), which handles both the PlanetX chip at
 // 0x43 and an APDS9960 at 0x39.
 //
-// The surface is exactly what App::Preamble and App::RobotLoop already call,
+// The surface is exactly what Core::Preamble and Core::RobotLoop already call,
 // no more: a non-blocking detection step, the present/connected pair, a
 // non-blocking per-cycle tick(), and the published reading. Extracting it
 // costs nothing at runtime (the leaf was already driven through these seven

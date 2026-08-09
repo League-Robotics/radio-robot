@@ -7,7 +7,7 @@
 `NezhaProtocol.twist()` (103-009) onto `move_twist()` — every motion is now
 a bounded `Move` (a velocity variant + a stop condition + a required
 `timeout` safety backstop), not a bare `v_x`/`omega`/`duration` twist that
-armed a separate deadman watchdog (`App::Deadman` no longer exists). This
+armed a separate deadman watchdog (`Core::Deadman` no longer exists). This
 script keeps the same single-shot "drive for a while, then stop" shape by
 using a TIME stop condition (`stop_time=args.duration`) plus `replace=True`
 (preempt-and-start-now, matching the old `twist()` call's own "just drive

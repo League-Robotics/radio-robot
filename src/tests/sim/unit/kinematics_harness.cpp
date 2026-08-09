@@ -9,7 +9,7 @@
 //      that claim gets checked against the round-trip identities and the
 //      closed-form values, not taken on faith.
 //   2. MecanumKinematics is correct. Nothing in the firmware constructs it
-//      yet (App::Drive is still differential-specific end to end), so this
+//      yet (Core::DifferentialDrive is still differential-specific end to end), so this
 //      harness is its ONLY coverage -- and an interface whose second
 //      implementation is untested is not a proven seam.
 //   3. Model::saturate() -- the one concrete method on the base -- behaves

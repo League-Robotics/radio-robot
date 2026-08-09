@@ -279,13 +279,13 @@ pushes). Two classes implement it:
   read, lever-arm compensation, wrap-aware heading, staged `setPose()`)
   lives here. This is the only implementation with any real-chip or bus
   dependency.
-- **`App::FakeOtos`** ([`../app/fake_otos.h`](../app/fake_otos.h), in
+- **`Core::FakeOtos`** ([`../app/fake_otos.h`](../app/fake_otos.h), in
   `app/` not here) — a bench synthesizer whose `tick()` reports the
-  dead-reckoned `App::Odometry` pose + the `BodyKinematics`-fused wheel
+  dead-reckoned `Core::Odometry` pose + the `BodyKinematics`-fused wheel
   twist as if it were the chip, so a bench tour on a free-spinning stand
   tracks its commanded path through the SAME `applyOtosSample()` code path
   the table build uses. It lives in `app/` precisely because it needs
-  `App::Odometry` — a dependency the devices/ isolation invariant (§3)
+  `Core::Odometry` — a dependency the devices/ isolation invariant (§3)
   forbids this layer from taking. That is exactly why the SEAM is the
   interface (here) and the app-coupled implementation sits above it: the
   invariant is preserved (`RealOtos` and this header stay app-free) while
@@ -310,7 +310,7 @@ target when ON — compile-time only, never a runtime/wire toggle. Select it
 via `cmake .. -DFAKE_OTOS=ON` or `build.py --fake-otos` (which always
 passes an explicit `-DFAKE_OTOS=ON`/`OFF`, so a stale `CMakeCache.txt`
 can never leave the flag stuck). In `main.cpp` a `RealOtos` is constructed
-and, under `#ifdef FAKE_OTOS`, an `App::FakeOtos` too; a `Devices::Otos&`
+and, under `#ifdef FAKE_OTOS`, an `Core::FakeOtos` too; a `Devices::Otos&`
 is bound to whichever the build selected and handed to `Preamble` and
 `RobotLoop` — the ONE place the variant diverges.
 
@@ -407,8 +407,8 @@ needs this; every other interpolated field uses plain `lerp()`.
 - **`Devices::Clock`/`Devices::Sleeper`** (`clock.h`): `nowMicros()` [us],
   `sleepMillis(duration)` [ms], `yield()`. One ARM instance of each
   (`MicroBitClock`/`MicroBitSleeper`), owned by `main()`, passed by
-  reference to the loop and any module needing "now" (`App::Deadman`,
-  `App::Preamble`). This is the fiber-cycle time seam — a *different* seam
+  reference to the loop and any module needing "now" (`Core::Deadman`,
+  `Core::Preamble`). This is the fiber-cycle time seam — a *different* seam
   from `I2CBus`'s own internal clearance-timer clock, which is scoped
   purely to that class's own preClear/postClear bookkeeping.
 - **`Devices::I2CBus`** (`i2c_bus.h`): `write()`/`read()` (mirroring
@@ -430,7 +430,7 @@ needs this; every other interpolated field uses plain `lerp()`.
   last ACCEPTED fresh sample's own timestamp (`NezhaMotor::lastFreshUs_`/
   `RealOtos::lastReadUs_`), never "now" at call time. `MotorArmor` forwards
   it unmodified (no armor-side state of its own); every fake/stub in
-  `tests/sim/unit/` and `App::FakeOtos` implement it too, since it is part
+  `tests/sim/unit/` and `Core::FakeOtos` implement it too, since it is part
   of the abstract interface, not an ad hoc addition to the two real leaves.
   Added so a caller (telemetry's per-sample `age` fields) can compute a
   REAL per-sample age instead of stamping every reading with the same
@@ -438,7 +438,7 @@ needs this; every other interpolated field uses plain `lerp()`.
   `clasi/sprints/124-protocol-v5-robotstate-blackboard-and-radio-bench-gate/issues/protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md`
   §B2.
   `Otos` is an abstract interface with two implementations —
-  `Devices::RealOtos` (the chip) and `App::FakeOtos` (the `FAKE_OTOS`
+  `Devices::RealOtos` (the chip) and `Core::FakeOtos` (the `FAKE_OTOS`
   bench synthesizer) — see §4's own paragraph for the split and build seam.
 - **`Devices::MeasurementRing<T>`/`Devices::Sample<T>`**
   (`measurement_ring.h`): `publish(value, stamp)`, `latest()`,

@@ -1,11 +1,11 @@
-#include "app/comms.h"
-#include "app/debug.h"
+#include "core/comms.h"
+#include "core/debug.h"
 #include <cstdlib>
 
 #include <cstdio>
 #include <cstring>
 
-#include "app/telemetry.h"
+#include "core/telemetry.h"
 #include "messages/wire_runtime.h"
 #include "types/version_generated.h"
 
@@ -14,7 +14,7 @@
 #include "com/serial_port.h"
 #endif
 
-namespace App {
+namespace Core {
 
 #ifndef HOST_BUILD
 
@@ -76,7 +76,7 @@ const char* verbName(msg::Verb verb) {
   return nullptr;
 }
 
-App::Comms::TlmAction classifyTlmArg(const uint8_t* data, uint16_t len) {
+Core::Comms::TlmAction classifyTlmArg(const uint8_t* data, uint16_t len) {
   if (len > 0 && data[len - 1] == '\r') --len;
 
   auto matches = [data, len](const char* token) {
@@ -92,17 +92,17 @@ App::Comms::TlmAction classifyTlmArg(const uint8_t* data, uint16_t len) {
     return true;
   };
 
-  if (matches("NOW")) return App::Comms::TlmAction::kFrame;
-  if (matches("ON")) return App::Comms::TlmAction::kSetOn;
-  if (matches("AUTO")) return App::Comms::TlmAction::kSetAuto;
-  if (matches("OFF")) return App::Comms::TlmAction::kSetOff;
-  return App::Comms::TlmAction::kUnrecognized;
+  if (matches("NOW")) return Core::Comms::TlmAction::kFrame;
+  if (matches("ON")) return Core::Comms::TlmAction::kSetOn;
+  if (matches("AUTO")) return Core::Comms::TlmAction::kSetAuto;
+  if (matches("OFF")) return Core::Comms::TlmAction::kSetOff;
+  return Core::Comms::TlmAction::kUnrecognized;
 }
 
 #ifdef ROBOT_DEBUG
-App::Comms::DbgAction classifyDbgArg(const uint8_t* data, uint16_t len) {
-  App::Comms::DbgAction action;
-  action.kind = App::Comms::DbgActionKind::kUnrecognized;
+Core::Comms::DbgAction classifyDbgArg(const uint8_t* data, uint16_t len) {
+  Core::Comms::DbgAction action;
+  action.kind = Core::Comms::DbgActionKind::kUnrecognized;
   if (data == nullptr || len == 0) return action;
   const size_t cap = sizeof(action.text) - 1;
   const size_t n = (len < cap) ? len : cap;
@@ -128,20 +128,20 @@ App::Comms::DbgAction classifyDbgArg(const uint8_t* data, uint16_t len) {
   const char* sub = nextToken();
   if (sub == nullptr) return action;
   if (std::strcmp(sub, "mark") == 0) {
-    action.kind = App::Comms::DbgActionKind::kMark;
+    action.kind = Core::Comms::DbgActionKind::kMark;
     std::memcpy(action.text, verbatim, sizeof(action.text));
     return action;
   }
   if (std::strcmp(sub, "ping") == 0) {
-    action.kind = App::Comms::DbgActionKind::kPing;
+    action.kind = Core::Comms::DbgActionKind::kPing;
     return action;
   }
   if (std::strcmp(sub, "clear") == 0) {
-    action.kind = App::Comms::DbgActionKind::kClear;
+    action.kind = Core::Comms::DbgActionKind::kClear;
     return action;
   }
   if (std::strcmp(sub, "otos") == 0) {
-    action.kind = App::Comms::DbgActionKind::kOtos;
+    action.kind = Core::Comms::DbgActionKind::kOtos;
     return action;
   }
   auto parseScalar = [&nextToken](float& out) -> bool {
@@ -157,24 +157,24 @@ App::Comms::DbgAction classifyDbgArg(const uint8_t* data, uint16_t len) {
 
   if (std::strcmp(sub, "vmin") == 0) {
     if (!parseScalar(action.value)) return action;
-    action.kind = App::Comms::DbgActionKind::kVmin;
+    action.kind = Core::Comms::DbgActionKind::kVmin;
     return action;
   }
   if (std::strcmp(sub, "asteady") == 0) {
     if (!parseScalar(action.value)) return action;
-    action.kind = App::Comms::DbgActionKind::kASteady;
+    action.kind = Core::Comms::DbgActionKind::kASteady;
     return action;
   }
   if (std::strcmp(sub, "pos") == 0) {
     if (!parseScalar(action.value)) return action;
-    action.kind = App::Comms::DbgActionKind::kPos;
+    action.kind = Core::Comms::DbgActionKind::kPos;
     return action;
   }
   if (std::strcmp(sub, "gain") == 0) {
     if (!parseScalar(action.value)) return action;
     if (!parseScalar(action.value2)) return action;
     if (action.value <= 0.0f || action.value2 <= 0.0f) return action;
-    action.kind = App::Comms::DbgActionKind::kGain;
+    action.kind = Core::Comms::DbgActionKind::kGain;
     return action;
   }
   if (std::strcmp(sub, "wedge") == 0) {
@@ -186,7 +186,7 @@ App::Comms::DbgAction classifyDbgArg(const uint8_t* data, uint16_t len) {
     else return action;
     const char* ms = nextToken();
     if (ms != nullptr) action.duration = static_cast<uint32_t>(std::strtoul(ms, nullptr, 10));
-    action.kind = App::Comms::DbgActionKind::kWedge;
+    action.kind = Core::Comms::DbgActionKind::kWedge;
     return action;
   }
   return action;
@@ -543,4 +543,4 @@ void Comms::updateStatus(const Types::RobotState& state, const Telemetry& tlm) {
   status_ = status;
 }
 
-}  // namespace App
+}  // namespace Core

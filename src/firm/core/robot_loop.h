@@ -1,34 +1,34 @@
-// robot_loop.h -- App::RobotLoop: the boot loop and main per-cycle
+// robot_loop.h -- Core::RobotLoop: the boot loop and main per-cycle
 // schedule. run() = boot() once then cycle() forever; host tests call
 // boot()/cycle() directly. Timing goes through the Platform::Clock/Sleeper
 // seam so this compiles under -DHOST_BUILD. Design: DESIGN.md.
 //
 // Command ingestion (command-ingestion-ring-buffered-comms-subsystem-
-// routing-two-stops.md): the loop PUMPS App::Comms several times per cycle
+// routing-two-stops.md): the loop PUMPS Core::Comms several times per cycle
 // -- once inside each existing runAndWait body -- so neither transport's
 // own small buffer is the backpressure, then DRAINS the resulting command
 // ring once per cycle through routeCommand(). RobotLoop decides only WHERE
 // each command goes; what it means is the destination subsystem's job:
 //
-//     WHEELS -> App::Drive       (dumb, time-bounded teleop)
+//     WHEELS -> Core::DifferentialDrive       (dumb, time-bounded teleop)
 //     MOVE   -> Motion::Planner  (the motion queue)
 //     STOP   -> Motion::Planner  (a PLANNED stop, queued in sequence)
-//     ESTOP  -> Drive + Planner  (halt now, both)
-//     CONFIG -> App::Configurator
+//     ESTOP  -> DifferentialDrive + Planner  (halt now, both)
+//     CONFIG -> Core::Configurator
 //
 // Exactly one subsystem owns motion at a time, and that is enforced HERE,
-// at routing: a WHEELS command clears the planner, a MOVE clears Drive's
+// at routing: a WHEELS command clears the planner, a MOVE clears DifferentialDrive's
 // armed command.
 #pragma once
 
 #include <cstdint>
-#include "app/debug.h"
+#include "core/debug.h"
 
-#include "app/comms.h"
-#include "app/configurator.h"
-#include "app/drive.h"
-#include "app/preamble.h"
-#include "app/telemetry.h"
+#include "core/comms.h"
+#include "core/configurator.h"
+#include "core/differential_drive.h"
+#include "core/preamble.h"
+#include "core/telemetry.h"
 #include "platform/clock.h"
 #include "hal/color_sensor.h"
 #include "platform/i2c_bus.h"
@@ -40,7 +40,7 @@
 #include "motion/odometry.h"
 #include "motion/planner/planner.h"
 
-namespace App {
+namespace Core {
 
 class RobotLoop {
  public:
@@ -120,11 +120,11 @@ class RobotLoop {
   // All references are already-constructed modules; the composition root
   // (main.cpp or a harness) owns construction and wiring order. The
   // persisted-tuning store is NOT a parameter here any more -- it belongs
-  // to App::Configurator, which owns the whole CONFIG lifecycle.
+  // to Core::Configurator, which owns the whole CONFIG lifecycle.
   RobotLoop(Platform::I2CBus& bus, Hal::Motor& motorL,
             Hal::Motor& motorR, Hal::Otos& otos,
             Hal::ColorSensor& color, Hal::LineSensor& line,
-            Comms& comms, Telemetry& tlm, Drive& drive,
+            Comms& comms, Telemetry& tlm, DifferentialDrive& drive,
             Configurator& configurator, Motion::Odometry& odom,
             Motion::Planner& planner, Motion::Navigator& navigator,
             Preamble& preamble, const Platform::Clock& clock,
@@ -147,7 +147,7 @@ class RobotLoop {
   // `actual = gain * commanded + offset`, per direction of rotation.
   // handleMove() inverts it so an ANGLE-stopped move LANDS on the angle the
   // host asked for. Seeded from the robot JSON by main.cpp, mirroring how
-  // Drive gets its wheel calibration; the identity (gain 1, offset 0) is
+  // DifferentialDrive gets its wheel calibration; the identity (gain 1, offset 0) is
   // deliberately the default, so an uncalibrated robot behaves exactly as
   // before rather than being silently skewed.
   //
@@ -162,7 +162,7 @@ class RobotLoop {
   }
 
   // Read-only observability for setRotationCalibration()'s installed
-  // values (test/bench observability -- mirrors Drive's own biasLeft()/
+  // values (test/bench observability -- mirrors DifferentialDrive's own biasLeft()/
   // pidLeft()-style getters, drive.h). Added for 132-007's own configure()
   // unit test: nothing else reads rotation calibration back out today.
   float rotationGainPos() const { return rotGainPos_; }
@@ -175,7 +175,7 @@ class RobotLoop {
   // geometry/rotation calibration slice. A thin pull-and-forward onto
   // setRotationCalibration() above, reading Config::Robot's geometry
   // group and its two derived rotationOffsetPos()/rotationOffsetNeg()
-  // methods (config/robot.h) instead of App::installRotationCalibration()'s
+  // methods (config/robot.h) instead of Core::installRotationCalibration()'s
   // now-superseded msg::DrivetrainConfig-based conversion
   // (boot_calibration.cpp:75-81) -- this IS the "solve cleanly" 132-006
   // deferred here (configurator.h's own doc comment): boot_wiring.cpp
@@ -225,7 +225,7 @@ class RobotLoop {
   // method's own .cpp doc comment for why that ErrCode, not a new one)
   // while `!state_.otos.connected` -- SUC-005's own explicit gate, a goto
   // with no OTOS fix to navigate on is refused outright, never
-  // accepted-then-immediately-aborted. Cancels active Drive teleop via
+  // accepted-then-immediately-aborted. Cancels active DifferentialDrive teleop via
   // drive_.takeover(), same as handleMove().
   void handleGoto(const msg::CommandEnvelope& env);
 
@@ -269,7 +269,7 @@ class RobotLoop {
   // write to a decider-owned field legitimate: a zero-only writer cannot
   // originate motion, cannot fight a decider for control, and cannot
   // produce a speed no decider asked for. Do not relax it -- the moment
-  // this method can emit a nonzero, App::RobotLoop becomes a third
+  // this method can emit a nonzero, Core::RobotLoop becomes a third
   // decider, and the cmdVelocity ownership invariant (stated in full at
   // RobotLoop::publishWheels(), robot_loop.cpp) is void.
   //
@@ -308,7 +308,7 @@ class RobotLoop {
   void publishMoveResult(const Motion::TickResult& moveResult);
   // publishGotoResult() -- 135-004: NavResult's own counterpart, called
   // instead of publishMoveResult() on a cycle a goto (not an ordinary
-  // Move) owns Drive -- cycle()'s own if/navigator_.active() branch, this
+  // Move) owns DifferentialDrive -- cycle()'s own if/navigator_.active() branch, this
   // file's Landmine-1 fix (see robot_loop.cpp's own doc comment on both).
   void publishGotoResult(const Motion::NavResult& navResult);
 
@@ -335,7 +335,7 @@ class RobotLoop {
   //      sweep is undoable without a reflash or a power cycle.
   //
   // The baseline is the value Configurator::install() landed, NOT
-  // Drive::kDutyPerSpeed. Since 132-009 that constant is reference-only
+  // DifferentialDrive::kDutyPerSpeed. Since 132-009 that constant is reference-only
   // and boot reads config.drive.duty_per_speed_left/right instead
   // (drive.h's own kDutyPerSpeed doc comment); multiplying the constant
   // would hand every robot tovez's gearboxes again -- the precise
@@ -354,7 +354,7 @@ class RobotLoop {
   // the other three fields are meaningless and DBG:clear has nothing to
   // restore.
   bool dbgTuningBaselined_ = false;
-  Drive::AdaptationBounds dbgBoundsBaseline_{};
+  DifferentialDrive::AdaptationBounds dbgBoundsBaseline_{};
   float dbgDutyPerSpeedBaseLeft_ = 0.0f;   // [duty/(mm/s)]
   float dbgDutyPerSpeedBaseRight_ = 0.0f;  // [duty/(mm/s)]
 #endif
@@ -367,7 +367,7 @@ class RobotLoop {
   Hal::LineSensor& line_;
   Comms& comms_;
   Telemetry& tlm_;
-  Drive& drive_;
+  DifferentialDrive& drive_;
   Configurator& configurator_;
   Motion::Odometry& odom_;
   Motion::Planner& planner_;
@@ -426,4 +426,4 @@ class RobotLoop {
   float rotOffsetNeg_ = 0.0f;
 };
 
-}  // namespace App
+}  // namespace Core

@@ -1,8 +1,8 @@
-// preamble.cpp -- App::Preamble implementation. See preamble.h's file
+// preamble.cpp -- Core::Preamble implementation. See preamble.h's file
 // header for the module's full contract and the ported-constants table.
-#include "app/preamble.h"
+#include "core/preamble.h"
 
-namespace App {
+namespace Core {
 
 Preamble::Preamble(Hal::Motor& left, Hal::Motor& right,
                     Hal::Otos& otos, Hal::ColorSensor& color,
@@ -129,4 +129,4 @@ void Preamble::forceResolveAll() {
   for (uint8_t i = 0; i < kSlotCount; ++i) resolved_[i] = true;
 }
 
-}  // namespace App
+}  // namespace Core

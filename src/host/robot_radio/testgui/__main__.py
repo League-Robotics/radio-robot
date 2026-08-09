@@ -1291,7 +1291,7 @@ def _build_main_window():  # type: ignore[return]
     #
     # It must be the EFFECTIVE track (trackwidth / rotational_slip), the same
     # quantity the firmware derives at boot in
-    # ``src/firm/app/boot_calibration.cpp``'s ``effectiveTrackWidth()`` and
+    # ``src/firm/core/boot_calibration.cpp``'s ``effectiveTrackWidth()`` and
     # hands to Drive/Odometry/plannerLimits -- NOT the raw caliper value
     # ``_active_cfg.trackwidth`` returns. Both integrators consume the SAME
     # encoder counts, so a raw 128.0 here against the firmware's 140.4 makes
@@ -2608,7 +2608,7 @@ def _build_main_window():  # type: ignore[return]
         ``NezhaProtocol.set_config_field()``. ``ESTIMATOR`` is an honest
         dead end (see ``push.estimator_kwargs()``'s own docstring): it
         decodes but ``install(ESTIMATOR)`` permanently returns
-        ``ERR_UNIMPLEMENTED`` (``App::StateEstimator`` was already deleted
+        ``ERR_UNIMPLEMENTED`` (``Core::StateEstimator`` was already deleted
         as dead code before this sprint). ``PLANNER_SHAPER`` -- FIXED,
         132-017 (JSON reshape ticket, stakeholder-sanctioned mid-sprint
         scope addition): the six shaper-ceiling fields this function

@@ -33,7 +33,7 @@
 #include <string>
 #include <vector>
 
-#include "app/telemetry.h"
+#include "core/telemetry.h"
 #include "bench_test_config.h"
 #include "messages/envelope.h"
 #include "sim_harness.h"
@@ -120,8 +120,8 @@ void scenarioMotorDisconnectFlipsConnLeftAndRecovers() {
   bool sawDisconnected = false;
   bool rightStayedConnectedThroughout = true;
   for (const auto& f : disconnectedFrames) {
-    if (!(f.telemetry.flags & App::kFlagConnLeft)) sawDisconnected = true;
-    if (!(f.telemetry.flags & App::kFlagConnRight)) rightStayedConnectedThroughout = false;
+    if (!(f.telemetry.flags & Core::kFlagConnLeft)) sawDisconnected = true;
+    if (!(f.telemetry.flags & Core::kFlagConnRight)) rightStayedConnectedThroughout = false;
   }
   checkTrue(sawDisconnected, "decoded telemetry shows kFlagConnLeft clear while the knob is active");
   checkTrue(rightStayedConnectedThroughout,
@@ -137,7 +137,7 @@ void scenarioMotorDisconnectFlipsConnLeftAndRecovers() {
 
   bool sawRecovered = false;
   for (const auto& f : recoveredFrames) {
-    if (f.telemetry.flags & App::kFlagConnLeft) sawRecovered = true;
+    if (f.telemetry.flags & Core::kFlagConnLeft) sawRecovered = true;
   }
   checkTrue(sawRecovered, "decoded telemetry shows kFlagConnLeft set again once the knob is cleared "
                           "(connected() is recomputed fresh every collectEncoder() call, never latched)");
@@ -186,7 +186,7 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
 
   bool sawWedgeLatch = false;
   for (const auto& f : frozenFrames) {
-    if (f.telemetry.flags & App::kFlagFaultWedgeLatch) sawWedgeLatch = true;
+    if (f.telemetry.flags & Core::kFlagFaultWedgeLatch) sawWedgeLatch = true;
   }
   checkTrue(sawWedgeLatch, "kFlagFaultWedgeLatch sets in decoded telemetry within the wedge threshold");
 
@@ -198,7 +198,7 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
 
   bool sawClear = false;
   for (const auto& f : releasedFrames) {
-    if (!(f.telemetry.flags & App::kFlagFaultWedgeLatch)) sawClear = true;
+    if (!(f.telemetry.flags & Core::kFlagFaultWedgeLatch)) sawClear = true;
   }
   checkTrue(sawClear,
             "kFlagFaultWedgeLatch clears again once the frozen reading resumes advancing "
@@ -211,7 +211,7 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
 //     above, but asserting the NEW, per-wheel, motion-qualified
 //     kFlagFaultWheelFrozenLeft -- RobotLoop::publishWheels()'s new
 //     `motorL_.wedgeSuspect()`/`motorR_.wedgeSuspect()` publish point,
-//     wired through App::Telemetry::update() into the wire frame.
+//     wired through Core::Telemetry::update() into the wire frame.
 //
 //     Two things this scenario proves that scenario 2 does not:
 //       (a) "not on a single cycle" -- the flag stays CLEAR for the first
@@ -247,7 +247,7 @@ void scenarioWheelFrozenGatedFlagSetsOnlyAfterThresholdLeftOnly() {
   std::vector<DecodedLine> driving = onlyTelemetry(sim.drainTelemetry());
   bool sawFrozenBeforeFreeze = false;
   for (const auto& f : driving) {
-    if (f.telemetry.flags & (App::kFlagFaultWheelFrozenLeft | App::kFlagFaultWheelFrozenRight))
+    if (f.telemetry.flags & (Core::kFlagFaultWheelFrozenLeft | Core::kFlagFaultWheelFrozenRight))
       sawFrozenBeforeFreeze = true;
   }
   checkTrue(!sawFrozenBeforeFreeze, "driving normally (no freeze yet): neither wheel-frozen bit sets");
@@ -262,8 +262,8 @@ void scenarioWheelFrozenGatedFlagSetsOnlyAfterThresholdLeftOnly() {
   checkTrue(!underThreshold.empty(), "telemetry decoded under the wedge threshold");
   bool sawFrozenUnderThreshold = false;
   for (const auto& f : underThreshold) {
-    if (f.telemetry.flags & App::kFlagFaultWheelFrozenLeft) sawFrozenUnderThreshold = true;
-    checkTrue(!(f.telemetry.flags & App::kFlagFaultWheelFrozenRight),
+    if (f.telemetry.flags & Core::kFlagFaultWheelFrozenLeft) sawFrozenUnderThreshold = true;
+    checkTrue(!(f.telemetry.flags & Core::kFlagFaultWheelFrozenRight),
               "right wheel was never frozen -- kFlagFaultWheelFrozenRight must never set");
   }
   checkTrue(!sawFrozenUnderThreshold,
@@ -275,8 +275,8 @@ void scenarioWheelFrozenGatedFlagSetsOnlyAfterThresholdLeftOnly() {
   checkTrue(!pastThreshold.empty(), "telemetry decoded past the wedge threshold");
   bool sawFrozenPastThreshold = false;
   for (const auto& f : pastThreshold) {
-    if (f.telemetry.flags & App::kFlagFaultWheelFrozenLeft) sawFrozenPastThreshold = true;
-    checkTrue(!(f.telemetry.flags & App::kFlagFaultWheelFrozenRight),
+    if (f.telemetry.flags & Core::kFlagFaultWheelFrozenLeft) sawFrozenPastThreshold = true;
+    checkTrue(!(f.telemetry.flags & Core::kFlagFaultWheelFrozenRight),
               "right wheel was never frozen -- kFlagFaultWheelFrozenRight must never set");
   }
   checkTrue(sawFrozenPastThreshold,
@@ -287,7 +287,7 @@ void scenarioWheelFrozenGatedFlagSetsOnlyAfterThresholdLeftOnly() {
   std::vector<DecodedLine> released = onlyTelemetry(sim.drainTelemetry());
   bool sawClear = false;
   for (const auto& f : released) {
-    if (!(f.telemetry.flags & App::kFlagFaultWheelFrozenLeft)) sawClear = true;
+    if (!(f.telemetry.flags & Core::kFlagFaultWheelFrozenLeft)) sawClear = true;
   }
   checkTrue(sawClear, "kFlagFaultWheelFrozenLeft clears again once the frozen reading resumes advancing");
 }
@@ -341,7 +341,7 @@ void scenarioWedgeWhileDrivingStopsTheRobot() {
   std::vector<DecodedLine> driving = onlyTelemetry(sim.drainTelemetry());
   bool wasActive = false;
   for (const auto& f : driving) {
-    if (f.telemetry.flags & App::kFlagActive) wasActive = true;
+    if (f.telemetry.flags & Core::kFlagActive) wasActive = true;
   }
   checkTrue(wasActive, "the Move is active and driving before the wedge");
 
@@ -358,7 +358,7 @@ void scenarioWedgeWhileDrivingStopsTheRobot() {
   // the Move active while the detector accumulates its threshold.
   bool endedInactive = false;
   for (const auto& f : wedged) {
-    endedInactive = !(f.telemetry.flags & App::kFlagActive);
+    endedInactive = !(f.telemetry.flags & Core::kFlagActive);
   }
   checkTrue(endedInactive,
             "the active Move is abandoned once the wedge is recognised -- so every "
@@ -373,7 +373,7 @@ void scenarioWedgeWhileDrivingStopsTheRobot() {
   std::vector<DecodedLine> recovered = onlyTelemetry(sim.drainTelemetry());
   bool stayedInactive = true;
   for (const auto& f : recovered) {
-    if (f.telemetry.flags & App::kFlagActive) stayedInactive = false;
+    if (f.telemetry.flags & Core::kFlagActive) stayedInactive = false;
   }
   checkTrue(stayedInactive,
             "the abandoned Move does NOT restart when the bus recovers");
@@ -390,7 +390,7 @@ void scenarioWedgeWhileDrivingStopsTheRobot() {
 //    sprint.md): NezhaMotor's freshness gate is DELETED OUTRIGHT this
 //    ticket, not relocated -- velocity() is now a naive per-tick difference
 //    quotient (nezha_motor.cpp's own file header), pending ticket 004's
-//    App::WheelObserver, which restores a real predict-correct estimate
+//    Core::WheelObserver, which restores a real predict-correct estimate
 //    that holds through a stale/held sample instead of computing a fresh
 //    zero-delta. Under THIS interim, a held/stale dropout read DOES
 //    genuinely starve velLeft toward 0 for that tick -- a disclosed,
@@ -430,7 +430,7 @@ void scenarioEncoderDropoutStaysSaneUnderModerateLoss() {
   bool sawWedgeLatch = false;
   bool sawHealthyVelocity = false;
   for (const auto& f : frames) {
-    if (f.telemetry.flags & App::kFlagFaultWedgeLatch) sawWedgeLatch = true;
+    if (f.telemetry.flags & Core::kFlagFaultWedgeLatch) sawWedgeLatch = true;
     // EncoderReading is unconditionally present every frame (115-005 frame
     // v2 -- no has_vel presence flag any more), so every frame's
     // enc_left.velocity is real data, not a filtered subset. 124-008
@@ -444,7 +444,7 @@ void scenarioEncoderDropoutStaysSaneUnderModerateLoss() {
   // DELETED here, not weakened silently -- see this scenario's own updated
   // header comment. It genuinely does starve toward 0 on a held/stale
   // sample now that the freshness gate is gone; restoring this guarantee is
-  // ticket 004's own job (App::WheelObserver).
+  // ticket 004's own job (Core::WheelObserver).
   checkTrue(sawHealthyVelocity, "velLeft still reaches/holds a healthy value despite the dropout");
 }
 

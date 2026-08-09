@@ -53,9 +53,9 @@
 #include <cstring>
 #include <string>
 
-#include "app/boot_calibration.h"
-#include "app/configurator.h"
-#include "app/drive.h"
+#include "core/boot_calibration.h"
+#include "core/configurator.h"
+#include "core/differential_drive.h"
 #include "config/boot_config.h"
 #include "config/robot.h"
 #include "hal/motor.h"
@@ -183,11 +183,11 @@ int main() {
 
   RecordingMotor motorL, motorR;
   RecordingOtos otos;
-  App::Drive drive(motorL, motorR, /*trackWidth=*/128.0f);
+  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/128.0f);
   Motion::PlannerLimits limits;
   Motion::Planner planner(limits);
   Motion::NavigatorLimits navigatorLimits;
-  App::Configurator configurator(drive, motorL, motorR, otos, planner, navigatorLimits, /*tuningStore=*/nullptr);
+  Core::Configurator configurator(drive, motorL, motorR, otos, planner, navigatorLimits, /*tuningStore=*/nullptr);
 
   // --- DRIVE: push then get -------------------------------------------
 

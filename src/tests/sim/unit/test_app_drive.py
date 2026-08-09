@@ -1,13 +1,13 @@
-"""Off-hardware acceptance proof for ticket 103-006 (SUC-006), App::Drive
-(``src/firm/app/drive.{h,cpp}``).
+"""Off-hardware acceptance proof for ticket 103-006 (SUC-006), Core::DifferentialDrive
+(``src/firm/core/differential_drive.{h,cpp}``).
 
 Compiles ``app_drive_harness.cpp`` together with the HOST_BUILD
-implementations it needs (``src/firm/app/drive.cpp``,
+implementations it needs (``src/firm/core/differential_drive.cpp``,
 ``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
 physics dependencies, ``src/firm/hardware/nezha/nezha_motor.cpp``,
 ``src/firm/kinematics/differential_kinematics.cpp``) with ``-DHOST_BUILD``, against the SAME
-headers every ARM build compiles. App::Drive holds no controller of its own
+headers every ARM build compiles. Core::DifferentialDrive holds no controller of its own
 (open-loop duty from calibrated speed, drive.h's own header) -- 128-015
 deleted the zero-instantiation motion-local wheel-velocity PID class
 (``src/firm/motion/wheel_velocity_pid.cpp``) this harness used to (needlessly)
@@ -37,7 +37,7 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_drive_harness.cpp"
-_DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
+_DRIVE_SRC = _SOURCE_DIR / "core" / "differential_drive.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
@@ -61,7 +61,7 @@ def _find_cxx_compiler() -> str:
 
 
 def test_app_drive_harness_compiles_and_passes(tmp_path):
-    """Compile App::Drive + its Devices leaf dependencies + SimPlant + the
+    """Compile Core::DifferentialDrive + its Devices leaf dependencies + SimPlant + the
     harness; assert every scenario passes."""
     sources = [
         _HARNESS_SRC,

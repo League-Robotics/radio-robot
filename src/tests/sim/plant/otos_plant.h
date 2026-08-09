@@ -1,10 +1,10 @@
 // otos_plant.h -- TestSim::OtosPlant: a deterministic OTOS register
 // responder deriving pose from the SAME two wheel positions the firmware's
-// own App::Odometry integrates -- and nothing else.
+// own Core::Odometry integrates -- and nothing else.
 //
 // Ticket 105-003 (SUC-020), architecture-update.md Decision 3: "The plant
 // carries no heading/angle-wrap state or logic of its own; all heading
-// comes from App::Odometry's existing integration." This class's own
+// comes from Core::Odometry's existing integration." This class's own
 // accumulator below is the SAME midpoint-arc update Odometry::integrate()
 // (src/firm/app/odometry.cpp) already performs -- literally the same three
 // lines (Kinematics::DifferentialKinematics::forward() + cosf/sinf midpoint-arc accumulation),
@@ -34,7 +34,7 @@
 // Heading sign convention (135-008, sim-otos-heading-sign-diverges-from-
 // hardware-angle-moves-never-stop.md): heading_ above carries the SAME
 // sign as encoder-derived heading, by construction (it integrates the
-// identical midpoint-arc math App::Odometry uses -- see this file's own
+// identical midpoint-arc math Core::Odometry uses -- see this file's own
 // header above). The REAL OTOS chip's heading does NOT: it is measurably
 // mounted with its sign INVERTED relative to encoder heading, which
 // src/firm/motion/planner/planner.cpp:513 reconciles with exactly one negation
@@ -56,7 +56,7 @@ namespace TestSim {
 class OtosPlant {
  public:
   // trackWidth: [mm] Kinematics::DifferentialKinematics::forward()'s own `b` parameter. MUST
-  // match the trackWidth passed to the App::Odometry instance under test in
+  // match the trackWidth passed to the Core::Odometry instance under test in
   // the SAME scenario, so this plant's own OTOS pose and Odometry's
   // independently-integrated pose describe the same physical wheelbase
   // (architecture-update.md Decision 3's own "will always agree closely --
@@ -65,7 +65,7 @@ class OtosPlant {
 
   // Advances this plant's own (x, y, heading) accumulator by exactly one
   // cycle's wheel-position delta, via Kinematics::DifferentialKinematics::forward() -- the SAME
-  // function App::Odometry itself calls, over the SAME two absolute wheel
+  // function Core::Odometry itself calls, over the SAME two absolute wheel
   // positions the caller's two WheelPlant instances just computed. Call
   // once per cycle, after both WheelPlant::step() calls for that cycle.
   //
@@ -78,7 +78,7 @@ class OtosPlant {
   // `omega()==0`/`v_x()==0`/`v_y()==0` (the pre-109-010 behavior:
   // sim_plant.cpp's own handleOtosRead() zeroed the VELOCITY_XL bytes
   // unconditionally, "no scenario asserts on OTOS's twist" -- ticket 010
-  // is the first scenario that does, via App::HeadingSource's own
+  // is the first scenario that does, via Core::HeadingSource's own
   // measurement-age projection needing a real `omega_meas`).
   void step(float leftPosition, float rightPosition, float dt = 0.0f);   // [mm] [mm] [s]
 

@@ -6,7 +6,7 @@
 // REWRITTEN by 115-006 (gut S1 sim lockstep): the original file (113-002)
 // also covered SimHarness::configurePlanner()/plannerConfig() and the
 // setYawRateMax() sim-only hook -- all deleted by this ticket, since
-// Motion::Executor/App::Pilot/App::HeadingSource (115-002's motion-stack
+// Motion::Executor/Core::Pilot/Core::HeadingSource (115-002's motion-stack
 // excision) no longer exist for any of them to configure. What survives:
 // configureMotor()'s own per-port additive contract (readable back via
 // motorConfig()) and the motor-only configuration-completeness gate
@@ -35,7 +35,7 @@
 // Compiled by test_sim_harness_configure.py against the same full
 // HOST_BUILD dependency graph the other post-gut sim/unit harnesses (e.g.
 // test_app_robot_loop.py) compile -- SimHarness composes the real
-// App::RobotLoop graph -- see sim_harness.h's own header.
+// Core::RobotLoop graph -- see sim_harness.h's own header.
 #include <cmath>
 #include <cstdio>
 #include <string>
@@ -152,11 +152,11 @@ int main() {
     checkTrue(sim.isConfigured(), "isConfigured() true once BOTH ports are configured");
   }
 
-  // --- Scenario 4 (133-005): the sim's App::Drive is calibrated with an
+  // --- Scenario 4 (133-005): the sim's Core::DifferentialDrive is calibrated with an
   //     IDENTITY Stage A wheel correction, whatever data/robots/*.json
   //     currently holds.
   //
-  //     This is a REGRESSION GUARD with a price tag. App::Drive's wheel
+  //     This is a REGRESSION GUARD with a price tag. Core::DifferentialDrive's wheel
   //     correction linearizes a real gearbox (measured = gain*commanded +
   //     intercept); TestSim::WheelPlant is already linear, so installing
   //     a hardware fit against it cancels nothing and just bends every
@@ -167,7 +167,7 @@ int main() {
   //     right), the assumption silently stopped being true, and
   //     src/tests/testgui/test_tour_closure_gate.py's TOUR_1/ideal worst
   //     per-turn error went 21.8deg -> 53.8deg with nothing failing that
-  //     was not already failing. See App::BootOverrides::wheelCorrection
+  //     was not already failing. See Core::BootOverrides::wheelCorrection
   //     (app/boot_wiring.h) for the full account.
   //
   //     Three parts, because "the sim runs identity" alone would go

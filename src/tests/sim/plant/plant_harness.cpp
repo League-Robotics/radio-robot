@@ -7,16 +7,16 @@
 //      there is no RNG in this plant, see wheel_plant.h's file header)
 //      seed produce bit-identical trajectories;
 //   3. a pivot (differential-duty, turn-in-place) scenario's resulting
-//      heading, read ENTIRELY through App::Odometry's own integration over
+//      heading, read ENTIRELY through Core::Odometry's own integration over
 //      the plant's two wheel positions (never read from the plant
 //      directly), is sane -- the sprint's own "B3 doesn't reappear" check.
 //
-// Drives the REAL Hardware::NezhaMotor x2 + Hal::Otos + App::Odometry
+// Drives the REAL Hardware::NezhaMotor x2 + Hal::Otos + Core::Odometry
 // against a real Platform::I2CBus implementation, exactly as
 // devices_motor_harness.cpp scenario 6 and app_odometry_harness.cpp already
 // do for their own narrower scopes -- this harness generalizes that same
 // proven idiom across the whole loop (both motors + OTOS), per
-// architecture-update.md Decision 2. No App::RobotLoop involvement -- that
+// architecture-update.md Decision 2. No Core::RobotLoop involvement -- that
 // composition is TestSim::SimHarness's own job (architecture-update.md Step
 // 3's "Plant" boundary: "the plant is driven BY the harness, between
 // cycles, never inside a runAndWait block").
@@ -30,7 +30,7 @@
 // longer scripts exact per-cycle bus responses; it drives SimPlant live
 // (bus.tick(dt) each cycle, motor/otos calls read back whatever SimPlant's
 // OWN WheelPlant/OtosPlant instances actually computed). SimPlant itself
-// has zero App::RobotLoop dependency -- it is purely a wire-protocol
+// has zero Core::RobotLoop dependency -- it is purely a wire-protocol
 // responder over these same plant classes -- so reusing it here does not
 // pull in the RobotLoop/sim_api composition layer this file's own header
 // has always disclaimed; it only replaces the deleted scripted-FIFO
@@ -226,7 +226,7 @@ void scenarioVelocityStepShowsRampWithTauInRange() {
 }
 
 // ===========================================================================
-// Shared multi-device fixture: two NezhaMotor + one Otos + one App::Odometry,
+// Shared multi-device fixture: two NezhaMotor + one Otos + one Core::Odometry,
 // all sharing ONE SimPlant (its own left/right WheelPlant + OtosPlant).
 // Used by BOTH the pivot scenario and the determinism scenario below --
 // exercising "the WHOLE plant (both motors + OTOS)", not one leaf in
@@ -254,7 +254,7 @@ struct CycleSample {
 // call -- two calls with identical arguments are two fully independent
 // runs, which the determinism scenario relies on.
 std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles) {
-  TestSim::SimPlant bus(kTrackWidth);   // trackWidth MUST match the App::Odometry instance
+  TestSim::SimPlant bus(kTrackWidth);   // trackWidth MUST match the Core::Odometry instance
                                          // below -- see otos_plant.h's own "MUST match" comment.
 
   Hardware::NezhaMotor motorLeft(bus, baseMotorConfig(1));
@@ -301,7 +301,7 @@ std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles
     // state (sim_plant.h's own selectedPort_); interleaving both
     // requestSample() calls before either tick() would let the second
     // select overwrite the first before its own read lands. This also
-    // matches App::RobotLoop::cycle()'s own real schedule (robot_loop.cpp):
+    // matches Core::RobotLoop::cycle()'s own real schedule (robot_loop.cpp):
     // motorL_.requestSample() -> ... -> motorL_.tick() -> motorR_.
     // requestSample() -> ... -> motorR_.tick().
     motorLeft.requestSample();
@@ -327,7 +327,7 @@ std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles
 
 // ===========================================================================
 // 2. Pivot scenario: equal-and-opposite duty targets on the two wheels (a
-//    turn-in-place). Heading is asserted ENTIRELY through App::Odometry's
+//    turn-in-place). Heading is asserted ENTIRELY through Core::Odometry's
 //    own integrate()/theta() -- never read from OtosPlant or WheelPlant
 //    directly -- the sprint's own "B3 doesn't reappear" re-verification
 //    (architecture-update.md Decision 3).

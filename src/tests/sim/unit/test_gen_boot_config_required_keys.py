@@ -50,7 +50,7 @@ config"): ``estimator.weight_heading_otos``/``weight_omega_otos``/
 ``control.output_deadband``/``control.reversal_dwell_ms`` did in sprint
 114 ticket 003 -- ``gen_boot_config.py``'s new
 ``estimator_config_for_config()`` reads all three via ``_require()``, no
-source-side fallback, mirroring `App::StateEstimator`'s own fail-closed
+source-side fallback, mirroring `Core::StateEstimator`'s own fail-closed
 boot-config precedent.
 
 ADDED (129-009, config consolidation): all 29 ``planner.*`` keys joined
@@ -75,7 +75,7 @@ REMOVED (118 ticket 004, land-at-zero-completion-delete-stop-lead.md): a
 former fourth ``estimator.*`` key -- a boot-time anticipation-lead
 constant -- briefly joined this list (turn-prediction campaign) and is
 now gone again: the completion mechanism it fed no longer exists (see
-``App::MoveQueue::tick()``'s own doc comment for the land-at-zero
+``Core::MoveQueue::tick()``'s own doc comment for the land-at-zero
 predicate that replaces it), so ``estimator_config_for_config()`` no
 longer reads (or requires) that key at all.
 

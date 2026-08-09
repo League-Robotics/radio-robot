@@ -1,10 +1,10 @@
 // main.cpp -- the ARM entry point. Owns the real MicroBit hardware
 // singleton, constructs the ONE leaf that differs from the sim build (the
 // real Platform::MicroBitI2CBus), and hands everything else to
-// App::composeRobot() (app/boot_wiring.h) -- the SAME composition root
+// Core::composeRobot() (app/boot_wiring.h) -- the SAME composition root
 // TestSim::SimHarness (src/firm/platform/host/sim_harness.h) calls. 130-002 (unify-sim-
 // and-robot-composition-roots.md): before this ticket, this file hand-
-// wired the whole App::/Motion:: graph itself, and TestSim::SimHarness
+// wired the whole Core::/Motion:: graph itself, and TestSim::SimHarness
 // hand-wired an independently-drifted copy of the same graph. See
 // boot_wiring.h's own header for the composition-root contract and why
 // that drift is now structurally impossible.
@@ -16,8 +16,8 @@
 #include <cstdio>
 #include <cstring>
 
-#include "app/boot_wiring.h"
-#include "app/comms.h"
+#include "core/boot_wiring.h"
+#include "core/comms.h"
 #include "com/banner.h"
 #include "com/radio.h"
 #include "com/serial_port.h"
@@ -78,7 +78,7 @@ void versionTag(char* out, size_t cap) {
 // completes and before the first control cycle: the LED matrix driver
 // refreshes continuously off its own timer, and the loop's own motion
 // tuning assumes those cycles are not being spent elsewhere. The loop
-// targets App::RobotLoop::kCycle (32 ms) as an ABSOLUTE end-of-cycle
+// targets Core::RobotLoop::kCycle (32 ms) as an ABSOLUTE end-of-cycle
 // deadline (131-005) -- previously this comment said "a measured ~47 ms
 // budget" (the 40ms-nominal generation's own baked, empirically-measured
 // number); that framing is retired along with the defect it described
@@ -156,17 +156,17 @@ int main() {
            Config::kRobotProfileName, FIRMWARE_VERSION_STR);
 
   // The ONE leaf that differs from the sim composition root: the real I2C
-  // bus. Everything downstream of `bus` is built by App::composeRobot(),
+  // bus. Everything downstream of `bus` is built by Core::composeRobot(),
   // the SAME function TestSim::SimHarness calls with a TestSim::SimPlant
   // in this slot instead (app/boot_wiring.h).
   static Platform::MicroBitI2CBus bus(uBit.i2c);
   static Platform::MicroBitClock clock;
   static Platform::MicroBitSleeper sleeper;
-  static App::SerialTransport serialLink(serial);
-  static App::RadioTransport radioLink(radio);
+  static Core::SerialTransport serialLink(serial);
+  static Core::RadioTransport radioLink(radio);
   static Config::MicroBitTuningStore tuningStore(uBit.storage);
 
-  static App::RobotGraph graph = App::composeRobot(bus, clock, sleeper, serialLink, radioLink,
+  static Core::RobotGraph graph = Core::composeRobot(bus, clock, sleeper, serialLink, radioLink,
                                                    &tuningStore, banner, idLine);
 
   // RobotLoop::run() is boot() followed by cycle() forever; it is spelled
@@ -176,7 +176,7 @@ int main() {
   // 132-015 (trap 1, the-configuration-object.md): loadPersistedTuning()
   // MUST run AFTER boot(), not before -- the pre-132-015 order here. Every
   // Hardware::RealOtos setter reapplyPersistedTuning()'s own OTOS branch
-  // reaches (App::configureOtos() -> setOffset()/setLinearScalar()/
+  // reaches (Core::configureOtos() -> setOffset()/setLinearScalar()/
   // setAngularScalar(), otos.cpp) is a no-op until RealOtos::begin() sets
   // initialized_ = true, and begin() itself only ever runs inside boot()'s
   // own Preamble::step() loop (preamble.cpp's Otos slot) -- calling
@@ -198,7 +198,7 @@ int main() {
 
   // Boot is done and the first control cycle is next: give the LED matrix's
   // refresh timer back to the loop. Everything from here runs to the
-  // measured budget App::RobotGraph baked from the robot JSON (see
+  // measured budget Core::RobotGraph baked from the robot JSON (see
   // Motion::PlannerLimits::controlPeriod), and the motion tuning assumes
   // those cycles are the loop's.
   uBit.display.clear();

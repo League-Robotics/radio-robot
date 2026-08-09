@@ -96,7 +96,7 @@
 #include <string>
 #include <vector>
 
-#include "app/telemetry.h"
+#include "core/telemetry.h"
 #include "bench_test_config.h"
 #include "messages/envelope.h"
 #include "sim_harness.h"
@@ -180,7 +180,7 @@ bool anyAckMatches(const std::vector<DecodedLine>& frames, uint32_t corrId) {
 // -- see this file's own header comment. Every OTHER declared fault bit is
 // something this demo's own actions should never provoke.
 constexpr uint32_t kWatchedFaultMask =
-    App::kFlagFaultWedgeLatch | App::kFlagFaultI2CNak | App::kFlagFaultCommsMalformed;
+    Core::kFlagFaultWedgeLatch | Core::kFlagFaultI2CNak | Core::kFlagFaultCommsMalformed;
 
 void printTraceHeader() {
   std::printf("%6s  %8s %8s  %8s %8s  %8s %8s\n", "cycle", "cmd_v_x", "cmd_om", "encL", "encR", "velL", "velR");
@@ -210,7 +210,7 @@ int main() {
   bool connHealthyThroughout = true;
 
   // ===========================================================================
-  // Phase 1: BOOT -- drives the REAL App::RobotLoop::boot(), motors + OTOS
+  // Phase 1: BOOT -- drives the REAL Core::RobotLoop::boot(), motors + OTOS
   // connect. 125-002 (telemetry-emit-policy-rebuild-spec.md Part 1 item 8/
   // Part 8 #1): there is no boot-ready telemetry bit any more, and a silent
   // host gets ZERO unsolicited frames after boot (mode_ defaults kAuto,
@@ -245,7 +245,7 @@ int main() {
     checkTrue(!bootFrames.empty(), "the bare TLM request produced telemetry");
     for (const auto& f : bootFrames) {
       if (f.telemetry.flags & kWatchedFaultMask) anyWatchedFaultEver = true;
-      if (!(f.telemetry.flags & App::kFlagConnLeft) || !(f.telemetry.flags & App::kFlagConnRight))
+      if (!(f.telemetry.flags & Core::kFlagConnLeft) || !(f.telemetry.flags & Core::kFlagConnRight))
         connHealthyThroughout = false;
     }
     std::printf("  BOOT OK: motors + OTOS connected, silent host confirmed silent, connectivity confirmed via "
@@ -287,7 +287,7 @@ int main() {
     if (anyAckMatches(frames, kTwistCorrId)) twistAcked = true;
     for (const auto& f : frames) {
       if (f.telemetry.flags & kWatchedFaultMask) anyWatchedFaultEver = true;
-      if (!(f.telemetry.flags & App::kFlagConnLeft) || !(f.telemetry.flags & App::kFlagConnRight))
+      if (!(f.telemetry.flags & Core::kFlagConnLeft) || !(f.telemetry.flags & Core::kFlagConnRight))
         connHealthyThroughout = false;
       // EncoderReading is unconditionally present every frame (115-005
       // frame v2 -- no has_vel/has_enc presence flag any more), so every
@@ -337,7 +337,7 @@ int main() {
   // change.
   constexpr uint32_t kStopWindow = 600;  // [ms]
   const int kStopCycles =
-      static_cast<int>((kStopWindow + App::RobotLoop::kCycle - 1) / App::RobotLoop::kCycle);
+      static_cast<int>((kStopWindow + Core::RobotLoop::kCycle - 1) / Core::RobotLoop::kCycle);
   // Open-loop era (stakeholder 2026-07-27, no wheel PID): STOP cuts duty
   // to zero and the plant COASTS on its own time constant -- there is no
   // controller actively braking to a small residual any more. The bound
@@ -364,9 +364,9 @@ int main() {
     if (anyAckMatches(frames, kStopCorrId)) stopAcked = true;
     for (const auto& f : frames) {
       if (f.telemetry.flags & kWatchedFaultMask) anyWatchedFaultEver = true;
-      if (!(f.telemetry.flags & App::kFlagConnLeft) || !(f.telemetry.flags & App::kFlagConnRight))
+      if (!(f.telemetry.flags & Core::kFlagConnLeft) || !(f.telemetry.flags & Core::kFlagConnRight))
         connHealthyThroughout = false;
-      if (!(f.telemetry.flags & App::kFlagActive)) sawInactive = true;
+      if (!(f.telemetry.flags & Core::kFlagActive)) sawInactive = true;
       if (f.telemetry.mode == msg::DriveMode::IDLE) sawIdleMode = true;
       // EncoderReading is unconditionally present every frame (115-005
       // frame v2) -- no has_vel presence flag to gate on any more.

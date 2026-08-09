@@ -3,16 +3,16 @@ message channel, bench/Sim only; issue 05-dbg-debug-message-channel-for-
 bench-and-sim.md).
 
 Proves the FULL real C++ plumbing end to end through the compiled sim
-library, not a Python stub: ``App::setDebugSink()`` (wired by
+library, not a Python stub: ``Core::setDebugSink()`` (wired by
 ``TestSim::SimHarness``'s own constructor, ``src/firm/platform/host/sim_harness.h``) ->
-``App::debugf()`` (``src/firm/app/debug.h``/``.cpp``) -> ``App::Comms::
+``Core::debugf()`` (``src/firm/core/debug.h``/``.cpp``) -> ``Core::Comms::
 sendDebug()`` (``comms.h``/``.cpp``, a real cleartext ``"DBG:<message>"``
 wire line via ``sendReliable()``) -> ``SimHarness::drainReliable()`` ->
 ``sim_drain_debug()`` (``sim_ctypes.cpp``) -> ``SimLoop._drain_debug_into_
 queue()`` -> ``SimLoop.drain_debug_lines()``/``drain_pending_debug()``.
 
 ``sim_test_emit_debug()`` (``sim_ctypes.cpp``) is a TEST-ONLY escape hatch
-that calls ``App::debugf("%s", msg)`` directly against the handle's own
+that calls ``Core::debugf("%s", msg)`` directly against the handle's own
 installed sink -- this ticket lands the DBG CHANNEL itself, ahead of
 tickets 006 (duty sweep)/007 (adaptive calibration)'s actual ``debugf()``
 call sites, so there is no real diagnostic producing DBG lines yet to

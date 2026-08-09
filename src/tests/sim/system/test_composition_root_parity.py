@@ -7,8 +7,8 @@ header for the full rationale on each).
 
 Compiles ``composition_root_parity_harness.cpp`` together with the same
 full HOST_BUILD dependency graph every sibling ``test_*.py`` in this
-directory already compiles (SimHarness composes the real App::RobotLoop
-graph through App::composeRobot(), see sim_harness.h's own header), runs the
+directory already compiles (SimHarness composes the real Core::RobotLoop
+graph through Core::composeRobot(), see sim_harness.h's own header), runs the
 resulting binary, and asserts it exits 0 -- printing its own human-readable
 field-by-field comparison.
 
@@ -36,27 +36,27 @@ _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 
 _APP_SOURCES = [
-    _SOURCE_DIR / "app" / "robot_loop.cpp",
-    _SOURCE_DIR / "app" / "comms.cpp",
-    _SOURCE_DIR / "app" / "debug.cpp",
-    _SOURCE_DIR / "app" / "configurator.cpp",
-    _SOURCE_DIR / "app" / "telemetry.cpp",
+    _SOURCE_DIR / "core" / "robot_loop.cpp",
+    _SOURCE_DIR / "core" / "comms.cpp",
+    _SOURCE_DIR / "core" / "debug.cpp",
+    _SOURCE_DIR / "core" / "configurator.cpp",
+    _SOURCE_DIR / "core" / "telemetry.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "profile.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "estimation.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "shape.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "planner.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
-    _SOURCE_DIR / "app" / "drive.cpp",
+    _SOURCE_DIR / "core" / "differential_drive.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
-    _SOURCE_DIR / "app" / "preamble.cpp",
-    # 130-002 -- the shared composition root (App::composeRobot()/
+    _SOURCE_DIR / "core" / "preamble.cpp",
+    # 130-002 -- the shared composition root (Core::composeRobot()/
     # RobotGraph) sim_harness.h boots through, plus its Config::boot_config-
-    # reading calibration helpers (App::bootPlannerLimits()/
+    # reading calibration helpers (Core::bootPlannerLimits()/
     # effectiveTrackWidth(), which this harness ALSO calls directly to
     # compute the hardware-equivalent value to diff against).
-    _SOURCE_DIR / "app" / "boot_wiring.cpp",
-    _SOURCE_DIR / "app" / "boot_calibration.cpp",
+    _SOURCE_DIR / "core" / "boot_wiring.cpp",
+    _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 _MOTION_SOURCES = []
 _DEVICE_SOURCES = [

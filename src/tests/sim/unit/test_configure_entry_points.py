@@ -4,7 +4,7 @@ discipline"): Config::Robot's derived-value methods
 (effectiveTrackWidth()/rotationOffsetPos()/rotationOffsetNeg()/
 velocityFilterWeight(), config/robot.h) plus five of the six subsystem
 configure() entry points (Drive::configure(),
-App::configurePlanner()/configureMotor()/configureOtos()). RobotLoop::
+Core::configurePlanner()/configureMotor()/configureOtos()). RobotLoop::
 configure() -- the sixth -- is covered by a scenario added to
 test_configurator_loadbaked.py instead, since it needs the full composition
 root; the other five do not.
@@ -34,8 +34,8 @@ _UNIT_DIR = pathlib.Path(__file__).resolve().parent
 _HARNESS_SRC = _UNIT_DIR / "configure_entry_points_harness.cpp"
 
 _APP_SOURCES = [
-    _SOURCE_DIR / "app" / "drive.cpp",
-    _SOURCE_DIR / "app" / "boot_calibration.cpp",
+    _SOURCE_DIR / "core" / "differential_drive.cpp",
+    _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 _MOTION_SOURCES = [
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "profile.cpp",

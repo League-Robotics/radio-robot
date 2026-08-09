@@ -119,7 +119,7 @@ def calibration_kwargs(config: Any) -> "dict[str, float]":
         a host-only section unaffected by the reshape) when the group field
         reads its proto3 zero default (0.0 is never a valid calibrated
         value -- ``robot_config.proto``'s own ``(min) = 0.0001`` bound).
-      - ``pid.kp/ki/kff/iMax/kaw`` -- App::Drive's unified wheel-speed
+      - ``pid.kp/ki/kff/iMax/kaw`` -- Core::DifferentialDrive's unified wheel-speed
         controller's Stage B fast-PID gains (``WheelControl.pid_kp/pid_ki/
         pid_kaff/pid_i_max/pid_max``), the direct successor of
         ``control.wheel_pid_*`` -- unchanged consumer (130-005), only the
@@ -148,7 +148,7 @@ def calibration_kwargs(config: Any) -> "dict[str, float]":
     if travel_calib_right is not None:
         kwargs["mr"] = float(travel_calib_right)
 
-    # ── App::Drive's unified wheel-speed controller: Stage B fast-PID gains
+    # ── Core::DifferentialDrive's unified wheel-speed controller: Stage B fast-PID gains
     wheel_control = getattr(config, "wheel_control", None)
     for wire_key, attr in (
         ("pid.kp", "pid_kp"),
@@ -178,7 +178,7 @@ def otos_kwargs(config: Any) -> "dict[str, float]":
     (1.0 = no correction) -- unlike the pre-132 text-plane ``OL``/``OA``
     verbs (which carried the chip's raw int8 register scalar,
     ``scale_to_int8()``-encoded), the live wire push applies NO such
-    encoding: ``App::configureOtos()`` (132-010, trap 3 closed) converts
+    encoding: ``Core::configureOtos()`` (132-010, trap 3 closed) converts
     the multiplier through ``Devices::scaleToRegister()`` FIRMWARE-side
     now, so a live push and a boot bake finally agree on what a given
     multiplier means. ``binary_bridge.py``'s ``OL <scale>``/``OA <scale>``
@@ -226,7 +226,7 @@ def estimator_kwargs(config: Any) -> "dict[str, float]":
     ``robot_config.proto`` groups instead of one Patch message:
 
       - ``config.estimator.weight_heading_otos``/``weight_omega_otos``/
-        ``staleness`` -- unchanged consumer intent (``App::StateEstimator``'s
+        ``staleness`` -- unchanged consumer intent (``Core::StateEstimator``'s
         complementary-blend fusion weights), but that consumer was ALREADY
         deleted as dead code before this sprint (sprint 128 ticket 016) --
         ``ESTIMATOR`` decodes these for read-back but ``install(ESTIMATOR)``

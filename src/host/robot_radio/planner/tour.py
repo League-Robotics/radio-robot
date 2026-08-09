@@ -251,7 +251,7 @@ _MOVE_MIN_TIMEOUT = 2000.0    # [ms]
 # false-positive.
 _TOUR_MOVE_ID_BASE = 1 << 20
 # ...and NEVER reused, run to run. A completed `Move.id` stays live in firmware's
-# depth-12 ack ring (`src/firm/app/telemetry.h`) long after the leg ends, so a rerun
+# depth-12 ack ring (`src/firm/core/telemetry.h`) long after the leg ends, so a rerun
 # that reuses it matches the STALE completion on its first poll and skips the leg --
 # and the duplicate itself wedges the firmware command path (measured on `tovez` over
 # the relay 2026-08-05: reused id -> never active, enc_delta=0; the NEXT command then
@@ -292,7 +292,7 @@ class TourExecution:
     `sequential` mode. **The dwell is PASSIVE: `run_tour()` sends nothing
     at all while it waits.** That is load-bearing, not incidental. A
     zero-velocity `WHEELS` command is a teleop TAKEOVER, not a no-op:
-    `App::RobotLoop::handleWheels()` calls `planner_.estop()`, which clears
+    `Core::RobotLoop::handleWheels()` calls `planner_.estop()`, which clears
     `carryValid_` -- the planner's cumulative-heading intent ledger, the
     mechanism that makes the square tour close. A host that leases
     `wheels(0, 0)` through the dwell tears that ledger down at every
@@ -399,7 +399,7 @@ class TourLegResult:
     leg: TourLeg
     outcome: RunOutcome
     heading_before: float | None  # [rad] measured_heading() at this leg's own enqueue, ABSOLUTE
-    # since-boot (App::Odometry never resets across a boot session -- see run_tour()'s own docstring)
+    # since-boot (Core::Odometry never resets across a boot session -- see run_tour()'s own docstring)
     heading_after: float | None  # [rad] measured_heading() at this leg's own terminal ack, same caveat
     duration: float  # [s] wall/elapsed time this leg's own wait-for-terminal loop took
     fault: bool  # True iff this leg's own outcome was RunOutcome.FAULT
@@ -781,7 +781,7 @@ def run_tour(
     is sent immediately after leg N's (while leg N is still active, not
     after it completes) --
     the ONE piece of host-side sequencing this function still does -- so
-    firmware's own `App::MoveQueue` (1 active + 4 pending,
+    firmware's own `Core::MoveQueue` (1 active + 4 pending,
     `docs/protocol-v4.md` section 5.1) can carry velocity through a
     compatible boundary instead of decelerating to a stop: the FIRST leg is
     sent `replace=True` (starts immediately, matching every other "just
@@ -799,7 +799,7 @@ def run_tour(
     queue is momentarily empty -- mirrors the pre-109-008 path's own
     `begin()` retry), and once more after the FINAL leg's settle window
     (only when every leg completes -- see `TourClosure`'s own docstring for
-    why an early-stopped tour reports `None` closure fields). `App::Odometry`
+    why an early-stopped tour reports `None` closure fields). `Core::Odometry`
     never resets across a boot session, so both readings -- and their delta
     -- are always RELATIVE to each other, never an absolute zero.
 

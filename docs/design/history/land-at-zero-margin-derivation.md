@@ -113,7 +113,7 @@ immediately before deletion (original authorship spans tickets 118-004,
 // kStoppingMarginFactorFinal (pendingCount() == 0) was swept ONCE, at
 // sim's original 50ms cycle (118 ticket 004), and re-verified UNCHANGED
 // after sim/firmware cadence parity landed at 40ms (118 ticket 003 --
-// SimHarness::kCycleDtUs equals App::RobotLoop::kCycle exactly, see
+// SimHarness::kCycleDtUs equals Core::RobotLoop::kCycle exactly, see
 // sim_harness.h's own file header): 0.90-1.10 was a broad, flat plateau
 // (worst=0.844deg settle-based at 40ms, against the button-acceptance
 // suite's own 3.0deg tolerance), AT THAT SCHEDULE (118's asymmetric

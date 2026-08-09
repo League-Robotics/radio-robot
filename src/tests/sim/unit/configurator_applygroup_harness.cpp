@@ -20,12 +20,12 @@
 //     effect -- Drive::configure() (132-007), verified behaviorally
 //     (tick()'s written duty for DRIVE, controlGains()/adaptationBounds()
 //     for WHEEL_CONTROL), not just that a setter was reachable.
-//   - MOTORS: applies via App::configureMotor() at rest; refuses with
+//   - MOTORS: applies via Core::configureMotor() at rest; refuses with
 //     ERR_BUSY (surfaced, not swallowed) while in motion -- and the guard
 //     is PER SIDE, not global: the side that is at rest still gets its
 //     travel_calib applied even when the push overall returns ERR_BUSY
 //     because the OTHER side is moving.
-//   - OTOS: decodes and installs via App::configureOtos() -- trap 3
+//   - OTOS: decodes and installs via Core::configureOtos() -- trap 3
 //     (the-configuration-object.md) CLOSED (132-010): the scale fields are
 //     converted through Hardware::scaleToRegister() before reaching
 //     setLinearScalar()/setAngularScalar(), matching RealOtos::begin()'s
@@ -36,7 +36,7 @@
 //   - ESTIMATOR: decodes into config_ (read-back stays honest) but
 //     install() returns ERR_UNIMPLEMENTED, not ERR_NONE -- PERMANENTLY,
 //     not a to-be-filled gap (132-010 closes trap 2 by making this
-//     explicit rather than inventing a consumer): App::StateEstimator was
+//     explicit rather than inventing a consumer): Core::StateEstimator was
 //     deleted as dead code (sprint 128 ticket 016), and its one candidate
 //     successor -- Motion::PoseTracker::blendHeading() -- had its only
 //     call site and its own config fields deleted outright by 130-009 in
@@ -94,9 +94,9 @@
 #include <cstring>
 #include <string>
 
-#include "app/boot_calibration.h"
-#include "app/configurator.h"
-#include "app/drive.h"
+#include "core/boot_calibration.h"
+#include "core/configurator.h"
+#include "core/differential_drive.h"
 #include "config/boot_config.h"
 #include "config/robot.h"
 #include "hal/motor.h"
@@ -261,11 +261,11 @@ int main() {
 
   RecordingMotor motorL, motorR;
   RecordingOtos otos;
-  App::Drive drive(motorL, motorR, /*trackWidth=*/128.0f);
+  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/128.0f);
   Motion::PlannerLimits limits;
   Motion::Planner planner(limits);
   Motion::NavigatorLimits navigatorLimits;
-  App::Configurator configurator(drive, motorL, motorR, otos, planner, navigatorLimits, /*tuningStore=*/nullptr);
+  Core::Configurator configurator(drive, motorL, motorR, otos, planner, navigatorLimits, /*tuningStore=*/nullptr);
 
   // config_ starts default-constructed (all-zero) -- applyGroup() is
   // exercised directly, without loadBaked(), so every scenario's
@@ -401,14 +401,14 @@ int main() {
     checkFloatEq(configurator.config().wheelControl.pos_err_max, 12.0f,
                 "config().wheelControl.pos_err_max reflects the push");
 
-    const App::Drive::ControlGains& gains = drive.controlGains();
+    const Core::DifferentialDrive::ControlGains& gains = drive.controlGains();
     checkFloatEq(gains.kp, 0.11f, "controlGains().kp");
     checkFloatEq(gains.ki, 0.22f, "controlGains().ki");
     checkFloatEq(gains.iMax, 0.33f, "controlGains().iMax");
     checkFloatEq(gains.kaff, 0.44f, "controlGains().kaff");
     checkFloatEq(gains.pidMax, 0.55f, "controlGains().pidMax");
 
-    const App::Drive::AdaptationBounds& bounds = drive.adaptationBounds();
+    const Core::DifferentialDrive::AdaptationBounds& bounds = drive.adaptationBounds();
     checkFloatEq(bounds.vMin, 66.0f, "adaptationBounds().vMin");
     checkFloatEq(bounds.biasMax, 77.0f, "adaptationBounds().biasMax");
     // The two clamps arrive over the wire INDEPENDENTLY and land in
@@ -447,7 +447,7 @@ int main() {
   beginScenario(
       "MOTORS push while one side is in motion returns ERR_BUSY (surfaced, not "
       "swallowed) -- the OTHER, at-rest side still applies (per-side guard, "
-      "App::configureMotor(), 132-007)");
+      "Core::configureMotor(), 132-007)");
   {
     motorL.stagedVelocity = 100.0f;  // [mm/s], well above the rest threshold
     motorL.stagedAppliedDuty = 0.3f;
@@ -476,7 +476,7 @@ int main() {
   // --- OTOS: decode + configureOtos() (trap 3 CLOSED, 132-010) -------------
 
   beginScenario(
-      "OTOS push decodes into config_ and reaches App::configureOtos() -- "
+      "OTOS push decodes into config_ and reaches Core::configureOtos() -- "
       "scale fields are REGISTER-domain-converted via "
       "Hardware::scaleToRegister() before reaching setLinearScalar()/"
       "setAngularScalar() (trap 3 closed, 132-010)");
@@ -544,7 +544,7 @@ int main() {
       "ESTIMATOR push decodes into config_ (read-back stays honest) but "
       "install() returns ERR_UNIMPLEMENTED, not ERR_NONE -- PERMANENTLY, "
       "not a to-be-filled gap (trap 2 closed, 132-010, by making the dead "
-      "end explicit: App::StateEstimator is dead code (128-016) and its "
+      "end explicit: Core::StateEstimator is dead code (128-016) and its "
       "one candidate successor's call site was itself deliberately deleted "
       "(130-009) pending a from-scratch fusion redesign, "
       "clasi/issues/later/estimator-v2-otos-fusion-sim-first.md) -- this is "
@@ -663,7 +663,7 @@ int main() {
     checkFloatEq(configurator.config().drive.wheel_gain_left_accel,
                 hwDrive.wheel_gain_left_accel,
                 "config().drive.wheel_gain_left_accel reflects loadBaked()");
-    const App::Drive::ControlGains& bootGains = drive.controlGains();
+    const Core::DifferentialDrive::ControlGains& bootGains = drive.controlGains();
     const msg::WheelControl hwWheelControl = Config::defaultWheelControlGroup();
     checkFloatEq(bootGains.kp, hwWheelControl.pid_kp,
                 "controlGains().kp reflects the boot install() fan-out");

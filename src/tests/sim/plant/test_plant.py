@@ -8,7 +8,7 @@ physics feed; ticket 108-004 migrated this harness onto it, replacing the
 deleted scripted-FIFO ``Devices::I2CBus`` fake ticket 108-001 removed), and
 the HOST_BUILD Devices/App/Kinematics sources they exercise
 (``src/firm/hardware/nezha/nezha_motor.cpp``, ``src/firm/hardware/generic/real_otos.cpp``,
-``src/firm/kinematics/differential_kinematics.cpp``, ``src/firm/app/odometry.cpp``) with
+``src/firm/kinematics/differential_kinematics.cpp``, ``src/firm/core/odometry.cpp``) with
 ``-DHOST_BUILD``, against the SAME headers every ARM build compiles.
 Mirrors ``test_app_odometry.py``'s exact shape: compile with the system
 C++ compiler, run the resulting binary, assert it exits 0.

@@ -4,7 +4,7 @@ un-stubbed and settable from the TestGUI without a reflash.
 
 115-003 (gut-to-minimal-firmware S1 motion-stack excision) DELETES
 `PlannerConfigPatch`/`ConfigDelta.planner` wholesale, alongside the
-`App::Pilot` that applied it (`Pilot::applyPlannerPatch()`) -- there is no
+`Core::Pilot` that applied it (`Pilot::applyPlannerPatch()`) -- there is no
 `headingKp`/`headingKd`/`minSpeed` wire target left at all; every test this
 file used to carry for that live-tuning path (`test_heading_kp_is_settable_
 and_echoes_back`, `test_heading_kd_is_settable_and_echoes_back`,

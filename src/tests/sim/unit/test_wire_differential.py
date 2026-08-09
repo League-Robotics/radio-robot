@@ -1,7 +1,7 @@
 """Differential round-trip + boundary/range suite for the wire protocol
 (103-001, SUC-001, architecture-update.md (103) Decisions 2/3).
 
-***THIS IS THE CORRECTNESS GATE the `src/firm/app/` tickets (004+) are built
+***THIS IS THE CORRECTNESS GATE the `src/firm/core/` tickets (004+) are built
 on top of.*** It proves the self-written firmware codec (``src/firm/messages/
 wire_runtime.{h,cpp}`` + generated ``wire.{h,cpp}``) agrees with the host's
 `google.protobuf`-backed reference (``src/host/robot_radio/robot/pb2/``)
@@ -134,10 +134,10 @@ def test_field_numbers_match_pb2_descriptors():
     # shorter than the SetConfigField message type it carries; see
     # envelope.proto's own set_field arm doc comment for the wire-budget
     # reasoning).
-    # `go_to` (26, 135-004: GoTo / App::RobotLoop::handleGoto()) is the next
+    # `go_to` (26, 135-004: GoTo / Core::RobotLoop::handleGoto()) is the next
     # fresh arm after set_field, same load-bearing-name rule -- uppercases
     # to commands.proto's GO_TO verb exactly.
-    # `calibrate` (27, 2026-08-08: Calibrate / App::RobotLoop::handleCalibrate())
+    # `calibrate` (27, 2026-08-08: Calibrate / Core::RobotLoop::handleCalibrate())
     # is the next fresh arm after go_to, same load-bearing-name rule --
     # uppercases to commands.proto's CALIBRATE verb exactly. Its 9-byte verb
     # name stays under GET_CONFIG's 10, so the prefix/line budgets are
@@ -231,7 +231,7 @@ def test_field_numbers_match_pb2_descriptors_telemetry():
         "enc_left": 7, "enc_right": 8, "otos": 9, "pose": 10, "twist": 11, "line": 12, "color": 13,
         "acks": 14,
         "cycle_busy": 15, "cycle_period": 16,  # 123-004, ADDITIVE (migrated from TelemetrySecondary)
-        # 130-005, ADDITIVE (App::Drive's unified wheel-speed controller --
+        # 130-005, ADDITIVE (Core::DifferentialDrive's unified wheel-speed controller --
         # issue 04's folded-in observability mandate): the installed
         # conversion scale and live per-wheel Stage C/B state. Nothing
         # above is renumbered.

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """wheel_controller_ab_bench.py -- sprint 130 ticket 006: bench acceptance for
-App::Drive's unified wheel-speed controller (Stage A/B/C, tickets 004/005) --
+Core::DifferentialDrive's unified wheel-speed controller (Stage A/B/C, tickets 004/005) --
 the A/B (old additive-trim baseline vs. the new map-adaptation controller),
 the right-wheel affine-residual closure across cmd 100/150/250/400 mm/s, and
 the +500-button acceptance spec re-verification
@@ -8,7 +8,7 @@ the +500-button acceptance spec re-verification
 
 Bench setup: `tovez` on the stand, wheels free
 (`.claude/rules/hardware-bench-testing.md`). Real hardware only -- there is
-no rig/sim harness for this ticket's own subject (App::Drive's controller,
+no rig/sim harness for this ticket's own subject (Core::DifferentialDrive's controller,
 not the deleted Motion::WheelTrim square_tour_sim.py exercised -- see that
 script's own RETIRED docstring, square_tour_velocity.py, for why it is not
 reused here).

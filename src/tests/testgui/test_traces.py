@@ -16,7 +16,7 @@ generic wire/config-channel simulation surface at all, so ``send()``/
 ``command()`` text verbs no longer route to anything on Sim; a single
 ``twist(v_x, omega, duration)`` call arms the firmware's deadman for
 ``duration`` ms and the robot drives at that commanded twist until it
-expires -- see ``src/firm/app/robot_loop.cpp``'s ``deadman_.arm()`` call --
+expires -- see ``src/firm/core/robot_loop.cpp``'s ``deadman_.arm()`` call --
 so one call with a generous duration covers this file's whole wait window).
 
 Run with::
@@ -250,7 +250,7 @@ def test_camera_trace_grows_in_step_with_ground_truth(transport: SimTransport) -
     # meaningful assertion is growth (+x) and negligible lateral drift across
     # every sample, not proximity of the first sample to the origin.
     # Wait for the MOTION, not for a sample count that is assumed to imply
-    # it. The sim advances one App::RobotLoop::kCycle of sim time per tick,
+    # it. The sim advances one Core::RobotLoop::kCycle of sim time per tick,
     # so how far the robot travels inside a fixed wall-clock window scales
     # with the loop period: when kCycle went 50ms -> 32ms on 2026-08-07 the
     # same three samples covered 6.8mm instead of clearing the 1.0cm bound

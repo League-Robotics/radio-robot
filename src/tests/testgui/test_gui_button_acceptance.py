@@ -176,7 +176,7 @@ MANAGED_ANGLE_REL_TOL = 0.10
 # connect flow actually delivers shaper config (118 ticket 004,
 # land-at-zero-completion-delete-stop-lead.md: the connect flow's own live
 # push has since lost its former time-lead field -- the completion
-# mechanism it drove is deleted; App::MoveQueue::tick()'s own land-at-zero
+# mechanism it drove is deleted; Core::MoveQueue::tick()'s own land-at-zero
 # predicate, computed on-robot, replaces it -- see that method's own doc
 # comment). A flat absolute bound (no relative term -- there is only one
 # commanded magnitude in this band). Measured through the REAL GUI
@@ -190,7 +190,7 @@ MANAGED_ANGLE_REL_TOL = 0.10
 # TEMPORARILY WIDENED 3.0 -> 6.5 (125-003, sprint 125, dated 2026-07-26;
 # revert to 3.0 once ticket 006 lands -- see below for why). Sprint 125
 # Decision 2 relocates the wheel velocity PID off Devices::NezhaMotor
-# entirely (to an interim App::Drive-owned instance, see drive.h's own
+# entirely (to an interim Core::DifferentialDrive-owned instance, see drive.h's own
 # header) -- structurally, this adds exactly one extra loop cycle (~40ms)
 # of measured-velocity staleness to the closed loop: the pre-125-003 design
 # ran the PID INSIDE NezhaMotor::tick() itself, against the SAME cycle's

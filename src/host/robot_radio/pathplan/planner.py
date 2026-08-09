@@ -313,7 +313,7 @@ class MoveIdAllocator:
     Move, since an id-0 replacement whose enqueue ack is lost and retried
     could double-execute instead of being caught by the dedup ring.
     `GoTo.id` has no such dedup ring at all (verified directly against
-    `src/firm/app/robot_loop.cpp`'s `handleGoto()`, 135-007) so id 0 is
+    `src/firm/core/robot_loop.cpp`'s `handleGoto()`, 135-007) so id 0 is
     not specially dangerous for a goto the way it is for a Move -- but
     starting at 1 (or any caller-chosen positive value) keeps every id
     this allocator issues inside the same, single, unambiguous space
@@ -650,7 +650,7 @@ def gotoRobot(proto: NezhaProtocol, worldPose: WorldPose, x: float, y: float, *,
     x/y: [cm] target position in the ROBOT's OWN current body frame
         (forward = +x, left = +y -- `Pose.heading`'s CCW-positive
         convention). Resolved to world coordinates ONCE, FIRMWARE-side
-        (`App::RobotLoop::handleGoto()`), at the moment this `GO_TO` is
+        (`Core::RobotLoop::handleGoto()`), at the moment this `GO_TO` is
         accepted -- using the robot's own live OTOS pose, which is fresher
         and more precise than any host-side `WorldPose` snapshot could be
         by the time a command reaches the wire. Unlike this function's

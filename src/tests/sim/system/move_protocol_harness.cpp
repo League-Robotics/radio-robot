@@ -6,8 +6,8 @@
 // non-interference with an in-flight MOVE.
 //
 // Exercises every scenario through TestSim::SimHarness driving the REAL
-// App::RobotLoop/App::MoveQueue/Motion::StopCondition/App::Drive/
-// App::Odometry graph against a REAL, live-responding TestSim::SimPlant
+// Core::RobotLoop/Core::MoveQueue/Motion::StopCondition/Core::DifferentialDrive/
+// Core::Odometry graph against a REAL, live-responding TestSim::SimPlant
 // (real duty->velocity->position physics, the SAME bench_test_config.h
 // motor gains every sibling sim/system harness configures with) -- never a
 // mock or a scripted bus. This is the same "whole robot, real firmware,
@@ -22,7 +22,7 @@
 // Every Move injected below uses a DISTINCT `id` (echoed on its completion
 // ack) and `corrId` (echoed on its enqueue ack) -- e.g. id=1/corrId=101 --
 // so a scenario can tell the two acks apart by which value they carry,
-// with no need to read App::MoveQueue's own internal state (SimHarness
+// with no need to read Core::MoveQueue's own internal state (SimHarness
 // exposes no moveQueue() accessor -- every assertion below is proved
 // purely from decoded telemetry, the same wire-level observability every
 // sibling sim/system harness already uses).
@@ -40,7 +40,7 @@
 #include <string>
 #include <vector>
 
-#include "app/telemetry.h"
+#include "core/telemetry.h"
 #include "bench_test_config.h"
 #include "messages/envelope.h"
 #include "messages/wire_runtime.h"
@@ -208,7 +208,7 @@ bool putMessageField(Buf& b, uint32_t number, const Buf& nested) {
 // armorLine() -- 124-005 (protocol v5 Part A, "framing grammar cutover"):
 // builds the COMPLETE wire LINE, `<command>':'<COBS+CRC bytes>` (CRC-then-
 // COBS, delimiter 0x0A), byte-for-byte the same composition as
-// App::Comms::sendReply()/decodeBinaryFrame() / TestSupport::armor()
+// Core::Comms::sendReply()/decodeBinaryFrame() / TestSupport::armor()
 // (wire_test_codec.cpp) -- a small, self-contained, file-local copy for the
 // same reason the hand-rolled encoder above is (this file's own CONFIG
 // envelope shape isn't in the shared codec). `command` is REQUIRED --
@@ -243,7 +243,7 @@ std::string armorLine(const uint8_t* raw, size_t rawLen, const char* command) {
 
 // CommandEnvelope{corr_id, config: SetConfigGroup{target=WHEEL_CONTROL,
 // body=WheelControl{..., pid_kp=kp}}} -- pid_kp lands on Drive's unified
-// wheel-speed controller (App::Drive::configure()) regardless of which
+// wheel-speed controller (Core::DifferentialDrive::configure()) regardless of which
 // bound motor "side" the OLD MotorConfigPatch.side selector used to name
 // (kp/ki/etc always applied to BOTH bound motors even under the deleted
 // surface -- see this file's own git history for the pre-132-013 comment).
@@ -313,8 +313,8 @@ void scenarioTimeStopCompletesWithinTolerance() {
   uint32_t err = 1, flags = 0;
   checkTrue(findFreshAck(frames, kMoveId, &err, &flags), "the Move's completion ack (ack_corr==id) reached the wire");
   checkUintEq(err, 0, "the completion ack's err is OK (a met stop condition, not a timeout)");
-  checkTrue((flags & App::kFlagFaultMoveTimeout) == 0, "kFlagFaultMoveTimeout is NOT set -- ended via TIME, not timeout");
-  checkTrue((frames.back().telemetry.flags & App::kFlagActive) == 0, "active clears by the end of the run");
+  checkTrue((flags & Core::kFlagFaultMoveTimeout) == 0, "kFlagFaultMoveTimeout is NOT set -- ended via TIME, not timeout");
+  checkTrue((frames.back().telemetry.flags & Core::kFlagActive) == 0, "active clears by the end of the run");
 }
 
 void scenarioDistanceStopCompletesWithinTolerance() {
@@ -345,7 +345,7 @@ void scenarioDistanceStopCompletesWithinTolerance() {
   uint32_t err = 1, flags = 0;
   checkTrue(findFreshAck(frames, kMoveId, &err, &flags), "the Move's completion ack (ack_corr==id) reached the wire");
   checkUintEq(err, 0, "the completion ack's err is OK");
-  checkTrue((flags & App::kFlagFaultMoveTimeout) == 0, "kFlagFaultMoveTimeout is NOT set -- ended via DISTANCE, not timeout");
+  checkTrue((flags & Core::kFlagFaultMoveTimeout) == 0, "kFlagFaultMoveTimeout is NOT set -- ended via DISTANCE, not timeout");
 
   // Straight travel (omega=0) -- the odometry-derived pose.x IS the path
   // traveled, the exact reading Motion::StopCondition's own DISTANCE kind
@@ -424,7 +424,7 @@ void scenarioAngleStopCompletesWithinTolerance() {
   uint32_t err = 1, flags = 0;
   checkTrue(findFreshAck(frames, kMoveId, &err, &flags), "the Move's completion ack (ack_corr==id) reached the wire");
   checkUintEq(err, 0, "the completion ack's err is OK");
-  checkTrue((flags & App::kFlagFaultMoveTimeout) == 0, "kFlagFaultMoveTimeout is NOT set -- ended via ANGLE, not timeout");
+  checkTrue((flags & Core::kFlagFaultMoveTimeout) == 0, "kFlagFaultMoveTimeout is NOT set -- ended via ANGLE, not timeout");
 
   // 124-008 (issue §B3): pose.h is now a raw sint32 wire int (1mrad scale)
   // -- unpackH() is the GENERATED conversion back to radians.
@@ -490,7 +490,7 @@ void scenarioWheelsVariantDrivesCorrectSigns() {
   uint32_t err = 1, flags = 0;
   checkTrue(findFreshAck(frames, kMoveId, &err, &flags), "the Move's completion ack (ack_corr==id) reached the wire");
   checkUintEq(err, 0, "the completion ack's err is OK");
-  checkTrue((flags & App::kFlagFaultMoveTimeout) == 0, "kFlagFaultMoveTimeout is NOT set");
+  checkTrue((flags & Core::kFlagFaultMoveTimeout) == 0, "kFlagFaultMoveTimeout is NOT set");
 }
 
 // ===========================================================================
@@ -513,7 +513,7 @@ void scenarioDistanceTimeoutWithStalledWheelsSetsFaultFlag() {
   (void)sim.drainTelemetry();
 
   // Stall BOTH wheels -- freezePosition() freezes the REPORTED raw encoder
-  // value each leaf reads over I2C (sim_plant.h), so App::Odometry's own
+  // value each leaf reads over I2C (sim_plant.h), so Core::Odometry's own
   // pathLength() cannot advance regardless of the plant's real duty/
   // velocity physics or the motor's own (real, nonzero) gains -- a
   // DISTANCE stop condition can only ever end via the timeout backstop.
@@ -538,14 +538,14 @@ void scenarioDistanceTimeoutWithStalledWheelsSetsFaultFlag() {
   uint32_t err = 1, flags = 0;
   checkTrue(findFreshAck(frames, kMoveId, &err, &flags), "the Move's completion ack (ack_corr==id) reached the wire");
   checkUintEq(err, 0, "ack_err is still 0 -- a timeout is signalled via the flags bit, not ack_err");
-  checkTrue((flags & App::kFlagFaultMoveTimeout) != 0, "kFlagFaultMoveTimeout IS set on the ending cycle");
+  checkTrue((flags & Core::kFlagFaultMoveTimeout) != 0, "kFlagFaultMoveTimeout IS set on the ending cycle");
 
   // Corroborating proof the wheels really were stalled, not merely slow --
   // pose.x (straight travel) stayed essentially at its starting value the
   // entire run.
   checkFloatLe(std::fabs(frames.back().telemetry.pose.x), 5.0f, "pose.x barely moved -- the DISTANCE stop condition "
                                                                  "genuinely could not be satisfied");
-  checkTrue((frames.back().telemetry.flags & App::kFlagFaultMoveTimeout) == 0,
+  checkTrue((frames.back().telemetry.flags & Core::kFlagFaultMoveTimeout) == 0,
             "kFlagFaultMoveTimeout is level-set, not sticky -- clears again a cycle or two later");
 }
 
@@ -870,7 +870,7 @@ void scenarioFifthPendingRejectedErrFullQueueUnchanged() {
 
   constexpr float kVx = 100.0f;
   // Long enough (2s) that the whole 6-command injection burst below (one
-  // inject+step(1) pair per command -- App::Comms::pump() consumes at most
+  // inject+step(1) pair per command -- Core::Comms::pump() consumes at most
   // one inbound line per cycle) cannot possibly let Move #1 complete before
   // the 6th (rejected) command has been dispatched.
   constexpr float kStopTimeMs = 2000.0f;
@@ -938,7 +938,7 @@ void scenarioFifthPendingRejectedErrFullQueueUnchanged() {
   // completed when the scan gave up and the scenario reported a queue defect
   // that was really a test budget that stopped covering the work.
   const int kMaxCycles =
-      static_cast<int>(5.0f * kStopTimeMs * 1.3f / static_cast<float>(App::RobotLoop::kCycle));
+      static_cast<int>(5.0f * kStopTimeMs * 1.3f / static_cast<float>(Core::RobotLoop::kCycle));
   for (int i = 0; i < kMaxCycles && completionOrder.size() < 5; ++i) {
     sim.step(1);
     std::vector<DecodedLine> cycleFrames = onlyTelemetry(sim.drainTelemetry());
@@ -1009,10 +1009,10 @@ void scenarioEmptyQueueExpiryStopsMotorsNoFurtherTraffic() {
   uint32_t err = 1, flags = 0;
   checkTrue(findFreshAck(frames, kMoveId, &err, &flags), "the Move's completion ack (ack_corr==id) reached the wire");
   checkUintEq(err, 0, "the completion ack's err is OK");
-  checkTrue((flags & App::kFlagFaultMoveTimeout) == 0, "ended via its own TIME stop condition, not the timeout backstop");
+  checkTrue((flags & Core::kFlagFaultMoveTimeout) == 0, "ended via its own TIME stop condition, not the timeout backstop");
 
   const msg::Telemetry& lastFrame = frames.back().telemetry;
-  checkTrue((lastFrame.flags & App::kFlagActive) == 0, "active clears by the end of the run");
+  checkTrue((lastFrame.flags & Core::kFlagActive) == 0, "active clears by the end of the run");
   checkTrue(lastFrame.mode == msg::DriveMode::IDLE, "mode reads IDLE by the end of the run");
   checkFloatEq(sim.driveTargetVelLeft(), 0.0f, 1.0f, "the staged left target is exactly 0 -- Drive::stop() zeroed it");
   checkFloatEq(sim.driveTargetVelRight(), 0.0f, 1.0f, "the staged right target is exactly 0 -- Drive::stop() zeroed it");
@@ -1057,7 +1057,7 @@ void scenarioConfigMidMoveDoesNotChangeCompletionOutcome() {
   }
   checkTrue(baselineCompleted, "baseline: the Move completes within a bounded number of cycles");
   checkUintEq(baselineErr, 0, "baseline: the completion ack's err is OK");
-  checkTrue((baselineFlags & App::kFlagFaultMoveTimeout) == 0, "baseline: ended via TIME, not timeout");
+  checkTrue((baselineFlags & Core::kFlagFaultMoveTimeout) == 0, "baseline: ended via TIME, not timeout");
 
   // --- interfered: a CONFIG{motor} patch injected mid-flight ---
   TestSim::SimHarness interfered;
@@ -1069,7 +1069,7 @@ void scenarioConfigMidMoveDoesNotChangeCompletionOutcome() {
   constexpr uint32_t kIdInterfered = 51;
   constexpr uint32_t kCorrInterfered = 151;
   constexpr uint32_t kConfigCorrId = 152;
-  // 125-003 -> 130-005 -> 132-013: kp routes to App::Drive's own unified
+  // 125-003 -> 130-005 -> 132-013: kp routes to Core::DifferentialDrive's own unified
   // wheel-speed controller now (Configurator::install(WHEEL_CONTROL) ->
   // Drive::configure() -> drive_.setControlGains()) -- NOT Motion::Planner's
   // parked M4 duty stage
@@ -1084,7 +1084,7 @@ void scenarioConfigMidMoveDoesNotChangeCompletionOutcome() {
   interfered.injectMove(/*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
                         kStopTimeMs, kTimeoutMs, /*replace=*/true, kIdInterfered, kCorrInterfered);
   // Queued directly behind the Move on the SAME inbound transport --
-  // App::Comms::pump() consumes at most one inbound line per cycle(), so
+  // Core::Comms::pump() consumes at most one inbound line per cycle(), so
   // this CONFIG line dispatches the cycle AFTER the Move itself activates
   // -- genuinely "mid-MOVE", well before its own 250ms/5-cycle stop
   // threshold.
@@ -1108,7 +1108,7 @@ void scenarioConfigMidMoveDoesNotChangeCompletionOutcome() {
                "the concurrently-active Move");
   checkTrue(interferedCompleted, "interfered: the Move completes within a bounded number of cycles");
   checkUintEq(interferedErr, 0, "interfered: the completion ack's err is OK");
-  checkTrue((interferedFlags & App::kFlagFaultMoveTimeout) == 0, "interfered: ended via TIME, not timeout");
+  checkTrue((interferedFlags & Core::kFlagFaultMoveTimeout) == 0, "interfered: ended via TIME, not timeout");
 
   checkUintEq(static_cast<uint32_t>(interferedCyclesToEnd), static_cast<uint32_t>(baselineCyclesToEnd),
               "SUC-055: the CONFIG patch injected mid-flight shifts nothing -- the Move ends at the SAME "

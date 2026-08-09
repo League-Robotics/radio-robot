@@ -5,12 +5,12 @@ This is the round trip `src/tests/bench/velocity_profile_gate.py`'s
 `_assert_tuning()` depends on, exercised without a robot:
 
     inject `DBG:vmin 60` as a cleartext wire line
-      -> App::Comms::dispatchLine() intercepts it (ROBOT_DEBUG)
+      -> Core::Comms::dispatchLine() intercepts it (ROBOT_DEBUG)
       -> classifyDbgArg() stages a DbgAction on the ring
-      -> App::RobotLoop::applyDbgAction() drains it
-      -> App::Drive::setSpeedFloor() applies it
-      -> App::debugf() formats the echo
-      -> App::Comms::sendDebug() emits `DBG:vmin 60.000 applied`
+      -> Core::RobotLoop::applyDbgAction() drains it
+      -> Core::DifferentialDrive::setSpeedFloor() applies it
+      -> Core::debugf() formats the echo
+      -> Core::Comms::sendDebug() emits `DBG:vmin 60.000 applied`
       -> SimLoop.drain_pending_debug() hands it back here
 
 The echo is the contract, not a nicety. The gate REFUSES to report a run
@@ -80,7 +80,7 @@ def _push(loop, verb: str, *, cycles: int = 6) -> "list[str]":
 
 def _latest_duty_per_speed(loop, *, cycles: int = 6):
     """The most recent `(left, right)` duty_per_speed pair telemetry
-    reported -- App::Drive's own installed conversion scale, which is what
+    reported -- Core::DifferentialDrive's own installed conversion scale, which is what
     `DBG:gain` rewrites and therefore the only way to observe the verb's
     effect rather than merely its echo.
 

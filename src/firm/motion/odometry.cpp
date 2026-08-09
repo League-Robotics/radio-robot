@@ -18,7 +18,7 @@ void Odometry::integrate(float leftPosition, float rightPosition, uint8_t leftEp
                           uint8_t rightEpoch) {
   // 131-004: a per-wheel epoch change means THIS wheel's raw position just
   // jumped by a software rebaseline (Hal::Motor::rebaseline(), called
-  // from App::RobotLoop::publishWheel()) -- re-anchor that wheel's own
+  // from Core::RobotLoop::publishWheel()) -- re-anchor that wheel's own
   // baseline to the incoming (already-rebaselined) position instead of
   // differencing across the jump, crediting zero delta for it this call.
   // The other wheel, if its epoch is unchanged, diffs normally -- the two

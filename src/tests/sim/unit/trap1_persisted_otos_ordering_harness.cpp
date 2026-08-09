@@ -1,8 +1,8 @@
 // trap1_persisted_otos_ordering_harness.cpp -- 132-015's own regression
 // proof for trap 1 (the-configuration-object.md): a persisted OTOS scale
 // must reach the (simulated) chip's own calibration-scalar register, and
-// only does so when App::RobotGraph::loadPersistedTuning() runs AFTER
-// App::RobotLoop::boot() -- never before.
+// only does so when Core::RobotGraph::loadPersistedTuning() runs AFTER
+// Core::RobotLoop::boot() -- never before.
 //
 // Root cause this proves closed: every Hardware::RealOtos setter
 // (setLinearScalar()/setAngularScalar()/setOffset()) is a no-op until
@@ -18,7 +18,7 @@
 // loadPersistedTuning() attempted moments earlier).
 //
 // Chip-level observable: TestSim::OtosPlant::linearScalarReg()/
-// angularScalarReg() -- NOT App::Configurator::config().otos, which is
+// angularScalarReg() -- NOT Core::Configurator::config().otos, which is
 // set unconditionally by Configurator::reapplyPersistedTuning() regardless
 // of whether the underlying RealOtos setter actually landed (that
 // LOOKS-correct-but-isn't-applied gap is trap 1 itself: a GET_CONFIG
@@ -26,7 +26,7 @@
 // even while the real chip silently kept running the baked one). SimPlant
 // (src/firm/platform/host/sim_plant.cpp handleOtosWrite()) captures a real firmware
 // write to the chip's REG_SCALAR_LINEAR/REG_SCALAR_ANGULAR registers into
-// OtosPlant -- a genuine round trip through App::configureOtos()'s
+// OtosPlant -- a genuine round trip through Core::configureOtos()'s
 // scaleToRegister() conversion and Hardware::RealOtos's own bus-write
 // path, not a shortcut through Configurator's cached copy.
 //
@@ -41,7 +41,7 @@
 //
 // Compiled by test_trap1_persisted_otos_ordering.py against the same full
 // HOST_BUILD dependency graph every other post-gut sim/unit harness
-// compiles (SimHarness composes the real App::RobotLoop graph -- see
+// compiles (SimHarness composes the real Core::RobotLoop graph -- see
 // sim_harness.h's own header).
 #include <cmath>
 #include <cstdio>
