@@ -56,6 +56,42 @@ reach every robot on it.
 Both ends must match or the robot is simply unreachable. If a session sees
 duplicate replies to one command, check the channel before anything else.
 
+### `mbdeploy probe` writes ports into a TRACKED file
+
+`config/devices.json` is the registry, it is checked in, and `probe` rewrites
+its `port` fields with whatever the ports happen to be right now. Since port
+numbers move on every re-enumeration (above), those values are worthless to
+anyone else and actively misleading. **Never commit them** —
+`git checkout -- config/devices.json` before staging anything after a bench
+session.
+
+### Per-robot fleet facts (measured 2026-08-09)
+
+- **`gopiv` has NO OTOS, NO line sensor, and NO colour sensor fitted.** Its
+  telemetry `flags` word reads 216 (`0b11011000`) — motors connected, bits 0
+  (otos), 13 (line) and 14 (colour) all clear — and `otos`/`line`/`color`
+  never appear on a frame. This is the hardware population, not a firmware
+  fault: confirmed by flashing pristine `master` and the branch under test to
+  the same robot and getting the identical flags word. Encoders, pose, and
+  the whole MOVE protocol work normally. Do not spend a session re-deriving
+  this, and do not gate a `gopiv` run on OTOS.
+- **`gopiv.json` and `togov.json` were missing
+  `wheel_control.stall_{speed,demand,window}`**, which `gen_boot_config.py`
+  requires with no source-side default — so `build.py` could not produce an
+  image for either robot AT ALL. `gopiv.json` was filled in 2026-08-09 (held
+  at 0, the documented inert state). **`togov.json` still has the gap and is
+  still unbuildable.**
+
+### The first command after a flash races the boot
+
+`mbdeploy deploy` resets the board, and boot is not instant: the LED boot
+identity, device detection with paced retries, and `RealOtos::init()`'s
+~612 ms IMU calibration all run first. A bench script started immediately
+after flashing can connect, send, and see no telemetry at all —
+`twist_drive.py` scored 3/6 that way and 6/6 on a retry seconds later, with
+nothing changed. **Sleep ~5 s after a flash**, and re-run once before
+believing a failure.
+
 ### Then, before any hardware command
 
 Confirm the row says `tovez`, take the PORT from that row for this session only,
