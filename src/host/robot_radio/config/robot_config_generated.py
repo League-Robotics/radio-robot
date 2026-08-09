@@ -55,6 +55,7 @@ class Connection(BaseModel):
     device_announcement_name: str = ""
     serial_last_6: str = ""
     radio_channel: int = 0
+    wifi_ip: str = ""
 
 class Vision(BaseModel):
     model_config = ConfigDict(extra="forbid")

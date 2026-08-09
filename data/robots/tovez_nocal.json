@@ -9,6 +9,7 @@
   "connection": {
     "device_announcement_name": "tovez",
     "serial_last_6": "f137c0",
+    "wifi_ip": "192.168.4.11",
     "_i2c_addresses": {}
   },
   "vision": {

@@ -9,6 +9,7 @@
   "connection": {
     "device_announcement_name": "tovez",
     "radio_channel": 3,
+    "wifi_ip": "192.168.4.11",
     "serial_last_6": "f137c0",
     "_i2c_addresses": {}
   },

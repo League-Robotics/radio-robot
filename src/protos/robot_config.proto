@@ -255,6 +255,18 @@ message Connection {
   // zero = channel 0, the historical hard-coded value -- every existing
   // robot JSON keeps its behavior without an edit.
   uint32 radio_channel = 3;  // [nRF frequency band]
+
+  // Fixed IPv4 address for the Planet X WiFi module (Ai-Thinker Ai-WB2-12F)
+  // when this robot carries one. The bench DNS resolves each robot's name to
+  // its reserved address (2026-08-08: gopiv=192.168.4.10, tovez=192.168.4.11);
+  // this field records that reservation so config, not a session transcript,
+  // is the source of truth. The module learns everything else about the
+  // network (gateway, netmask) from DHCP and takes ONLY the address itself
+  // from here (stakeholder directive 2026-08-08). Absent/empty = this robot
+  // has no WiFi module, or runs it DHCP-only: every consumer MUST no-op --
+  // the module is an optional peripheral, not part of the base robot. First
+  // consumer: src/tests/bench/wifi/wifi_setup.py.
+  string wifi_ip = 4;
 }
 
 // Vision -- the overhead-camera AprilTag mount this robot answers to (never
