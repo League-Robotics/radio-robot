@@ -82,6 +82,58 @@ session.
   at 0, the documented inert state). **`togov.json` still has the gap and is
   still unbuildable.**
 
+### Reaching a robot that hangs off `gauti` (no local USB)
+
+`gauti` (the companion Pi) holds tovez's micro:bit on `/dev/ttyACM0`, and
+tovez does not appear in `mbdeploy list` on the Mac at all. There is **no web
+service on gauti** — only SSH on :22. Two things you need, both worked out
+2026-08-09:
+
+**Flash via the DAPLink mass-storage drive.** gauti has no pyocd, but the
+MSD is there. The block device node MOVES (`sda` → `sdb` …) every time the
+board resets, so find it by LABEL, and always confirm the Unique ID before
+copying — it is the only check that you are flashing the robot you think:
+
+```bash
+scp MICROBIT.hex ros@gauti:/tmp/
+ssh ros@gauti 'sudo umount /mnt/microbit 2>/dev/null
+  D=$(lsblk -no NAME,LABEL | awk "/MICROBIT/{print \$1}")
+  sudo mount /dev/$D /mnt/microbit
+  grep "Unique ID" /mnt/microbit/DETAILS.TXT     # MUST match the target robot
+  sudo cp /tmp/MICROBIT.hex /mnt/microbit/ && sync
+  sleep 14; cat /mnt/microbit/FAIL.TXT 2>/dev/null'   # silence == flashed
+```
+
+Writing to a stale mount fails with **"No space left on device"** — that is
+the wrong-device-node symptom, not a full disk.
+
+**Bridge the serial port to a local PTY** so the host tooling works
+unmodified. `SerialConnection` does `serial.Serial()` + `.port =` + DTR and
+HUPCL fiddling, so it needs a REAL tty — a `socket://` URL will not do:
+
+```bash
+# one command: ssh -f backgrounds locally, socat stays alive as the remote
+# command. Do NOT try setsid/nohup -- it does not survive the session.
+ssh -f -L 7777:127.0.0.1:7777 ros@gauti \
+  'exec socat TCP-LISTEN:7777,reuseaddr,bind=127.0.0.1,fork \
+        FILE:/dev/ttyACM0,b115200,raw,echo=0'
+```
+
+then a local PTY pump (there is no socat on the Mac — a ~40-line
+`os.openpty()` + socket select loop does it) symlinked to e.g.
+`/tmp/tovez-tty`. Tear BOTH ends down before re-flashing; a second socat
+fails with "Address already in use" and the stale one keeps the port.
+
+**Do not read sub-100 ms timings through this bridge.** Every byte crosses
+WiFi twice. Measured 2026-08-09: `move_protocol_bench.py` scores 48-49/57
+over the bridge versus 57/57 on direct USB, and the failures MOVE between
+runs — they cluster on "completion ack observed" and on travel/rotation
+magnitudes, both of which are telemetry-window-bound. Verified as transport,
+not firmware, by running the identical bench over the identical bridge on
+pre-reorganization firmware: same 49/57, same eight checks, travel 69.0 mm
+vs 61.2 mm. Protocol correctness and encoder direction survive the bridge
+fine; timing numbers do not.
+
 ### The first command after a flash races the boot
 
 `mbdeploy deploy` resets the board, and boot is not instant: the LED boot
