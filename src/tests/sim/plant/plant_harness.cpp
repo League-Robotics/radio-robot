@@ -11,7 +11,7 @@
 //      the plant's two wheel positions (never read from the plant
 //      directly), is sane -- the sprint's own "B3 doesn't reappear" check.
 //
-// Drives the REAL Devices::NezhaMotor x2 + Devices::Otos + App::Odometry
+// Drives the REAL Hardware::NezhaMotor x2 + Hal::Otos + App::Odometry
 // against a real Platform::I2CBus implementation, exactly as
 // devices_motor_harness.cpp scenario 6 and app_odometry_harness.cpp already
 // do for their own narrower scopes -- this harness generalizes that same
@@ -47,11 +47,11 @@
 #include <string>
 #include <vector>
 
-#include "devices/device_config.h"
-#include "devices/device_types.h"
+#include "hal/device_config.h"
+#include "hal/device_types.h"
 #include "platform/i2c_bus.h"
-#include "devices/nezha_motor.h"
-#include "devices/otos.h"
+#include "hardware/nezha/nezha_motor.h"
+#include "hardware/generic/real_otos.h"
 #include "motion/odometry.h"
 #include "sim_plant.h"
 
@@ -88,7 +88,7 @@ void checkFloatEq(float actual, float expected, const std::string& what,
   }
 }
 
-// --- Devices::NezhaMotor / Devices::Otos fixture helpers --------------------
+// --- Hardware::NezhaMotor / Hal::Otos fixture helpers --------------------
 
 // wheelTravelCalib [mm/deg]: the INVERSE of sim_plant.cpp's own
 // kEncoderCountsPerMm (1.4187f, "counts = mm * 360/(pi*80.77) for the tovez
@@ -111,8 +111,8 @@ void checkFloatEq(float actual, float expected, const std::string& what,
 // gets for free.
 constexpr float kWheelTravelCalib = 1.0f / 1.4187f;  // [mm/deg]
 
-Devices::MotorConfig baseMotorConfig(uint32_t port) {
-  Devices::MotorConfig cfg;
+Hal::MotorConfig baseMotorConfig(uint32_t port) {
+  Hal::MotorConfig cfg;
   cfg.port = port;
   cfg.fwdSign = 1;
   cfg.wheelTravelCalib = kWheelTravelCalib;
@@ -135,8 +135,8 @@ void scenarioVelocityStepShowsRampWithTauInRange() {
   TestSim::SimPlant bus;   // owns its own left/right WheelPlant + OtosPlant internally --
                             // this scenario only ever drives port 1 (left).
 
-  Devices::MotorConfig cfg = baseMotorConfig(1);
-  Devices::NezhaMotor motor(bus, cfg);
+  Hal::MotorConfig cfg = baseMotorConfig(1);
+  Hardware::NezhaMotor motor(bus, cfg);
   // 125-003: setDuty() is the ONLY mode NezhaMotor has left -- no more
   // setPidEnabled(false) call needed to select raw-duty passthrough.
   const float duty = 0.6f;
@@ -257,16 +257,16 @@ std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles
   TestSim::SimPlant bus(kTrackWidth);   // trackWidth MUST match the App::Odometry instance
                                          // below -- see otos_plant.h's own "MUST match" comment.
 
-  Devices::NezhaMotor motorLeft(bus, baseMotorConfig(1));
-  Devices::NezhaMotor motorRight(bus, baseMotorConfig(2));
+  Hardware::NezhaMotor motorLeft(bus, baseMotorConfig(1));
+  Hardware::NezhaMotor motorRight(bus, baseMotorConfig(2));
   // 125-003: setDuty() is the ONLY mode NezhaMotor has left -- no more
   // setPidEnabled(false) calls needed to select raw-duty passthrough.
   motorLeft.setDuty(dutyLeft);
   motorRight.setDuty(dutyRight);
 
-  Devices::OtosConfig otosCfg;   // identity mounting (offsetX=offsetY=offsetYaw=0) --
+  Hal::OtosConfig otosCfg;   // identity mounting (offsetX=offsetY=offsetYaw=0) --
                                   // see otos_plant.h's own "Identity-mounting assumption".
-  Devices::RealOtos otos(bus, otosCfg);
+  Hardware::RealOtos otos(bus, otosCfg);
   otos.begin();   // SimPlant answers the product-ID probe + init/config writes live --
                    // no bus scripting needed (the deleted scripted-FIFO fake's own
                    // exact-write-count bookkeeping does not apply to a real responder).
@@ -274,7 +274,7 @@ std::vector<CycleSample> runScenario(float dutyLeft, float dutyRight, int cycles
   Motion::Odometry odom(kTrackWidth, motorLeft.position(), motorRight.position());
 
   const float dtS = 0.02f;        // [s]
-  const uint64_t dtUs = 20000;    // [us] == Devices::Otos's own kReadPeriod, so
+  const uint64_t dtUs = 20000;    // [us] == Hal::Otos's own kReadPeriod, so
                                    // readDue() is true every single cycle.
   uint64_t nowUs = 50000;         // avoid the first-write throttle edge (see
                                    // the ramp scenario's identical comment).
@@ -365,7 +365,7 @@ void scenarioPivotHeadingSaneViaOdometry() {
   // Odometry's independently-integrated heading.
   //
   // SIGN (135-008, sim-otos-heading-sign-diverges-from-hardware-angle-
-  // moves-never-stop.md): `otos` here is a real Devices::Otos decoding
+  // moves-never-stop.md): `otos` here is a real Hal::Otos decoding
   // bytes straight off SimPlant's wire (runScenario() above), with no
   // planner-side reconciliation applied -- unlike state.otos.heading as
   // the planner sees it. SimPlant's handleOtosRead() (sim_plant.cpp,
@@ -428,7 +428,7 @@ void scenarioDeterminismAcrossTwoRuns() {
 //    write drives the two wheel shafts in OPPOSITE physical (wire-frame)
 //    directions -- exactly what a real mirrored pair's shafts do. This
 //    scenario drives the wire-level Nezha 0x60 frame DIRECTLY via
-//    SimPlant::write() (bypassing Devices::NezhaMotor entirely, so this is a
+//    SimPlant::write() (bypassing Hardware::NezhaMotor entirely, so this is a
 //    test of SimPlant alone, independent of firmware's own fwdSign encode
 //    logic) with the SAME duty magnitude, OPPOSITE wire-level sign on the
 //    two ports -- exactly what handleMotorWrite() (sim_plant.cpp) decodes
@@ -444,10 +444,10 @@ void scenarioDeterminismAcrossTwoRuns() {
 // Writes one wire-level Nezha 0x60 RUN frame directly to `bus` -- the exact
 // 8-byte layout nezha_motor.cpp's writeMotorRun() sends
 // ([0xFF, 0xF9, motorId, direction, 0x60, speed, 0xF5, 0x00]) -- bypassing
-// Devices::NezhaMotor so this scenario exercises SimPlant's own wire
+// Hardware::NezhaMotor so this scenario exercises SimPlant's own wire
 // protocol handling directly, per this ticket's Approach step 6.
 void writeStraightDutyFrame(TestSim::SimPlant& bus, uint8_t port, uint8_t dir, uint8_t speedPct) {
-  const uint16_t motorWireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr) << 1;
+  const uint16_t motorWireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr) << 1;
   uint8_t frame[8] = {0xFF, 0xF9, port, dir, 0x60, speedPct, 0xF5, 0x00};
   int status = bus.write(motorWireAddr, frame, 8);
   checkTrue(status == 0, "wire-level motor-run write ACKed");

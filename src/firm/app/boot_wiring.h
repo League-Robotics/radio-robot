@@ -66,13 +66,13 @@
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
 #include "platform/clock.h"
-#include "devices/color_sensor.h"
-#include "devices/device_config.h"
+#include "hardware/planetx/color_sensor.h"
+#include "hal/device_config.h"
 #include "platform/i2c_bus.h"
-#include "devices/line_sensor.h"
-#include "devices/motor_armor.h"
-#include "devices/nezha_motor.h"
-#include "devices/otos.h"
+#include "hardware/planetx/line_sensor.h"
+#include "hardware/generic/motor_armor.h"
+#include "hardware/nezha/nezha_motor.h"
+#include "hardware/generic/real_otos.h"
 #include "motion/navigator/navigator.h"
 #include "motion/odometry.h"
 #include "motion/planner/planner.h"
@@ -103,7 +103,7 @@ struct BootOverrides {
   // no-ops until begin() has run and set initialized_ = true (otos.cpp),
   // and begin() itself applies config_'s own baked scale before any such
   // call could land, so the only safe seam is here, at bakeBootValues() time.
-  const Devices::OtosConfig* otosConfig = nullptr;
+  const Hal::OtosConfig* otosConfig = nullptr;
 
   // wheelCorrection -- the FOURTH genuinely-justified override (133-005),
   // and the one with a price tag attached.
@@ -225,13 +225,13 @@ class RobotGraph {
   // --- Accessors -- every caller need (main.cpp's boot sequence, and
   // every SimHarness test-injection method) reaches into the graph
   // through these, never by re-deriving a value the graph already holds.
-  Devices::NezhaMotor& motorLeft() { return motorL_; }
-  Devices::NezhaMotor& motorRight() { return motorR_; }
-  Devices::MotorArmor& armorLeft() { return armorL_; }
-  Devices::MotorArmor& armorRight() { return armorR_; }
-  Devices::Otos& otos() { return otos_; }
-  Devices::ColorSensorLeaf& color() { return color_; }
-  Devices::LineSensorLeaf& line() { return line_; }
+  Hardware::NezhaMotor& motorLeft() { return motorL_; }
+  Hardware::NezhaMotor& motorRight() { return motorR_; }
+  Hardware::MotorArmor& armorLeft() { return armorL_; }
+  Hardware::MotorArmor& armorRight() { return armorR_; }
+  Hal::Otos& otos() { return otos_; }
+  Hardware::ColorSensorLeaf& color() { return color_; }
+  Hardware::LineSensorLeaf& line() { return line_; }
   Comms& comms() { return comms_; }
   Telemetry& telemetry() { return tlm_; }
   Drive& drive() { return drive_; }
@@ -286,11 +286,11 @@ class RobotGraph {
   // (config/boot_config.h's Config::default*Group(), 132-005). Both read
   // the identical robot-JSON keys; see 132-005's own completion note.
   struct BootValues {
-    Devices::MotorConfig motorCfgL;
-    Devices::MotorConfig motorCfgR;
-    Devices::OtosConfig otosConfig;
-    Devices::ColorConfig colorConfig;
-    Devices::LineConfig lineConfig;
+    Hal::MotorConfig motorCfgL;
+    Hal::MotorConfig motorCfgR;
+    Hal::OtosConfig otosConfig;
+    Hal::ColorConfig colorConfig;
+    Hal::LineConfig lineConfig;
     msg::DrivetrainConfig drivetrainConfig;
     float trackWidth = 0.0f;  // [mm]
     Motion::PlannerLimits plannerLimits;
@@ -300,22 +300,22 @@ class RobotGraph {
   BootValues bootValues_;
   float trackWidth_;
 
-  Devices::NezhaMotor motorL_;
-  Devices::NezhaMotor motorR_;
+  Hardware::NezhaMotor motorL_;
+  Hardware::NezhaMotor motorR_;
   // PARITY: bare NezhaMotor wrapped in the MotorArmor decorator, the ARMOR
   // handed to the rest of the graph -- the ONE difference between an ARM
   // build and a sim build is what answers on the I2C bus underneath these,
   // never this wiring shape itself.
-  Devices::MotorArmor armorL_;
-  Devices::MotorArmor armorR_;
+  Hardware::MotorArmor armorL_;
+  Hardware::MotorArmor armorR_;
 
   // realOtos_ is ALWAYS constructed (harmless: it does no bus I/O until
   // tick()), exactly mirroring main.cpp's own pre-130-002 shape -- declared
   // here (right after the motor leaves) because it needs only `bus`.
-  Devices::RealOtos realOtos_;
+  Hardware::RealOtos realOtos_;
 
-  Devices::ColorSensorLeaf color_;
-  Devices::LineSensorLeaf line_;
+  Hardware::ColorSensorLeaf color_;
+  Hardware::LineSensorLeaf line_;
 
   Comms comms_;
   Telemetry tlm_;
@@ -331,7 +331,7 @@ class RobotGraph {
 #ifdef FAKE_OTOS
   App::FakeOtos fakeOtos_;
 #endif
-  Devices::Otos& otos_;
+  Hal::Otos& otos_;
 
   Motion::Planner planner_;
 

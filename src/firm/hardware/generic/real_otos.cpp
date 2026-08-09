@@ -1,8 +1,8 @@
-#include "devices/otos.h"
+#include "hardware/generic/real_otos.h"
 
 #include <cmath>
 
-namespace Devices {
+namespace Hardware {
 
 namespace {
 constexpr int kOk = 0;
@@ -22,9 +22,7 @@ int8_t scaleToRegister(float scale)
     return static_cast<int8_t>(raw);
 }
 
-Otos::~Otos() = default;
-
-RealOtos::RealOtos(Platform::I2CBus& bus, const OtosConfig& config)
+RealOtos::RealOtos(Platform::I2CBus& bus, const Hal::OtosConfig& config)
     : bus_(bus), config_(config)
 {
 }
@@ -54,7 +52,7 @@ void RealOtos::begin()
     writeXYH(kRegPositionXl, 0, 0, 0);
 }
 
-PoseReading RealOtos::pose() const { return cachedPose_; }
+Hal::PoseReading RealOtos::pose() const { return cachedPose_; }
 
 bool RealOtos::poseFresh() const { return poseFresh_; }
 
@@ -341,4 +339,4 @@ void RealOtos::writePoseMm(uint8_t startReg, float xF, float yF, float hF)
              static_cast<int16_t>(rh));
 }
 
-}  // namespace Devices
+}  // namespace Hardware

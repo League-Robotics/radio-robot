@@ -44,7 +44,7 @@
 // 115-005 (gut S1) update: App::Pilot/Motion::Executor/App::HeadingSource
 // are deleted along with the rest of the motion stack -- RobotLoop's
 // constructor drops the Pilot& parameter and gains
-// Devices::ColorSensorLeaf&/Devices::LineSensorLeaf& (already-constructed
+// Hardware::ColorSensorLeaf&/Hardware::LineSensorLeaf& (already-constructed
 // leaves this harness's fixtures already build for Preamble, now ALSO
 // wired directly into RobotLoop for its own rate-limited line/color
 // polling). The CONFIG-dispatch scenario's PlannerConfigPatch injection is
@@ -65,12 +65,12 @@
 #include "app/robot_loop.h"
 #include "app/telemetry.h"
 #include "config/persisted_tuning.h"
-#include "devices/color_sensor.h"
-#include "devices/device_config.h"
-#include "devices/device_types.h"
-#include "devices/line_sensor.h"
-#include "devices/nezha_motor.h"
-#include "devices/otos.h"
+#include "hardware/planetx/color_sensor.h"
+#include "hal/device_config.h"
+#include "hal/device_types.h"
+#include "hardware/planetx/line_sensor.h"
+#include "hardware/nezha/nezha_motor.h"
+#include "hardware/generic/real_otos.h"
 #include "messages/wire_runtime.h"
 #include "motion/move_queue.h"
 #include "motion/odometry.h"
@@ -176,13 +176,13 @@ class MockTuningStore : public Config::TuningStore {
 
 // --- Fixture helpers (mirrors app_preamble_harness.cpp) --------------------
 
-constexpr uint16_t kMotorWireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-constexpr uint16_t kOtosWireAddr = static_cast<uint16_t>(Devices::kOtosDeviceAddr << 1);
-constexpr uint16_t kColorAltWireAddr = static_cast<uint16_t>(Devices::kColorDeviceAddrAlt << 1);
-constexpr uint16_t kLineWireAddr = static_cast<uint16_t>(Devices::kLineDeviceAddr << 1);
+constexpr uint16_t kMotorWireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
+constexpr uint16_t kOtosWireAddr = static_cast<uint16_t>(Hardware::kOtosDeviceAddr << 1);
+constexpr uint16_t kColorAltWireAddr = static_cast<uint16_t>(Hardware::kColorDeviceAddrAlt << 1);
+constexpr uint16_t kLineWireAddr = static_cast<uint16_t>(Hardware::kLineDeviceAddr << 1);
 
-Devices::MotorConfig baseMotorConfig(uint32_t port) {
-  Devices::MotorConfig cfg;
+Hal::MotorConfig baseMotorConfig(uint32_t port) {
+  Hal::MotorConfig cfg;
   cfg.port = port;
   cfg.fwdSign = 1;
   cfg.wheelTravelCalib = 1.0f;
@@ -451,11 +451,11 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   TestSim::SimClock clock;
   TestSim::SimSleeper sleeper;
 
-  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
-  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
-  Devices::RealOtos otos(plant, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+  Hardware::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Hardware::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Hardware::RealOtos otos(plant, Hal::OtosConfig{});
+  Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
+  Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
   NullTransport serialLink;
   NullTransport radioLink;
@@ -510,8 +510,8 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   checkTrue(sleeper.sleepCount() > sleepsBeforeBoot,
             "boot()'s own pacing sleep (kPreamblePace) went through Platform::Sleeper, "
             "not uBit.sleep()");
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run: motor (boot)");
-  checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos (boot)");
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0, "no script under-run: motor (boot)");
+  checkUintEq(bus.errCount(Hardware::kOtosDeviceAddr), 0, "no script under-run: otos (boot)");
 
   // --- A few main cycles. Encoder positions climb by 10mm per cycle on
   // both wheels (a plain forward roll) -- proves requestSample()/tick()'s
@@ -540,8 +540,8 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   checkTrue(motorL.connected(), "left motor still connected after 3 cycles");
   checkTrue(motorR.connected(), "right motor still connected after 3 cycles");
 
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run: motor (cycles)");
-  checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos (cycles)");
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0, "no script under-run: motor (cycles)");
+  checkUintEq(bus.errCount(Hardware::kOtosDeviceAddr), 0, "no script under-run: otos (cycles)");
 
   checkTrue(tlm.primaryEmitCount() > 0, "Telemetry emitted at least one primary frame");
   checkTrue(serialLink.sendCount > 0, "Comms actually sent bytes over the (fake) transport");
@@ -591,11 +591,11 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   TestSim::SimClock clock;
   TestSim::SimSleeper sleeper;
 
-  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
-  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
-  Devices::RealOtos otos(plant, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+  Hardware::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Hardware::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Hardware::RealOtos otos(plant, Hal::OtosConfig{});
+  Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
+  Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
@@ -627,7 +627,7 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   checkTrue(preamble.done(), "boot() completes against the FakeTransport-based fixture too");
 
   // Confirmed pre-patch baseline: App::Drive's own interim gains (125-003:
-  // relocated from Devices::MotorConfig::velGains -- see drive.h's own
+  // relocated from Hal::MotorConfig::velGains -- see drive.h's own
   // header) default to Motion::Gains{}'s all-zero default.
   checkFloatEq(drive.gainsLeft().kp, 0.0f, "left motor starts at the constructed (zero) kp");
   checkFloatEq(drive.gainsRight().kp, 0.0f, "right motor starts at the constructed (zero) kp");
@@ -719,8 +719,8 @@ void scenarioConfigMotorAppliesWhileDrivetrainStaysUnimplemented() {
   runOneCycle(&drivetrainLine);
   std::string afterDrivetrainLine = captureNextPrimaryLine();
 
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run: motor (config-dispatch cycles)");
-  checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos (config-dispatch cycles)");
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0, "no script under-run: motor (config-dispatch cycles)");
+  checkUintEq(bus.errCount(Hardware::kOtosDeviceAddr), 0, "no script under-run: otos (config-dispatch cycles)");
 
   // --- "applies": both bound motors' PRESENT fields changed; ABSENT fields
   // (kff/iMax/kaw) stayed at their pre-patch value -- proves the merge, not
@@ -790,11 +790,11 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
   TestSim::SimClock clock;
   TestSim::SimSleeper sleeper;
 
-  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
-  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
-  Devices::RealOtos otos(plant, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+  Hardware::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Hardware::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Hardware::RealOtos otos(plant, Hal::OtosConfig{});
+  Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
+  Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
@@ -862,8 +862,8 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
     nowUs += 41000;
   }
 
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run: motor (persist-policy cycles)");
-  checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos (persist-policy cycles)");
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0, "no script under-run: motor (persist-policy cycles)");
+  checkUintEq(bus.errCount(Hardware::kOtosDeviceAddr), 0, "no script under-run: otos (persist-policy cycles)");
 
   checkFloatEq(drive.gainsLeft().kp, 0.02f, "left motor kp reflects the (twice-dispatched) patch");
   checkFloatEq(drive.gainsLeft().ki, 0.01f, "left motor ki reflects the (twice-dispatched) patch");
@@ -896,7 +896,7 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
 // 125-003: "velGains at Devices::Gains{}'s all-zero default" above now
 // means App::Drive's own interim gains (drive.h's own header) -- the SAME
 // property (commanded duty always 0 given a zero target AND zero gains)
-// holds unchanged, just relocated off Devices::MotorConfig.
+// holds unchanged, just relocated off Hal::MotorConfig.
 // ===========================================================================
 
 // driveLivePlantBootToDone -- mirrors sim_harness.h's own
@@ -924,11 +924,11 @@ struct LiveFixture {
   TestSim::SimClock clock;
   TestSim::SimSleeper sleeper;
 
-  Devices::NezhaMotor motorL;
-  Devices::NezhaMotor motorR;
-  Devices::RealOtos otos;
-  Devices::ColorSensorLeaf color;
-  Devices::LineSensorLeaf line;
+  Hardware::NezhaMotor motorL;
+  Hardware::NezhaMotor motorR;
+  Hardware::RealOtos otos;
+  Hardware::ColorSensorLeaf color;
+  Hardware::LineSensorLeaf line;
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
@@ -952,9 +952,9 @@ struct LiveFixture {
   LiveFixture()
       : motorL(plant, baseMotorConfig(1)),
         motorR(plant, baseMotorConfig(2)),
-        otos(plant, Devices::OtosConfig{}),
-        color(plant, Devices::ColorConfig{}),
-        line(plant, Devices::LineConfig{}),
+        otos(plant, Hal::OtosConfig{}),
+        color(plant, Hal::ColorConfig{}),
+        line(plant, Hal::LineConfig{}),
         comms(serialFake, radioFake, "DEVICE:NEZHA2:robot:test:0"),
         tlm(comms),
         drive(motorL, motorR, /*trackWidth=*/120.0f),
@@ -1168,11 +1168,11 @@ void scenarioMoveArrivingDuringBootIsExplicitlyRejectedNeverSilentlyDropped() {
   TestSim::SimClock clock;
   TestSim::SimSleeper sleeper;
 
-  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
-  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
-  Devices::RealOtos otos(plant, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+  Hardware::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Hardware::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Hardware::RealOtos otos(plant, Hal::OtosConfig{});
+  Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
+  Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
@@ -1363,7 +1363,7 @@ void scenarioMoveEndDrainsWithNoFurtherHostTraffic() {
   // MoveQueue::tick() (this cycle's OWN trailing pace block, the 4th
   // runAndWait) calls Drive::stop(), which only STAGES a zero target on
   // Drive itself -- Drive::tick() is the only method that ever forwards a
-  // duty to Devices::Motor::setDuty() (drive.h's own doc comment), and it
+  // duty to Hal::Motor::setDuty() (drive.h's own doc comment), and it
   // runs at the TOP of cycle() (119 ticket 005 restores the 112-005 hoist's
   // one genuinely good half here -- see robot_loop.cpp's own comment),
   // BEFORE this same cycle's dispatch block, let alone the pace block that
@@ -1371,7 +1371,7 @@ void scenarioMoveEndDrainsWithNoFurtherHostTraffic() {
   // leaves one cycle LATER -- exactly the same one-cycle lag the deleted
   // deadman-driven stop had, at this same schedule position; not a
   // regression here. One more cycle before checking the staged target
-  // (125-003: Drive::vLeft()/vRight() -- Devices::Motor::velocityTarget()
+  // (125-003: Drive::vLeft()/vRight() -- Hal::Motor::velocityTarget()
   // is deleted along with the motor-resident PID it fed).
   fx.step(1);
   checkFloatEq(fx.drive.vLeft(), 0.0f, "left target velocity is zero once the Move ends");
@@ -1631,7 +1631,7 @@ void scenarioConfigMidMoveDoesNotChangeMoveCompletionOutcome() {
 // known, letting this scenario place a DISTANCE stop threshold exactly on
 // the boundary a specific cycle's own odom_.integrate() call crosses.
 // Velocity gains stay at App::Drive's own constructed all-zero default
-// (125-003 -- relocated off Devices::MotorConfig; the same "duty stays
+// (125-003 -- relocated off Hal::MotorConfig; the same "duty stays
 // exactly 0 regardless of target" posture every other ScriptedI2CHook
 // scenario in this file relies on -- see
 // scriptMotorCycle()'s own header comment), so the Move's own commanded
@@ -1660,11 +1660,11 @@ void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
   TestSim::SimClock clock;
   TestSim::SimSleeper sleeper;
 
-  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
-  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
-  Devices::RealOtos otos(plant, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+  Hardware::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Hardware::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Hardware::RealOtos otos(plant, Hal::OtosConfig{});
+  Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
+  Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
@@ -1771,8 +1771,8 @@ void scenarioMoveDistanceStopReadsThisCyclesOdometryNotLastCycles() {
             "cycle AFTER the one it completed on -- 'ack rides the next frame', unchanged by "
             "this ticket");
 
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run: motor (ordering cycles)");
-  checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos (ordering cycles)");
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0, "no script under-run: motor (ordering cycles)");
+  checkUintEq(bus.errCount(Hardware::kOtosDeviceAddr), 0, "no script under-run: otos (ordering cycles)");
 }
 
 // ===========================================================================
@@ -1798,11 +1798,11 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
   TestSim::SimClock clock;
   TestSim::SimSleeper sleeper;
 
-  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
-  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
-  Devices::RealOtos otos(plant, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+  Hardware::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Hardware::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Hardware::RealOtos otos(plant, Hal::OtosConfig{});
+  Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
+  Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
@@ -1892,7 +1892,7 @@ void scenarioConfigEstimatorAppliesPresentFieldMergeAndNeverPersists() {
 //       exercised end to end);
 //   (2) no regression in encoder-tracking-vs-commanded-speed accuracy
 //       attributable to the estimator's addition to the schedule -- the
-//       REAL motor's own encoder-derived velocity (Devices::Motor::
+//       REAL motor's own encoder-derived velocity (Hal::Motor::
 //       velocity(), independent of the estimator's own copy) still ramps
 //       toward the commanded speed. Complements
 //       scenarioVirtualCycleTimingDiagnostic() (sim_api_harness.cpp), which
@@ -1922,12 +1922,12 @@ void scenarioStateEstimatorTracksCommandedMotionNoTrackingRegression() {
   // baseMotorConfig() (this file's own zero-gain default, used by every
   // scenario above) will not do here. 125-003: benchTestMotorConfig() no
   // longer carries gains at all (relocated to benchTestGains(), applied to
-  // App::Drive's own interim closed loop below, not Devices::MotorConfig).
-  Devices::NezhaMotor motorL(plant, TestSupport::benchTestMotorConfig(1));
-  Devices::NezhaMotor motorR(plant, TestSupport::benchTestMotorConfig(2));
-  Devices::RealOtos otos(plant, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+  // App::Drive's own interim closed loop below, not Hal::MotorConfig).
+  Hardware::NezhaMotor motorL(plant, TestSupport::benchTestMotorConfig(1));
+  Hardware::NezhaMotor motorR(plant, TestSupport::benchTestMotorConfig(2));
+  Hardware::RealOtos otos(plant, Hal::OtosConfig{});
+  Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
+  Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
@@ -2115,7 +2115,7 @@ void scenarioPrimaryFrameCarriesExactLoopTimingFields() {
 // position-rebaseline policy. When a wheel's position() reaches
 // App::RobotLoop's own kPositionRebaselineMargin (30000mm, 2000mm below
 // EncoderReading.position's wire (abs_max)=32000), assembleFrame() must
-// call Devices::Motor::rebaseline() (software-only, zero bus traffic) --
+// call Hal::Motor::rebaseline() (software-only, zero bus traffic) --
 // NEVER Motor::resetPosition()/MotorArmor's staged dispatch (a real,
 // bus-touching hard reset, forbidden outright by the stakeholder ruling) --
 // and increment a RobotLoop-owned positionEpoch counter, observable on the
@@ -2139,11 +2139,11 @@ void scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch() {
   TestSim::SimClock clock;
   TestSim::SimSleeper sleeper;
 
-  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
-  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
-  Devices::RealOtos otos(plant, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+  Hardware::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Hardware::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Hardware::RealOtos otos(plant, Hal::OtosConfig{});
+  Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
+  Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;
@@ -2210,7 +2210,7 @@ void scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch() {
 
   // Left wheel jumps to 31000mm (>= the 30000mm margin, still under the
   // 32000mm wire bound); right wheel stays quiet at 0mm -- proves the
-  // trigger is PER-WHEEL, not both-or-neither. Devices::NezhaMotor's own
+  // trigger is PER-WHEEL, not both-or-neither. Hardware::NezhaMotor's own
   // PRE-EXISTING, unmodified position-step plausibility gate
   // (nezha_motor.cpp: kMaxPlausibleStepSpeed) rejects a single-cycle jump
   // this large as a corrupted read and holds the prior position for
@@ -2233,11 +2233,11 @@ void scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch() {
               "the rebaseline trigger fires within a bounded number of scripted "
               "glitch-streak-then-reanchor cycles");
 
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0,
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0,
               "no script under/over-run on the motor bus -- rebaseline() issued ZERO I2C "
               "transactions (a real bus-touching resetPosition() call here would desync the "
               "scripted FIFO and show up as an error on this exact assertion)");
-  checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos");
+  checkUintEq(bus.errCount(Hardware::kOtosDeviceAddr), 0, "no script under-run: otos");
 
   TestSupport::DecodedLine decoded1 = TestSupport::decodeOutboundLine(afterFirstTrigger);
   checkTrue(decoded1.kind == TestSupport::DecodedKind::kTelemetry,
@@ -2247,7 +2247,7 @@ void scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch() {
   checkUintEq(decoded1.telemetry.enc_right.position_epoch, 0,
               "right wheel's positionEpoch stays 0 -- it never crossed the margin");
   checkTrue(decoded1.telemetry.enc_left.position == 0,
-            "left wheel's reported position resets to 0 -- Devices::Motor::rebaseline() folds "
+            "left wheel's reported position resets to 0 -- Hal::Motor::rebaseline() folds "
             "the pre-rebaseline position into its own internal offset and zeroes the cache "
             "(nezha_motor.cpp's own softRebaseline()), so the WIRE value is not the raw "
             "unrebaselined 31000mm");
@@ -2255,7 +2255,7 @@ void scenarioPositionRebaselineTriggersAtMarginAndIncrementsEpoch() {
             "kFlagFaultPositionClamped stays clear -- 31000mm never reached the 32000mm wire "
             "bound, so the defensive clamp path never engaged");
   checkFloatEq(motorL.position(), 0.0f,
-               "Devices::Motor::rebaseline() itself (unmodified by this ticket) zeroes "
+               "Hal::Motor::rebaseline() itself (unmodified by this ticket) zeroes "
                "position() immediately -- confirms RobotLoop drove the real method, not a stub");
 
   // A SECOND trigger on the SAME wheel (post-reset position climbs back
@@ -2483,7 +2483,7 @@ void scenarioPositionRebaselineFiresOverExtendedLiveRunPastCumulativeTravel() {
 // 124-008: RobotLoop::clampToPositionWireBound()'s own defensive-fallback
 // math, tested directly and in isolation from a live Motor. Under the
 // CURRENT margin/bound relationship (kPositionRebaselineMargin strictly
-// below the wire bound) and Devices::Motor::rebaseline()'s own unconditional
+// below the wire bound) and Hal::Motor::rebaseline()'s own unconditional
 // zero-the-cache behavior (proved by the scenario above), assembleFrame()'s
 // own call site can never actually observe a clamp -- the margin always
 // fires first and rebaseline() always resets position() to 0 before the
@@ -2567,11 +2567,11 @@ void scenarioEncoderAgesAreIndependentAndReflectRealCollectSkew() {
   TestSim::SimClock clock;
   TickingSleeper sleeper(clock);
 
-  Devices::NezhaMotor motorL(plant, baseMotorConfig(1));
-  Devices::NezhaMotor motorR(plant, baseMotorConfig(2));
-  Devices::RealOtos otos(plant, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+  Hardware::NezhaMotor motorL(plant, baseMotorConfig(1));
+  Hardware::NezhaMotor motorR(plant, baseMotorConfig(2));
+  Hardware::RealOtos otos(plant, Hal::OtosConfig{});
+  Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
+  Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
   TestSupport::FakeTransport serialFake;
   TestSupport::FakeTransport radioFake;

@@ -27,7 +27,7 @@
 //     because the OTHER side is moving.
 //   - OTOS: decodes and installs via App::configureOtos() -- trap 3
 //     (the-configuration-object.md) CLOSED (132-010): the scale fields are
-//     converted through Devices::scaleToRegister() before reaching
+//     converted through Hardware::scaleToRegister() before reaching
 //     setLinearScalar()/setAngularScalar(), matching RealOtos::begin()'s
 //     own boot-time conversion. Covers both the general case and the
 //     ticket's own regression guard -- a pushed linearScale/angularScale
@@ -99,8 +99,8 @@
 #include "app/drive.h"
 #include "config/boot_config.h"
 #include "config/robot.h"
-#include "devices/motor.h"
-#include "devices/otos.h"
+#include "hal/motor.h"
+#include "hardware/generic/real_otos.h"
 #include "firm/types/robot_state.h"
 #include "messages/envelope.h"
 #include "messages/robot_config.h"
@@ -188,20 +188,20 @@ bool encodeUint32Field(uint32_t fieldNumber, uint32_t value, uint8_t* buf, size_
   return WireRuntime::encodeVarint(value, buf, cap, pos);
 }
 
-// --- Devices::Motor / Devices::Otos test doubles ----------------------------
+// --- Hal::Motor / Hal::Otos test doubles ----------------------------
 // Same shape as configure_entry_points_harness.cpp's own RecordingMotor/
 // RecordingOtos (132-007) -- duplicated rather than shared, matching this
 // project's "each harness compiles ad hoc, no shared fixture" convention
 // (src/tests/CLAUDE.md).
 
-class RecordingMotor : public Devices::Motor {
+class RecordingMotor : public Hal::Motor {
  public:
   void begin() override {}
   void requestSample() override {}
   void setDuty(float duty) override { lastDuty = duty; }
-  void setNeutral(Devices::Neutral) override {}
+  void setNeutral(Hal::Neutral) override {}
   void applyTravelCalib(float travelCalib) override { lastTravelCalib = travelCalib; }
-  [[nodiscard]] bool reconfigure(const Devices::MotorConfig&) override { return true; }
+  [[nodiscard]] bool reconfigure(const Hal::MotorConfig&) override { return true; }
   void tick(uint64_t) override {}
 
   float position() const override { return 0.0f; }
@@ -222,11 +222,11 @@ class RecordingMotor : public Devices::Motor {
   float lastTravelCalib = -1.0f;  // sentinel: configureMotor() must overwrite this to pass
 };
 
-class RecordingOtos : public Devices::Otos {
+class RecordingOtos : public Hal::Otos {
  public:
   void begin() override {}
   void tick(uint64_t) override {}
-  Devices::PoseReading pose() const override { return {}; }
+  Hal::PoseReading pose() const override { return {}; }
   bool poseFresh() const override { return false; }
   bool connected() const override { return true; }
   bool present() const override { return true; }
@@ -478,7 +478,7 @@ int main() {
   beginScenario(
       "OTOS push decodes into config_ and reaches App::configureOtos() -- "
       "scale fields are REGISTER-domain-converted via "
-      "Devices::scaleToRegister() before reaching setLinearScalar()/"
+      "Hardware::scaleToRegister() before reaching setLinearScalar()/"
       "setAngularScalar() (trap 3 closed, 132-010)");
   {
     uint8_t buf[128];
@@ -495,10 +495,10 @@ int main() {
                 "config().otos.linear_scale reflects the push (config_ itself stays "
                 "in the RAW multiplier domain, per the-configuration-object.md's "
                 "'the object holds RAW file values' rule)");
-    checkFloatEq(otos.linearScalar, static_cast<float>(Devices::scaleToRegister(1.03f)),
+    checkFloatEq(otos.linearScalar, static_cast<float>(Hardware::scaleToRegister(1.03f)),
                 "setLinearScalar() argument is REGISTER-domain (scaleToRegister(1.03) "
                 "== 30), not the raw 1.03 multiplier -- trap 3 closed");
-    checkFloatEq(otos.angularScalar, static_cast<float>(Devices::scaleToRegister(0.98f)),
+    checkFloatEq(otos.angularScalar, static_cast<float>(Hardware::scaleToRegister(0.98f)),
                 "setAngularScalar() argument is REGISTER-domain (scaleToRegister(0.98) "
                 "== -20)");
     checkFloatEq(otos.offsetX, -48.0f,
@@ -511,7 +511,7 @@ int main() {
       "pushed linearScale/angularScale of 1.0 (true unity) installs register "
       "0 -- the SAME register value RealOtos::begin() installs for an "
       "identical BAKED 1.0 multiplier, because both call sites now share the "
-      "one Devices::scaleToRegister() conversion. Also confirms the fix is "
+      "one Hardware::scaleToRegister() conversion. Also confirms the fix is "
       "live: the OLD bug would have installed register 1 (setLinearScalar("
       "1.0) with no conversion -> clamp+truncate -> register 1, a real "
       "+0.1% scalar, 'a 1-LSB scalar instead of unity')");
@@ -526,7 +526,7 @@ int main() {
     const msg::ErrCode result = configurator.applyGroup(msg::ConfigGroupTarget::OTOS, buf, pos);
     checkEq(result, msg::ErrCode::ERR_NONE, "applyGroup(OTOS, unity scale) result");
 
-    const float bootWouldInstall = static_cast<float>(Devices::scaleToRegister(1.0f));
+    const float bootWouldInstall = static_cast<float>(Hardware::scaleToRegister(1.0f));
     checkFloatEq(bootWouldInstall, 0.0f,
                 "sanity: scaleToRegister(1.0) == register 0 -- true unity");
     checkFloatEq(otos.linearScalar, bootWouldInstall,

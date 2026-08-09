@@ -1,10 +1,10 @@
 // devices_motor_harness.cpp — off-hardware acceptance harness (originally
 // ticket DB-004; restructured 2026-07-18 with the Motor-interface split):
-// exercises Devices::NezhaMotor's OWN write shaping (reversal dwell +
+// exercises Hardware::NezhaMotor's OWN write shaping (reversal dwell +
 // output deadband, folded into the leaf's writeShapedDuty()), its
 // request/collect encoder pairing, and duty passthrough through the real
 // leaf against a TestSim::SimPlant (108-002), scripted deterministically
-// via TestSim::ScriptedI2CHook (108-009) — AND the Devices::MotorArmor
+// via TestSim::ScriptedI2CHook (108-009) — AND the Hardware::MotorArmor
 // DECORATOR's observation/recovery policy (standstill-guarded resets,
 // motion-qualified wedge reporting) through a dependency-free MockMotor
 // inner double.
@@ -39,7 +39,7 @@
 // scenario and exits nonzero if any assertion failed. Run by the pytest
 // wrapper in test_devices_motor.py, which compiles this file together with
 // tests/_infra/sim/sim_plant.cpp, src/tests/sim/plant/{wheel,otos}_plant.cpp,
-// and src/firm/devices/nezha_motor.cpp under -DHOST_BUILD, then runs the
+// and src/firm/hardware/nezha/nezha_motor.cpp under -DHOST_BUILD, then runs the
 // resulting binary via subprocess and asserts exit code 0.
 
 #include <cmath>
@@ -47,10 +47,10 @@
 #include <cstdio>
 #include <string>
 
-#include "devices/device_config.h"
-#include "devices/device_types.h"
-#include "devices/motor_armor.h"
-#include "devices/nezha_motor.h"
+#include "hal/device_config.h"
+#include "hal/device_types.h"
+#include "hardware/generic/motor_armor.h"
+#include "hardware/nezha/nezha_motor.h"
 #include "scripted_i2c_hook.h"
 #include "sim_plant.h"
 
@@ -97,24 +97,24 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
 
 // --- MockMotor ---------------------------------------------------------
 //
-// A dependency-free Devices::Motor double for the MotorArmor DECORATOR
+// A dependency-free Hal::Motor double for the MotorArmor DECORATOR
 // scenarios (2026-07-18 restructure: MotorArmor composes a Motor& instead
 // of being the leaf's base class). Test-settable position/velocity/
 // appliedDuty; counts the reset verbs the armor's standstill guard
 // dispatches. No I2C, no CODAL — devices/motor.h + device_config.h only.
-class MockMotor : public Devices::Motor {
+class MockMotor : public Hal::Motor {
  public:
   // --- Motor faceplate (trivial forwarding/recording) ---
   void begin() override {}
   void requestSample() override {}
   void setDuty(float duty) override { lastDutyCmd = duty; }
-  void setNeutral(Devices::Neutral) override {}
+  void setNeutral(Hal::Neutral) override {}
   void applyTravelCalib(float) override {}
   // REVISION 1 (114-001, motor.h): trivial always-succeeds stand-in --
   // MockMotor has no boot-identity config of its own to actually reassign,
   // it only needs to satisfy the new pure virtual and let scenarios assert
   // it was called.
-  bool reconfigure(const Devices::MotorConfig&) override {
+  bool reconfigure(const Hal::MotorConfig&) override {
     ++reconfigureCalls;
     return true;
   }
@@ -151,8 +151,8 @@ class MockMotor : public Devices::Motor {
 // only outputDeadband is functionally relevant here, MotorArmor::
 // reconfigure() reads it straight into its own motionThreshold_ motion-gate
 // cache; MockMotor ignores config entirely, so reversalDwell is moot).
-Devices::MotorConfig defaultArmorConfig() {
-  Devices::MotorConfig cfg;
+Hal::MotorConfig defaultArmorConfig() {
+  Hal::MotorConfig cfg;
   cfg.outputDeadband = 0.03f;   // [-1,1] fraction
   return cfg;
 }
@@ -163,13 +163,13 @@ Devices::MotorConfig defaultArmorConfig() {
 // Forward declarations — defined with the NezhaMotor scenario helpers below.
 void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAddr,
                                   float positionMm);
-Devices::MotorConfig baseNezhaConfig();
+Hal::MotorConfig baseNezhaConfig();
 
 // Scripts one encoder request/collect cycle and drives one setDuty+tick
 // pass; returns nothing — callers assert on appliedDuty() transitions
 // (write-on-change/throttle make exact write-call sequences a raw-path
 // concern; appliedDuty() is the shaped outcome).
-void dutyTick(Devices::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus,
+void dutyTick(Hardware::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus,
               uint16_t wireAddr, float duty, uint64_t nowUs) {
   scriptEncoderRequestCollect(bus, wireAddr, 0.0f);   // stationary plant
   motor.setDuty(duty);
@@ -188,10 +188,10 @@ void scenarioReversalDwellWritesZeroThenHoldsThroughDeadline() {
   {
     TestSim::SimPlant plant;
     TestSim::ScriptedI2CHook bus(plant);
-    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-    Devices::MotorConfig cfg = baseNezhaConfig();   // dwell/deadband = 100ms/0.03 (baseNezhaConfig()'s own explicit set)
+    const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
+    Hal::MotorConfig cfg = baseNezhaConfig();   // dwell/deadband = 100ms/0.03 (baseNezhaConfig()'s own explicit set)
     cfg.slewRate = 100.0f;                          // no slew clamping — isolates the dwell
-    Devices::NezhaMotor m(plant, cfg);
+    Hardware::NezhaMotor m(plant, cfg);
 
     dutyTick(m, bus, wireAddr, 0.5f, 50000);     // no prior direction — forwarded
     checkFloatEq(m.appliedDuty(), 0.5f, "initial direction forwarded immediately");
@@ -209,10 +209,10 @@ void scenarioReversalDwellWritesZeroThenHoldsThroughDeadline() {
   {
     TestSim::SimPlant plant;
     TestSim::ScriptedI2CHook bus(plant);
-    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-    Devices::MotorConfig cfg = baseNezhaConfig();
+    const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
+    Hal::MotorConfig cfg = baseNezhaConfig();
     cfg.slewRate = 100.0f;
-    Devices::NezhaMotor m(plant, cfg);
+    Hardware::NezhaMotor m(plant, cfg);
 
     dutyTick(m, bus, wireAddr, 0.5f, 50000);     // establish a direction
     dutyTick(m, bus, wireAddr, -0.5f, 100000);   // sign flip — arms dwell, deadline 200ms
@@ -242,10 +242,10 @@ void scenarioOutputDeadbandBoostsSubDeadbandNonzeroDutyExactZeroStaysZero() {
   {
     TestSim::SimPlant plant;
     TestSim::ScriptedI2CHook bus(plant);
-    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-    Devices::MotorConfig cfg = baseNezhaConfig();
+    const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
+    Hal::MotorConfig cfg = baseNezhaConfig();
     cfg.slewRate = 100.0f;
-    Devices::NezhaMotor m(plant, cfg);
+    Hardware::NezhaMotor m(plant, cfg);
     dutyTick(m, bus, wireAddr, 0.0f, 50000);
     checkFloatEq(m.appliedDuty(), 0.0f, "exact duty==0.0f writes 0 immediately");
   }
@@ -255,10 +255,10 @@ void scenarioOutputDeadbandBoostsSubDeadbandNonzeroDutyExactZeroStaysZero() {
   {
     TestSim::SimPlant plant;
     TestSim::ScriptedI2CHook bus(plant);
-    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-    Devices::MotorConfig cfg = baseNezhaConfig();   // outputDeadband = 0.03
+    const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
+    Hal::MotorConfig cfg = baseNezhaConfig();   // outputDeadband = 0.03
     cfg.slewRate = 100.0f;
-    Devices::NezhaMotor m(plant, cfg);
+    Hardware::NezhaMotor m(plant, cfg);
     dutyTick(m, bus, wireAddr, 0.01f, 50000);   // 0 < 0.01 < 0.03 -- genuine nonzero, sub-deadband
     checkFloatEq(m.appliedDuty(), 0.03f,
                  "sub-deadband positive duty boosted to +outputDeadband_, not zeroed");
@@ -269,10 +269,10 @@ void scenarioOutputDeadbandBoostsSubDeadbandNonzeroDutyExactZeroStaysZero() {
   {
     TestSim::SimPlant plant;
     TestSim::ScriptedI2CHook bus(plant);
-    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-    Devices::MotorConfig cfg = baseNezhaConfig();
+    const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
+    Hal::MotorConfig cfg = baseNezhaConfig();
     cfg.slewRate = 100.0f;
-    Devices::NezhaMotor m(plant, cfg);
+    Hardware::NezhaMotor m(plant, cfg);
     dutyTick(m, bus, wireAddr, -0.02f, 50000);   // 0 < 0.02 < 0.03
     checkFloatEq(m.appliedDuty(), -0.03f,
                  "sub-deadband negative duty boosted to -outputDeadband_ (sign preserved)");
@@ -285,10 +285,10 @@ void scenarioOutputDeadbandBoostsSubDeadbandNonzeroDutyExactZeroStaysZero() {
   {
     TestSim::SimPlant plant;
     TestSim::ScriptedI2CHook bus(plant);
-    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-    Devices::MotorConfig cfg = baseNezhaConfig();
+    const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
+    Hal::MotorConfig cfg = baseNezhaConfig();
     cfg.slewRate = 100.0f;
-    Devices::NezhaMotor m(plant, cfg);
+    Hardware::NezhaMotor m(plant, cfg);
     dutyTick(m, bus, wireAddr, 0.5f, 50000);
     checkFloatEq(m.appliedDuty(), 0.5f, "above-deadband duty passes through unmodified");
     dutyTick(m, bus, wireAddr, 0.03f, 110000);   // exactly AT the deadband boundary
@@ -303,10 +303,10 @@ void scenarioOutputDeadbandBoostsSubDeadbandNonzeroDutyExactZeroStaysZero() {
   {
     TestSim::SimPlant plant;
     TestSim::ScriptedI2CHook bus(plant);
-    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-    Devices::MotorConfig cfg = baseNezhaConfig();   // reversalDwell = 100ms, outputDeadband = 0.03
+    const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
+    Hal::MotorConfig cfg = baseNezhaConfig();   // reversalDwell = 100ms, outputDeadband = 0.03
     cfg.slewRate = 100.0f;
-    Devices::NezhaMotor m(plant, cfg);
+    Hardware::NezhaMotor m(plant, cfg);
 
     dutyTick(m, bus, wireAddr, 0.5f, 50000);      // establish a direction
     checkFloatEq(m.appliedDuty(), 0.5f, "initial direction forwarded");
@@ -337,7 +337,7 @@ void scenarioStandstillGuardedResetGatesOnRestTicks() {
   // (a) Moving: velocity and applied duty both nonzero — restTicks_ stays 0.
   {
     MockMotor inner;
-    Devices::MotorArmor armor(inner);
+    Hardware::MotorArmor armor(inner);
     (void)armor.reconfigure(defaultArmorConfig());
     inner.setMockVelocity(80.0f);      // well above kRestVelocity
     inner.setMockAppliedDuty(0.5f);    // being driven
@@ -359,7 +359,7 @@ void scenarioStandstillGuardedResetGatesOnRestTicks() {
   // (b) Verified standstill: well past kRestTicksRequired (5) ticks at rest.
   {
     MockMotor inner;
-    Devices::MotorArmor armor(inner);
+    Hardware::MotorArmor armor(inner);
     (void)armor.reconfigure(defaultArmorConfig());
     inner.setMockVelocity(0.0f);       // below kRestVelocity throughout
     // appliedDuty stays 0 — never commanded to move.
@@ -392,7 +392,7 @@ void scenarioWedgeLatchAndSuspectDeriveAsBefore() {
   // (a) Idle parked motor: frozen position, zero applied duty throughout.
   {
     MockMotor inner;
-    Devices::MotorArmor idle(inner);
+    Hardware::MotorArmor idle(inner);
     (void)idle.reconfigure(defaultArmorConfig());
     inner.setMockPosition(100.0f);   // never changes
     inner.setMockVelocity(0.0f);
@@ -411,7 +411,7 @@ void scenarioWedgeLatchAndSuspectDeriveAsBefore() {
   //     unconditional one.
   {
     MockMotor inner;
-    Devices::MotorArmor moving(inner);
+    Hardware::MotorArmor moving(inner);
     (void)moving.reconfigure(defaultArmorConfig());
     inner.setMockPosition(100.0f);   // still never changes — genuinely stuck
     inner.setMockVelocity(0.0f);
@@ -427,7 +427,7 @@ void scenarioWedgeLatchAndSuspectDeriveAsBefore() {
   }
 }
 
-// --- Devices::NezhaMotor scenarios (real leaf, scripted Platform::I2CBus) ---
+// --- Hardware::NezhaMotor scenarios (real leaf, scripted Platform::I2CBus) ---
 
 // Packs positionMm into the little-endian int32 tenths-of-degree raw
 // encoder reading NezhaMotor::collectEncoder() decodes (mirrors
@@ -458,8 +458,8 @@ void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAdd
   bus.queueRead(wireAddr, data, 4, /*status=*/0);   // collectEncoder()'s 4-byte read
 }
 
-Devices::MotorConfig baseNezhaConfig() {
-  Devices::MotorConfig cfg;
+Hal::MotorConfig baseNezhaConfig() {
+  Hal::MotorConfig cfg;
   cfg.port = 1;
   cfg.fwdSign = 1;
   cfg.wheelTravelCalib = 1.0f;
@@ -484,9 +484,9 @@ void scenarioRequestCollectPairingYieldsExpectedPositionVelocity() {
   beginScenario("request->collect encoder pairing yields expected position()/velocity()");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor motor(plant, baseNezhaConfig());
+  Hardware::NezhaMotor motor(plant, baseNezhaConfig());
 
   // Prime cycle: request -> collect at position 0.
   scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
@@ -504,7 +504,7 @@ void scenarioRequestCollectPairingYieldsExpectedPositionVelocity() {
   checkFloatEq(motor.position(), 10.0f, "position reflects the collected sample");
   checkFloatEq(motor.velocity(), 500.0f, "velocity == delta-position / delta-time");
   checkTrue(motor.connected(), "request+collect pairing reports connected");
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the pairing");
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0, "no script under-run across the pairing");
 }
 
 // 5b. Ticket 125-001 (telemetry-emit-policy-rebuild-spec.md, Part 2):
@@ -525,9 +525,9 @@ void scenarioVelocityReadsZeroUntilTwoValidSamplesCollected() {
   beginScenario("velocity() reads 0 until two valid samples are collected (125-001, Part 2)");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor motor(plant, baseNezhaConfig());
+  Hardware::NezhaMotor motor(plant, baseNezhaConfig());
 
   // First sample: connect + collect one reading. Nonzero position, nonzero
   // nowUs -- if this were still fabricating a rate from the pre-boot
@@ -553,7 +553,7 @@ void scenarioVelocityReadsZeroUntilTwoValidSamplesCollected() {
                "second sample: velocity() == (8.0 - 3.0)mm / 0.020s -- the real, unchanged "
                "difference-quotient behavior, now correctly gated on having two samples");
 
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0,
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0,
               "no script under-run across the two-sample-floor sequence");
 }
 
@@ -567,12 +567,12 @@ void scenarioSetDutyTickWritesExactlyTheGivenDutyThroughShaping() {
   beginScenario("setDuty()->tick() writes exactly the given duty through dwell/deadband shaping");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::MotorConfig cfg = baseNezhaConfig();
+  Hal::MotorConfig cfg = baseNezhaConfig();
   cfg.slewRate = 100.0f;   // no slew clamping -- isolates the passthrough
 
-  Devices::NezhaMotor motor(plant, cfg);
+  Hardware::NezhaMotor motor(plant, cfg);
 
   // A sequence of well-spaced (>=35ms apart, clears the write-rate
   // throttle), above-deadband, same-sign duties (no dwell in play) --
@@ -604,7 +604,7 @@ void scenarioSetDutyTickWritesExactlyTheGivenDutyThroughShaping() {
   checkFloatEq(motor.appliedDuty(), -0.35f,
                "dwell elapsed -- exact staged duty forwarded, unchanged in magnitude");
 
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the duty-passthrough sequence");
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0, "no script under-run across the duty-passthrough sequence");
 }
 
 // 7. A NAK'd STOP write (pct==0) must NOT be latched as "already written" --
@@ -617,11 +617,11 @@ void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
   beginScenario("a NAK'd stop write is retried next tick, not permanently latched-as-written");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::MotorConfig cfg = baseNezhaConfig();
+  Hal::MotorConfig cfg = baseNezhaConfig();
   cfg.slewRate = 100.0f;   // no slew clamping -- isolates the write-status behavior
-  Devices::NezhaMotor motor(plant, cfg);
+  Hardware::NezhaMotor motor(plant, cfg);
 
   // Starts at 50ms (not 0): writeRawDuty()'s write-rate throttle compares
   // this tick's nowUs against lastWriteTimeUs_'s zero-init value, so a
@@ -652,7 +652,7 @@ void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
   checkFloatEq(motor.appliedDuty(), 0.5f,
                "a NAK'd stop write does NOT latch -- appliedDuty() still reflects the "
                "PREVIOUS (still physically applied) duty, not the failed 0.0 attempt");
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 1,
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 1,
               "exactly one scripted error (the NAK'd stop write) recorded so far");
 
   // Cycle 3: the SAME stop target is retried -- write-on-change must NOT
@@ -668,7 +668,7 @@ void scenarioNakedStopWriteIsRetriedNextTickNotLatched() {
 
   checkFloatEq(motor.appliedDuty(), 0.0f,
                "the retried stop write actually reaches the bus and succeeds -- appliedDuty() is now 0");
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 1,
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 1,
               "no new error -- the retry succeeded; errCount stays at the one earlier NAK");
 }
 
@@ -706,11 +706,11 @@ void scenarioDroppedStopWriteReassertsZeroWhileVelocityNonzero() {
                 "re-asserts zero next tick while velocity() is nonzero");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::MotorConfig cfg = baseNezhaConfig();
+  Hal::MotorConfig cfg = baseNezhaConfig();
   cfg.slewRate = 100.0f;   // no slew clamping -- isolates the write-on-change behavior
-  Devices::NezhaMotor motor(plant, cfg);
+  Hardware::NezhaMotor motor(plant, cfg);
 
   // kStopConfirmVelocity (nezha_motor.h) == 8.0 mm/s -- 500 mm/s (25mm every
   // 50ms tick) is comfortably above it, with margin for any measurement
@@ -772,7 +772,7 @@ void scenarioDroppedStopWriteReassertsZeroWhileVelocityNonzero() {
   checkFloatEq(motor.velocity(), 500.0f,
                "the wheel is STILL measurably moving despite the committed zero write -- "
                "the exact 2026-07-31 defect scenario");
-  const uint32_t errsBeforeReassert = bus.errCount(Devices::kNezhaDeviceAddr);
+  const uint32_t errsBeforeReassert = bus.errCount(Hardware::kNezhaDeviceAddr);
 
   // Next tick: the SAME target (0.0f) is commanded again while velocity()
   // is still nonzero. pct == lastWrittenPct_ (0 == 0) this time -- the
@@ -789,7 +789,7 @@ void scenarioDroppedStopWriteReassertsZeroWhileVelocityNonzero() {
 
   checkFloatEq(motor.velocity(), 500.0f,
                "setup check: velocity() was still nonzero at the moment of this tick's write");
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), errsBeforeReassert + 1,
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), errsBeforeReassert + 1,
               "the re-asserted stop write was actually attempted on the bus (stopNotTaken "
               "bypassed write-on-change) -- NOT silently suppressed because lastWrittenPct_ "
               "already claimed 0 was sent");
@@ -804,10 +804,10 @@ void scenarioApplyTravelCalibTakesEffectSameBootNoReflash() {
   beginScenario("applyTravelCalib() changes subsequent position() decode on the same boot, no reflash");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::MotorConfig cfg = baseNezhaConfig();   // wheelTravelCalib = 1.0, fwdSign = 1
-  Devices::NezhaMotor motor(plant, cfg);
+  Hal::MotorConfig cfg = baseNezhaConfig();   // wheelTravelCalib = 1.0, fwdSign = 1
+  Hardware::NezhaMotor motor(plant, cfg);
 
   // Prime cycle: anchor at raw=0.
   scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
@@ -831,7 +831,7 @@ void scenarioApplyTravelCalibTakesEffectSameBootNoReflash() {
   checkFloatEq(motor.position(), 30.0f,
                "travelCalib=2.0 doubles the SAME raw-derived reading into mm -- confirms the applied change");
 
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the travelCalib sequence");
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0, "no script under-run across the travelCalib sequence");
 }
 
 // 9. reconfigure() -- REVISION 1 (114-001, motor.h): guarded, whole-config
@@ -845,17 +845,17 @@ void scenarioReconfigureGuardedWholeConfigReplacement() {
                 "and not at rest, succeeds again once at rest");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::MotorConfig cfg = baseNezhaConfig();   // port=1, fwdSign=1, wheelTravelCalib=1.0
-  Devices::NezhaMotor motor(plant, cfg);
+  Hal::MotorConfig cfg = baseNezhaConfig();   // port=1, fwdSign=1, wheelTravelCalib=1.0
+  Hardware::NezhaMotor motor(plant, cfg);
 
   // --- Step 1: never commanded (mode_ == Mode::None) -- reconfigure()
   //     succeeds and replaces config_ WHOLESALE (fwdSign/wheelTravelCalib
   //     have no other runtime setter besides applyTravelCalib(), which only
   //     touches wheelTravelCalib -- this is the ONLY path that can change
   //     fwdSign post-construction). ---
-  Devices::MotorConfig cfgA = baseNezhaConfig();
+  Hal::MotorConfig cfgA = baseNezhaConfig();
   cfgA.fwdSign = -1;
   cfgA.wheelTravelCalib = 2.0f;
   bool ok1 = motor.reconfigure(cfgA);
@@ -881,7 +881,7 @@ void scenarioReconfigureGuardedWholeConfigReplacement() {
   motor.tick(50000);   // first write is slew-exempt -- lands immediately, nonzero
   checkTrue(motor.appliedDuty() != 0.0f, "setup: a real nonzero duty actually landed -- not at rest");
 
-  Devices::MotorConfig cfgB = baseNezhaConfig();
+  Hal::MotorConfig cfgB = baseNezhaConfig();
   cfgB.fwdSign = 1;
   cfgB.wheelTravelCalib = 1.0f;
   bool ok2 = motor.reconfigure(cfgB);
@@ -909,7 +909,7 @@ void scenarioReconfigureGuardedWholeConfigReplacement() {
                "position now decodes under cfgB's fwdSign=1/wheelTravelCalib=1.0 -- the recovery "
                "reconfigure() genuinely took effect");
 
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the reconfigure() sequence");
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0, "no script under-run across the reconfigure() sequence");
 }
 
 // 10. Explicit all-zero write shaping (reversalDwell=0/outputDeadband=0) is
@@ -922,13 +922,13 @@ void scenarioExplicitZeroWriteShapingIsPassThrough() {
   beginScenario("explicit reversalDwell=0/outputDeadband=0 is a pure pass-through");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::MotorConfig cfg = baseNezhaConfig();
+  Hal::MotorConfig cfg = baseNezhaConfig();
   cfg.reversalDwell = 0.0f;    // [ms] explicit off, distinct from "unset"
   cfg.outputDeadband = 0.0f;   // [-1,1] explicit off, distinct from "unset"
   cfg.slewRate = 100.0f;       // no slew clamping -- isolates write shaping
-  Devices::NezhaMotor m(plant, cfg);
+  Hardware::NezhaMotor m(plant, cfg);
 
   // A tiny duty that would have been zeroed under the 0.03 ship default
   // lands unmodified -- outputDeadband_ == 0 never suppresses a nonzero duty.
@@ -965,15 +965,15 @@ void scenarioSigmaDeltaRepresentsSubCountDutyAndDropsCarryOnStop() {
                 "and discards its carry on a commanded zero (133-002)");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
   // (a) 12.3% -- strictly between counts 12 and 13. Plain lroundf() would
   //     write 12 on every single cycle forever, an error of 0.3 of a count
   //     held indefinitely in one direction.
   {
-    Devices::MotorConfig cfg = baseNezhaConfig();
+    Hal::MotorConfig cfg = baseNezhaConfig();
     cfg.slewRate = 100.0f;  // no slew clamping -- isolates the quantizer
-    Devices::NezhaMotor m(plant, cfg);
+    Hardware::NezhaMotor m(plant, cfg);
 
     const float duty = 0.123f;  // [-1,1] -> 12.3 percent
     const int kTicks = 20;      // two full periods of the residual pattern
@@ -1005,9 +1005,9 @@ void scenarioSigmaDeltaRepresentsSubCountDutyAndDropsCarryOnStop() {
   //     carry cleared that is 13 again; with the carry carried across the
   //     stop it would be 12.6 - 0.4 = 12.2, i.e. 12.
   {
-    Devices::MotorConfig cfg = baseNezhaConfig();
+    Hal::MotorConfig cfg = baseNezhaConfig();
     cfg.slewRate = 100.0f;
-    Devices::NezhaMotor m(plant, cfg);
+    Hardware::NezhaMotor m(plant, cfg);
 
     dutyTick(m, bus, wireAddr, 0.126f, 50000);
     checkFloatEq(m.appliedDuty(), 0.13f,
@@ -1028,9 +1028,9 @@ void scenarioSigmaDeltaRepresentsSubCountDutyAndDropsCarryOnStop() {
   // (c) A commanded zero stays exactly zero however long it is held --
   //     the carry cannot re-accumulate while the command is zero.
   {
-    Devices::MotorConfig cfg = baseNezhaConfig();
+    Hal::MotorConfig cfg = baseNezhaConfig();
     cfg.slewRate = 100.0f;
-    Devices::NezhaMotor m(plant, cfg);
+    Hardware::NezhaMotor m(plant, cfg);
 
     dutyTick(m, bus, wireAddr, 0.457f, 50000);  // build an arbitrary residual
     uint64_t nowUs = 100000;
@@ -1060,10 +1060,10 @@ void scenarioSampleTimeReflectsMostRecentTick() {
   beginScenario("sampleTime() reflects the most recent tick() call's own nowUs (healthy path)");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::MotorConfig cfg = baseNezhaConfig();
-  Devices::NezhaMotor motor(plant, cfg);
+  Hal::MotorConfig cfg = baseNezhaConfig();
+  Hardware::NezhaMotor motor(plant, cfg);
 
   uint64_t nowUs = 0;
   scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
@@ -1077,7 +1077,7 @@ void scenarioSampleTimeReflectsMostRecentTick() {
   motor.tick(nowUs);
   checkTrue(motor.sampleTime() == nowUs, "sampleTime() advances to the next tick's own nowUs");
 
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run across the run");
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0, "no script under-run across the run");
 }
 
 // 12. NEW (131-002, issue A-commanded-zero-leaks-through-stage-b.md): a
@@ -1097,10 +1097,10 @@ void scenarioSampleTimeHoldsLastSuccessfulCollectAcrossFailedCollects() {
                 "collects (131-002)");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::MotorConfig cfg = baseNezhaConfig();
-  Devices::NezhaMotor motor(plant, cfg);
+  Hal::MotorConfig cfg = baseNezhaConfig();
+  Hardware::NezhaMotor motor(plant, cfg);
 
   // Baseline: a genuinely successful collect at nowUs=0.
   scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
@@ -1163,9 +1163,9 @@ void scenarioRebaselinePreservesVelocityAcrossTheBoundary() {
   beginScenario("rebaseline() preserves velocity() across the software re-anchor (131-004)");
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor motor(plant, baseNezhaConfig());
+  Hardware::NezhaMotor motor(plant, baseNezhaConfig());
 
   // Two paired cycles establish a real, nonzero velocity -- mirrors
   // scenarioRequestCollectPairingYieldsExpectedPositionVelocity() above.

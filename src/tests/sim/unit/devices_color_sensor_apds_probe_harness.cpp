@@ -2,7 +2,7 @@
 // ticket 108-008 (clasi/issues/color-sensor-apds-probe-success-on-failure.md,
 // 2026-07-13 code review finding M4).
 //
-// Proves Devices::ColorSensorLeaf::beginStep()'s APDS probe (color_sensor.cpp
+// Proves Hardware::ColorSensorLeaf::beginStep()'s APDS probe (color_sensor.cpp
 // ApdsProbe phase) no longer latches present()==true on a NAK'd bus read.
 // Pre-fix, the probe used readReg8() (status-ignoring); a NAK left its
 // out-buffer at its zero-initialized default, and en==0x00 is exactly the
@@ -32,7 +32,7 @@
 // this same scenario once that surface exists.
 //
 // Compiled by test_devices_color_sensor_apds_probe.py against the REAL
-// src/firm/devices/color_sensor.cpp and tests/_infra/sim/sim_plant.cpp (plus
+// src/firm/hardware/planetx/color_sensor.cpp and tests/_infra/sim/sim_plant.cpp (plus
 // its own wheel_plant.cpp/otos_plant.cpp dependencies) with -DHOST_BUILD,
 // the same "compile a throwaway subprocess binary" pattern every other
 // src/tests/sim/{unit,plant,system} harness uses (see test_plant.py, this
@@ -43,8 +43,8 @@
 #include <cstdio>
 #include <string>
 
-#include "devices/color_sensor.h"
-#include "devices/device_config.h"
+#include "hardware/planetx/color_sensor.h"
+#include "hal/device_config.h"
 #include "sim_plant.h"
 
 namespace {
@@ -101,7 +101,7 @@ constexpr int kOk = 0;
 // this harness never hooks it), so every run walks the full kMaxAltAttempts
 // retries before beginStep() ever reaches the ApdsProbe phase this test is
 // actually about.
-int runDetectionToCompletion(Devices::ColorSensorLeaf& sensor) {
+int runDetectionToCompletion(Hardware::ColorSensorLeaf& sensor) {
   const int kBound = kMaxAltAttempts + 2;  // 20 ALT attempts + 1 APDS attempt + margin
   int callsUsed = 0;
   for (int i = 0; i < kBound; ++i) {
@@ -129,8 +129,8 @@ void scenarioApdsProbeNakLatchesAbsent() {
     return plant.defaultRead(address, data, len);  // pass-through, just counting
   });
 
-  Devices::ColorConfig cfg;
-  Devices::ColorSensorLeaf sensor(plant, cfg);
+  Hal::ColorConfig cfg;
+  Hardware::ColorSensorLeaf sensor(plant, cfg);
 
   int callsUsed = runDetectionToCompletion(sensor);
   checkTrue(sensor.detectDone(), "detectDone() reached within the bounded call count");
@@ -163,7 +163,7 @@ void scenarioApdsProbeOkLatchesPresent() {
   beginScenario("ColorSensorLeaf APDS probe: hook returns OK + en==0x00 -- present() must latch true");
 
   TestSim::SimPlant plant;
-  constexpr uint16_t kApdsWireAddr = static_cast<uint16_t>(Devices::kColorDeviceAddrApds << 1);
+  constexpr uint16_t kApdsWireAddr = static_cast<uint16_t>(Hardware::kColorDeviceAddrApds << 1);
 
   // Writes to the APDS address (the ENABLE-register writes beginStep()'s
   // ApdsProbe phase and initApds() both issue) always ACK.
@@ -184,8 +184,8 @@ void scenarioApdsProbeOkLatchesPresent() {
     return plant.defaultRead(address, data, len);
   });
 
-  Devices::ColorConfig cfg;
-  Devices::ColorSensorLeaf sensor(plant, cfg);
+  Hal::ColorConfig cfg;
+  Hardware::ColorSensorLeaf sensor(plant, cfg);
 
   int callsUsed = runDetectionToCompletion(sensor);
   checkTrue(sensor.detectDone(), "detectDone() reached within the bounded call count");

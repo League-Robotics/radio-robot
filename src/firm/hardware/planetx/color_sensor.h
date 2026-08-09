@@ -1,4 +1,4 @@
-// color_sensor.h — Devices::ColorSensorLeaf: the internal leaf for RGBC color
+// color_sensor.h — Hardware::ColorSensorLeaf: the internal leaf for RGBC color
 // sensing. Supports two chip variants: an alt/"PlanetX" chip at I2C address
 // 0x43 (primary) and an APDS9960 at 0x39 (fallback). The loop constructs and
 // drives this leaf directly — there is no separate handle class.
@@ -37,18 +37,19 @@
 
 #include <cstdint>
 
-#include "devices/device_config.h"
-#include "devices/device_types.h"
+#include "hal/device_config.h"
+#include "hal/device_types.h"
+#include "hal/color_sensor.h"
 #include "platform/i2c_bus.h"
 
-namespace Devices {
+namespace Hardware {
 
 constexpr uint8_t kColorDeviceAddrApds = 0x39;
 constexpr uint8_t kColorDeviceAddrAlt = 0x43;
 
-class ColorSensorLeaf {
+class ColorSensorLeaf : public Hal::ColorSensor {
  public:
-  ColorSensorLeaf(Platform::I2CBus& bus, const ColorConfig& config);
+  ColorSensorLeaf(Platform::I2CBus& bus, const Hal::ColorConfig& config);
 
   // Non-blocking single detection step. Call once per fiber cycle (DB-007's
   // detection preamble) until detectDone() is true; a no-op once it is.
@@ -65,15 +66,15 @@ class ColorSensorLeaf {
   // true, phase Done. Either way (found or not), phase becomes Done after
   // this one attempt — a caller must stop calling beginStep() once
   // detectDone() is true.
-  void beginStep(uint64_t nowUs);  // [us]
-  bool detectDone() const;
+  void beginStep(uint64_t nowUs) override;  // [us]
+  bool detectDone() const override;
 
   // present()/connected(): same distinction as otos.h.
   // present() is set once by beginStep() reaching a successful terminal
   // state and never re-evaluated; connected() is the live, per-tick()
   // bus-health result (see tick()'s own comment).
-  bool present() const;
-  bool connected() const;
+  bool present() const override;
+  bool connected() const override;
 
   // True if a real bus read is due: no real read has ever happened, or at
   // least (ColorConfig::lagColor * 1000) [us] have elapsed since the last
@@ -84,14 +85,14 @@ class ColorSensorLeaf {
   // traffic) if beginStep() never found a chip, or if the call arrives
   // before readDue() is true (rate-limited, same "always retried, never
   // permanently latched" contract as Otos::tick()). Publishes a fresh
-  // ColorReading (readingFresh() true) only when the chip's own data-ready
+  // Hal::ColorReading (readingFresh() true) only when the chip's own data-ready
   // condition was met THIS call; a poll miss (chip not ready yet) or a bus
   // failure both leave readingFresh() false and reading() unchanged,
   // connected() reflecting the latter case only.
-  void tick(uint64_t nowUs);  // [us]
+  void tick(uint64_t nowUs) override;  // [us]
 
-  ColorReading reading() const;
-  bool readingFresh() const;
+  Hal::ColorReading reading() const override;
+  bool readingFresh() const override;
 
   // [counts] the ADC's full-scale value at the CURRENT integration time --
   // 1025 per 2.78ms integration step, i.e. 1025 * (256 - ATIME), saturating
@@ -104,13 +105,13 @@ class ColorSensorLeaf {
   // 2026-08-08 before this was exposed: r/g/b pinned at 0 and c at 2 across
   // 375 consecutive frames, zero spread -- a sensor that reads fine but
   // could not express anything.
-  uint32_t fullScale() const;
+  uint32_t fullScale() const override;
 
  private:
   enum class DetectPhase : uint8_t { AltProbe, ApdsProbe, Done };
 
   Platform::I2CBus& bus_;
-  ColorConfig config_;
+  Hal::ColorConfig config_;
 
   DetectPhase phase_ = DetectPhase::AltProbe;
   int altAttempts_ = 0;
@@ -121,7 +122,7 @@ class ColorSensorLeaf {
   bool connected_ = false;
   bool isAlt_ = false;
 
-  ColorReading cachedReading_{};
+  Hal::ColorReading cachedReading_{};
   bool readingFresh_ = false;
 
   uint64_t lastReadUs_ = 0;  // [us] time of the most recent real tick() read
@@ -137,7 +138,7 @@ class ColorSensorLeaf {
 
   // writeReg8()/readReg8()/readReg16()/readReg16Alt() ignore the I2C
   // transaction status. The *Status() variants below are used by tick()'s
-  // steady-state path (which, like NezhaMotor/Otos, DOES track bus health
+  // steady-state path (which, like NezhaMotor/Hal::Otos, DOES track bus health
   // for connected()) AND by beginStep()'s ApdsProbe phase — a
   // status-ignoring probe read there once latched present()==true on a NAK
   // (a status-ignoring readback decodes a NAK as en==0x00, exactly the
@@ -153,4 +154,4 @@ class ColorSensorLeaf {
   bool readReg16AltStatus(uint8_t regLo, uint16_t& out);
 };
 
-}  // namespace Devices
+}  // namespace Hardware

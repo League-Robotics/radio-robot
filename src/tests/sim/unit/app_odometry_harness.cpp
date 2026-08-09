@@ -2,7 +2,7 @@
 // Motion::Odometry (src/motion/odometry.{h,cpp}). Proves:
 // Odometry::integrate() accumulates world x/y/theta correctly for a
 // straight-line case (equal wheel deltas) and a pure-rotation case
-// (equal-and-opposite wheel deltas), reading the REAL Devices::NezhaMotor
+// (equal-and-opposite wheel deltas), reading the REAL Hardware::NezhaMotor
 // leaves' own position() (no shadow copy), plus the pathLength() odometer
 // semantics.
 //
@@ -29,9 +29,9 @@
 #include <cstdio>
 #include <string>
 
-#include "devices/device_config.h"
-#include "devices/device_types.h"
-#include "devices/nezha_motor.h"
+#include "hal/device_config.h"
+#include "hal/device_types.h"
+#include "hardware/nezha/nezha_motor.h"
 #include "motion/body_kinematics.h"
 #include "motion/odometry.h"
 #include "scripted_i2c_hook.h"
@@ -81,7 +81,7 @@ void checkNear(float actual, float expected, float tol, const std::string& what)
   }
 }
 
-// --- Devices::NezhaMotor scripting helpers (duplicated from
+// --- Hardware::NezhaMotor scripting helpers (duplicated from
 // devices_motor_harness.cpp) ------------------------------------------------
 
 void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAddr,
@@ -99,15 +99,15 @@ void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAdd
   bus.queueRead(wireAddr, data, 4, /*status=*/0);   // collectEncoder()'s 4-byte read
 }
 
-Devices::MotorConfig baseNezhaConfig(uint32_t port) {
-  Devices::MotorConfig cfg;
+Hal::MotorConfig baseNezhaConfig(uint32_t port) {
+  Hal::MotorConfig cfg;
   cfg.port = port;
   cfg.fwdSign = 1;
   cfg.wheelTravelCalib = 1.0f;
   return cfg;
 }
 
-void driveToPosition(Devices::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus,
+void driveToPosition(Hardware::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus,
                       uint16_t wireAddr, float positionMm, uint64_t nowUs) {
   scriptEncoderRequestCollect(bus, wireAddr, positionMm);
   motor.requestSample();
@@ -126,10 +126,10 @@ void scenarioStraightLineAccumulatesDistanceNoHeadingChange() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
-  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  Hardware::NezhaMotor left(plant, baseNezhaConfig(1));
+  Hardware::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
   Motion::Odometry odom(trackWidth, left.position(), right.position());
@@ -159,10 +159,10 @@ void scenarioPureRotationAccumulatesHeadingNoTranslation() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
-  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  Hardware::NezhaMotor left(plant, baseNezhaConfig(1));
+  Hardware::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
   Motion::Odometry odom(trackWidth, left.position(), right.position());
@@ -201,10 +201,10 @@ void scenarioBaselineSeededFromLeafPositionAtConstruction() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
-  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  Hardware::NezhaMotor left(plant, baseNezhaConfig(1));
+  Hardware::NezhaMotor right(plant, baseNezhaConfig(2));
 
   // Advance both leaves to a nonzero position BEFORE constructing Odometry.
   driveToPosition(left, bus, wireAddr, 500.0f, 20000);
@@ -233,10 +233,10 @@ void scenarioPathLengthAccumulatesStraightLineTravel() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
-  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  Hardware::NezhaMotor left(plant, baseNezhaConfig(1));
+  Hardware::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
   Motion::Odometry odom(trackWidth, left.position(), right.position());
@@ -264,10 +264,10 @@ void scenarioPathLengthInPlaceTurnContributesApproximatelyZero() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
-  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  Hardware::NezhaMotor left(plant, baseNezhaConfig(1));
+  Hardware::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
   Motion::Odometry odom(trackWidth, left.position(), right.position());
@@ -288,10 +288,10 @@ void scenarioPathLengthReverseTravelAccumulatesNotCancels() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
-  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  Hardware::NezhaMotor left(plant, baseNezhaConfig(1));
+  Hardware::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
   Motion::Odometry odom(trackWidth, left.position(), right.position());
@@ -317,10 +317,10 @@ void scenarioPathLengthNotZeroedByReset() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
-  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  Hardware::NezhaMotor left(plant, baseNezhaConfig(1));
+  Hardware::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
   Motion::Odometry odom(trackWidth, left.position(), right.position());
@@ -358,10 +358,10 @@ void scenarioEpochChangeReAnchorsThatWheelOnlyLeavesTheOtherDiffingNormally() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
-  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  Hardware::NezhaMotor left(plant, baseNezhaConfig(1));
+  Hardware::NezhaMotor right(plant, baseNezhaConfig(2));
 
   const float trackWidth = 200.0f;  // [mm]
   Motion::Odometry odom(trackWidth, left.position(), right.position());
@@ -373,7 +373,7 @@ void scenarioEpochChangeReAnchorsThatWheelOnlyLeavesTheOtherDiffingNormally() {
   checkNear(odom.x(), 40.0f, 1e-3f, "ordinary cycle: x accumulates the real 40mm common delta");
 
   // Left wheel "rebaselines" -- App::RobotLoop::publishWheel() re-anchors
-  // Devices::Motor::position() near 0 the SAME cycle it bumps positionEpoch
+  // Hal::Motor::position() near 0 the SAME cycle it bumps positionEpoch
   // (odometry.h's own file header); driveToPosition() here stands in for
   // that (this harness's real NezhaMotor leaves have no rebaseline concept
   // of their own -- Odometry only ever sees the (position, epoch) pair

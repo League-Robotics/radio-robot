@@ -26,13 +26,13 @@ constexpr float kConfigureRestVelocity = 5.0f;  // [mm/s]
 
 }  // namespace
 
-Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
-  Devices::MotorConfig cfg;
+Hal::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
+  Hal::MotorConfig cfg;
   cfg.wheelTravelCalib = src.travel_calib;
   cfg.fwdSign = src.fwd_sign;
   cfg.slewRate = src.slew_rate;
   cfg.port = src.port;
-  // Devices::MotorConfig's reversalDwell/outputDeadband are plain required
+  // Hal::MotorConfig's reversalDwell/outputDeadband are plain required
   // floats -- gen_boot_config.py's required-key gate guarantees
   // src.reversal_dwell/src.output_deadband are always set (.has == true)
   // here, so read .val directly rather than changing the wire
@@ -111,7 +111,7 @@ void configurePlanner(Motion::Planner& planner, const Config::Robot& config) {
 }
 
 // configureMotor -- see boot_calibration.h's own doc comment.
-bool configureMotor(Devices::Motor& motor, const Config::Robot& config, bool isLeft) {
+bool configureMotor(Hal::Motor& motor, const Config::Robot& config, bool isLeft) {
   const bool atRest =
       std::fabs(motor.velocity()) < kConfigureRestVelocity && motor.appliedDuty() == 0.0f;
   if (!atRest) return false;
@@ -122,7 +122,7 @@ bool configureMotor(Devices::Motor& motor, const Config::Robot& config, bool isL
 }
 
 // configureOtos -- see boot_calibration.h's own doc comment. linear_scale/
-// angular_scale are converted through Devices::scaleToRegister() (otos.h)
+// angular_scale are converted through Hardware::scaleToRegister() (otos.h)
 // before reaching setLinearScalar()/setAngularScalar() -- those two setters
 // take the chip's raw int8 register domain directly, never the config
 // MULTIPLIER domain (1.0 = no correction) config.otos itself holds. This is
@@ -133,9 +133,9 @@ bool configureMotor(Devices::Motor& motor, const Config::Robot& config, bool isL
 // setter already takes the value directly, no domain conversion (otos.h's
 // own setOffset() doc comment spells out the distinction from the scale
 // registers).
-void configureOtos(Devices::Otos& otos, const Config::Robot& config) {
-  otos.setLinearScalar(static_cast<float>(Devices::scaleToRegister(config.otos.linear_scale)));
-  otos.setAngularScalar(static_cast<float>(Devices::scaleToRegister(config.otos.angular_scale)));
+void configureOtos(Hal::Otos& otos, const Config::Robot& config) {
+  otos.setLinearScalar(static_cast<float>(Hardware::scaleToRegister(config.otos.linear_scale)));
+  otos.setAngularScalar(static_cast<float>(Hardware::scaleToRegister(config.otos.angular_scale)));
   otos.setOffset(config.otos.offset_x, config.otos.offset_y, config.otos.offset_yaw);
 }
 

@@ -18,7 +18,7 @@
 //   B   alternate LEFT/RIGHT   (~18 ms/poll per wheel), 20 s -- correlation
 //   C   slow-poll LEFT (~25 ms/poll), 20 s -- read-rate influence vs A1
 //
-// Wire protocol (byte-for-byte from src/firm/devices/nezha_motor.cpp --
+// Wire protocol (byte-for-byte from src/firm/hardware/nezha/nezha_motor.cpp --
 // this file deliberately re-implements it raw rather than linking the
 // driver, so the driver's own conditioning can't color the measurement):
 //   encoder read:  write [0xFF,0xF9,port,0x00,0x46,0x00,0xF5,0x00],

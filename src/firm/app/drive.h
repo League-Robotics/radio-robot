@@ -3,14 +3,14 @@
 #include <cstdint>
 
 #include "config/robot.h"
-#include "devices/motor.h"
+#include "hal/motor.h"
 #include "firm/types/robot_state.h"
 
 namespace App {
 
 class Drive {
  public:
-  Drive(Devices::Motor& left, Devices::Motor& right, float trackWidth);
+  Drive(Hal::Motor& left, Hal::Motor& right, float trackWidth);
 
   static constexpr float kDutyPerSpeed = 0.001182f;  // [duty/(mm/s)]
 
@@ -170,8 +170,8 @@ class Drive {
 
   static constexpr uint32_t kMaxSampleAge = 200;  // [ms]
 
-  Devices::Motor& left_;
-  Devices::Motor& right_;
+  Hal::Motor& left_;
+  Hal::Motor& right_;
   float trackWidth_;  // [mm]
 
   float targetLeft_ = 0.0f;   // [mm/s]

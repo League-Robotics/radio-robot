@@ -45,7 +45,7 @@
 #include <string>
 
 #include "bench_test_config.h"
-#include "devices/nezha_motor.h"
+#include "hardware/nezha/nezha_motor.h"
 #include "messages/envelope.h"
 #include "messages/wire_runtime.h"
 #include "sim_harness.h"
@@ -210,7 +210,7 @@ std::string armorWheelControlConfigCommand(float kp, uint32_t corrId) {
 int main() {
   std::printf("=== Config-Completeness Gate (114-001, SUC-001/SUC-004) ===\n\n");
 
-  const uint16_t kNezhaWireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t kNezhaWireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
   // --- Scenario 1: fresh + booted SimHarness starts unconfigured ---------
   {
@@ -333,7 +333,7 @@ int main() {
     // Pure rotation (v_x=0, omega!=0): a correctly-ported drivetrain drives
     // the left and right wheels in OPPOSITE directions. If configureMotor()
     // had failed to propagate `port` (the exact aliasing bug Revision 1
-    // fixed -- both motors constructed with Devices::MotorConfig{}'s
+    // fixed -- both motors constructed with Hal::MotorConfig{}'s
     // port=0, never corrected), both simulated writes would land on the
     // SAME WheelPlant and the other port's own plant would stay stone dead
     // at velocity 0 for the whole run -- impossible to produce opposite-sign
@@ -361,7 +361,7 @@ int main() {
 
     float velLeft = sim.motorLeft().velocity();
     float velRight = sim.motorRight().velocity();
-    std::printf("  velLeft=%.3f velRight=%.3f (mm/s, measured via Devices::NezhaMotor::velocity())\n",
+    std::printf("  velLeft=%.3f velRight=%.3f (mm/s, measured via Hardware::NezhaMotor::velocity())\n",
                 static_cast<double>(velLeft), static_cast<double>(velRight));
     checkTrue(std::fabs(velLeft) > 5.0f,
               "left wheel measured velocity is genuinely nonzero -- NOT frozen at 0.00 (the original "

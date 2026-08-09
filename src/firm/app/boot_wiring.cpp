@@ -25,12 +25,12 @@ RobotGraph::BootValues RobotGraph::bakeBootValues(const BootOverrides& overrides
     r.otosConfig.angularScale = otosBoot.angularScale;
   }
 
-  // colorConfig/lineConfig stay at Devices::ColorConfig{}/LineConfig{}'s own
+  // colorConfig/lineConfig stay at Hal::ColorConfig{}/LineConfig{}'s own
   // defaults -- neither root has ever baked a robot-JSON override for these
   // (main.cpp's own pre-130-002 code constructed the same all-default
   // structs inline).
-  r.colorConfig = Devices::ColorConfig{};
-  r.lineConfig = Devices::LineConfig{};
+  r.colorConfig = Hal::ColorConfig{};
+  r.lineConfig = Hal::LineConfig{};
 
   // 132-007 (subsystem configure() entry points + derived-value methods):
   // trackWidth is now computed via Config::Robot::effectiveTrackWidth()

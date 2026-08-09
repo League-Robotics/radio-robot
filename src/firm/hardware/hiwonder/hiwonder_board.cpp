@@ -1,11 +1,11 @@
 // hiwonder_board.cpp -- see hiwonder_board.h; reference documentation at
 // docs/hiwonder/hiwonder-motor-board.md (cited as "doc s1.2" etc.).
-#include "devices/hiwonder_board.h"
+#include "hardware/hiwonder/hiwonder_board.h"
 
 #include <cmath>
 #include <cstring>
 
-namespace Devices {
+namespace Hardware {
 
 bool HiwonderBoard::init(uint8_t motorType) {
   uint8_t typeFrame[2] = {kRegMotorType, motorType};
@@ -124,4 +124,4 @@ void HiwonderBoard::readEncoders(int32_t* totalsOut) {
   if (totalsOut != nullptr) std::memcpy(totalsOut, totals_, sizeof(totals_));
 }
 
-}  // namespace Devices
+}  // namespace Hardware

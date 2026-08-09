@@ -55,7 +55,7 @@ _DEVICE_SOURCES = [
     # Devices::Otos's virtual destructor is declared out-of-line (otos.h)
     # and defined here -- RecordingOtos's own dtor chain needs the symbol
     # even though this harness never constructs a RealOtos.
-    _SOURCE_DIR / "devices" / "otos.cpp",
+    _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp",
 ]
 
 _CXX_STANDARD = "c++20"

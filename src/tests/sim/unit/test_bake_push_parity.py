@@ -7,7 +7,7 @@ discipline"): sprint.md's "Bake/push parity" success criterion --
 
 Compiles ``bake_push_parity_harness.cpp`` together with configurator.cpp,
 drive.cpp, boot_calibration.cpp, persisted_tuning.cpp, config/boot_config.cpp,
-messages/wire.cpp, messages/wire_runtime.cpp, devices/otos.cpp, and the
+messages/wire.cpp, messages/wire_runtime.cpp, hardware/generic/real_otos.cpp, and the
 standalone Motion::Planner sources -- the SAME source list
 configurator_applygroup_harness.cpp (132-008)/configurator_getconfig_harness.cpp
 (132-011) already established, since this harness reuses that fixture shape
@@ -52,7 +52,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _DEVICE_SOURCES = [
-    _SOURCE_DIR / "devices" / "otos.cpp",
+    _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp",
 ]
 
 _CXX_STANDARD = "c++20"

@@ -39,12 +39,12 @@
 #include <string>
 
 #include "app/preamble.h"
-#include "devices/color_sensor.h"
-#include "devices/device_config.h"
-#include "devices/device_types.h"
-#include "devices/line_sensor.h"
-#include "devices/nezha_motor.h"
-#include "devices/otos.h"
+#include "hardware/planetx/color_sensor.h"
+#include "hal/device_config.h"
+#include "hal/device_types.h"
+#include "hardware/planetx/line_sensor.h"
+#include "hardware/nezha/nezha_motor.h"
+#include "hardware/generic/real_otos.h"
 #include "scripted_i2c_hook.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
@@ -85,13 +85,13 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
 
 // --- Fixture helpers -------------------------------------------------------
 
-constexpr uint16_t kMotorWireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
-constexpr uint16_t kOtosWireAddr = static_cast<uint16_t>(Devices::kOtosDeviceAddr << 1);
-constexpr uint16_t kColorAltWireAddr = static_cast<uint16_t>(Devices::kColorDeviceAddrAlt << 1);
-constexpr uint16_t kLineWireAddr = static_cast<uint16_t>(Devices::kLineDeviceAddr << 1);
+constexpr uint16_t kMotorWireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
+constexpr uint16_t kOtosWireAddr = static_cast<uint16_t>(Hardware::kOtosDeviceAddr << 1);
+constexpr uint16_t kColorAltWireAddr = static_cast<uint16_t>(Hardware::kColorDeviceAddrAlt << 1);
+constexpr uint16_t kLineWireAddr = static_cast<uint16_t>(Hardware::kLineDeviceAddr << 1);
 
-Devices::MotorConfig baseMotorConfig(uint32_t port) {
-  Devices::MotorConfig cfg;
+Hal::MotorConfig baseMotorConfig(uint32_t port) {
+  Hal::MotorConfig cfg;
   cfg.port = port;
   cfg.fwdSign = 1;
   cfg.wheelTravelCalib = 1.0f;
@@ -184,11 +184,11 @@ struct TxnSnapshot {
 
 TxnSnapshot snapshotTxns(const TestSim::ScriptedI2CHook& bus) {
   return TxnSnapshot{
-      bus.txnCount(Devices::kNezhaDeviceAddr),
-      bus.txnCount(Devices::kOtosDeviceAddr),
-      bus.txnCount(Devices::kColorDeviceAddrAlt),
-      bus.txnCount(Devices::kColorDeviceAddrApds),
-      bus.txnCount(Devices::kLineDeviceAddr),
+      bus.txnCount(Hardware::kNezhaDeviceAddr),
+      bus.txnCount(Hardware::kOtosDeviceAddr),
+      bus.txnCount(Hardware::kColorDeviceAddrAlt),
+      bus.txnCount(Hardware::kColorDeviceAddrApds),
+      bus.txnCount(Hardware::kLineDeviceAddr),
   };
 }
 
@@ -219,11 +219,11 @@ void scenarioAllPresentHappyPath() {
   TestSim::ScriptedI2CHook bus(plant);
   TestSim::SimClock clock;
 
-  Devices::NezhaMotor left(plant, baseMotorConfig(1));
-  Devices::NezhaMotor right(plant, baseMotorConfig(2));
-  Devices::RealOtos otos(plant, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+  Hardware::NezhaMotor left(plant, baseMotorConfig(1));
+  Hardware::NezhaMotor right(plant, baseMotorConfig(2));
+  Hardware::RealOtos otos(plant, Hal::OtosConfig{});
+  Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
+  Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
   checkUintEq(snapshotTxns(bus).motor + snapshotTxns(bus).otos + snapshotTxns(bus).colorAlt +
                   snapshotTxns(bus).colorApds + snapshotTxns(bus).line,
@@ -274,10 +274,10 @@ void scenarioAllPresentHappyPath() {
   checkTrue(preamble.colorPresent(), "colorPresent() true");
   checkTrue(preamble.linePresent(), "linePresent() true");
 
-  checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run: motor");
-  checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos");
-  checkUintEq(bus.errCount(Devices::kColorDeviceAddrAlt), 0, "no script under-run: color");
-  checkUintEq(bus.errCount(Devices::kLineDeviceAddr), 0, "no script under-run: line");
+  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0, "no script under-run: motor");
+  checkUintEq(bus.errCount(Hardware::kOtosDeviceAddr), 0, "no script under-run: otos");
+  checkUintEq(bus.errCount(Hardware::kColorDeviceAddrAlt), 0, "no script under-run: color");
+  checkUintEq(bus.errCount(Hardware::kLineDeviceAddr), 0, "no script under-run: line");
 }
 
 // ===========================================================================
@@ -299,11 +299,11 @@ void scenarioOtosAbsentLatchesAfterRetries() {
   TestSim::ScriptedI2CHook bus(plant);
   TestSim::SimClock clock;
 
-  Devices::NezhaMotor left(plant, baseMotorConfig(1));
-  Devices::NezhaMotor right(plant, baseMotorConfig(2));
-  Devices::RealOtos otos(plant, Devices::OtosConfig{});  // never scripted -- always absent
-  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+  Hardware::NezhaMotor left(plant, baseMotorConfig(1));
+  Hardware::NezhaMotor right(plant, baseMotorConfig(2));
+  Hardware::RealOtos otos(plant, Hal::OtosConfig{});  // never scripted -- always absent
+  Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
+  Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
   App::Preamble preamble(left, right, otos, color, line, clock);
 
@@ -358,7 +358,7 @@ void scenarioOtosAbsentLatchesAfterRetries() {
   // Exactly kOtosBeginAttempts (20) failed probes, 2 transactions each
   // (1 write + 1 read) -- device_bus.h's ported kOtosBeginAttempts,
   // preamble.h's own kOtosBeginAttempts.
-  checkUintEq(bus.txnCount(Devices::kOtosDeviceAddr), 40,
+  checkUintEq(bus.txnCount(Hardware::kOtosDeviceAddr), 40,
               "OTOS retried exactly 20 times (40 transactions), not fewer or more");
 }
 
@@ -382,11 +382,11 @@ void scenarioTransientMotorNakDuringBeginNotLatched() {
   TestSim::ScriptedI2CHook bus(plant);
   TestSim::SimClock clock;
 
-  Devices::NezhaMotor left(plant, baseMotorConfig(1));
-  Devices::NezhaMotor right(plant, baseMotorConfig(2));
-  Devices::RealOtos otos(plant, Devices::OtosConfig{});
-  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});
-  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});
+  Hardware::NezhaMotor left(plant, baseMotorConfig(1));
+  Hardware::NezhaMotor right(plant, baseMotorConfig(2));
+  Hardware::RealOtos otos(plant, Hal::OtosConfig{});
+  Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});
+  Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});
 
   App::Preamble preamble(left, right, otos, color, line, clock);
 
@@ -433,11 +433,11 @@ void scenarioMultipleAbsentLeavesStillTerminates() {
   TestSim::ScriptedI2CHook bus(plant);
   TestSim::SimClock clock;
 
-  Devices::NezhaMotor left(plant, baseMotorConfig(1));
-  Devices::NezhaMotor right(plant, baseMotorConfig(2));
-  Devices::RealOtos otos(plant, Devices::OtosConfig{});          // absent
-  Devices::ColorSensorLeaf color(plant, Devices::ColorConfig{});  // absent
-  Devices::LineSensorLeaf line(plant, Devices::LineConfig{});     // absent
+  Hardware::NezhaMotor left(plant, baseMotorConfig(1));
+  Hardware::NezhaMotor right(plant, baseMotorConfig(2));
+  Hardware::RealOtos otos(plant, Hal::OtosConfig{});          // absent
+  Hardware::ColorSensorLeaf color(plant, Hal::ColorConfig{});  // absent
+  Hardware::LineSensorLeaf line(plant, Hal::LineConfig{});     // absent
 
   App::Preamble preamble(left, right, otos, color, line, clock);
 

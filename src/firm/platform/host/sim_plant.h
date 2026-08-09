@@ -151,14 +151,14 @@ class SimPlant : public Platform::I2CBus {
   // -- see that method's own comment. Fractional over/under-report, 0=perfect
   // (default). This models the physically mis-calibrated chip; the
   // firmware's own OtosConfigPatch-pushed calibration scalar (captured by
-  // handleOtosWrite() below, via the REAL Devices::Otos::setLinearScalar()/
+  // handleOtosWrite() below, via the REAL Hal::Otos::setLinearScalar()/
   // setAngularScalar() write path) corrects it back -- see otos_plant.h's
   // own setLinearScalarReg()/setAngularScalarReg() comment.
   void setOtosRawScaleErr(float linearFraction, float angularFraction);  // [fractional over/under-report, 0=perfect]
 
   // Motor mount orientation (114-007, Decision 7 -- NOT a fault-injection
   // knob like the ones above; a configuration fact, mirroring firmware's own
-  // Devices::MotorConfig::fwdSign). A mirror-mounted motor pair's two wheel
+  // Hal::MotorConfig::fwdSign). A mirror-mounted motor pair's two wheel
   // shafts turn in OPPOSITE physical directions for one straight command --
   // firmware's own fwdSign already accounts for this symmetrically on both
   // the write-encode and encoder-decode sides (nezha_motor.cpp), but nothing
@@ -206,7 +206,7 @@ class SimPlant : public Platform::I2CBus {
   OtosPlant otos_;
 
   // Wire-parsed duty, off the 0x60 frame only -- NEVER read back from
-  // Devices::NezhaMotor::appliedDuty() (no back-channel of any kind, per
+  // Hardware::NezhaMotor::appliedDuty() (no back-channel of any kind, per
   // this ticket's own acceptance criteria).
   float leftDuty_ = 0.0f;   // [-1,1]
   float rightDuty_ = 0.0f;  // [-1,1]

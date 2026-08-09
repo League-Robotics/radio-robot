@@ -1,6 +1,6 @@
-#include "devices/color_sensor.h"
+#include "hardware/planetx/color_sensor.h"
 
-namespace Devices {
+namespace Hardware {
 
 namespace {
 // CODAL's well-known convention: 0 == success (matches nezha_motor.cpp's
@@ -8,9 +8,9 @@ namespace {
 constexpr int kOk = 0;
 }  // namespace
 
-ColorSensorLeaf::ColorSensorLeaf(Platform::I2CBus& bus, const ColorConfig& config)
+ColorSensorLeaf::ColorSensorLeaf(Platform::I2CBus& bus, const Hal::ColorConfig& config)
     : bus_(bus), config_(config) {
-  // ColorConfig's fields all zero-default (device_config.h) — the
+  // Hal::ColorConfig's fields all zero-default (device_config.h) — the
   // "unconfigured" sentinel this leaf resolves to its ship default (same
   // pattern as NezhaMotor's slewRate fixup).
   if (config_.lagColor == 0) config_.lagColor = kDefaultLagColor;
@@ -128,7 +128,7 @@ void ColorSensorLeaf::tick(uint64_t nowUs) {
       readingFresh_ = false;
       return;
     }
-    cachedReading_ = ColorReading{r, g, b, probe};
+    cachedReading_ = Hal::ColorReading{r, g, b, probe};
     readingFresh_ = true;
   } else {
     // APDS9960: AVALID bit (STATUS, 0x93) without blocking.
@@ -154,12 +154,12 @@ void ColorSensorLeaf::tick(uint64_t nowUs) {
       readingFresh_ = false;
       return;
     }
-    cachedReading_ = ColorReading{r, g, b, c};
+    cachedReading_ = Hal::ColorReading{r, g, b, c};
     readingFresh_ = true;
   }
 }
 
-ColorReading ColorSensorLeaf::reading() const { return cachedReading_; }
+Hal::ColorReading ColorSensorLeaf::reading() const { return cachedReading_; }
 
 uint32_t ColorSensorLeaf::fullScale() const {
   // APDS-9960: integration time = 2.78ms * (256 - ATIME), and the ALS ADC
@@ -242,4 +242,4 @@ uint16_t ColorSensorLeaf::readReg16Alt(uint8_t regLo) {
   return out;
 }
 
-}  // namespace Devices
+}  // namespace Hardware

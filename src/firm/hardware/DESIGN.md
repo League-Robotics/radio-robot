@@ -2,54 +2,68 @@
 root: ../../../docs/design/design.md
 ---
 
-# Devices
+# Hardware
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-16 · **Status:** in-flux
+**Owner:** Eric Busboom · **Last reviewed:** 2026-08-09 · **Status:** in-flux
 
 ---
 
 ## 1. Purpose
 
-`devices/` owns every I2C-attached device leaf on the robot (the Nezha V2
-motor channels, the OTOS odometry sensor, the color sensor, the line
-sensor), the shared armor policy those leaves apply around their writes and
-resets, the embedded velocity control law, and the pure hardware-time/bus
-seams (`Clock`, `Sleeper`, `I2CBus`) everything above it is parameterized
-on. It is the bottom of the firmware's dependency stack (see root
-`DESIGN.md` §2's dependency diagram): nothing here depends on the wire
-schema, on generated boot configuration, or on the loop that drives it.
-The seam this subsystem draws is the hardware boundary itself — every
-device-specific register map, timing quirk, and hardware workaround lives
-here and nowhere else, so the rest of the firmware (and the host-side test
-and simulation story) can drive the same leaf code against either real
-silicon or a fake.
+`hardware/` owns every concrete device driver on the robot — one class per
+physical part, each holding that part's register map, timing quirks, and
+hardware workarounds and **nothing else**. It sits between `platform/`
+(bus and clock primitives, below) and `hal/` (the interfaces these drivers
+implement, above): a driver here reaches DOWN to a `Platform::I2CBus&` and
+UP only as far as the `Hal::` interface it satisfies. Nothing here depends
+on the wire schema, on generated boot configuration, or on the loop that
+drives it.
 
-## 2. Orientation
+The seam is the hardware boundary itself, so the rest of the firmware —
+and the whole host-side test and simulation story — drives the same driver
+code against either real silicon or `Platform::host`'s `SimPlant`.
 
-Three layers, bottom to top:
+## 2. Orientation — the three-way filing test
 
-- **Seams** (`clock.h`, `i2c_bus.h`) — plain virtual bases with zero
-  preprocessor forks: `Devices::Clock`/`Devices::Sleeper` (time/yield) and
-  `Devices::I2CBus` (the bus). Each has exactly one real ARM
-  implementation in this directory (`microbit_clock.*`,
-  `microbit_i2c_bus.*`) wrapping CODAL/`MicroBitI2C`; the host-test fakes
-  live under `tests/`, not here.
-- **Shared policy** (`motor_armor.h`, `velocity_pid.*`, `interpolation.h`,
-  `measurement_ring.h`) — behavior any leaf can reuse: `MotorArmor`'s
-  reversal-dwell/deadband/reset/wedge state machine, the embedded PI
-  velocity control law, lerp helpers for reading types, and the 6-slot
-  gap-write ring every measurement stream eventually publishes through.
-- **Leaves** (`nezha_motor.*`, `otos.*`, `color_sensor.*`, `line_sensor.*`)
-  — one class per physical device, each taking an `I2CBus&` reference,
-  owning its own register map and timing, and exposing a
-  `tick(nowUs)`/`beginStep(nowUs)` surface the loop drives once per cycle.
-  `NezhaMotor` additionally derives from `MotorArmor` (leaf-supplies-
-  primitives, base-supplies-policy).
+A driver's directory says **who else could reuse it**, not what it does.
+`Platform::I2CBus&`-only is *not* sufficient to call something generic: a
+bespoke board speaking its own wire protocol over a standard bus is still
+nobody else's device.
 
-`device_config.h`/`device_types.h` are the plain-aggregate vocabulary this
-whole layer speaks in — Devices-local counterparts of `msg::*`/`Config::*`
-types (see §3's isolation invariant for why they exist as separate types
-rather than reusing the wire ones).
+- **`generic/`** — genuinely standard, publicly documented parts, reusable
+  by anyone on any I2C/SPI/UART-capable platform without project-specific
+  knowledge, plus the driver-agnostic policy that composes over them.
+  - `real_otos.*` — the SparkFun OTOS, a commercial documented part.
+  - `motor_armor.h` — `MotorArmor`, a decorator over *any* `Hal::Motor`
+    (reversal dwell, deadband, standstill-guarded resets, wedge
+    detection). Generic by the same test: it names no chip.
+  - `board_motor.*` — `BoardMotor`, one channel of any `Hal::MotorBoard`
+    presented as a `Hal::Motor`. Board-agnostic by construction.
+- **Named hardware families** — a specific peripheral-board family that is
+  not itself a compute target. One directory per family:
+  - `nezha/` — `NezhaMotor`, this project's own motor-controller board.
+  - `hiwonder/` — `HiwonderBoard`, the HiWonder 4-channel encoder driver
+    behind `Hal::MotorBoard`. Not wired in yet.
+  - `planetx/` — `ColorSensorLeaf`, `LineSensorLeaf` (the PlanetX
+    ecosystem parts at 0x43/0x1A). `ColorSensorLeaf` also detects an
+    APDS9960 at 0x39 as a fallback, which *is* a generic part — splitting
+    that path out into `generic/` would be a behavior change, not a move,
+    so it stays here with the chip it shares a class with.
+- **Compute-platform-intrinsic hardware** — hardware physically part of
+  one compute board and unable to exist anywhere else (the micro:bit's
+  onboard compass). That lives at `platform/<target>/hardware/`, **not
+  here**. Nothing occupies that slot today.
+
+Named-family directories are siblings under `hardware/`, deliberately not
+`platform/<family>/hardware/`. The reorganization proposal left that open;
+`hardware/` wins because "platform" then stays strictly compute-target-only
+(micro:bit, host, a future Pi). The alternative reading forces
+`platform/hiwonder/` and `platform/planetx/` too, and a colour sensor is
+not a compute target under any reading.
+
+All three categories implement the same `Hal::` interfaces where one
+applies — the split is about where a driver lives and who can reuse it,
+never about whether it participates in HAL.
 
 Every leaf follows the same non-blocking shape: construction takes an
 `I2CBus&` and a config struct; a `begin()`/`beginStep(nowUs)` detects the
@@ -67,21 +81,27 @@ state out → pace) and the schedule these leaves are ticked from, see root
 
 ## 3. Constraints and Invariants
 
-- **Devices isolation invariant:** nothing under `devices/` may
-  `#include "messages/..."` or `#include "config/..."`. Every value a leaf
-  accepts or publishes is a plain Devices-local aggregate
-  (`device_config.h`/`device_types.h`), never a `msg::*` or `Config::*`
-  type. Breaking this couples a device leaf to the wire schema or to
-  generated boot config and kills its reuse under `-DHOST_BUILD`/sim —
-  `main.cpp` is the one place both a wire type and its Devices-local
-  counterpart are reachable, and conversion happens only there.
-- **No `#ifdef HOST_BUILD` forks inside a shared header:** the hardware
-  seams (`Clock`, `Sleeper`, `I2CBus`) are plain virtual bases with zero
-  preprocessor conditionals. The real ARM implementation lives in its own
-  `microbit_*` file (which includes `MicroBit.h` and is therefore
-  ARM-only); the host-test fake lives under `tests/`. Reintroducing a
-  same-header fork was the pre-108 shape this subsystem replaced —
-  don't regress to it.
+- **Hardware isolation invariant:** nothing under `hardware/` may
+  `#include "messages/..."` or `#include "config/..."`. Every value a
+  driver accepts or publishes is a plain HAL-local aggregate
+  (`hal/device_config.h`/`hal/device_types.h`), never a `msg::*` or
+  `Config::*` type. Breaking this couples a driver to the wire schema or
+  to generated boot config and kills its reuse under `-DHOST_BUILD`/sim —
+  the composition root (`app/boot_wiring.*`, and `main.cpp` above it) is
+  the one place both a wire type and its HAL-local counterpart are
+  reachable, and conversion happens only there.
+- **Dependencies point one way.** A driver may reach DOWN to `platform/`
+  and name the `hal/` interface it implements. It may not reach UP into
+  `kinematics/`, `motion/`, or `app/`, and it may not include a driver
+  from another family directory. If two drivers need to share something,
+  that something belongs in `generic/` or in `hal/`.
+- **No `#ifdef HOST_BUILD` forks inside a shared header:** the platform
+  seams (`Platform::Clock`, `Platform::Sleeper`, `Platform::I2CBus`) are
+  plain virtual bases with zero preprocessor conditionals. The real ARM
+  implementation lives in its own `platform/microbit/microbit_*` file
+  (which includes `MicroBit.h` and is therefore ARM-only); the host
+  implementation lives in `platform/host/`. Reintroducing a same-header
+  fork was the pre-108 shape this subsystem replaced — don't regress to it.
 - **No leaf sleeps or blocks.** Every `tick()`/`beginStep()` takes its
   "now" as a `uint64_t` [us] parameter and returns having done at most one
   bounded unit of bus work. A leaf that calls `fiber_sleep()` or spins on

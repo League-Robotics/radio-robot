@@ -35,8 +35,8 @@
 #include "app/boot_calibration.h"
 #include "app/drive.h"
 #include "config/robot.h"
-#include "devices/motor.h"
-#include "devices/otos.h"
+#include "hal/motor.h"
+#include "hardware/generic/real_otos.h"
 #include "firm/types/robot_state.h"
 #include "motion/planner/planner.h"
 #include "motion/planner/planner_types.h"
@@ -133,18 +133,18 @@ Config::Robot sampleConfig() {
   return config;
 }
 
-// RecordingMotor -- a minimal Devices::Motor test double: records the
+// RecordingMotor -- a minimal Hal::Motor test double: records the
 // last setDuty()/applyTravelCalib() call, and reports whatever
 // velocity()/appliedDuty() the scenario stages, so configureMotor()'s
 // "is moving" guard can be exercised in both directions.
-class RecordingMotor : public Devices::Motor {
+class RecordingMotor : public Hal::Motor {
  public:
   void begin() override {}
   void requestSample() override {}
   void setDuty(float duty) override { lastDuty = duty; }
-  void setNeutral(Devices::Neutral) override {}
+  void setNeutral(Hal::Neutral) override {}
   void applyTravelCalib(float travelCalib) override { lastTravelCalib = travelCalib; }
-  [[nodiscard]] bool reconfigure(const Devices::MotorConfig&) override { return true; }
+  [[nodiscard]] bool reconfigure(const Hal::MotorConfig&) override { return true; }
   void tick(uint64_t) override {}
 
   float position() const override { return 0.0f; }
@@ -165,13 +165,13 @@ class RecordingMotor : public Devices::Motor {
   float lastTravelCalib = -1.0f;  // sentinel: configureMotor() must overwrite this to pass
 };
 
-// RecordingOtos -- a minimal Devices::Otos test double: records the
+// RecordingOtos -- a minimal Hal::Otos test double: records the
 // scalars/offset configureOtos() installs.
-class RecordingOtos : public Devices::Otos {
+class RecordingOtos : public Hal::Otos {
  public:
   void begin() override {}
   void tick(uint64_t) override {}
-  Devices::PoseReading pose() const override { return {}; }
+  Hal::PoseReading pose() const override { return {}; }
   bool poseFresh() const override { return false; }
   bool connected() const override { return true; }
   bool present() const override { return true; }
@@ -364,14 +364,14 @@ int main() {
 
   beginScenario(
       "configureOtos() applies scalars (REGISTER-domain, via "
-      "Devices::scaleToRegister() -- trap 3 closed, 132-010) and offset "
+      "Hardware::scaleToRegister() -- trap 3 closed, 132-010) and offset "
       "(unconverted) via existing setters");
   {
     RecordingOtos otos;
     App::configureOtos(otos, config);
-    checkFloatEq(otos.linearScalar, static_cast<float>(Devices::scaleToRegister(config.otos.linear_scale)),
+    checkFloatEq(otos.linearScalar, static_cast<float>(Hardware::scaleToRegister(config.otos.linear_scale)),
                 "setLinearScalar() argument is REGISTER-domain, matching begin()'s own conversion");
-    checkFloatEq(otos.angularScalar, static_cast<float>(Devices::scaleToRegister(config.otos.angular_scale)),
+    checkFloatEq(otos.angularScalar, static_cast<float>(Hardware::scaleToRegister(config.otos.angular_scale)),
                 "setAngularScalar() argument is REGISTER-domain, matching begin()'s own conversion");
     checkFloatEq(otos.offsetX, config.otos.offset_x, "setOffset() x argument");
     checkFloatEq(otos.offsetY, config.otos.offset_y, "setOffset() y argument");

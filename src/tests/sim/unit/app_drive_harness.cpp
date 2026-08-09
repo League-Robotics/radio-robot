@@ -1,7 +1,7 @@
 // app_drive_harness.cpp -- off-hardware acceptance harness for ticket
 // 103-006 (SUC-006), App::Drive (src/firm/app/drive.{h,cpp}). Proves:
 // setDuty() stages the raw left/right values directly and tick() applies
-// the last-staged target onto the two REAL Devices::NezhaMotor leaves, and
+// the last-staged target onto the two REAL Hardware::NezhaMotor leaves, and
 // stop() zeroes both targets within one cycle of the next
 // NezhaMotor::tick().
 //
@@ -54,8 +54,8 @@
 #include <vector>
 
 #include "app/drive.h"
-#include "devices/device_config.h"
-#include "devices/nezha_motor.h"
+#include "hal/device_config.h"
+#include "hardware/nezha/nezha_motor.h"
 #include "firm/types/robot_state.h"
 #include "scripted_i2c_hook.h"
 #include "sim_plant.h"
@@ -122,7 +122,7 @@ void checkFloatEq(float actual, float expected, const std::string& what,
 
 // --- MockMotor (129-001) -------------------------------------------------
 //
-// A dependency-free Devices::Motor double, local to this harness, for the
+// A dependency-free Hal::Motor double, local to this harness, for the
 // stop-re-assertion scenario below -- it needs direct, test-settable
 // control over velocity() independent of any plant physics, which the real
 // NezhaMotor leaves used by scenarios 1/2 above can't give without a much
@@ -130,14 +130,14 @@ void checkFloatEq(float actual, float expected, const std::string& what,
 // the last value, unlike the real leaves' appliedDuty()) -- that count is
 // this scenario's own oracle for "did Drive actually re-issue the write,
 // or did the quiet-at-zero shortcut swallow it."
-class MockMotor : public Devices::Motor {
+class MockMotor : public Hal::Motor {
  public:
   void begin() override {}
   void requestSample() override {}
   void setDuty(float duty) override { lastDutyCmd = duty; ++setDutyCalls; }
-  void setNeutral(Devices::Neutral) override {}
+  void setNeutral(Hal::Neutral) override {}
   void applyTravelCalib(float) override {}
-  bool reconfigure(const Devices::MotorConfig&) override { return true; }
+  bool reconfigure(const Hal::MotorConfig&) override { return true; }
   void tick(uint64_t) override {}
   float position() const override { return 0.0f; }
   float velocity() const override { return mockVelocity_; }
@@ -156,7 +156,7 @@ class MockMotor : public Devices::Motor {
   float mockVelocity_ = 0.0f;  // [mm/s]
 };
 
-// --- Devices::NezhaMotor scripting helpers (duplicated from
+// --- Hardware::NezhaMotor scripting helpers (duplicated from
 // devices_motor_harness.cpp -- see this file's own header note) ----------
 
 void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAddr,
@@ -185,8 +185,8 @@ void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAdd
 // post-stop cycle does not need the same margin.
 constexpr uint64_t kPastWriteThrottleUs = 50000;
 
-Devices::MotorConfig baseNezhaConfig(uint32_t port) {
-  Devices::MotorConfig cfg;
+Hal::MotorConfig baseNezhaConfig(uint32_t port) {
+  Hal::MotorConfig cfg;
   cfg.port = port;
   cfg.fwdSign = 1;
   cfg.wheelTravelCalib = 1.0f;
@@ -197,7 +197,7 @@ Devices::MotorConfig baseNezhaConfig(uint32_t port) {
 // so lastPosition_/lastTickUs_ are established before any staged target is
 // executed -- mirrors devices_motor_harness.cpp's own "prime cycle"
 // convention.
-void primeAtZero(Devices::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus, uint16_t wireAddr) {
+void primeAtZero(Hardware::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus, uint16_t wireAddr) {
   scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
   motor.requestSample();
   motor.tick(0);
@@ -206,7 +206,7 @@ void primeAtZero(Devices::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus, uint
 // Runs one more request->collect + tick() cycle at the given time, holding
 // position at 0 (so velocity() stays exactly 0 -- isolates the staged
 // target's effect on appliedDuty() from any plant convergence dynamics).
-void runOneCycleAtZeroPosition(Devices::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus,
+void runOneCycleAtZeroPosition(Hardware::NezhaMotor& motor, TestSim::ScriptedI2CHook& bus,
                                 uint16_t wireAddr, uint64_t nowUs) {
   scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
   motor.requestSample();
@@ -217,7 +217,7 @@ void runOneCycleAtZeroPosition(Devices::NezhaMotor& motor, TestSim::ScriptedI2CH
 // 1. setDuty() stages the raw v_left/v_right values directly (AC #1) --
 //    the ONE staging path Drive has left post-122-002. tick() runs the
 //    interim PID (this file's own header) and forwards the resulting duty
-//    to Devices::Motor::setDuty().
+//    to Hal::Motor::setDuty().
 // ===========================================================================
 
 void scenarioSetDutyStagesRawValues() {
@@ -225,10 +225,10 @@ void scenarioSetDutyStagesRawValues() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
-  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  Hardware::NezhaMotor left(plant, baseNezhaConfig(1));
+  Hardware::NezhaMotor right(plant, baseNezhaConfig(2));
   primeAtZero(left, bus, wireAddr);
   primeAtZero(right, bus, wireAddr);
 
@@ -322,12 +322,12 @@ void tickStall(App::Drive& drive, float cmd, float otosVx, uint32_t cycles,
 struct StallRig {
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus{plant};
-  Devices::NezhaMotor left{plant, baseNezhaConfig(1)};
-  Devices::NezhaMotor right{plant, baseNezhaConfig(2)};
+  Hardware::NezhaMotor left{plant, baseNezhaConfig(1)};
+  Hardware::NezhaMotor right{plant, baseNezhaConfig(2)};
   App::Drive drive{left, right, 200.0f};
 
   StallRig() {
-    const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+    const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
     primeAtZero(left, bus, wireAddr);
     primeAtZero(right, bus, wireAddr);
     drive.setDutyPerSpeed(1.0f, 1.0f);
@@ -436,10 +436,10 @@ void scenarioStopZeroesBothTargetsWithinOneCycle() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Devices::kNezhaDeviceAddr << 1);
+  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Devices::NezhaMotor left(plant, baseNezhaConfig(1));
-  Devices::NezhaMotor right(plant, baseNezhaConfig(2));
+  Hardware::NezhaMotor left(plant, baseNezhaConfig(1));
+  Hardware::NezhaMotor right(plant, baseNezhaConfig(2));
   primeAtZero(left, bus, wireAddr);
   primeAtZero(right, bus, wireAddr);
 
@@ -1007,7 +1007,7 @@ void scenarioPositionErrorGuardsReAnchorWithoutCorrecting() {
                 "and the reference resumes cleanly from the new origin on the very next cycle");
   }
 
-  // (c) DISCONNECT -- Devices::NezhaMotor::collectEncoder() hands back its
+  // (c) DISCONNECT -- Hardware::NezhaMotor::collectEncoder() hands back its
   //     last good raw value on a failed read, so a disconnected wheel's
   //     position is MANUFACTURED, not measured. Anchoring against it would
   //     bank a fictitious deficit for as long as the bus stays down.
@@ -1036,7 +1036,7 @@ void scenarioPositionErrorGuardsReAnchorWithoutCorrecting() {
 // that FROZE the sum on exactly the ticks where distance was being
 // travelled unobserved -- so travel during a dropped sample was lost for
 // good. The position REGISTER carries that travel across the gap
-// (Devices::NezhaMotor::collectEncoder() returns the last good value, then
+// (Hardware::NezhaMotor::collectEncoder() returns the last good value, then
 // the next successful read reports the full advance), so the position-
 // domain term simply sees the truth again the moment it can look.
 //

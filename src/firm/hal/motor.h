@@ -1,15 +1,15 @@
-// motor.h — Devices::Motor: the pure motor interface every consumer takes.
+// motor.h — Hal::Motor: the pure motor interface every consumer takes.
 // Either construct a bare motor and hand it directly to whatever wants a
 // Motor, or wrap it in the armor decorator and hand that along instead —
 // the armor composes a Motor&, it is not a subclass of one.
 //
 // Two implementations exist:
-//   - Devices::NezhaMotor (nezha_motor.h) — the bare concrete leaf: register
+//   - Hardware::NezhaMotor (nezha_motor.h) — the bare concrete leaf: register
 //     map, split-phase encoder sequencing, and its OWN device-intrinsic
 //     write shaping (slew cap, write throttle, write-on-change, reversal
 //     dwell, output deadband — all Nezha-brick protection, see
 //     nezha_motor.cpp).
-//   - Devices::MotorArmor (motor_armor.h) — a decorator: composes a Motor&,
+//   - Hardware::MotorArmor (motor_armor.h) — a decorator: composes a Motor&,
 //     forwards everything, and adds the observation/recovery policies
 //     (wedge detection, standstill-guarded resets).
 //
@@ -35,10 +35,10 @@
 
 #include <cstdint>
 
-#include "devices/device_config.h"
-#include "devices/device_types.h"
+#include "hal/device_config.h"
+#include "hal/device_types.h"
 
-namespace Devices {
+namespace Hal {
 
 class Motor {
  public:
@@ -66,11 +66,11 @@ class Motor {
   // No Config::Robot-consuming configure() on THIS interface (132-007,
   // the-configuration-object.md): the devices isolation invariant (this
   // file's own DESIGN.md §3) forbids devices/ from naming a Config::
-  // type at all. App::configureMotor(Devices::Motor&, const
+  // type at all. App::configureMotor(Hal::Motor&, const
   // Config::Robot&, bool isLeft) -> bool (app/boot_calibration.h) is the
   // Config::Robot-consuming entry point instead — the same App::-layer
   // pattern toDeviceMotorConfig() (same file) already uses for
-  // msg::MotorConfig -> Devices::MotorConfig. It calls applyTravelCalib()
+  // msg::MotorConfig -> Hal::MotorConfig. It calls applyTravelCalib()
   // below, guarded like reconfigure()'s own at-rest check.
   virtual void applyTravelCalib(float travelCalib) = 0;
 
@@ -86,7 +86,7 @@ class Motor {
   // verified at rest, and must succeed otherwise. Exists so a composition
   // root that constructs a motor before its real configuration is known
   // (TestSim::SimHarness, whose bare NezhaMotor starts at
-  // Devices::MotorConfig{}'s all-zero default) can still reach a
+  // Hal::MotorConfig{}'s all-zero default) can still reach a
   // genuinely working motor once configuration arrives.
   [[nodiscard]] virtual bool reconfigure(const MotorConfig& config) = 0;
 
@@ -136,4 +136,4 @@ class Motor {
   virtual bool wedgeSuspect() const { return false; }
 };
 
-}  // namespace Devices
+}  // namespace Hal

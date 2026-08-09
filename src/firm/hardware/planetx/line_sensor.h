@@ -1,10 +1,10 @@
-// line_sensor.h — Devices::LineSensorLeaf: the internal leaf for the PlanetX
+// line_sensor.h — Hardware::LineSensorLeaf: the internal leaf for the PlanetX
 // 4-channel line sensor, I2C address 0x1A. The loop constructs and drives
 // this leaf directly — there is no separate handle class.
 //
 // Mirrors color_sensor.h's leaf shape: a non-blocking beginStep(nowUs)
 // detection state machine, present()/connected(), and a non-blocking
-// tick(nowUs) that publishes a combined raw+normalized LineReading.
+// tick(nowUs) that publishes a combined raw+normalized Hal::LineReading.
 //
 // Protocol: write a 1-byte channel index (0-3), then read 1 byte of
 // grayscale data (0 = white, 255 = black approximately) -- FOUR such
@@ -14,7 +14,7 @@
 // own comment).
 //
 // Calibration (captureCalibMin()/captureCalibMax()/setSmoothingAlpha(),
-// below) operates on a local mutable copy of the LineConfig this leaf was
+// below) operates on a local mutable copy of the Hal::LineConfig this leaf was
 // constructed with (config_.calMin/calMax/filtAlpha), so this leaf's one
 // config_ stays the single source of truth for both the boot-time
 // calibration AND any later runtime recalibration call.
@@ -25,17 +25,18 @@
 
 #include <cstdint>
 
-#include "devices/device_config.h"
-#include "devices/device_types.h"
+#include "hal/device_config.h"
+#include "hal/device_types.h"
+#include "hal/line_sensor.h"
 #include "platform/i2c_bus.h"
 
-namespace Devices {
+namespace Hardware {
 
 constexpr uint8_t kLineDeviceAddr = 0x1A;
 
-class LineSensorLeaf {
+class LineSensorLeaf : public Hal::LineSensor {
  public:
-  LineSensorLeaf(Platform::I2CBus& bus, const LineConfig& config);
+  LineSensorLeaf(Platform::I2CBus& bus, const Hal::LineConfig& config);
 
   // Non-blocking single detection step. Call once per fiber cycle until
   // detectDone() is true; a no-op once it is.
@@ -45,14 +46,14 @@ class LineSensorLeaf {
   // with a settle pause so a sensor still powering up after a cold boot is
   // caught once it answers. present()/connected() become true on the first
   // successful attempt; both stay false if every attempt is exhausted.
-  void beginStep(uint64_t nowUs);  // [us]
-  bool detectDone() const;
+  void beginStep(uint64_t nowUs) override;  // [us]
+  bool detectDone() const override;
 
   // present()/connected(): same distinction as otos.h/color_sensor.h.
   // present() is set once by beginStep() and never re-evaluated;
   // connected() is the live, per-tick() bus-health result.
-  bool present() const;
-  bool connected() const;
+  bool present() const override;
+  bool connected() const override;
 
   // True if a real bus read is due: no real read has ever happened, or at
   // least (LineConfig::lagLine * 1000) [us] have elapsed since the last one
@@ -65,16 +66,16 @@ class LineSensorLeaf {
   // config_.calMin/calMax with optional EMA smoothing (config_.filtAlpha).
   // No-op (no bus traffic) if beginStep() never found a chip, or before
   // readDue() is true.
-  void tick(uint64_t nowUs);  // [us]
+  void tick(uint64_t nowUs) override;  // [us]
 
-  LineReading reading() const;
-  bool readingFresh() const;
+  Hal::LineReading reading() const override;
+  bool readingFresh() const override;
 
  private:
   enum class DetectPhase : uint8_t { Probing, Done };
 
   Platform::I2CBus& bus_;
-  LineConfig config_;
+  Hal::LineConfig config_;
 
   DetectPhase phase_ = DetectPhase::Probing;
   int attempts_ = 0;
@@ -84,7 +85,7 @@ class LineSensorLeaf {
   bool initialized_ = false;  // present()'s backing field
   bool connected_ = false;
 
-  LineReading cachedReading_{};
+  Hal::LineReading cachedReading_{};
   bool readingFresh_ = false;
 
   uint64_t lastReadUs_ = 0;  // [us] time of the most recent real tick() read
@@ -103,4 +104,4 @@ class LineSensorLeaf {
   bool readRaw(uint16_t out[4]);
 };
 
-}  // namespace Devices
+}  // namespace Hardware

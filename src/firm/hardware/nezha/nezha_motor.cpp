@@ -1,4 +1,4 @@
-#include "devices/nezha_motor.h"
+#include "hardware/nezha/nezha_motor.h"
 
 #include <cmath>
 #ifdef HOST_BUILD
@@ -7,7 +7,7 @@
 
 // [3..7].
 
-namespace Devices {
+namespace Hardware {
 
 namespace {
 constexpr int kOk = 0;
@@ -46,13 +46,13 @@ int32_t decodeRawEncoder(const uint8_t resp[4]) {
 }
 }
 
-NezhaMotor::NezhaMotor(Platform::I2CBus& bus, const MotorConfig& config)
+NezhaMotor::NezhaMotor(Platform::I2CBus& bus, const Hal::MotorConfig& config)
     : bus_(bus)
 {
     (void)reconfigure(config);
 }
 
-bool NezhaMotor::reconfigure(const MotorConfig& config)
+bool NezhaMotor::reconfigure(const Hal::MotorConfig& config)
 {
     bool atRest = std::fabs(velocity_) < kReconfigureRestVelocity &&
                   appliedDuty() == 0.0f;
@@ -85,7 +85,7 @@ void NezhaMotor::setDuty(float duty)
     mode_ = Mode::Active;
 }
 
-void NezhaMotor::setNeutral(Neutral mode)
+void NezhaMotor::setNeutral(Hal::Neutral mode)
 {
     neutralTarget_ = mode;
     mode_ = Mode::Neutral;

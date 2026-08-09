@@ -1,5 +1,5 @@
-// hiwonder_board.h -- Devices::HiwonderBoard: the HiWonder 4-channel
-// encoder motor driver (I2C 0x34) behind the Devices::MotorBoard
+// hiwonder_board.h -- Hardware::HiwonderBoard: the HiWonder 4-channel
+// encoder motor driver (I2C 0x34) behind the Hal::MotorBoard
 // interface.
 //
 // NOT WIRED IN YET: nothing constructs this class today (the firmware
@@ -26,11 +26,11 @@
 #include <cstdint>
 
 #include "platform/i2c_bus.h"
-#include "devices/motor_board.h"
+#include "hal/motor_board.h"
 
-namespace Devices {
+namespace Hardware {
 
-class HiwonderBoard : public MotorBoard {
+class HiwonderBoard : public Hal::MotorBoard {
  public:
   static constexpr uint8_t kAddr = 0x34;
   static constexpr uint8_t kRegBattery = 0x00;
@@ -55,7 +55,7 @@ class HiwonderBoard : public MotorBoard {
 
   explicit HiwonderBoard(Platform::I2CBus& bus) : bus_(bus) {}
 
-  // Motor type + polarity + all-stop. Returns false when the board
+  // Hal::Motor type + polarity + all-stop. Returns false when the board
   // never acks (wiring/power) -- callers treat that as "board absent".
   // NOTE a live board with a flat pack acks but will not move: check
   // supplyMillivolts() before debugging anything else (doc s1.6).
@@ -105,4 +105,4 @@ class HiwonderBoard : public MotorBoard {
   uint32_t cycles_ = 0;
 };
 
-}  // namespace Devices
+}  // namespace Hardware

@@ -5,7 +5,7 @@ Compiles ``app_drive_harness.cpp`` together with the HOST_BUILD
 implementations it needs (``src/firm/app/drive.cpp``,
 ``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
-physics dependencies, ``src/firm/devices/nezha_motor.cpp``,
+physics dependencies, ``src/firm/hardware/nezha/nezha_motor.cpp``,
 ``src/motion/body_kinematics.cpp``) with ``-DHOST_BUILD``, against the SAME
 headers every ARM build compiles. App::Drive holds no controller of its own
 (open-loop duty from calibrated speed, drive.h's own header) -- 128-015
@@ -41,7 +41,7 @@ _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
-_NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
+_NEZHA_MOTOR_SRC = _SOURCE_DIR / "hardware" / "nezha" / "nezha_motor.cpp"
 _BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard.

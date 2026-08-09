@@ -7,8 +7,8 @@ namespace TestSim {
 namespace {
 // ---------------------------------------------------------------------------
 // Wire constants -- duplicated from the real device leaves' own private
-// register-map constants (source/devices/nezha_motor.{h,cpp},
-// source/devices/otos.h), the SAME per-file duplication convention
+// register-map constants (source/hardware/nezha/nezha_motor.{h,cpp},
+// source/hardware/generic/real_otos.h), the SAME per-file duplication convention
 // tests/sim/plant/otos_plant.cpp's own kPosMmPerLsb/kHdgRadPerLsb already
 // established ("this codebase's established per-file fixture-duplication
 // convention, NOT a second, independently-derived formula"). SimPlant is
@@ -19,7 +19,7 @@ namespace {
 // internals of a source/devices/ leaf class.
 // ---------------------------------------------------------------------------
 
-// Nezha motor-controller channel -- source/devices/nezha_motor.h.
+// Nezha motor-controller channel -- source/hardware/nezha/nezha_motor.h.
 constexpr uint8_t kNezhaDeviceAddr = 0x10;                                    // 7-bit
 constexpr uint16_t kMotorWireAddr = static_cast<uint16_t>(kNezhaDeviceAddr << 1);
 constexpr uint8_t kNezhaCmdRun = 0x60;
@@ -28,7 +28,7 @@ constexpr uint8_t kNezhaDirCw = 1;   // positive
 constexpr uint8_t kNezhaDirCcw = 2;  // negative
 constexpr int kNezhaFrameLen = 8;
 
-// OTOS -- source/devices/otos.h.
+// OTOS -- source/hardware/generic/real_otos.h.
 constexpr uint8_t kOtosDeviceAddr = 0x17;                                  // 7-bit
 constexpr uint16_t kOtosWireAddr = static_cast<uint16_t>(kOtosDeviceAddr << 1);
 constexpr uint8_t kOtosRegProductId = 0x00;
@@ -192,7 +192,7 @@ int SimPlant::handleOtosWrite(uint8_t* data, int len) {
   otosRegPtr_ = data[0];
   // 109-007: the ONE exception to "swallow every OTOS write payload" above
   // -- a write to the chip's own linear/angular calibration-scalar
-  // registers (the REAL Devices::Otos::setLinearScalar()/setAngularScalar()
+  // registers (the REAL Hal::Otos::setLinearScalar()/setAngularScalar()
   // wire path, driven by begin()'s boot-config push, a live OtosConfigPatch,
   // or the OL/OA text verb) is captured and applied to this plant's
   // OtosPlant, so a firmware-pushed calibration genuinely corrects the
@@ -220,7 +220,7 @@ int SimPlant::handleOtosRead(uint8_t* data, int len) {
   if (otosRegPtr_ == kOtosRegPositionXl) {
     if (len < 12) return kNakStatus;
     // Same 12-byte POSITION_XL+VELOCITY_XL burst layout
-    // Devices::Otos::readPositionVelocity() decodes (otos.cpp); packed
+    // Hal::Otos::readPositionVelocity() decodes (otos.cpp); packed
     // here directly since there is no I2CBus FIFO left for a
     // scriptPoseResponse()-style helper to target. reportedX/Y/Heading()
     // (not the bare x()/y()/heading() ground truth) apply OtosPlant's own
@@ -237,7 +237,7 @@ int SimPlant::handleOtosRead(uint8_t* data, int len) {
     writeLeInt16(data + 2, ry);
     writeLeInt16(data + 4, rh);
     // 109-010: VELOCITY_XL's own angular-rate word (rvh, decoded by
-    // Devices::Otos::readPositionVelocity() as `whF` -- see that method's
+    // Hal::Otos::readPositionVelocity() as `whF` -- see that method's
     // own "reuses the SAME kPosMmPerLsb/kHdgRadPerLsb" comment for why the
     // SAME kHdgRadPerLsb scale applies here too) is OtosPlant::omega(), a
     // real finite-difference rate estimate -- App::HeadingSource's own
@@ -247,7 +247,7 @@ int SimPlant::handleOtosRead(uint8_t* data, int len) {
     //
     // 115-006 (gut S1 optional stretch): the linear-velocity words (rvx,
     // rvy) are likewise now OtosPlant::v_x()/v_y() -- the SAME
-    // kPosMmPerLsb scale Devices::Otos::readPositionVelocity() decodes
+    // kPosMmPerLsb scale Hal::Otos::readPositionVelocity() decodes
     // vxF/vyF with (otos.cpp) -- instead of the hard-zero this word used to
     // carry ("no consumer reads pose().v_x/v_y, only pose().omega" was true
     // until this ticket; OtosReading.v_x/v_y now ride the primary telemetry

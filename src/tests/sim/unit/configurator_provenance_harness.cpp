@@ -53,8 +53,8 @@
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
 #include "config/robot.h"
-#include "devices/motor.h"
-#include "devices/otos.h"
+#include "hal/motor.h"
+#include "hardware/generic/real_otos.h"
 #include "firm/types/robot_state.h"
 #include "messages/envelope.h"
 #include "messages/robot_config.h"
@@ -164,16 +164,16 @@ bool encodeFloatField(uint32_t fieldNumber, float value, uint8_t* buf, size_t ca
   return WireRuntime::encodeFloat(value, buf, cap, pos);
 }
 
-// --- Devices::Motor / Devices::Otos test doubles -------------------------
+// --- Hal::Motor / Hal::Otos test doubles -------------------------
 
-class RecordingMotor : public Devices::Motor {
+class RecordingMotor : public Hal::Motor {
  public:
   void begin() override {}
   void requestSample() override {}
   void setDuty(float duty) override { lastDuty = duty; }
-  void setNeutral(Devices::Neutral) override {}
+  void setNeutral(Hal::Neutral) override {}
   void applyTravelCalib(float travelCalib) override { lastTravelCalib = travelCalib; }
-  [[nodiscard]] bool reconfigure(const Devices::MotorConfig&) override { return true; }
+  [[nodiscard]] bool reconfigure(const Hal::MotorConfig&) override { return true; }
   void tick(uint64_t) override {}
 
   float position() const override { return 0.0f; }
@@ -189,11 +189,11 @@ class RecordingMotor : public Devices::Motor {
   float lastTravelCalib = -1.0f;
 };
 
-class RecordingOtos : public Devices::Otos {
+class RecordingOtos : public Hal::Otos {
  public:
   void begin() override {}
   void tick(uint64_t) override {}
-  Devices::PoseReading pose() const override { return {}; }
+  Hal::PoseReading pose() const override { return {}; }
   bool poseFresh() const override { return false; }
   bool connected() const override { return true; }
   bool present() const override { return true; }

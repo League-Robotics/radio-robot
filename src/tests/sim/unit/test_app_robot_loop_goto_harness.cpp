@@ -301,7 +301,7 @@ void scenarioEstopClearsNavigatorSameCycleAsPlannerQueue() {
 // exercised here: TestSim::SimPlant has no existing fault-injection knob
 // that reports OTOS itself as disconnected (setDisconnected(port, ...) is
 // the WHEEL plant's own knob, sim_plant.cpp's mutableWheelPlant() --
-// confirmed by reading it, not assumed) -- adding one is Devices::Otos/
+// confirmed by reading it, not assumed) -- adding one is Hal::Otos/
 // SimPlant's own scope, not this ticket's wire-routing job. The gate
 // itself is a direct, one-line, easily-code-reviewed guard in
 // RobotLoop::handleGoto() (robot_loop.cpp); ticket 006's real bench pass

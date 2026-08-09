@@ -121,7 +121,7 @@ void testPoseTrackerReAnchorsOnEpochChangePerWheelIndependently() {
   CHECK_NEAR(pose.heading(), 0.0f, 1e-6);
 
   // Left wheel "rebaselines" -- its raw position drops to near 0 (mirrors
-  // Devices::NezhaMotor::softRebaseline()'s lastPosition_ = 0.0f) and its
+  // Hardware::NezhaMotor::softRebaseline()'s lastPosition_ = 0.0f) and its
   // epoch bumps 0 -> 1. Right wheel's own epoch is unchanged and keeps
   // advancing normally (10 -> 25, a genuine +15mm). Without the epoch-aware
   // re-anchor this would compute dLeft = 0 - 10 = -10 (a phantom -10mm on

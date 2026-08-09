@@ -15,8 +15,8 @@
 
 namespace TestSupport {
 
-Devices::MotorConfig benchTestMotorConfig(uint32_t port) {
-  Devices::MotorConfig cfg;
+Hal::MotorConfig benchTestMotorConfig(uint32_t port) {
+  Hal::MotorConfig cfg;
   cfg.port = port;
   cfg.fwdSign = 1;
   // mm per encoder count (== mm/motor-degree, 360/rev). Must be the RECIPROCAL

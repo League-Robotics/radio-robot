@@ -25,8 +25,8 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "devices_types_harness.cpp"
-_DEVICE_TYPES_HDR = _SOURCE_DIR / "devices" / "device_types.h"
-_DEVICE_CONFIG_HDR = _SOURCE_DIR / "devices" / "device_config.h"
+_DEVICE_TYPES_HDR = _SOURCE_DIR / "hal" / "device_types.h"
+_DEVICE_CONFIG_HDR = _SOURCE_DIR / "hal" / "device_config.h"
 
 # messages/common.h documents its own target as "CODAL C++11" -- build the
 # host harness to the same standard so it exercises exactly the language

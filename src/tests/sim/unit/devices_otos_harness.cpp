@@ -1,6 +1,6 @@
 // devices_otos_harness.cpp — off-hardware acceptance harness for ticket
-// DB-005 (device-bus-tickets.md): exercises the REAL Devices::Otos leaf
-// (src/firm/devices/otos.cpp) against a TestSim::SimPlant (108-002), scripted
+// DB-005 (device-bus-tickets.md): exercises the REAL Hal::Otos leaf
+// (src/firm/hardware/generic/real_otos.cpp) against a TestSim::SimPlant (108-002), scripted
 // deterministically via TestSim::ScriptedI2CHook (108-009) -- no
 // MicroBitI2C, no CODAL, no real hardware.
 //
@@ -13,7 +13,7 @@
 //
 // Modeled on src/tests/sim/unit/otos_odometer_harness.cpp (that file's own
 // header comment is this harness's explicit test precedent) -- compiles the
-// ACTUAL src/firm/devices/otos.cpp against the SAME src/firm/devices/otos.h
+// ACTUAL src/firm/hardware/generic/real_otos.cpp against the SAME src/firm/hardware/generic/real_otos.h
 // every ARM build compiles, with -DHOST_BUILD. Hand-rolled assertions,
 // PASS/FAIL per scenario, nonzero exit on any failure. Run by
 // test_devices_otos.py, which compiles and runs this binary via subprocess.
@@ -33,9 +33,9 @@
 #include <cstdio>
 #include <string>
 
-#include "devices/device_config.h"
-#include "devices/device_types.h"
-#include "devices/otos.h"
+#include "hal/device_config.h"
+#include "hal/device_types.h"
+#include "hardware/generic/real_otos.h"
 #include "scripted_i2c_hook.h"
 #include "sim_plant.h"
 
@@ -85,7 +85,7 @@ void checkNear(float actual, float expected, float tol, const std::string& what)
 
 // --- Fixture helpers ---------------------------------------------------
 
-constexpr uint16_t kAddr7 = Devices::kOtosDeviceAddr;                     // 0x17
+constexpr uint16_t kAddr7 = Hardware::kOtosDeviceAddr;                     // 0x17
 constexpr uint16_t kWireAddr = static_cast<uint16_t>(kAddr7 << 1);        // 0x2E
 
 // Same LSB scale factors as otos.cpp -- duplicated here so this harness can
@@ -102,7 +102,7 @@ constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);
 constexpr uint64_t kReadPeriodUs = 20000;   // [us]
 
 // testSensorToCentre()/testCentreToSensor() -- a LOCAL, independent
-// re-implementation of Devices::Otos's private sensorToCentre()/
+// re-implementation of Hal::Otos's private sensorToCentre()/
 // centreToSensor() methods, duplicated the same way kPosMmPerLsb/
 // kHdgRadPerLsb above already are -- this file's own established convention
 // for a test oracle that can't reach a production symbol directly.
@@ -126,9 +126,9 @@ void testCentreToSensor(float centreX, float centreY, float centreHeading,
   sensorYOut = centreY + (s * offsetX + c * offsetY);
 }
 
-Devices::OtosConfig makeConfig(float offsetX, float offsetY, float offsetYaw,
+Hal::OtosConfig makeConfig(float offsetX, float offsetY, float offsetYaw,
                                 float linearScale, float angularScale) {
-  Devices::OtosConfig cfg;
+  Hal::OtosConfig cfg;
   cfg.offsetX = offsetX;
   cfg.offsetY = offsetY;
   cfg.offsetYaw = offsetYaw;
@@ -189,7 +189,7 @@ void scenarioProductIdGatesAllTraffic() {
     scriptGenerousWrites(bus, 20);
     scriptProductId(bus, 0x00);   // wrong id -- real chip reports 0x5F
 
-    Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+    Hardware::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
     odom.begin();
 
     checkFalse(odom.present(), "mismatch: present() false");
@@ -203,7 +203,7 @@ void scenarioProductIdGatesAllTraffic() {
     TestSim::SimPlant plant;
     TestSim::ScriptedI2CHook bus(plant);   // no scripts queued -- any traffic surfaces as an error
 
-    Devices::RealOtos odom(plant, makeConfig(-47.7f, 3.5f, 0.0f, 1.067f, 0.987f));
+    Hardware::RealOtos odom(plant, makeConfig(-47.7f, 3.5f, 0.0f, 1.067f, 0.987f));
 
     float ox = 0, oy = 0, oh = 0;
     odom.init();
@@ -226,7 +226,7 @@ void scenarioProductIdGatesAllTraffic() {
     checkUintEq(signalCfg, 0, "never begun: signalProcessConfig() returns 0");
     checkUintEq(imuRemaining, 0, "never begun: imuCalibrationSamplesRemaining() returns 0");
 
-    Devices::PoseReading pose = odom.pose();
+    Hal::PoseReading pose = odom.pose();
     checkNear(pose.x, 0.0f, 1e-6f, "never begun: pose() stays the zero default");
     checkFalse(odom.poseFresh(), "never begun: poseFresh() stays false");
   }
@@ -238,7 +238,7 @@ void scenarioProductIdGatesAllTraffic() {
     scriptGenerousWrites(bus, 20);
     scriptProductId(bus, 0x5F);
 
-    Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+    Hardware::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
     odom.begin();
 
     checkTrue(odom.present(), "match: present() true");
@@ -260,7 +260,7 @@ void scenarioReadDueRateLimitsRealReads() {
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
-  Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Hardware::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   checkTrue(odom.readDue(0), "readDue() true before begin() is ever called");
 
   odom.begin();
@@ -279,7 +279,7 @@ void scenarioReadDueRateLimitsRealReads() {
 
   // Tick 2, just inside the window: too soon -- zero further bus traffic,
   // sample marked stale, prior pose held.
-  Devices::PoseReading afterTick1 = odom.pose();
+  Hal::PoseReading afterTick1 = odom.pose();
   odom.tick(1000000 + kReadPeriodUs - 1);
   checkUintEq(bus.txnCount(kAddr7), txnAfterTick1, "tick 2 (too soon): issues NO bus traffic");
   checkFalse(odom.poseFresh(), "tick 2 (too soon): poseFresh() false -- stale, not re-fused");
@@ -307,7 +307,7 @@ void scenarioTickLeverArmOnlyTransform() {
 
   constexpr float kOffsetX = -47.7f;   // [mm] tovez.json-realistic
   constexpr float kOffsetY = 3.5f;     // [mm]
-  Devices::RealOtos odom(plant, makeConfig(kOffsetX, kOffsetY, 0.0f, 1.0f, 1.0f));
+  Hardware::RealOtos odom(plant, makeConfig(kOffsetX, kOffsetY, 0.0f, 1.0f, 1.0f));
   odom.begin();
 
   constexpr int16_t kRx = 2000, kRy = 1000, kRh = 5217;
@@ -325,7 +325,7 @@ void scenarioTickLeverArmOnlyTransform() {
   float expectedCentreX = 0.0f, expectedCentreY = 0.0f;
   testSensorToCentre(xF, yF, hF, kOffsetX, kOffsetY, expectedCentreX, expectedCentreY);
 
-  Devices::PoseReading pose = odom.pose();
+  Hal::PoseReading pose = odom.pose();
   checkNear(pose.x, expectedCentreX, 1e-2f, "pose().x matches testSensorToCentre()");
   checkNear(pose.y, expectedCentreY, 1e-2f, "pose().y matches testSensorToCentre()");
   checkNear(pose.heading, hF, 1e-5f, "pose().heading passes the raw heading through unmodified");
@@ -350,7 +350,7 @@ void scenarioTickMountingYawRotationOnlyTransform() {
   scriptProductId(bus, 0x5F);
 
   constexpr float kOffsetYaw = 0.3f;   // [rad] a hypothetical rotated mount
-  Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, kOffsetYaw, 1.0f, 1.0f));
+  Hardware::RealOtos odom(plant, makeConfig(0.0f, 0.0f, kOffsetYaw, 1.0f, 1.0f));
   odom.begin();
 
   constexpr int16_t kRx = 1500, kRy = -800, kRh = 2000;
@@ -365,7 +365,7 @@ void scenarioTickMountingYawRotationOnlyTransform() {
   float expectedX = cosf(ang) * xF - sinf(ang) * yF;   // zero offset -- lever-arm is a no-op
   float expectedY = sinf(ang) * xF + cosf(ang) * yF;
 
-  Devices::PoseReading pose = odom.pose();
+  Hal::PoseReading pose = odom.pose();
   checkNear(pose.x, expectedX, 1e-2f, "pose().x reflects the mounting-yaw rotation");
   checkNear(pose.y, expectedY, 1e-2f, "pose().y reflects the mounting-yaw rotation");
   checkNear(pose.heading, hF, 1e-5f, "pose().heading still takes no mounting-rotation adjustment");
@@ -390,7 +390,7 @@ void scenarioLeverArmCancelsOnPureSpin() {
 
   constexpr float kOffsetX = -47.7f;   // [mm] tovez.json-realistic
   constexpr float kOffsetY = 3.5f;     // [mm]
-  Devices::RealOtos odom(plant, makeConfig(kOffsetX, kOffsetY, 0.0f, 1.0f, 1.0f));
+  Hardware::RealOtos odom(plant, makeConfig(kOffsetX, kOffsetY, 0.0f, 1.0f, 1.0f));
   odom.begin();
 
   // Spin sweep -- spread across most of the chip's representable heading
@@ -415,7 +415,7 @@ void scenarioLeverArmCancelsOnPureSpin() {
     odom.tick(now);
 
     checkTrue(odom.poseFresh(), "spin sample: poseFresh() true");
-    Devices::PoseReading pose = odom.pose();
+    Hal::PoseReading pose = odom.pose();
 
     char label[128];
     std::snprintf(label, sizeof(label), "spin sample at heading=%.3frad", static_cast<double>(heading));
@@ -439,7 +439,7 @@ void scenarioBurstFailureHoldsPriorPoseAndMarksStale() {
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
-  Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Hardware::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   odom.begin();
 
   // Tick 1: clean burst -- establishes a known-good cached pose.
@@ -447,7 +447,7 @@ void scenarioBurstFailureHoldsPriorPoseAndMarksStale() {
   odom.tick(1000000);
   checkTrue(odom.connected(), "tick 1: clean burst -- connected() true");
   checkTrue(odom.poseFresh(), "tick 1: poseFresh() true");
-  Devices::PoseReading afterGood = odom.pose();
+  Hal::PoseReading afterGood = odom.pose();
 
   // Tick 2 (kReadPeriodUs later, so the read is due): the combined 12-byte
   // burst read fails (induced status) -- the bogus 9999 values must NOT be
@@ -457,7 +457,7 @@ void scenarioBurstFailureHoldsPriorPoseAndMarksStale() {
 
   checkFalse(odom.connected(), "tick 2: induced failure -- connected() false");
   checkFalse(odom.poseFresh(), "tick 2: poseFresh() false -- must not be re-fused downstream");
-  Devices::PoseReading afterFail = odom.pose();
+  Hal::PoseReading afterFail = odom.pose();
   checkNear(afterFail.x, afterGood.x, 1e-6f, "tick 2: the failed burst's bogus reading must NOT overwrite pose().x");
   checkNear(afterFail.y, afterGood.y, 1e-6f, "tick 2: the failed burst's bogus reading must NOT overwrite pose().y");
   checkNear(afterFail.heading, afterGood.heading, 1e-6f, "tick 2: the failed burst's bogus reading must NOT overwrite pose().heading");
@@ -482,7 +482,7 @@ void scenarioPresentTracksDetectionOnlyIndependentOfConnected() {
   // Case A: never begin()'d at all.
   TestSim::SimPlant plantNeverBegun;
   TestSim::ScriptedI2CHook busNeverBegun(plantNeverBegun);
-  Devices::RealOtos odomNeverBegun(plantNeverBegun, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Hardware::RealOtos odomNeverBegun(plantNeverBegun, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   checkFalse(odomNeverBegun.present(), "present() false -- begin() was never called");
   checkUintEq(busNeverBegun.errCount(kAddr7), 0, "no bus traffic at all when begin() is never called");
 
@@ -491,7 +491,7 @@ void scenarioPresentTracksDetectionOnlyIndependentOfConnected() {
   TestSim::ScriptedI2CHook busWrongId(plantWrongId);
   scriptGenerousWrites(busWrongId, 20);
   scriptProductId(busWrongId, 0x00);
-  Devices::RealOtos odomWrongId(plantWrongId, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Hardware::RealOtos odomWrongId(plantWrongId, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   odomWrongId.begin();
   checkFalse(odomWrongId.present(), "present() false -- begin()'s product-ID detect failed");
 
@@ -502,7 +502,7 @@ void scenarioPresentTracksDetectionOnlyIndependentOfConnected() {
   TestSim::ScriptedI2CHook busPresent(plantPresent);
   scriptGenerousWrites(busPresent, 20);
   scriptProductId(busPresent, 0x5F);
-  Devices::RealOtos odomPresent(plantPresent, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Hardware::RealOtos odomPresent(plantPresent, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   odomPresent.begin();
   checkTrue(odomPresent.present(), "present() true -- begin()'s product-ID detect succeeded");
 
@@ -527,13 +527,13 @@ void scenarioSetPoseStagedReanchorAppliesAtNextTick() {
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
-  Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Hardware::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   odom.begin();
 
   // Establish a known-good cached pose first.
   scriptPosVel(bus, 1000, 500, 0, 0, 0, 0);
   odom.tick(1000000);
-  Devices::PoseReading beforeReanchor = odom.pose();
+  Hal::PoseReading beforeReanchor = odom.pose();
   uint32_t base = bus.txnCount(kAddr7);
 
   odom.setPose(123.0f, -45.0f, 0.3f);
@@ -542,7 +542,7 @@ void scenarioSetPoseStagedReanchorAppliesAtNextTick() {
   odom.tick(1000000 + kReadPeriodUs);   // due for a read, but the staged pose takes priority
   checkUintEq(bus.txnCount(kAddr7) - base, 1, "tick()'s drain issues exactly one write");
   checkFalse(odom.poseFresh(), "the drain tick performs no read -- poseFresh() false");
-  Devices::PoseReading afterReanchor = odom.pose();
+  Hal::PoseReading afterReanchor = odom.pose();
   checkNear(afterReanchor.x, beforeReanchor.x, 1e-6f, "pose() is unchanged by the drain itself (write-only)");
   checkNear(afterReanchor.y, beforeReanchor.y, 1e-6f, "pose() is unchanged by the drain itself (write-only)");
 
@@ -568,7 +568,7 @@ void scenarioSecondaryPrimitivesRoundTrip() {
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
-  Devices::RealOtos odom(plant, makeConfig(10.0f, -5.0f, 0.0f, 1.0f, 1.0f));
+  Hardware::RealOtos odom(plant, makeConfig(10.0f, -5.0f, 0.0f, 1.0f, 1.0f));
   odom.begin();
   uint32_t base = bus.txnCount(kAddr7);
 
@@ -628,7 +628,7 @@ void scenarioSampleTimeReflectsLastRealReadAttemptNotCurrentNow() {
   scriptGenerousWrites(bus, 20);
   scriptProductId(bus, 0x5F);
 
-  Devices::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
+  Hardware::RealOtos odom(plant, makeConfig(0.0f, 0.0f, 0.0f, 1.0f, 1.0f));
   checkTrue(odom.sampleTime() == 0, "sampleTime() defaults to 0 before begin()/any tick()");
 
   odom.begin();
@@ -659,7 +659,7 @@ void scenarioSampleTimeReflectsLastRealReadAttemptNotCurrentNow() {
   checkUintEq(bus.errCount(kAddr7), 0, "no script under-run");
 }
 
-// (The former scenario 9 exercised Devices::Otos::feedSyntheticSample() --
+// (The former scenario 9 exercised Hal::Otos::feedSyntheticSample() --
 // the 120-002 FAKE_OTOS build seam. That method is deleted: synthesis now
 // lives in App::FakeOtos (app/fake_otos.h), covered by its own harness
 // app_fake_otos_harness.cpp / test_app_fake_otos.py. The real leaf below no
@@ -678,22 +678,22 @@ void scenarioSampleTimeReflectsLastRealReadAttemptNotCurrentNow() {
 void scenarioScaleToRegisterConversion() {
   beginScenario("scaleToRegister(): multiplier -> chip register, exact values and clamping");
 
-  checkNear(static_cast<float>(Devices::scaleToRegister(1.0f)), 0.0f, 1e-6f,
+  checkNear(static_cast<float>(Hardware::scaleToRegister(1.0f)), 0.0f, 1e-6f,
             "1.0 (true unity) -> register 0 -- the exact value trap 3's bug got "
             "wrong (the old pass-through installed register 1 instead)");
-  checkNear(static_cast<float>(Devices::scaleToRegister(1.03f)), 30.0f, 1e-6f,
+  checkNear(static_cast<float>(Hardware::scaleToRegister(1.03f)), 30.0f, 1e-6f,
             "1.03 -> register 30 ((1.03 - 1.0) / 0.001)");
-  checkNear(static_cast<float>(Devices::scaleToRegister(0.98f)), -20.0f, 1e-6f,
+  checkNear(static_cast<float>(Hardware::scaleToRegister(0.98f)), -20.0f, 1e-6f,
             "0.98 -> register -20 ((0.98 - 1.0) / 0.001)");
-  checkNear(static_cast<float>(Devices::scaleToRegister(1.0275f)), 28.0f, 1e-6f,
+  checkNear(static_cast<float>(Hardware::scaleToRegister(1.0275f)), 28.0f, 1e-6f,
             "1.0275 (tovez.json's own baked otos_linear_scale) -> register 28, "
             "round-half-away-from-zero of 27.5");
 
   // Clamping: a scale far outside the chip's representable +/-127 LSB range
   // (+/-12.7%) saturates rather than wrapping or overflowing the int8_t cast.
-  checkNear(static_cast<float>(Devices::scaleToRegister(2.0f)), 127.0f, 1e-6f,
+  checkNear(static_cast<float>(Hardware::scaleToRegister(2.0f)), 127.0f, 1e-6f,
             "a scale requesting +1000 LSB clamps to the register's +127 ceiling");
-  checkNear(static_cast<float>(Devices::scaleToRegister(0.5f)), -127.0f, 1e-6f,
+  checkNear(static_cast<float>(Hardware::scaleToRegister(0.5f)), -127.0f, 1e-6f,
             "a scale requesting -500 LSB clamps to the register's -127 floor");
 }
 
@@ -713,9 +713,9 @@ int main() {
   scenarioScaleToRegisterConversion();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all Devices::Otos scenarios passed\n");
+    std::printf("OK: all Hal::Otos scenarios passed\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the Devices::Otos scenarios\n", g_failureCount);
+  std::printf("FAILED: %d assertion(s) across the Hal::Otos scenarios\n", g_failureCount);
   return 1;
 }

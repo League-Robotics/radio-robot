@@ -41,7 +41,7 @@ constexpr float kPositionRebaselineMargin = 30000.0f;  // [mm]
 // needs to reject genuine motion, not split hairs about noise.
 constexpr float kCalibrateStillSpeed = 5.0f;
 
-uint32_t packLine(const Devices::LineReading& reading) {
+uint32_t packLine(const Hal::LineReading& reading) {
   return (reading.raw[0] & 0xFFu) | ((reading.raw[1] & 0xFFu) << 8) |
          ((reading.raw[2] & 0xFFu) << 16) | ((reading.raw[3] & 0xFFu) << 24);
 }
@@ -62,7 +62,7 @@ uint8_t scaleColorChannel(uint32_t value, uint32_t fullScale) {  // [counts]
   return static_cast<uint8_t>(scaled > 255u ? 255u : scaled);
 }
 
-uint32_t packColor(const Devices::ColorReading& reading, uint32_t fullScale) {  // [counts]
+uint32_t packColor(const Hal::ColorReading& reading, uint32_t fullScale) {  // [counts]
   return static_cast<uint32_t>(scaleColorChannel(reading.r, fullScale)) |
          (static_cast<uint32_t>(scaleColorChannel(reading.g, fullScale)) << 8) |
          (static_cast<uint32_t>(scaleColorChannel(reading.b, fullScale)) << 16) |
@@ -71,9 +71,9 @@ uint32_t packColor(const Devices::ColorReading& reading, uint32_t fullScale) {  
 
 }  // namespace
 
-RobotLoop::RobotLoop(Platform::I2CBus& bus, Devices::Motor& motorL,
-                      Devices::Motor& motorR, Devices::Otos& otos,
-                      Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
+RobotLoop::RobotLoop(Platform::I2CBus& bus, Hal::Motor& motorL,
+                      Hal::Motor& motorR, Hal::Otos& otos,
+                      Hal::ColorSensor& color, Hal::LineSensor& line,
                       Comms& comms, Telemetry& tlm, Drive& drive,
                       Configurator& configurator, Motion::Odometry& odom,
                       Motion::Planner& planner, Motion::Navigator& navigator,
@@ -572,7 +572,7 @@ void RobotLoop::clearStallLatch() {
   state_.health.stallRight = false;
 }
 
-void RobotLoop::publishWheel(Devices::Motor& motor,
+void RobotLoop::publishWheel(Hal::Motor& motor,
                              Types::RobotState::Wheel& wheel,
                              uint8_t& positionEpoch, bool& clamped) {
   float pos = motor.position();
@@ -607,7 +607,7 @@ void RobotLoop::publishOtos() {
   state_.otos.connected = otos_.connected();
   if (!otosPresent) return;
 
-  const Devices::PoseReading reading = otos_.pose();
+  const Hal::PoseReading reading = otos_.pose();
   state_.otos.x = reading.x;
   state_.otos.y = reading.y;
   state_.otos.heading = reading.heading;

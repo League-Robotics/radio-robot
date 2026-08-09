@@ -74,8 +74,8 @@ std::vector<DecodedLine> onlyTelemetry(const std::vector<DecodedLine>& lines) {
   return out;
 }
 
-// Same fiber-level wedge-latch threshold Devices::MotorArmor's own private
-// kWedgeThreshold declares (src/firm/devices/motor_armor.h) -- duplicated
+// Same fiber-level wedge-latch threshold Hardware::MotorArmor's own private
+// kWedgeThreshold declares (src/firm/hardware/generic/motor_armor.h) -- duplicated
 // here by citation, this codebase's established per-file fixture-
 // duplication convention (devices_motor_harness.cpp scenario 4's own
 // identical precedent: "064-004 hardening -- do not reintroduce...").
@@ -457,7 +457,7 @@ int main() {
   // NOT REGISTERED -- known gap, see clasi task "a wedged I2C bus makes the
   // motors unstoppable in software". The scenario is correct about the
   // REQUIREMENT and was verified to fail-without / pass-with a first-attempt
-  // fix; that fix (estop on Devices::Motor::wedgeSuspect()) was reverted
+  // fix; that fix (estop on Hal::Motor::wedgeSuspect()) was reverted
   // because wedgeSuspect also fires on an ordinary decel tail parking in the
   // dead zone, and planner_.estop() drops the whole queue -- it abandoned
   // real tours mid-run on hardware. Re-enable this call when the next

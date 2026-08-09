@@ -7,7 +7,7 @@ NaN-defeats-bounds-validation fix, and the no-partial-commit property.
 Compiles ``configurator_applygroup_harness.cpp`` together with
 configurator.cpp, drive.cpp, boot_calibration.cpp, persisted_tuning.cpp,
 config/boot_config.cpp, messages/wire.cpp, messages/wire_runtime.cpp,
-devices/otos.cpp, and the standalone Motion::Planner sources
+hardware/generic/real_otos.cpp, and the standalone Motion::Planner sources
 (planner.cpp/profile.cpp/estimation.cpp/shape.cpp), runs the resulting
 binary, and asserts it exits 0 -- printing its own human-readable
 per-scenario trace. No I2C bus, no sim plant: every Devices::Motor/
@@ -69,7 +69,7 @@ _DEVICE_SOURCES = [
     # Devices::Otos's virtual destructor is declared out-of-line (otos.h)
     # and defined here -- RecordingOtos's own dtor chain needs the symbol
     # even though this harness never constructs a RealOtos.
-    _SOURCE_DIR / "devices" / "otos.cpp",
+    _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp",
 ]
 
 _CXX_STANDARD = "c++20"

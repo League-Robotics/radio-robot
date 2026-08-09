@@ -175,7 +175,7 @@ int main() {
 
   // 132-015 (trap 1, the-configuration-object.md): loadPersistedTuning()
   // MUST run AFTER boot(), not before -- the pre-132-015 order here. Every
-  // Devices::RealOtos setter reapplyPersistedTuning()'s own OTOS branch
+  // Hardware::RealOtos setter reapplyPersistedTuning()'s own OTOS branch
   // reaches (App::configureOtos() -> setOffset()/setLinearScalar()/
   // setAngularScalar(), otos.cpp) is a no-op until RealOtos::begin() sets
   // initialized_ = true, and begin() itself only ever runs inside boot()'s

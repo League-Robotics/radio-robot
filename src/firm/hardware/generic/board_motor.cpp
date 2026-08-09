@@ -1,12 +1,12 @@
 // board_motor.cpp -- see board_motor.h; reference documentation at
 // docs/hiwonder/hiwonder-motor-board.md (cited as "doc s1.5" etc.).
-#include "devices/board_motor.h"
+#include "hardware/generic/board_motor.h"
 
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
 
-namespace Devices {
+namespace Hardware {
 
 void BoardMotor::begin() {
   zeroPending_ = true;  // real zero captured on the first tick with data
@@ -27,7 +27,7 @@ void BoardMotor::setDuty(float duty) {
   board_.stageSpeed(channel_, duty * static_cast<float>(config_.fwdSign));
 }
 
-void BoardMotor::setNeutral(Neutral) {
+void BoardMotor::setNeutral(Hal::Neutral) {
   // An explicit zero write, never silence: speed commands LATCH on
   // these boards and there is no watchdog, so a crashed or quiet host
   // leaves the wheel driving forever (doc s1.3). The zero is staged
@@ -37,7 +37,7 @@ void BoardMotor::setNeutral(Neutral) {
   board_.stageSpeed(channel_, 0.0f);
 }
 
-bool BoardMotor::reconfigure(const MotorConfig& config) {
+bool BoardMotor::reconfigure(const Hal::MotorConfig& config) {
   // Guard per the interface contract: refuse when genuinely in motion.
   if (commanded_ && std::fabs(velocity_) > 5.0f) return false;  // [mm/s]
   config_ = config;
@@ -46,7 +46,7 @@ bool BoardMotor::reconfigure(const MotorConfig& config) {
 
 void BoardMotor::tick(uint64_t nowUs) {
   // First channel of the cycle pays the exchange; the rest serve from
-  // the same cached read (guarded inside the MotorBoard base).
+  // the same cached read (guarded inside the Hal::MotorBoard base).
   board_.exchangeOncePerCycle(nowUs);
   if (!board_.connected()) return;
   const int32_t counts = board_.total(channel_);
@@ -106,4 +106,4 @@ void BoardMotor::rebaseline() {
   resetPosition();
 }
 
-}  // namespace Devices
+}  // namespace Hardware

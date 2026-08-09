@@ -57,10 +57,10 @@ _APP_SOURCES = [
 ]
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
-    _SOURCE_DIR / "devices" / "nezha_motor.cpp",
-    _SOURCE_DIR / "devices" / "otos.cpp",
-    _SOURCE_DIR / "devices" / "color_sensor.cpp",
-    _SOURCE_DIR / "devices" / "line_sensor.cpp",
+    _SOURCE_DIR / "hardware" / "nezha" / "nezha_motor.cpp",
+    _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp",
+    _SOURCE_DIR / "hardware" / "planetx" / "color_sensor.cpp",
+    _SOURCE_DIR / "hardware" / "planetx" / "line_sensor.cpp",
 ]
 # This test's own reason for being: robot_loop.cpp/boot_wiring.cpp pull in
 # config/persisted_tuning.h's TuningStore/TuningSnapshot/serializeSnapshot()

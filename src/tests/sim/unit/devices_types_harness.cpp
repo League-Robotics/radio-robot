@@ -20,8 +20,8 @@
 // static_assert failure would already fail the COMPILE step before this
 // binary ever runs.
 
-#include "devices/device_config.h"
-#include "devices/device_types.h"
+#include "hal/device_config.h"
+#include "hal/device_types.h"
 
 #include <cstdio>
 #include <type_traits>
@@ -37,7 +37,7 @@ namespace {
   static_assert(std::is_standard_layout<T>::value,                         \
                 #T " must be standard layout")
 
-using namespace Devices;
+using namespace Hal;
 
 // --- Reading / value types (device_types.h) ---
 CHECK_TRIVIAL(MotorReading);

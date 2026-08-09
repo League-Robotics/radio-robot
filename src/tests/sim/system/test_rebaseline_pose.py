@@ -62,10 +62,10 @@ _APP_SOURCES = [
 _MOTION_SOURCES = []
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
-    _SOURCE_DIR / "devices" / "nezha_motor.cpp",
-    _SOURCE_DIR / "devices" / "otos.cpp",
-    _SOURCE_DIR / "devices" / "color_sensor.cpp",
-    _SOURCE_DIR / "devices" / "line_sensor.cpp",
+    _SOURCE_DIR / "hardware" / "nezha" / "nezha_motor.cpp",
+    _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp",
+    _SOURCE_DIR / "hardware" / "planetx" / "color_sensor.cpp",
+    _SOURCE_DIR / "hardware" / "planetx" / "line_sensor.cpp",
 ]
 _CONFIG_SOURCES = [
     _SOURCE_DIR / "config" / "persisted_tuning.cpp",

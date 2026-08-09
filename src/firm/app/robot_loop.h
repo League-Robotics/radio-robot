@@ -30,11 +30,11 @@
 #include "app/preamble.h"
 #include "app/telemetry.h"
 #include "platform/clock.h"
-#include "devices/color_sensor.h"
+#include "hal/color_sensor.h"
 #include "platform/i2c_bus.h"
-#include "devices/line_sensor.h"
-#include "devices/motor.h"
-#include "devices/otos.h"
+#include "hal/line_sensor.h"
+#include "hal/motor.h"
+#include "hardware/generic/real_otos.h"
 #include "firm/types/robot_state.h"
 #include "motion/navigator/navigator.h"
 #include "motion/odometry.h"
@@ -109,7 +109,7 @@ class RobotLoop {
   // exactly this period on tovez: 32.00 ms median, max 32.04.
   //
   // Everything that must move WITH this constant: Telemetry::
-  // kPrimaryPeriod (telemetry.h), Devices::NezhaMotor's
+  // kPrimaryPeriod (telemetry.h), Hardware::NezhaMotor's
   // kMinWriteIntervalUs (nezha_motor.cpp -- a hand-synced literal, since
   // devices/ may not include app/ headers), and every robot JSON's
   // planner.control_period AND planner.actuation_delay, which are both
@@ -121,9 +121,9 @@ class RobotLoop {
   // (main.cpp or a harness) owns construction and wiring order. The
   // persisted-tuning store is NOT a parameter here any more -- it belongs
   // to App::Configurator, which owns the whole CONFIG lifecycle.
-  RobotLoop(Platform::I2CBus& bus, Devices::Motor& motorL,
-            Devices::Motor& motorR, Devices::Otos& otos,
-            Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
+  RobotLoop(Platform::I2CBus& bus, Hal::Motor& motorL,
+            Hal::Motor& motorR, Hal::Otos& otos,
+            Hal::ColorSensor& color, Hal::LineSensor& line,
             Comms& comms, Telemetry& tlm, Drive& drive,
             Configurator& configurator, Motion::Odometry& odom,
             Motion::Planner& planner, Motion::Navigator& navigator,
@@ -232,7 +232,7 @@ class RobotLoop {
   // handleCalibrate() -- CALIBRATE arm: re-run the OTOS gyro bias
   // calibration on demand (envelope.proto's Calibrate doc comment carries
   // the 2026-08-08 boot-while-handled incident this answers). Acks
-  // ERR_NONE and triggers Devices::Otos::calibrateImu() ONLY when the
+  // ERR_NONE and triggers Hal::Otos::calibrateImu() ONLY when the
   // robot is verifiably parked: both wheels encoder-still AND no motion
   // owner commanding velocity this cycle -- calibrating while moving is
   // precisely the fault this command exists to fix, so the precondition
@@ -285,7 +285,7 @@ class RobotLoop {
 
   // Publish one wheel's state section (rebaseline/clamp/read), after its
   // collect. `clamped` reports the defensive wire-bound clamp.
-  void publishWheel(Devices::Motor& motor, Types::RobotState::Wheel& wheel,
+  void publishWheel(Hal::Motor& motor, Types::RobotState::Wheel& wheel,
                     uint8_t& positionEpoch, bool& clamped);
   void publishWheels();               // both wheels + wedge/clamp health
   void publishOtos();
@@ -360,11 +360,11 @@ class RobotLoop {
 #endif
 
   Platform::I2CBus& bus_;
-  Devices::Motor& motorL_;
-  Devices::Motor& motorR_;
-  Devices::Otos& otos_;
-  Devices::ColorSensorLeaf& color_;
-  Devices::LineSensorLeaf& line_;
+  Hal::Motor& motorL_;
+  Hal::Motor& motorR_;
+  Hal::Otos& otos_;
+  Hal::ColorSensor& color_;
+  Hal::LineSensor& line_;
   Comms& comms_;
   Telemetry& tlm_;
   Drive& drive_;

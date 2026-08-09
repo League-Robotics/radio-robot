@@ -33,13 +33,13 @@
 // section recommends relaxing the devices isolation invariant for
 // (src/firm/DESIGN.md §5 / src/firm/devices/DESIGN.md §3: "devices/ must
 // not include messages/... or config/..."), this header deliberately
-// stays OUTSIDE that relaxation. devices/otos.h's own "Scope changes"
+// stays OUTSIDE that relaxation. hardware/generic/real_otos.h's own "Scope changes"
 // header section already documents, as a considered design choice, why
-// Devices::OtosConfig exists instead of reusing Config::OtosBootConfig
+// Hal::OtosConfig exists instead of reusing Config::OtosBootConfig
 // ("Devices-local so this leaf never includes config/") -- relaxing the
 // invariant for this header would contradict that documented rationale
 // in place, not just add an exception next to it. 132-007 therefore
-// keeps Devices::Motor/Devices::Otos on their existing narrow structs and
+// keeps Hal::Motor/Hal::Otos on their existing narrow structs and
 // gives the App:: layer (boot_calibration.h's configureMotor()/
 // configureOtos(), alongside its existing toDeviceMotorConfig()) the
 // Config::Robot-consuming entry point instead -- see that file's own

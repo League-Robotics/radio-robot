@@ -55,7 +55,7 @@ _MESSAGE_SOURCES = [
 ]
 _DEVICE_SOURCES = [
     # Devices::Otos's virtual destructor is defined out-of-line.
-    _SOURCE_DIR / "devices" / "otos.cpp",
+    _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp",
 ]
 
 _CXX_STANDARD = "c++20"

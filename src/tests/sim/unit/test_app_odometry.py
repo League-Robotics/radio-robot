@@ -5,8 +5,8 @@ Compiles ``app_odometry_harness.cpp`` together with the HOST_BUILD
 implementations it needs (``src/firm/app/odometry.cpp``,
 ``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
-physics dependencies, ``src/firm/devices/nezha_motor.cpp``,
-``src/firm/devices/otos.cpp``, ``src/motion/body_kinematics.cpp``) with
+physics dependencies, ``src/firm/hardware/nezha/nezha_motor.cpp``,
+``src/firm/hardware/generic/real_otos.cpp``, ``src/motion/body_kinematics.cpp``) with
 ``-DHOST_BUILD``, against the SAME headers every ARM build compiles.
 Mirrors ``test_app_drive.py``'s exact shape: compile with the system C++
 compiler, run the resulting binary, assert it exits 0.
@@ -43,8 +43,8 @@ _ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
-_NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
-_OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
+_NEZHA_MOTOR_SRC = _SOURCE_DIR / "hardware" / "nezha" / "nezha_motor.cpp"
+_OTOS_SRC = _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp"
 _BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard.

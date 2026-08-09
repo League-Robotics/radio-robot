@@ -1,15 +1,15 @@
-// fake_otos.h -- App::FakeOtos: a bench implementation of the Devices::Otos
+// fake_otos.h -- App::FakeOtos: a bench implementation of the Hal::Otos
 // interface that reports the robot's dead-reckoned Odometry pose AS IF it
 // were a real OTOS chip, without touching the I2C bus. Selected at the
 // main.cpp composition root under `#ifdef FAKE_OTOS` (the ONE place that
-// macro appears); the loop holds a plain `Devices::Otos&` and neither knows
+// macro appears); the loop holds a plain `Hal::Otos&` and neither knows
 // nor cares which implementation it drives.
 //
 // The synthesis is pulled by this class's own tick(), not pushed into the
 // real leaf. Because a fake needs App:: context (the Odometry pose and
 // the wheel Motors' velocities), it lives in app/ rather than devices/ --
 // the devices/ isolation invariant forbids that leaf layer from depending
-// on App::Odometry, which is exactly why the interface (Devices::Otos) is
+// on App::Odometry, which is exactly why the interface (Hal::Otos) is
 // the seam and this concrete fake sits above it.
 //
 // tick() synthesizes:
@@ -25,18 +25,18 @@
 
 #include <cstdint>
 
-#include "devices/motor.h"
-#include "devices/otos.h"
+#include "hal/motor.h"
+#include "hardware/generic/real_otos.h"
 #include "motion/odometry.h"
 
 namespace App {
 
-class FakeOtos : public Devices::Otos {
+class FakeOtos : public Hal::Otos {
  public:
   // odom -- the pose source (read, never mutated). left/right -- the SAME
   // two Motor leaves Odometry integrates, used only for their velocity() to
   // fuse the body twist. trackWidth -- [mm], BodyKinematics::forward()'s `b`.
-  FakeOtos(const Motion::Odometry& odom, Devices::Motor& left, Devices::Motor& right,
+  FakeOtos(const Motion::Odometry& odom, Hal::Motor& left, Hal::Motor& right,
            float trackWidth);  // [mm]
 
   // No real chip: begin()/init()/calibration setters are all no-ops (a fake
@@ -55,7 +55,7 @@ class FakeOtos : public Devices::Otos {
   // gate, unlike RealOtos).
   void tick(uint64_t nowUs) override;  // [us]
 
-  Devices::PoseReading pose() const override { return cachedPose_; }
+  Hal::PoseReading pose() const override { return cachedPose_; }
   bool poseFresh() const override { return poseFresh_; }
   bool connected() const override { return true; }
   bool present() const override { return true; }
@@ -63,11 +63,11 @@ class FakeOtos : public Devices::Otos {
 
  private:
   const Motion::Odometry& odom_;
-  Devices::Motor& left_;
-  Devices::Motor& right_;
+  Hal::Motor& left_;
+  Hal::Motor& right_;
   float trackWidth_;  // [mm]
 
-  Devices::PoseReading cachedPose_{};
+  Hal::PoseReading cachedPose_{};
   bool poseFresh_ = false;
   uint64_t sampleTimeUs_ = 0;  // [us] sampleTime()'s backing field -- the last tick()'s own nowUs
 };

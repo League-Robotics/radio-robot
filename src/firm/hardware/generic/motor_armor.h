@@ -1,18 +1,18 @@
-// motor_armor.h — Devices::MotorArmor: a composing Motor decorator carrying
+// motor_armor.h — Hardware::MotorArmor: a composing Hal::Motor decorator carrying
 // the OBSERVATION/RECOVERY policies — the wedge detector and the
 // standstill-guarded reset dispatch.
 //
-// A pure DECORATOR over Devices::Motor (motor.h): construct a motor, hand
-// it to MotorArmor, hand the armor to whatever wants a Motor. Don't want
+// A pure DECORATOR over Hal::Motor (motor.h): construct a motor, hand
+// it to MotorArmor, hand the armor to whatever wants a Hal::Motor. Don't want
 // the armor? Hand the motor over directly. The sim does exactly that
 // (src/firm/platform/host/sim_harness.h — bare motors); the ARM build wraps
 // (src/firm/main.cpp).
 //
 // The write gate (reversal dwell + output deadband) is NOT here — it is
 // Nezha-brick wedge PROTECTION, write shaping in the same family as the
-// slew cap and write throttle, so it lives in Devices::NezhaMotor's own
+// slew cap and write throttle, so it lives in Hardware::NezhaMotor's own
 // write path (nezha_motor.cpp's writeShapedDuty(); configured by the same
-// MotorConfig reversalDwell/outputDeadband fields, 0/0 = off).
+// Hal::MotorConfig reversalDwell/outputDeadband fields, 0/0 = off).
 //
 // Policies kept here:
 //   - Wedge detector: the raw, unconditional stuck-encoder latch
@@ -40,14 +40,14 @@
 #include <cmath>
 #include <cstdint>
 
-#include "devices/device_config.h"
-#include "devices/motor.h"
+#include "hal/device_config.h"
+#include "hal/motor.h"
 
-namespace Devices {
+namespace Hardware {
 
-class MotorArmor : public Motor {
+class MotorArmor : public Hal::Motor {
  public:
-  explicit MotorArmor(Motor& inner) : inner_(inner) {}
+  explicit MotorArmor(Hal::Motor& inner) : inner_(inner) {}
 
   // reconfigure — forwards the whole config to the wrapped inner_ motor
   // FIRST (see motor.h), then, only if the inner motor actually accepted
@@ -58,7 +58,7 @@ class MotorArmor : public Motor {
   // updating motionThreshold_ when applied is true means an armor whose
   // inner motor refused the new config never silently drifts its own
   // wedge-detection threshold away from what the motor actually uses.
-  bool reconfigure(const MotorConfig& config) override {
+  bool reconfigure(const Hal::MotorConfig& config) override {
     bool applied = inner_.reconfigure(config);
     if (applied) {
       motionThreshold_ = config.outputDeadband;
@@ -66,11 +66,11 @@ class MotorArmor : public Motor {
     return applied;
   }
 
-  // --- Motor: command/lifecycle forwarding ---
+  // --- Hal::Motor: command/lifecycle forwarding ---
   void begin() override { inner_.begin(); }
   void requestSample() override { inner_.requestSample(); }
   void setDuty(float duty) override { inner_.setDuty(duty); }
-  void setNeutral(Neutral mode) override { inner_.setNeutral(mode); }
+  void setNeutral(Hal::Neutral mode) override { inner_.setNeutral(mode); }
   void applyTravelCalib(float travelCalib) override { inner_.applyTravelCalib(travelCalib); }
 
   void tick(uint64_t nowUs) override {
@@ -80,19 +80,19 @@ class MotorArmor : public Motor {
     updateRestTracking();
   }
 
-  // --- Motor: getters ---
+  // --- Hal::Motor: getters ---
   float position() const override { return inner_.position(); }
   float velocity() const override { return inner_.velocity(); }
   float appliedDuty() const override { return inner_.appliedDuty(); }
   bool connected() const override { return inner_.connected(); }
   uint64_t sampleTime() const override { return inner_.sampleTime(); }  // [us] pure passthrough -- no armor-side state of its own
 
-  // --- Motor: resets — the armor's whole reason to intercept ---
+  // --- Hal::Motor: resets — the armor's whole reason to intercept ---
   // Stages; the next tick() dispatches hard-at-rest / rebaseline-otherwise.
   void resetPosition() override { resetPending_ = true; }
   void rebaseline() override { inner_.rebaseline(); }
 
-  // --- Motor: observability ---
+  // --- Hal::Motor: observability ---
   bool wedged() const override { return wedgeLatched_ || forcedWedge_; }
   // DBG-injected wedge (system test): OR-ed into wedged() above so every
   // consumer -- health publication, flag bit 7, Drive's wedge handling --
@@ -102,7 +102,7 @@ class MotorArmor : public Motor {
   void setForcedWedge(bool on) override { forcedWedge_ = on; }
   bool wedgeSuspect() const override { return wedgeSuspect_; }
 
-  // --- Armor-specific accessors (beyond the Motor faceplate) ---
+  // --- Armor-specific accessors (beyond the Hal::Motor faceplate) ---
   uint32_t hardResetCount() const { return hardResetCount_; }
   uint32_t softResetCount() const { return softResetCount_; }
 
@@ -168,7 +168,7 @@ class MotorArmor : public Motor {
     if (movingStuckCount_ >= kWedgeThreshold) wedgeSuspect_ = true;
   }
 
-  Motor& inner_;
+  Hal::Motor& inner_;
 
   float motionThreshold_ = kDefaultMotionThreshold;   // [-1,1] duty fraction
 
@@ -199,4 +199,4 @@ class MotorArmor : public Motor {
   static constexpr uint8_t kWedgeThreshold = 10;
 };
 
-}  // namespace Devices
+}  // namespace Hardware

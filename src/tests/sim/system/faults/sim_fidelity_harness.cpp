@@ -7,7 +7,7 @@
 //
 // Unlike fault_knobs_harness.cpp / sim_api_harness.cpp (which run the FULL
 // TestSim::SimHarness -- the real App::RobotLoop against SimPlant), this
-// harness exercises the REAL Devices::Otos leaf (src/firm/devices/otos.cpp)
+// harness exercises the REAL Hal::Otos leaf (src/firm/hardware/generic/real_otos.cpp)
 // directly against a bare TestSim::SimPlant -- no ScriptedI2CHook, no
 // RobotLoop -- so it is SimPlant's own defaultRead()/defaultWrite() fidelity
 // under test, exactly the thing devices_otos_harness.cpp's ScriptedI2CHook-
@@ -21,15 +21,15 @@
 // test_sim_fidelity.py, which compiles this file together with
 // otos.cpp/sim_plant.cpp/otos_plant.cpp/wheel_plant.cpp only -- a much
 // lighter dependency graph than the full RobotLoop-based harnesses need,
-// since Devices::Otos/TestSim::SimPlant/TestSim::WheelPlant/TestSim::OtosPlant
+// since Hal::Otos/TestSim::SimPlant/TestSim::WheelPlant/TestSim::OtosPlant
 // have no messages/app dependency (the devices/ isolation invariant).
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
 #include <string>
 
-#include "devices/device_config.h"
-#include "devices/otos.h"
+#include "hal/device_config.h"
+#include "hardware/generic/real_otos.h"
 #include "sim_plant.h"
 #include "wheel_plant.h"
 
@@ -60,8 +60,8 @@ void checkNear(float actual, float expected, float tol, const std::string& what)
   }
 }
 
-Devices::OtosConfig makeConfig(float linearScale, float angularScale) {
-  Devices::OtosConfig cfg;
+Hal::OtosConfig makeConfig(float linearScale, float angularScale) {
+  Hal::OtosConfig cfg;
   cfg.offsetX = 0.0f;
   cfg.offsetY = 0.0f;
   cfg.offsetYaw = 0.0f;
@@ -111,7 +111,7 @@ void scenarioZeroErrorOtosExactness() {
 
 // ===========================================================================
 // 3. SUC-005's second acceptance criterion, made concrete (AC #1/#2): a raw
-//    OTOS linear scale error makes the REAL Devices::Otos leaf's decoded
+//    OTOS linear scale error makes the REAL Hal::Otos leaf's decoded
 //    pose diverge from truth; pushing the compensating calibration scalar
 //    via the SAME OL wire path (Otos::setLinearScalar()) converges it back.
 //    Runs through SimPlant's own defaultRead()/defaultWrite() -- no hook, no
@@ -127,7 +127,7 @@ void scenarioOtosRawScaleErrorDivergesThenCalibrationConverges() {
   // un-calibrated chip) -- begin() pushes it via the REAL setLinearScalar()/
   // setAngularScalar() wire path, exercising handleOtosWrite()'s register
   // capture from the very first boot.
-  Devices::RealOtos odom(plant, makeConfig(/*linearScale=*/1.0f, /*angularScale=*/1.0f));
+  Hardware::RealOtos odom(plant, makeConfig(/*linearScale=*/1.0f, /*angularScale=*/1.0f));
   odom.begin();
 
   constexpr float kTrueX = 1000.0f;   // [mm]
@@ -149,11 +149,11 @@ void scenarioOtosRawScaleErrorDivergesThenCalibrationConverges() {
   // live OtosConfigPatch drives (RobotLoop::handleConfig -> Otos::
   // setLinearScalar()), computed exactly the way calibration_commands()
   // (push.py) derives it: scale = 1/(1+rawError), then scaleToRegister().
-  // Devices::scaleToRegister() (otos.h) -- a free function since 132-010
+  // Hardware::scaleToRegister() (otos.h) -- a free function since 132-010
   // (trap 3) -- replaces this file's former local duplicate of the SAME
   // formula.
   float compensatingScale = 1.0f / (1.0f + kRawErrorLinear);
-  odom.setLinearScalar(static_cast<float>(Devices::scaleToRegister(compensatingScale)));
+  odom.setLinearScalar(static_cast<float>(Hardware::scaleToRegister(compensatingScale)));
 
   nowUs += 20000;  // kReadPeriod -- otos.h's own rate-limit window
   odom.tick(nowUs);

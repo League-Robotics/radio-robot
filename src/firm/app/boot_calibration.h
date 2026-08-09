@@ -23,9 +23,9 @@
 #pragma once
 
 #include "config/robot.h"
-#include "devices/device_config.h"
-#include "devices/motor.h"
-#include "devices/otos.h"
+#include "hal/device_config.h"
+#include "hal/motor.h"
+#include "hardware/generic/real_otos.h"
 #include "messages/drivetrain.h"
 #include "messages/motor.h"
 #include "motion/navigator/arc_solver.h"
@@ -45,7 +45,7 @@ namespace App {
 // deleted outright -- see drive.h's own header). vel_filt_alpha has no
 // live consumer at all -- the wire field itself is untouched (no protocol
 // change), simply unread by firmware for now.
-Devices::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src);
+Hal::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src);
 
 // effectiveTrackWidth -- physical separation corrected for SCRUB.
 //
@@ -98,11 +98,11 @@ Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainC
 //     dependency rule (src/motion/DESIGN.md §3) forbids ANY
 //     App::/Devices::/Config:: dependency, no exception -- "No Devices::*,
 //     App::*, or bus/timing collaborator anywhere in this tree."
-//   - Devices::Motor / Devices::Otos (src/firm/devices/): the devices
+//   - Hal::Motor / Hal::Otos (src/firm/devices/): the devices
 //     isolation invariant (src/firm/DESIGN.md §5) forbids devices/ from
 //     including messages/ or config/ headers, and (otos.h's own "Scope
-//     changes" section) Devices::Otos deliberately keeps its OWN narrow
-//     Devices::OtosConfig for exactly this reason today.
+//     changes" section) Hal::Otos deliberately keeps its OWN narrow
+//     Hal::OtosConfig for exactly this reason today.
 // toDeviceMotorConfig() above already lives here, in App::, for the
 // identical reason -- these three functions are that same pattern
 // extended to Config::Robot: App:: is the one layer that can see both a
@@ -115,7 +115,7 @@ Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainC
 // reading config.planner's six shaper-ceiling fields.
 void configurePlanner(Motion::Planner& planner, const Config::Robot& config);
 
-// configureMotor -- reuses Devices::Motor::applyTravelCalib(), the ONE
+// configureMotor -- reuses Hal::Motor::applyTravelCalib(), the ONE
 // MotorConfig field this interface still live-applies post-construction
 // (motor.h's own doc comment), side-selected exactly like RobotLoop's
 // own CONFIG merge path already does (isLeft picks motors.
@@ -124,23 +124,23 @@ void configurePlanner(Motion::Planner& planner, const Config::Robot& config);
 // (returns false, applies nothing) while the motor reports itself in
 // motion via its own public velocity()/appliedDuty() accessors -- the
 // SAME "is moving" signal reconfigure()'s own atRest check uses, read
-// through the public Devices::Motor interface rather than a
+// through the public Hal::Motor interface rather than a
 // leaf-private field, since this function operates on the interface,
 // not a concrete leaf. Configurator maps a `false` return to ERR_BUSY
 // (ticket 009's own job); this function's scope is only the bool.
-[[nodiscard]] bool configureMotor(Devices::Motor& motor, const Config::Robot& config,
+[[nodiscard]] bool configureMotor(Hal::Motor& motor, const Config::Robot& config,
                                   bool isLeft);
 
 // configureOtos -- reuses setLinearScalar()/setAngularScalar()/
 // setOffset(), the SAME setters Configurator::applyOtosPatch() (the old
 // patch surface, configurator.cpp) already call. Trap 3's multiplier-
 // vs-register domain mismatch is CLOSED here (132-010): linear_scale/
-// angular_scale are converted through Devices::scaleToRegister() (otos.h,
+// angular_scale are converted through Hardware::scaleToRegister() (otos.h,
 // a free function since 132-010 -- see its own doc comment) before
 // reaching the chip-level setters, the same conversion RealOtos::begin()
 // applies to the baked value at boot, so a live push and a boot bake now
 // agree on what a given multiplier means.
-void configureOtos(Devices::Otos& otos, const Config::Robot& config);
+void configureOtos(Hal::Otos& otos, const Config::Robot& config);
 
 // configureNavigator -- 135-004: writes config.navigator's fields DIRECTLY
 // into `limits` -- not a setter call, because Motion::Navigator holds its

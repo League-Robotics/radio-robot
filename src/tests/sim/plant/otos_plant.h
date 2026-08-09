@@ -26,7 +26,7 @@
 // centre-frame (x, y, heading) directly as the OTOS chip's raw register
 // values (TestSim::SimPlant does exactly this) does so WITHOUT any
 // lever-arm (sensorToCentre()/centreToSensor()) or mounting-yaw inverse
-// transform. This is only valid when the Devices::OtosConfig under test
+// transform. This is only valid when the Hal::OtosConfig under test
 // uses offsetX=offsetY=offsetYaw=0 (identity mounting). A future scenario
 // wanting a non-identity mount would need to invert Otos::tick()'s own
 // transform first.
@@ -96,7 +96,7 @@ class OtosPlant {
   // consumed by the midpoint-arc position update) -- a body-FRAME forward
   // velocity, matching the real chip's own linear-velocity report
   // convention (mounting-yaw-corrected only, not heading-rotated -- see
-  // Devices::Otos::tick()'s own rotVx/rotVy comment). v_y is always 0.0f:
+  // Hal::Otos::tick()'s own rotVx/rotVy comment). v_y is always 0.0f:
   // this plant, like the firmware's own encoder-only Odometry, has no
   // lateral-slip model for a differential-drive robot -- there is no
   // sideways component to report, matching the primary telemetry frame's
@@ -147,10 +147,10 @@ class OtosPlant {
   // the REAL SparkFun OTOS chip's own documented behavior -- its
   // REG_SCALAR_LINEAR/REG_SCALAR_ANGULAR registers multiply the chip's raw
   // measurement by (1 + reg*0.001) before it is ever reported on the wire
-  // (the exact inverse of Devices::Otos::scaleToRegister()'s own
+  // (the exact inverse of Hal::Otos::scaleToRegister()'s own
   // scale-to-register conversion). TestSim::SimPlant's handleOtosWrite()
   // captures a firmware write to either register (via the REAL
-  // Devices::Otos::setLinearScalar()/setAngularScalar() -- the same OL/OA
+  // Hal::Otos::setLinearScalar()/setAngularScalar() -- the same OL/OA
   // wire path a live OtosConfigPatch or the OL/OA text verb drives) and
   // calls these setters -- see sim_plant.cpp's own comment. 0 (the
   // default -- an un-calibrated/just-reset chip) is a genuine no-op

@@ -33,7 +33,7 @@
 #include "app/comms.h"
 #include "app/drive.h"
 #include "app/telemetry.h"
-#include "devices/motor.h"
+#include "hal/motor.h"
 #include "firm/types/robot_state.h"
 #include "messages/envelope.h"
 #include "messages/wire.h"
@@ -45,14 +45,14 @@
 // ticks it. Duplicated per this codebase's established per-harness-file
 // fixture convention (see e.g. app_telemetry_harness.cpp's own identical
 // pair).
-class StubMotor : public Devices::Motor {
+class StubMotor : public Hal::Motor {
  public:
   void begin() override {}
   void requestSample() override {}
   void setDuty(float) override {}
-  void setNeutral(Devices::Neutral) override {}
+  void setNeutral(Hal::Neutral) override {}
   void applyTravelCalib(float) override {}
-  bool reconfigure(const Devices::MotorConfig&) override { return true; }
+  bool reconfigure(const Hal::MotorConfig&) override { return true; }
   void tick(uint64_t) override {}
   float position() const override { return 0.0f; }
   float velocity() const override { return 0.0f; }

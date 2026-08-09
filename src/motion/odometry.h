@@ -2,21 +2,21 @@
 // estimate (encoder-only dead reckoning).
 //
 // Boundary: inside -- taking both wheels' position deltas (handed in by the
-// caller every cycle, NOT read from a held Devices::Motor&), calling
+// caller every cycle, NOT read from a held Hal::Motor&), calling
 // BodyKinematics::forward(), accumulating x/y/theta. Outside -- reading the
 // leaves themselves (the base's job -- src/firm/app/robot_loop.cpp reads
-// Devices::Motor::position() and passes the two floats in), fusing with
+// Hal::Motor::position() and passes the two floats in), fusing with
 // OTOS/camera (the host's job), and OTOS sampling itself (App::
 // applyOtosSample(), src/firm/app/otos_sample.{h,cpp} -- base-side, since it
-// needs Devices::Otos& and Telemetry::Frame&, neither of which src/motion may
+// needs Hal::Otos& and Telemetry::Frame&, neither of which src/motion may
 // depend on; sprint 122 ticket 002 split it out of this file, which used to
 // hold both).
 //
 // 122-002 (motion-library extraction): moved from src/firm/app/odometry.*
 // into src/motion/, behind the velocity-sink boundary (wheel_sink.h). This
-// class no longer holds a Devices::Motor& -- integrate()/the constructor
+// class no longer holds a Hal::Motor& -- integrate()/the constructor
 // take the CURRENT wheel positions as plain float parameters instead, the
-// same values Devices::Motor::position() already returns, read by the
+// same values Hal::Motor::position() already returns, read by the
 // caller (App::RobotLoop) at the exact point in the cycle this class used to
 // read them itself. Zero behavior change: the values flowing into
 // integrate() are identical, just handed in rather than pulled.
@@ -24,7 +24,7 @@
 // 131-004 (position-rebaseline-destroys-the-pose.md): integrate() now also
 // takes each wheel's positionEpoch (Types::RobotState::Wheel::positionEpoch)
 // -- App::RobotLoop::publishWheel() bumps a wheel's epoch the same cycle it
-// calls Devices::Motor::rebaseline(), which re-anchors that wheel's raw
+// calls Hal::Motor::rebaseline(), which re-anchors that wheel's raw
 // position (a ~30,000mm software-only jump). Before this ticket, integrate()
 // differenced blindly across that jump -- a wheel's positionEpoch changing
 // makes THIS wheel's delta for THIS call exactly zero (re-anchoring
@@ -73,7 +73,7 @@ class Odometry {
   // incoming position instead of differencing across the rebaseline jump);
   // the other wheel, if its own epoch is unchanged, diffs normally. A
   // caller with no rebaseline concept (a direct unit test, a harness that
-  // never calls Devices::Motor::rebaseline()) passes a stable literal (0,
+  // never calls Hal::Motor::rebaseline()) passes a stable literal (0,
   // 0) and sees unchanged behavior -- see this file's own header.
   void integrate(float leftPosition, float rightPosition, uint8_t leftEpoch,
                  uint8_t rightEpoch);  // [mm] [mm]

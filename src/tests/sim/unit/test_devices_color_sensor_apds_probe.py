@@ -4,7 +4,7 @@ finding M4): Devices::ColorSensorLeaf::beginStep()'s APDS probe must not
 latch present()==true on a NAK'd bus read.
 
 Compiles ``devices_color_sensor_apds_probe_harness.cpp`` together with the
-REAL ``src/firm/devices/color_sensor.cpp`` and ticket 108-002's real
+REAL ``src/firm/hardware/planetx/color_sensor.cpp`` and ticket 108-002's real
 ``Devices::I2CBus`` implementation, ``TestSim::SimPlant``
 (``src/firm/platform/host/sim_plant.cpp`` -- itself named as this exact ticket's
 consumer in its own header comment) plus SimPlant's own
@@ -26,12 +26,12 @@ import pytest
 # src/tests/sim/unit/test_devices_color_sensor_apds_probe.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
-_DEVICES_DIR = _SOURCE_DIR / "devices"
+_HARDWARE_DIR = _SOURCE_DIR / "hardware"
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "devices_color_sensor_apds_probe_harness.cpp"
-_COLOR_SENSOR_SRC = _DEVICES_DIR / "color_sensor.cpp"
+_COLOR_SENSOR_SRC = _HARDWARE_DIR / "planetx" / "color_sensor.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"

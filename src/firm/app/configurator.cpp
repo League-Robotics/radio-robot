@@ -63,8 +63,8 @@ msg::ConfigSource Configurator::configSource(msg::ConfigGroupTarget target) cons
   return groupSource_[slot];
 }
 
-Configurator::Configurator(Drive& drive, Devices::Motor& motorL,
-                           Devices::Motor& motorR, Devices::Otos& otos,
+Configurator::Configurator(Drive& drive, Hal::Motor& motorL,
+                           Hal::Motor& motorR, Hal::Otos& otos,
                            Motion::Planner& planner,
                            Motion::NavigatorLimits& navigatorLimits,
                            Config::TuningStore* tuningStore)
@@ -494,7 +494,7 @@ msg::ErrCode Configurator::install(msg::ConfigGroupTarget target) {
 
     case msg::ConfigGroupTarget::OTOS:
       // App::configureOtos() (132-007, domain fix 132-010) now converts
-      // linear_scale/angular_scale through Devices::scaleToRegister()
+      // linear_scale/angular_scale through Hardware::scaleToRegister()
       // before calling setLinearScalar()/setAngularScalar() -- the SAME
       // conversion RealOtos::begin() applies to the baked value at boot,
       // closing trap 3 (the-configuration-object.md): a live push and a

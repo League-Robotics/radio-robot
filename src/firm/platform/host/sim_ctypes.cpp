@@ -266,7 +266,7 @@ SimHandle sim_create(float trackWidth) {
   // realistic path -- every Python consumer of the sim (the tour runner,
   // TestGUI's sim-mode transport) gets hardware-like encoders that never
   // hold a byte-identical stopped-wheel reading long enough to false-
-  // positive Devices::MotorArmor's wedge-latch detector (kWedgeThreshold=10
+  // positive Hardware::MotorArmor's wedge-latch detector (kWedgeThreshold=10
   // consecutive identical reads) -- see wheel_plant.h's own "Rest-dither
   // tuning" comment for why. The plain C++ SimHarness/SimPlant construction
   // path (used directly by tests/sim/system/*.cpp scenario tests and
@@ -299,7 +299,7 @@ int sim_cycle_dt_us() { return static_cast<int>(TestSim::SimHarness::kCycleDtUs)
 
 // Commanded per-wheel velocity (the interim PID SETPOINT App::Drive stages
 // -- 125-003: read from Drive's own driveTargetVelLeft/Right() accessor now,
-// NOT Devices::Motor::velocityTarget(), which is deleted -- the velocity
+// NOT Hal::Motor::velocityTarget(), which is deleted -- the velocity
 // PID moved off NezhaMotor entirely, see drive.h's own header). cmd_vel is
 // NOT on the wire at all (it never made it off TelemetrySecondary before
 // that message was deleted outright, 124-009 -- see Types::RobotState::
@@ -312,7 +312,7 @@ float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->driveTargetVelRight(
 
 // Velocity-PID enable/disable (stakeholder 2026-07-18, TestGUI "PID"
 // checkbox next to the Test buttons) -- 125-003: NOW A NO-OP. The velocity
-// PID this used to toggle on/off (Devices::NezhaMotor::setPidEnabled()) no
+// PID this used to toggle on/off (Hardware::NezhaMotor::setPidEnabled()) no
 // longer exists on the Motor interface at all (Decision 2, sprint.md -- PID
 // is a control decision, not hardware protection, and relocated to a
 // motion-local wheel-velocity PID class -- itself deleted outright by
@@ -519,7 +519,7 @@ void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm) {
 //     int* fwdSign);
 //     port: 1 = left, 2 = right. Returns whatever configureMotor() was last
 //     called with for that port (SimHarness::motorConfig()'s own contract --
-//     a default-constructed Devices::MotorConfig{} if configureMotor() was
+//     a default-constructed Hal::MotorConfig{} if configureMotor() was
 //     never called for that port).
 
 // sim_configure_planner() -- DELETED (115-006, gut S1): msg::PlannerConfig
@@ -541,13 +541,13 @@ void sim_set_enc_slip(SimHandle h, int port, float rate, float magnitudeMm) {
 //
 // `velFiltAlpha` (the parameter, kept for C ABI/ctypes-argtypes
 // compatibility with host/robot_radio/io/sim_loop.py) is now UNUSED --
-// 125-003 deleted Devices::MotorConfig::velFiltAlpha along with the EMA
+// 125-003 deleted Hal::MotorConfig::velFiltAlpha along with the EMA
 // velocity estimator it fed (pending ticket 004's App::WheelObserver,
 // which will need its own config surface for whatever replaces it).
 void sim_configure_motor(SimHandle h, int port, float /*velFiltAlpha*/, int fwdSign) {
   TestSim::SimHarness* harness = asHarness(h);
-  Devices::NezhaMotor& motor = (port == 2) ? harness->motorRight() : harness->motorLeft();
-  Devices::MotorConfig cfg = motor.config();  // full live config -- merge, don't clobber
+  Hardware::NezhaMotor& motor = (port == 2) ? harness->motorRight() : harness->motorLeft();
+  Hal::MotorConfig cfg = motor.config();  // full live config -- merge, don't clobber
   cfg.port = static_cast<uint32_t>(port);
   cfg.fwdSign = fwdSign;
   harness->configureMotor(static_cast<uint32_t>(port), cfg);
@@ -567,9 +567,9 @@ void sim_configure_motor(SimHandle h, int port, float /*velFiltAlpha*/, int fwdS
 // port: 1 = left, 2 = right (same convention as sim_configure_motor() above).
 // `*velFiltAlpha` (parameter kept for C ABI compatibility, see
 // sim_configure_motor()'s own comment) always reads back 0.0f -- there is
-// no live Devices::MotorConfig::velFiltAlpha field left to report.
+// no live Hal::MotorConfig::velFiltAlpha field left to report.
 void sim_read_motor_config(SimHandle h, int port, float* velFiltAlpha, int* fwdSign) {
-  const Devices::MotorConfig& cfg = asHarness(h)->motorConfig(static_cast<uint32_t>(port));
+  const Hal::MotorConfig& cfg = asHarness(h)->motorConfig(static_cast<uint32_t>(port));
   *velFiltAlpha = 0.0f;
   *fwdSign = cfg.fwdSign;
 }

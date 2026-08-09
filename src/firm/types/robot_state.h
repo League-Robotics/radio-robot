@@ -27,8 +27,8 @@ struct RobotState {
   } time;
 
   struct Wheel {
-    float position = 0.0f;  // [mm] Devices::Motor::position()
-    float velocity = 0.0f;  // [mm/s] signed, Devices::Motor::velocity()
+    float position = 0.0f;  // [mm] Hal::Motor::position()
+    float velocity = 0.0f;  // [mm/s] signed, Hal::Motor::velocity()
     uint32_t sampleTime = 0;  // [ms] this reading's own genuine collect time --
     bool connected = false;
     uint8_t positionEpoch = 0;

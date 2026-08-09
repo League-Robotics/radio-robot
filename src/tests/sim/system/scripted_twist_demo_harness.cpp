@@ -45,7 +45,7 @@
 // 106-003 generalized the scripting mechanism (`SimApi::DutyPredictor`,
 // sim_api.{h,cpp}) to predict, per leaf, per cycle, whether NezhaMotor's
 // tick() will actually emit a duty write THIS cycle -- including replicating
-// `Devices::MotorArmor::armoredWrite()`'s own reversal-dwell/output-deadband
+// `Hardware::MotorArmor::armoredWrite()`'s own reversal-dwell/output-deadband
 // gate (motor_armor.h), which forces a same-cycle-or-later duty SIGN FLIP to
 // zero for a 100ms dwell window before letting the new direction reach the
 // bus -- discovered only by comparing this predictor's own per-cycle state
@@ -66,7 +66,7 @@
 // SAME "boundary-latch" flavor `.clasi/knowledge/encoder-wedge-boundary-
 // latch.md` documents for the real hardware. Left unobserved long enough,
 // this scenario's own converged residual would eventually accumulate
-// `Devices::MotorArmor`'s own `kWedgeThreshold` (10) consecutive identical
+// `Hardware::MotorArmor`'s own `kWedgeThreshold` (10) consecutive identical
 // raw reads and trip a REAL (not false) `kFaultWedgeLatch` -- verified by
 // stepping this same scenario out to 60+ cycles during this ticket's own
 // implementation. 12 cycles lands comfortably inside the converged-and-

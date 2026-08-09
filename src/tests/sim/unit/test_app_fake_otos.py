@@ -28,7 +28,7 @@ _ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"
 _BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
 # otos.cpp carries the abstract Devices::Otos base's out-of-line anchor
 # (~Otos / vtable / typeinfo) that any concrete subclass -- FakeOtos -- links.
-_OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
+_OTOS_SRC = _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard.
 _CXX_STANDARD = "c++20"

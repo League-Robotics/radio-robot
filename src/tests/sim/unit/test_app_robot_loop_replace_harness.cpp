@@ -70,7 +70,7 @@
 #include <cstdio>
 #include <string>
 
-#include "devices/device_config.h"
+#include "hal/device_config.h"
 #include "motion/planner/planner.h"
 #include "motion/planner/tests/test_support.h"
 #include "sim_harness.h"

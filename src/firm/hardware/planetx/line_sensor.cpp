@@ -1,6 +1,6 @@
-#include "devices/line_sensor.h"
+#include "hardware/planetx/line_sensor.h"
 
-namespace Devices {
+namespace Hardware {
 
 namespace {
 // CODAL's well-known convention: 0 == success (matches nezha_motor.cpp's,
@@ -8,7 +8,7 @@ namespace {
 constexpr int kOk = 0;
 }  // namespace
 
-LineSensorLeaf::LineSensorLeaf(Platform::I2CBus& bus, const LineConfig& config)
+LineSensorLeaf::LineSensorLeaf(Platform::I2CBus& bus, const Hal::LineConfig& config)
     : bus_(bus), config_(config) {
   // LineConfig::lagLine zero-defaults (device_config.h) -- the
   // "unconfigured" sentinel this leaf resolves to its ship default (same
@@ -90,7 +90,7 @@ void LineSensorLeaf::tick(uint64_t nowUs) {
     return;
   }
 
-  LineReading out{};
+  Hal::LineReading out{};
   for (uint8_t ch = 0; ch < 4; ++ch) {
     out.raw[ch] = raw[ch];
 
@@ -124,7 +124,7 @@ void LineSensorLeaf::tick(uint64_t nowUs) {
   readingFresh_ = true;
 }
 
-LineReading LineSensorLeaf::reading() const { return cachedReading_; }
+Hal::LineReading LineSensorLeaf::reading() const { return cachedReading_; }
 
 bool LineSensorLeaf::readingFresh() const { return readingFresh_; }
 
@@ -148,4 +148,4 @@ bool LineSensorLeaf::readRaw(uint16_t out[4]) {
   return true;
 }
 
-}  // namespace Devices
+}  // namespace Hardware

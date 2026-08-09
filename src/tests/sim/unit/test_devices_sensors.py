@@ -3,8 +3,8 @@
 Compiles ``devices_sensors_harness.cpp`` together with ``TestSim::SimPlant``
 (``src/firm/platform/host/sim_plant.cpp`` — ticket 108-002's real Devices::I2CBus
 implementation) plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
-physics dependencies, and the real ``src/firm/devices/color_sensor.cpp``
-and ``src/firm/devices/line_sensor.cpp`` against the SAME ``src/firm/devices/``
+physics dependencies, and the real ``src/firm/hardware/planetx/color_sensor.cpp``
+and ``src/firm/hardware/planetx/line_sensor.cpp`` against the SAME ``src/firm/devices/``
 headers every ARM build compiles, with ``-DHOST_BUILD``. Mirrors
 ``test_devices_otos.py``'s shape exactly: compile with the system C++
 compiler, run the resulting binary, assert it exits 0.
@@ -28,7 +28,7 @@ import pytest
 # src/tests/sim/unit/test_devices_sensors.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
-_DEVICES_DIR = _SOURCE_DIR / "devices"
+_HARDWARE_DIR = _SOURCE_DIR / "hardware"
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 
@@ -37,8 +37,8 @@ _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
-_COLOR_SENSOR_SRC = _DEVICES_DIR / "color_sensor.cpp"
-_LINE_SENSOR_SRC = _DEVICES_DIR / "line_sensor.cpp"
+_COLOR_SENSOR_SRC = _HARDWARE_DIR / "planetx" / "color_sensor.cpp"
+_LINE_SENSOR_SRC = _HARDWARE_DIR / "planetx" / "line_sensor.cpp"
 
 # messages/common.h documents its own target as "CODAL C++11" — build the
 # host harness to the same standard so it exercises exactly the language

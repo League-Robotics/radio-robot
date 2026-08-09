@@ -1,12 +1,12 @@
 // app_fake_otos_harness.cpp -- off-hardware acceptance proof for
 // App::FakeOtos (src/firm/app/fake_otos.{h,cpp}), the bench implementation
-// of the Devices::Otos interface that reports the dead-reckoned Odometry
+// of the Hal::Otos interface that reports the dead-reckoned Odometry
 // pose + wheel-fused body twist as if it were a real OTOS chip
 // (otos-fake-seam issue). Replaces the coverage the deleted
-// Devices::Otos::feedSyntheticSample() scenario used to give in
+// Hal::Otos::feedSyntheticSample() scenario used to give in
 // devices_otos_harness.cpp.
 //
-// FakeOtos needs an App::Odometry pose source and two Devices::Motor leaves
+// FakeOtos needs an App::Odometry pose source and two Hal::Motor leaves
 // (for velocity() -> body twist). Rather than drag in the NezhaMotor + PID +
 // SimPlant + I2C-scripting stack (App::Odometry is exercised against that in
 // app_odometry_harness.cpp), this harness drives a tiny StubMotor whose
@@ -16,7 +16,7 @@
 #include <cstdio>
 
 #include "app/fake_otos.h"
-#include "devices/motor.h"
+#include "hal/motor.h"
 #include "motion/body_kinematics.h"
 #include "motion/odometry.h"
 
@@ -38,10 +38,10 @@ void checkNear(float got, float want, float tol, const char* what) {
   }
 }
 
-// StubMotor -- a Devices::Motor whose position()/velocity() the test drives
+// StubMotor -- a Hal::Motor whose position()/velocity() the test drives
 // directly. Every other method is an inert no-op: FakeOtos and Odometry read
 // only position() and velocity() off a Motor.
-class StubMotor : public Devices::Motor {
+class StubMotor : public Hal::Motor {
  public:
   void setPosition(float position) { position_ = position; }  // [mm]
   // Test-only convenience setter (125-003: NOT an override -- Motor no
@@ -53,13 +53,13 @@ class StubMotor : public Devices::Motor {
   float position() const override { return position_; }   // [mm]
   float velocity() const override { return velocity_; }   // [mm/s]
 
-  // --- inert remainder of the Devices::Motor interface ---
+  // --- inert remainder of the Hal::Motor interface ---
   void begin() override {}
   void requestSample() override {}
   void setDuty(float) override {}
-  void setNeutral(Devices::Neutral) override {}
+  void setNeutral(Hal::Neutral) override {}
   void applyTravelCalib(float) override {}
-  bool reconfigure(const Devices::MotorConfig&) override { return true; }
+  bool reconfigure(const Hal::MotorConfig&) override { return true; }
   void tick(uint64_t) override {}
   float appliedDuty() const override { return 0.0f; }
   bool connected() const override { return true; }
@@ -115,7 +115,7 @@ void scenarioStraightMirrorsOdometryAndTwist() {
   BodyKinematics::forward(200.0f, 200.0f, kTrackWidth, expV, expOmega);
 
   fake.tick(1000000);
-  Devices::PoseReading r = fake.pose();
+  Hal::PoseReading r = fake.pose();
   checkNear(r.x, odom.x(), 1e-4f, "pose().x mirrors Odometry x");
   checkNear(r.y, odom.y(), 1e-4f, "pose().y mirrors Odometry y");
   checkNear(r.heading, odom.theta(), 1e-4f, "pose().heading mirrors Odometry theta");
@@ -144,7 +144,7 @@ void scenarioSpinMirrorsOdometryAndTwist() {
   BodyKinematics::forward(100.0f, -100.0f, kTrackWidth, expV, expOmega);
 
   fake.tick(1020000);
-  Devices::PoseReading r = fake.pose();
+  Hal::PoseReading r = fake.pose();
   checkNear(r.heading, odom.theta(), 1e-4f, "pose().heading mirrors Odometry theta on a spin");
   checkNear(r.v_x, expV, 1e-4f, "pose().v_x matches forward() v (~0 on a pure spin)");
   checkNear(r.omega, expOmega, 1e-4f, "pose().omega matches forward() omega (non-zero on a spin)");

@@ -1073,7 +1073,7 @@ void scenarioConfigMidMoveDoesNotChangeCompletionOutcome() {
   // wheel-speed controller now (Configurator::install(WHEEL_CONTROL) ->
   // Drive::configure() -> drive_.setControlGains()) -- NOT Motion::Planner's
   // parked M4 duty stage
-  // (velKp, dead since 128-015) and not Devices::Motor::gains() (deleted --
+  // (velKp, dead since 128-015) and not Hal::Motor::gains() (deleted --
   // sprint.md Decision 2/7). Drive's ControlGains ship all-zero by default
   // (130-004's own Open Question 4 decision -- live bench tuning is ticket
   // 006's job), and bench_test_config.cpp pushes no override, so kp starts

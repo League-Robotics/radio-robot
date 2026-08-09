@@ -73,10 +73,10 @@
 #include <cstdint>
 
 #include "platform/clock.h"
-#include "devices/color_sensor.h"
-#include "devices/line_sensor.h"
-#include "devices/motor.h"
-#include "devices/otos.h"
+#include "hal/color_sensor.h"
+#include "hal/line_sensor.h"
+#include "hal/motor.h"
+#include "hardware/generic/real_otos.h"
 
 namespace App {
 
@@ -86,9 +86,9 @@ class Preamble {
   // convention as Drive (which slot is "left" vs "right" is main.cpp's own
   // construction-time wiring -- Preamble does not care which physical
   // wheel each is, only that begin() is called on each).
-  Preamble(Devices::Motor& left, Devices::Motor& right,
-           Devices::Otos& otos, Devices::ColorSensorLeaf& color,
-           Devices::LineSensorLeaf& line, const Platform::Clock& clock);
+  Preamble(Hal::Motor& left, Hal::Motor& right,
+           Hal::Otos& otos, Hal::ColorSensor& color,
+           Hal::LineSensor& line, const Platform::Clock& clock);
 
   // Advances AT MOST ONE not-yet-resolved device's own detection entry
   // point by exactly one call. Never sleeps, never blocks -- a no-op call
@@ -147,11 +147,11 @@ class Preamble {
   void probeSlot(Slot slot, uint64_t nowUs);
   void forceResolveAll();
 
-  Devices::Motor& left_;
-  Devices::Motor& right_;
-  Devices::Otos& otos_;
-  Devices::ColorSensorLeaf& color_;
-  Devices::LineSensorLeaf& line_;
+  Hal::Motor& left_;
+  Hal::Motor& right_;
+  Hal::Otos& otos_;
+  Hal::ColorSensor& color_;
+  Hal::LineSensor& line_;
   const Platform::Clock& clock_;
 
   bool resolved_[kSlotCount] = {};

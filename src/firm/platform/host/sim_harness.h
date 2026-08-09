@@ -45,7 +45,7 @@
 
 #include "app/boot_wiring.h"
 #include "app/robot_loop.h"
-#include "devices/device_config.h"
+#include "hal/device_config.h"
 #include "fake_transport.h"
 #include "motion/odometry.h"
 #include "motion/planner/planner.h"
@@ -167,7 +167,7 @@ class SimHarness {
     graph_.drive().setDutyPerSpeed(1.0f / kDefaultDutyVelMax, 1.0f / kDefaultDutyVelMax);
 
     // No further self-configuration -- motorL_/motorR_ stay at their default
-    // Devices::MotorConfig{} (all-zero), matching a real, not-yet-booted
+    // Hal::MotorConfig{} (all-zero), matching a real, not-yet-booted
     // composition root. A caller MUST call configureMotor() for BOTH ports
     // (or TestSupport::configureSimForBenchTest()) before commanding a
     // MOVE -- see maybeMarkConfigured()'s own comment below. "Pre-boot
@@ -262,13 +262,13 @@ class SimHarness {
     injectCommand(TestSupport::armorGotoCommand(x, y, frame, speed, arrive, timeout, id, corrId));
   }
 
-  // motorConfig -- test-only readback of the Devices::MotorConfig last
+  // motorConfig -- test-only readback of the Hal::MotorConfig last
   // passed to configureMotor() below for the given port (1=left, 2=right).
   // SimHarness's OWN record of the request, not a live re-read off
-  // Devices::MotorArmor/NezhaMotor (neither stores a full copy). Defaults
-  // to Devices::MotorConfig{} if configureMotor() was never called for
+  // Hardware::MotorArmor/NezhaMotor (neither stores a full copy). Defaults
+  // to Hal::MotorConfig{} if configureMotor() was never called for
   // that port.
-  const Devices::MotorConfig& motorConfig(uint32_t port) const {
+  const Hal::MotorConfig& motorConfig(uint32_t port) const {
     return (port == 2) ? lastMotorConfigR_ : lastMotorConfigL_;
   }
 
@@ -279,7 +279,7 @@ class SimHarness {
   // SimHarness it must always return true, so a false is asserted as a
   // real bug. Also load-bearing for RobotLoop's configuration-completeness
   // gate -- see maybeMarkConfigured()'s own comment below.
-  void configureMotor(uint32_t port, const Devices::MotorConfig& cfg) {
+  void configureMotor(uint32_t port, const Hal::MotorConfig& cfg) {
     if (port == 2) {
       lastMotorConfigR_ = cfg;
       bool applied = graph_.armorRight().reconfigure(cfg);
@@ -300,7 +300,7 @@ class SimHarness {
   }
 
   // Test-only accessors exposing the STAGED target velocity Drive last
-  // received via setDuty() (125-003: NOT a live Devices::Motor::
+  // received via setDuty() (125-003: NOT a live Hal::Motor::
   // velocityTarget() read -- that accessor is gone, since NezhaMotor no
   // longer tracks a velocity target at all; Drive's own vLeft_/vRight_ is
   // now the one place "what was commanded" lives), NOT the measured/decoded
@@ -396,8 +396,8 @@ class SimHarness {
                             graph_.motorRight().position());
   }
 
-  Devices::NezhaMotor& motorLeft() { return graph_.motorLeft(); }
-  Devices::NezhaMotor& motorRight() { return graph_.motorRight(); }
+  Hardware::NezhaMotor& motorLeft() { return graph_.motorLeft(); }
+  Hardware::NezhaMotor& motorRight() { return graph_.motorRight(); }
 
   // drive -- App::Drive now holds the unified wheel-speed controller
   // (drive.h's own header): setControlGains()/controlGains() (Stage B),
@@ -451,11 +451,11 @@ class SimHarness {
   static constexpr float kSimControlPeriod = static_cast<float>(App::RobotLoop::kCycle);  // [ms]
 
   // See this constructor's own composeRobot() call comment above -- the
-  // sim's genuinely-justified otosConfig override. Devices::OtosConfig's
+  // sim's genuinely-justified otosConfig override. Hal::OtosConfig's
   // own default member initializers (device_config.h) ARE identity (zero
   // offset, 1.0 scale), so a plain default-constructed instance is exactly
   // the value this override needs.
-  static constexpr Devices::OtosConfig kIdentityOtosConfig{};
+  static constexpr Hal::OtosConfig kIdentityOtosConfig{};
 
   // See this constructor's own composeRobot() call comment above -- the
   // sim's genuinely-justified wheelCorrection override (133-005).
@@ -514,8 +514,8 @@ class SimHarness {
   size_t reliableDrainIndex_ = 0;  // index into serialLink_.sentReliable() already returned by drainReliable()
 
   // configureMotor()'s own test-only readback state -- see motorConfig().
-  Devices::MotorConfig lastMotorConfigL_ = {};
-  Devices::MotorConfig lastMotorConfigR_ = {};
+  Hal::MotorConfig lastMotorConfigL_ = {};
+  Hal::MotorConfig lastMotorConfigR_ = {};
 
   // The motor half of the configuration-completeness gate's tracking.
   bool hasConfiguredMotorL_ = false;

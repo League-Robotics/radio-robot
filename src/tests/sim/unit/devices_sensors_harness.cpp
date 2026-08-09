@@ -1,7 +1,7 @@
 // devices_sensors_harness.cpp — off-hardware acceptance harness for ticket
-// DB-006 (device-bus-tickets.md): exercises the REAL Devices::ColorSensorLeaf
-// and Devices::LineSensorLeaf leaves (src/firm/devices/color_sensor.cpp,
-// src/firm/devices/line_sensor.cpp) against a TestSim::SimPlant (108-002),
+// DB-006 (device-bus-tickets.md): exercises the REAL Hardware::ColorSensorLeaf
+// and Hardware::LineSensorLeaf leaves (src/firm/hardware/planetx/color_sensor.cpp,
+// src/firm/hardware/planetx/line_sensor.cpp) against a TestSim::SimPlant (108-002),
 // scripted deterministically via TestSim::ScriptedI2CHook (108-009) -- no
 // MicroBitI2C, no CODAL, no real hardware.
 //
@@ -47,10 +47,10 @@
 #include <cstdio>
 #include <string>
 
-#include "devices/color_sensor.h"
-#include "devices/device_config.h"
-#include "devices/device_types.h"
-#include "devices/line_sensor.h"
+#include "hardware/planetx/color_sensor.h"
+#include "hal/device_config.h"
+#include "hal/device_types.h"
+#include "hardware/planetx/line_sensor.h"
 #include "scripted_i2c_hook.h"
 #include "sim_plant.h"
 
@@ -90,9 +90,9 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
 
 // --- Fixture helpers ---------------------------------------------------
 
-constexpr uint16_t kAltWireAddr = static_cast<uint16_t>(Devices::kColorDeviceAddrAlt << 1);
-constexpr uint16_t kApdsWireAddr = static_cast<uint16_t>(Devices::kColorDeviceAddrApds << 1);
-constexpr uint16_t kLineWireAddr = static_cast<uint16_t>(Devices::kLineDeviceAddr << 1);
+constexpr uint16_t kAltWireAddr = static_cast<uint16_t>(Hardware::kColorDeviceAddrAlt << 1);
+constexpr uint16_t kApdsWireAddr = static_cast<uint16_t>(Hardware::kColorDeviceAddrApds << 1);
+constexpr uint16_t kLineWireAddr = static_cast<uint16_t>(Hardware::kLineDeviceAddr << 1);
 
 // kAltRetryPeriod/kLineRetryPeriod duplicated from color_sensor.h/
 // line_sensor.h's private constants -- this file's own established
@@ -202,8 +202,8 @@ void scenarioColorAltDetectionSucceedsViaRewakeRetry() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  Devices::ColorConfig cfg;  // zero-defaulted -> leaf applies its ship defaults
-  Devices::ColorSensorLeaf sensor(plant, cfg);
+  Hal::ColorConfig cfg;  // zero-defaulted -> leaf applies its ship defaults
+  Hardware::ColorSensorLeaf sensor(plant, cfg);
 
   // Attempts 1 and 2: chip still powering up -- probe reads back zero.
   scriptAltDetectAttempt(bus, 0x0000);
@@ -223,12 +223,12 @@ void scenarioColorAltDetectionSucceedsViaRewakeRetry() {
   checkTrue(sensor.detectDone(), "detectDone() true after the successful attempt");
   checkTrue(sensor.present(), "present() true -- ALT chip detected");
   checkTrue(sensor.connected(), "connected() true -- ALT chip detected");
-  checkUintEq(bus.errCount(Devices::kColorDeviceAddrAlt), 0, "no script under-run across the retry sequence");
+  checkUintEq(bus.errCount(Hardware::kColorDeviceAddrAlt), 0, "no script under-run across the retry sequence");
 
   // A further beginStep() call is a total no-op (already Done).
-  uint32_t txnBeforeExtra = bus.txnCount(Devices::kColorDeviceAddrAlt);
+  uint32_t txnBeforeExtra = bus.txnCount(Hardware::kColorDeviceAddrAlt);
   sensor.beginStep(static_cast<uint64_t>(attemptsUsed) * kAltRetryPeriodUs);
-  checkUintEq(bus.txnCount(Devices::kColorDeviceAddrAlt), txnBeforeExtra,
+  checkUintEq(bus.txnCount(Hardware::kColorDeviceAddrAlt), txnBeforeExtra,
               "beginStep() after detectDone() issues zero further bus traffic");
 
   // A scripted ALT frame decodes to the expected r/g/b/c.
@@ -243,7 +243,7 @@ void scenarioColorAltDetectionSucceedsViaRewakeRetry() {
 
   checkTrue(sensor.readingFresh(), "tick(): readingFresh() true after a ready scripted frame");
   checkTrue(sensor.connected(), "tick(): connected() true after a clean frame read");
-  Devices::ColorReading reading = sensor.reading();
+  Hal::ColorReading reading = sensor.reading();
   checkUintEq(reading.r, kR, "reading().r matches the scripted frame");
   checkUintEq(reading.g, kG, "reading().g matches the scripted frame");
   checkUintEq(reading.b, kB, "reading().b matches the scripted frame");
@@ -251,12 +251,12 @@ void scenarioColorAltDetectionSucceedsViaRewakeRetry() {
 
   // readDue() rate limit: an immediately-repeated tick() (same nowUs) issues
   // zero further bus traffic.
-  uint32_t txnAfterFrame = bus.txnCount(Devices::kColorDeviceAddrAlt);
+  uint32_t txnAfterFrame = bus.txnCount(Hardware::kColorDeviceAddrAlt);
   sensor.tick(tickNow);
-  checkUintEq(bus.txnCount(Devices::kColorDeviceAddrAlt), txnAfterFrame,
+  checkUintEq(bus.txnCount(Hardware::kColorDeviceAddrAlt), txnAfterFrame,
               "tick() called again before readDue(): zero further bus traffic");
 
-  checkUintEq(bus.errCount(Devices::kColorDeviceAddrAlt), 0, "no script under-run across the frame decode");
+  checkUintEq(bus.errCount(Hardware::kColorDeviceAddrAlt), 0, "no script under-run across the frame decode");
 }
 
 // 2. ColorSensorLeaf: ALT never responds across all kMaxAltAttempts retries --
@@ -268,8 +268,8 @@ void scenarioColorFallsBackToApds() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  Devices::ColorConfig cfg;
-  Devices::ColorSensorLeaf sensor(plant, cfg);
+  Hal::ColorConfig cfg;
+  Hardware::ColorSensorLeaf sensor(plant, cfg);
 
   for (int i = 0; i < kMaxAltAttempts; ++i) {
     scriptAltDetectAttempt(bus, 0x0000);  // every ALT attempt reads back zero
@@ -289,8 +289,8 @@ void scenarioColorFallsBackToApds() {
   checkTrue(sensor.detectDone(), "detectDone() true after the APDS fallback succeeds");
   checkTrue(sensor.present(), "present() true -- APDS9960 detected via fallback");
   checkTrue(sensor.connected(), "connected() true -- APDS9960 detected via fallback");
-  checkUintEq(bus.errCount(Devices::kColorDeviceAddrAlt), 0, "no script under-run on the ALT side");
-  checkUintEq(bus.errCount(Devices::kColorDeviceAddrApds), 0, "no script under-run on the APDS side");
+  checkUintEq(bus.errCount(Hardware::kColorDeviceAddrAlt), 0, "no script under-run on the ALT side");
+  checkUintEq(bus.errCount(Hardware::kColorDeviceAddrApds), 0, "no script under-run on the APDS side");
 
   // A scripted APDS frame decodes to the expected r/g/b/c.
   constexpr uint16_t kC = 0x0111, kR = 0x0222, kG = 0x0333, kB = 0x0444;
@@ -302,13 +302,13 @@ void scenarioColorFallsBackToApds() {
 
   sensor.tick(2000000);
   checkTrue(sensor.readingFresh(), "tick(): readingFresh() true after a ready scripted APDS frame");
-  Devices::ColorReading reading = sensor.reading();
+  Hal::ColorReading reading = sensor.reading();
   checkUintEq(reading.r, kR, "reading().r matches the scripted APDS frame");
   checkUintEq(reading.g, kG, "reading().g matches the scripted APDS frame");
   checkUintEq(reading.b, kB, "reading().b matches the scripted APDS frame");
   checkUintEq(reading.c, kC, "reading().c matches the scripted APDS frame");
 
-  checkUintEq(bus.errCount(Devices::kColorDeviceAddrApds), 0, "no script under-run across the APDS frame decode");
+  checkUintEq(bus.errCount(Hardware::kColorDeviceAddrApds), 0, "no script under-run across the APDS frame decode");
 }
 
 // 3. LineSensorLeaf: detection succeeds (a single successful readRaw() probe),
@@ -319,8 +319,8 @@ void scenarioLineRawToNormalized() {
 
   TestSim::SimPlant plant;
   TestSim::ScriptedI2CHook bus(plant);
-  Devices::LineConfig cfg;  // zero-defaulted -> calMin=0, calMax defaults to 255/channel
-  Devices::LineSensorLeaf sensor(plant, cfg);
+  Hal::LineConfig cfg;  // zero-defaulted -> calMin=0, calMax defaults to 255/channel
+  Hardware::LineSensorLeaf sensor(plant, cfg);
 
   uint16_t probeRaw[4] = {5, 5, 5, 5};
   scriptLineRead(bus, probeRaw);  // beginStep()'s detection probe
@@ -329,7 +329,7 @@ void scenarioLineRawToNormalized() {
   checkTrue(sensor.detectDone(), "detectDone() true after the first successful probe");
   checkTrue(sensor.present(), "present() true -- line sensor answered");
   checkTrue(sensor.connected(), "connected() true -- line sensor answered");
-  checkUintEq(bus.errCount(Devices::kLineDeviceAddr), 0, "no script under-run on detection");
+  checkUintEq(bus.errCount(Hardware::kLineDeviceAddr), 0, "no script under-run on detection");
 
   // Ship-default calibration (calMin=0, calMax=255/channel): raw values
   // spanning white/mid/black.
@@ -338,7 +338,7 @@ void scenarioLineRawToNormalized() {
   sensor.tick(1000000);
 
   checkTrue(sensor.readingFresh(), "tick(): readingFresh() true after a clean raw read");
-  Devices::LineReading readingA = sensor.reading();
+  Hal::LineReading readingA = sensor.reading();
   for (int ch = 0; ch < 4; ++ch) {
     checkUintEq(readingA.raw[ch], rawA[ch], "reading().raw[ch] passes the raw byte through unmodified");
     int32_t expected = expectedNormalize(rawA[ch], 0, 255);
@@ -350,12 +350,12 @@ void scenarioLineRawToNormalized() {
   // LineSensorLeaf so beginStep()'s config_ starts from these explicit bounds.
   TestSim::SimPlant plant2;
   TestSim::ScriptedI2CHook bus2(plant2);
-  Devices::LineConfig cfg2;
+  Hal::LineConfig cfg2;
   for (int ch = 0; ch < 4; ++ch) {
     cfg2.calMin[ch] = 50;
     cfg2.calMax[ch] = 200;
   }
-  Devices::LineSensorLeaf sensor2(plant2, cfg2);
+  Hardware::LineSensorLeaf sensor2(plant2, cfg2);
   uint16_t probeRaw2[4] = {100, 100, 100, 100};
   scriptLineRead(bus2, probeRaw2);
   sensor2.beginStep(0);
@@ -366,7 +366,7 @@ void scenarioLineRawToNormalized() {
   sensor2.tick(1000000);
 
   checkTrue(sensor2.readingFresh(), "tick(): readingFresh() true (custom calibration)");
-  Devices::LineReading readingB = sensor2.reading();
+  Hal::LineReading readingB = sensor2.reading();
   for (int ch = 0; ch < 4; ++ch) {
     checkUintEq(readingB.raw[ch], rawB[ch], "reading().raw[ch] passes through unmodified (custom calibration)");
     int32_t expected = expectedNormalize(rawB[ch], 50, 200);
@@ -374,8 +374,8 @@ void scenarioLineRawToNormalized() {
                 "reading().normalized[ch] matches the custom-calibration oracle");
   }
 
-  checkUintEq(bus.errCount(Devices::kLineDeviceAddr), 0, "no script under-run (default-calibration fixture)");
-  checkUintEq(bus2.errCount(Devices::kLineDeviceAddr), 0, "no script under-run (custom-calibration fixture)");
+  checkUintEq(bus.errCount(Hardware::kLineDeviceAddr), 0, "no script under-run (default-calibration fixture)");
+  checkUintEq(bus2.errCount(Hardware::kLineDeviceAddr), 0, "no script under-run (custom-calibration fixture)");
 }
 
 // 4. Absent-device detection: a completely unscripted I2CBus (every
@@ -405,8 +405,8 @@ void scenarioAbsentDeviceNeverHangs() {
       scriptAltDetectAttempt(bus, 0x0000);
     }
     scriptApdsDetectProbe(bus, 0xFF);  // readback != 0x00 -- APDS never answered either
-    Devices::ColorConfig cfg;
-    Devices::ColorSensorLeaf sensor(plant, cfg);
+    Hal::ColorConfig cfg;
+    Hardware::ColorSensorLeaf sensor(plant, cfg);
 
     int callsUsed = 0;
     const int kBound = kMaxAltAttempts + 2;  // 20 ALT attempts + 1 APDS attempt + margin
@@ -430,8 +430,8 @@ void scenarioAbsentDeviceNeverHangs() {
   {
     TestSim::SimPlant plant;
     TestSim::ScriptedI2CHook bus(plant);  // no scripts queued at all
-    Devices::LineConfig cfg;
-    Devices::LineSensorLeaf sensor(plant, cfg);
+    Hal::LineConfig cfg;
+    Hardware::LineSensorLeaf sensor(plant, cfg);
 
     int callsUsed = 0;
     const int kBound = kMaxLineAttempts + 2;
@@ -460,7 +460,7 @@ int main() {
   scenarioAbsentDeviceNeverHangs();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all Devices::ColorSensorLeaf/LineSensorLeaf scenarios passed\n");
+    std::printf("OK: all Hardware::ColorSensorLeaf/LineSensorLeaf scenarios passed\n");
     return 0;
   }
   std::printf("FAILED: %d assertion(s) across the Devices sensor scenarios\n", g_failureCount);

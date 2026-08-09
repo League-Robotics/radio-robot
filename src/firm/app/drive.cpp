@@ -5,7 +5,7 @@
 
 namespace App {
 
-Drive::Drive(Devices::Motor& left, Devices::Motor& right, float trackWidth)
+Drive::Drive(Hal::Motor& left, Hal::Motor& right, float trackWidth)
     : left_(left), right_(right), trackWidth_(trackWidth) {}
 
 void Drive::configure(const Config::Robot& config) {
@@ -317,7 +317,7 @@ void Drive::tick(const Types::RobotState& state) {
   //     the first rail run logged 239/222 encoder ticks (~17cm of wheel
   //     rotation) while the robot sat still against the rail.
   //  2. When the wheels DID stop dead (second run: encoders frozen 4.4s while
-  //     commanded 80mm/s), Devices::MotorArmor::updateWedgeDetector() had
+  //     commanded 80mm/s), Hardware::MotorArmor::updateWedgeDetector() had
   //     already latched wedgeSuspect() -- because its condition, "position
   //     unchanged while duty is applied", IS the definition of a stall. The
   //     believability guard therefore suppressed the detector exactly when

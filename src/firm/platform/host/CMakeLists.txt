@@ -51,8 +51,8 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 #                                 calibration helpers -- TestSim::
 #                                 SimHarness (sim_harness.h) calls the SAME
 #                                 composeRobot() src/firm/main.cpp does.
-#   devices/nezha_motor.cpp, devices/otos.cpp, devices/color_sensor.cpp,
-#   devices/line_sensor.cpp
+#   hardware/nezha/nezha_motor.cpp, hardware/generic/real_otos.cpp, hardware/planetx/color_sensor.cpp,
+#   hardware/planetx/line_sensor.cpp
 #                              -- the device leaves SimPlant answers wire
 #                                 transactions for
 #   messages/wire.cpp, messages/wire_runtime.cpp
@@ -150,10 +150,10 @@ set(MOTION_SOURCES
     "${MOTION_DIR}/navigator/navigator.cpp"
 )
 set(DEVICE_SOURCES
-    "${SOURCE_DIR}/devices/nezha_motor.cpp"
-    "${SOURCE_DIR}/devices/otos.cpp"
-    "${SOURCE_DIR}/devices/color_sensor.cpp"
-    "${SOURCE_DIR}/devices/line_sensor.cpp"
+    "${SOURCE_DIR}/hardware/nezha/nezha_motor.cpp"
+    "${SOURCE_DIR}/hardware/generic/real_otos.cpp"
+    "${SOURCE_DIR}/hardware/planetx/color_sensor.cpp"
+    "${SOURCE_DIR}/hardware/planetx/line_sensor.cpp"
 )
 # config/persisted_tuning.cpp (114-004) -- App::RobotLoop (APP_SOURCES,
 # above) now #includes config/persisted_tuning.h and calls its pure

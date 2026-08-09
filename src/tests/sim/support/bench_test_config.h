@@ -41,7 +41,7 @@
 
 #include <cstdint>
 
-#include "devices/device_config.h"
+#include "hal/device_config.h"
 
 namespace TestSim {
 class SimHarness;
@@ -79,11 +79,11 @@ struct Gains {
 // left, 2 = right (same convention as every other port-keyed call in this
 // codebase).
 //
-// 125-003: velFiltAlpha/velGains are DELETED from Devices::MotorConfig (the
+// 125-003: velFiltAlpha/velGains are DELETED from Hal::MotorConfig (the
 // velocity PID they fed relocated off the motor entirely) -- see
 // benchTestGains() below for the SAME kp/kff tuning (130-007: kff is now the
 // only field with a live consumer -- see Gains's own doc comment above).
-Devices::MotorConfig benchTestMotorConfig(uint32_t port);
+Hal::MotorConfig benchTestMotorConfig(uint32_t port);
 
 // benchTestGains -- 125-003: the kp/kff half of the pre-125-003
 // benchTestMotorConfig()'s own velGains, relocated here as this header's own

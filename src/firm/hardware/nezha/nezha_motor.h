@@ -1,13 +1,13 @@
-// nezha_motor.h — Devices::NezhaMotor: the BARE concrete leaf for one
+// nezha_motor.h — Hardware::NezhaMotor: the BARE concrete leaf for one
 // channel of the PlanetX Nezha V2 motor controller, implementing the
-// Devices::Motor interface (motor.h). Owns the register map, split-phase
+// Hal::Motor interface (motor.h). Owns the register map, split-phase
 // 0x46 encoder sequencing, and ALL of the brick's own write shaping — slew
 // limiting, write throttle, write-on-change, reversal dwell, and output
 // deadband (see writeShapedDuty()/writeRawDuty() below). The output
 // deadband BOOSTS a genuine nonzero sub-deadband duty to the deadband
 // floor instead of zeroing it (an exact zero still stays an immediate
 // hard stop) -- see writeShapedDuty()'s own doc comment. Wedge
-// OBSERVATION/RECOVERY policy lives in the Devices::MotorArmor decorator
+// OBSERVATION/RECOVERY policy lives in the Hardware::MotorArmor decorator
 // (motor_armor.h), which a caller may wrap this leaf in — or not (the sim
 // composes the bare leaf directly).
 //
@@ -65,20 +65,20 @@
 
 #include <cstdint>
 
-#include "devices/device_config.h"
-#include "devices/device_types.h"
+#include "hal/device_config.h"
+#include "hal/device_types.h"
 #include "platform/i2c_bus.h"
-#include "devices/motor.h"
+#include "hal/motor.h"
 
-namespace Devices {
+namespace Hardware {
 
 // 7-bit I2C address shared by all four Nezha V2 motor channels (the
 // motorId byte in each frame selects the channel, not the address).
 constexpr uint8_t kNezhaDeviceAddr = 0x10;
 
-class NezhaMotor : public Motor {
+class NezhaMotor : public Hal::Motor {
  public:
-  NezhaMotor(Platform::I2CBus& bus, const MotorConfig& config);
+  NezhaMotor(Platform::I2CBus& bus, const Hal::MotorConfig& config);
 
   // Primes the encoder: the Nezha 0x46 register sits frozen at 0 until the
   // chip receives its first atomic read transaction (calls hardReset()).
@@ -87,13 +87,13 @@ class NezhaMotor : public Motor {
 
   // Split-phase phase 1, public entry point. Wraps requestEncoder() so the
   // loop's own cycle can request this port's encoder sample without
-  // reaching into NezhaMotor's private register-verb surface (the Motor
+  // reaching into NezhaMotor's private register-verb surface (the Hal::Motor
   // interface frames it generically as "prepare this cycle's sample").
   void requestSample() override;
 
   // --- Primitive setters — stage the command; tick() executes it. ---
   void setDuty(float duty) override;           // [-1, 1] raw duty target
-  void setNeutral(Neutral mode) override;      // coast / brake — Nezha maps both to the same 0x60 speed-0 write (no distinct brake register)
+  void setNeutral(Hal::Neutral mode) override;      // coast / brake — Nezha maps both to the same 0x60 speed-0 write (no distinct brake register)
 
   // --- Resets (bare-motor semantics — see motor.h): resetPosition() acts
   // IMMEDIATELY (== hardReset()'s median-of-3 re-prime burst; the caller —
@@ -115,7 +115,7 @@ class NezhaMotor : public Motor {
   // re-derives the slew-rate/write-shaping substitution fields exactly as
   // the constructor does, then returns true. See motor.h's own doc comment
   // for why this is a separate, narrower surface from applyTravelCalib().
-  [[nodiscard]] bool reconfigure(const MotorConfig& config) override;
+  [[nodiscard]] bool reconfigure(const Hal::MotorConfig& config) override;
 
   // Full live config readback -- for a caller that must merge a partial
   // update onto everything this motor is actually running (sim_ctypes.cpp's
@@ -124,10 +124,10 @@ class NezhaMotor : public Motor {
   // from anything less than this live config clobbers every other field --
   // wheelTravelCalib/slewRate/outputDeadband/... -- back to zero). Kept
   // non-virtual/NezhaMotor-local: the one caller holds a concrete
-  // NezhaMotor&, and the Motor interface has no such readback surface.
-  const MotorConfig& config() const { return config_; }
+  // NezhaMotor&, and the Hal::Motor interface has no such readback surface.
+  const Hal::MotorConfig& config() const { return config_; }
 
-  // --- Primitive getters (Motor overrides) ---
+  // --- Primitive getters (Hal::Motor overrides) ---
   float position() const override;      // [mm]
   float velocity() const override;      // [mm/s] signed -- naive per-tick difference quotient, see this file's own header
   float appliedDuty() const override;   // [-1, 1]
@@ -168,12 +168,12 @@ class NezhaMotor : public Motor {
 
   // ---- Wiring ----
   Platform::I2CBus& bus_;
-  MotorConfig config_;
+  Hal::MotorConfig config_;
 
   // ---- Staged command (set by the primitive setters; executed by tick()) ----
   Mode mode_ = Mode::None;
   float dutyTarget_ = 0.0f;                   // [-1, 1]
-  Neutral neutralTarget_ = Neutral::Coast;
+  Hal::Neutral neutralTarget_ = Hal::Neutral::Coast;
 
   // ---- tick() encoder-sample cache ----
   float lastPosition_ = 0.0f;          // [mm]
@@ -210,7 +210,7 @@ class NezhaMotor : public Motor {
   // wedge protection (an instantaneous H-bridge sign flip under way
   // latches the 0x46 readback; near-zero dither would request such flips
   // every tick — see docs/knowledge/2026-07-04-encoder-wedge.md).
-  // Config-driven: cached straight from MotorConfig's required
+  // Config-driven: cached straight from Hal::MotorConfig's required
   // reversalDwell/outputDeadband fields in reconfigure() -- no code-side
   // ship default substitution; gen_boot_config.py always emits real
   // values, see data/robots/*.json's control.reversal_dwell_ms/
@@ -219,8 +219,8 @@ class NezhaMotor : public Motor {
   // duty up to itself (sign-preserving) rather than zeroing it -- an
   // explicit 0 here still means "never boost," i.e. still a pure
   // pass-through. ----
-  float reversalDwell_ = 0.0f;          // [ms] cached from MotorConfig
-  float outputDeadband_ = 0.0f;         // [-1,1] fraction, cached from MotorConfig
+  float reversalDwell_ = 0.0f;          // [ms] cached from Hal::MotorConfig
+  float outputDeadband_ = 0.0f;         // [-1,1] fraction, cached from Hal::MotorConfig
   bool dwelling_ = false;
   uint32_t dwellDeadline_ = 0;          // [ms]
   float lastRequestedDuty_ = 0.0f;      // [-1,1] last duty actually forwarded to writeRawDuty()
@@ -267,4 +267,4 @@ class NezhaMotor : public Motor {
   int32_t collectEncoder();         // split-phase phase 2; wired into tick()'s step 2
 };
 
-}  // namespace Devices
+}  // namespace Hardware

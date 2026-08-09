@@ -3,7 +3,7 @@
 Compiles ``devices_motor_harness.cpp`` together with ``TestSim::SimPlant``
 (``src/firm/platform/host/sim_plant.cpp`` — ticket 108-002's real Devices::I2CBus
 implementation) plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
-physics dependencies, and ``devices/nezha_motor.cpp`` against the SAME
+physics dependencies, and ``hardware/nezha/nezha_motor.cpp`` against the SAME
 ``src/firm/devices/`` headers every ARM build compiles, with
 ``-DHOST_BUILD`` so the HOST_BUILD fork is what gets exercised — no
 MicroBitI2C, no CODAL, no wall clock, no real sleeps. Mirrors
@@ -37,7 +37,7 @@ import pytest
 # src/tests/sim/unit/test_devices_motor.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
-_DEVICES_DIR = _SOURCE_DIR / "devices"
+_HARDWARE_DIR = _SOURCE_DIR / "hardware"
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 
@@ -46,7 +46,7 @@ _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
-_NEZHA_MOTOR_SRC = _DEVICES_DIR / "nezha_motor.cpp"
+_NEZHA_MOTOR_SRC = _HARDWARE_DIR / "nezha" / "nezha_motor.cpp"
 
 # messages/common.h documents its own target as "CODAL C++11" — build the
 # host harness to the same standard so it exercises exactly the language

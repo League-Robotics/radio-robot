@@ -5,7 +5,7 @@
 // plant is LEAF-GETTER-DRIVEN, not bus-byte-driven: it never intercepts a
 // raw Platform::I2CBus write payload (the HOST_BUILD scripted fake does not
 // even record one -- i2c_bus.h's own comment). Instead it reads
-// Devices::NezhaMotor::appliedDuty() (a public getter reflecting whatever
+// Hardware::NezhaMotor::appliedDuty() (a public getter reflecting whatever
 // armor/slew/write-on-change already decided was actually written to the
 // simulated hardware) and integrates a first-order duty->velocity->position
 // response, then SCHEDULES the resulting encoder reading onto the shared
@@ -59,7 +59,7 @@ constexpr float kDefaultDutyVelMax = 500.0f;   // [mm/s] velocity at |duty|==1.0
 // hardware-realistic ctypes/tour path, which is why jitter is enabled
 // there (tests/_infra/sim/sim_ctypes.cpp's sim_create(), see that file) and
 // left off everywhere else. With jitter OFF, it starves
-// Devices::MotorArmor::updateWedgeDetector() (kWedgeThreshold=10 consecutive
+// Hardware::MotorArmor::updateWedgeDetector() (kWedgeThreshold=10 consecutive
 // identical reads) of the natural jitter that keeps a real, healthy encoder
 // from ever latching the wedge fault while idle -- see
 // clasi/issues/sim-mode-tour-1-fault-baseline-exclusion-mismatch.md. Below
@@ -73,7 +73,7 @@ constexpr float kDefaultDutyVelMax = 500.0f;   // [mm/s] velocity at |duty|==1.0
 // own completion notes): the FIRST implementation flipped the dither's sign
 // on EVERY rest-branch call (kDitherPeriod effectively 1). That satisfied
 // the wedge detector (a change every single read, nowhere near
-// kWedgeThreshold=10) but, driven through the REAL Devices::NezhaMotor
+// kWedgeThreshold=10) but, driven through the REAL Hardware::NezhaMotor
 // velocity PID this harness wires up (tests/_infra/sim/sim_harness.h's
 // makeMotorConfig(): velFiltAlpha=1.0, i.e. NO smoothing, plus a raw
 // proportional term that is NEVER zeroed by MotorConfig.velDeadband --
@@ -93,7 +93,7 @@ constexpr float kDefaultDutyVelMax = 500.0f;   // [mm/s] velocity at |duty|==1.0
 // Fix: flip the dither's sign only once every kDitherPeriod calls (held
 // steady the calls in between), not every call. A held value between flips
 // means most rest-branch reads are BYTE-IDENTICAL to the last "fresh"
-// sample Devices::NezhaMotor's own freshness gate anchored on
+// sample Hardware::NezhaMotor's own freshness gate anchored on
 // (nezha_motor.cpp's `raw != lastFreshRawEnc_` check) -- exactly the real-
 // hardware-realistic case that gate exists for -- so filteredVelocity_ is
 // simply HELD (not recomputed, let alone driven to a new nonzero value) on
@@ -132,7 +132,7 @@ class WheelPlant {
 
   // Advances the plant's own velocity/position state by dt [s] of virtual
   // time, given the duty ACTUALLY applied on the simulated hardware THIS
-  // cycle (Devices::NezhaMotor::appliedDuty() -- never a raw bus byte).
+  // cycle (Hardware::NezhaMotor::appliedDuty() -- never a raw bus byte).
   // Exact discretization of dv/dt = (dutyVelMax*appliedDuty - v) / tau:
   //   alpha = 1 - exp(-dt/tau); v += (dutyVelMax*appliedDuty - v) * alpha.
   // position integrates velocity forward by the same dt (position += v*dt).
@@ -175,7 +175,7 @@ class WheelPlant {
   // Motor disconnect: SimPlant checks this directly (not through
   // reportedPosition()) and scripts a NAK status for the motor's wire
   // transactions instead of calling reportedPosition() at all --
-  // Devices::NezhaMotor::connected() is recomputed fresh every
+  // Hardware::NezhaMotor::connected() is recomputed fresh every
   // collectEncoder() call (nezha_motor.cpp -- never latched), so clearing
   // this knob recovers connected() to true on the very next cycle, no
   // separate "reconnect" step needed.
@@ -188,7 +188,7 @@ class WheelPlant {
   // position_. The plant's internal velocity/position integration keeps
   // running underneath exactly as if nothing were wrong (this plant "knows"
   // it should be moving; only the SCRIPTED reading sticks) -- the exact
-  // boundary-latch flavor Devices::MotorArmor::updateWedgeDetector() exists
+  // boundary-latch flavor Hardware::MotorArmor::updateWedgeDetector() exists
   // to catch (kWedgeThreshold consecutive identical position() reads).
   // Clearing the knob resumes reporting the plant's live position_, which
   // has kept advancing the whole time -- the reported value jumps forward

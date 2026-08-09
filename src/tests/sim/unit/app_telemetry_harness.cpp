@@ -43,27 +43,27 @@
 #include "app/comms.h"
 #include "app/drive.h"
 #include "app/telemetry.h"
-#include "devices/motor.h"
+#include "hal/motor.h"
 #include "firm/types/robot_state.h"
 #include "messages/envelope.h"
 #include "messages/wire.h"
 #include "messages/wire_runtime.h"
 #include "support/fake_transport.h"
 
-// StubMotor -- a completely inert Devices::Motor (130-005: update()'s new
+// StubMotor -- a completely inert Hal::Motor (130-005: update()'s new
 // `const Drive&` parameter needs two of these to construct a Drive; this
 // harness never ticks it, so every method beyond the interface minimum is
 // a no-op). Duplicated here per this codebase's established
 // per-harness-file fixture convention (see e.g. app_fake_otos_harness.cpp's
 // own StubMotor).
-class StubMotor : public Devices::Motor {
+class StubMotor : public Hal::Motor {
  public:
   void begin() override {}
   void requestSample() override {}
   void setDuty(float) override {}
-  void setNeutral(Devices::Neutral) override {}
+  void setNeutral(Hal::Neutral) override {}
   void applyTravelCalib(float) override {}
-  bool reconfigure(const Devices::MotorConfig&) override { return true; }
+  bool reconfigure(const Hal::MotorConfig&) override { return true; }
   void tick(uint64_t) override {}
   float position() const override { return 0.0f; }
   float velocity() const override { return 0.0f; }
@@ -1053,7 +1053,7 @@ void scenarioFreshConstructDefaultsAutoAndStaysSilentAtRest() {
 //     false forever -> the activity window can never open -> zero frames.
 //     This is what makes power-on silence unconditional: a hand-spun wheel
 //     on the stand (or a bogus first-sample read, belt-and-suspenders with
-//     125-001's Devices::Motor::velocity() two-sample floor) cannot wake
+//     125-001's Hal::Motor::velocity() two-sample floor) cannot wake
 //     the link.
 // ===========================================================================
 

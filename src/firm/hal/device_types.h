@@ -20,7 +20,7 @@
 
 #include <cstdint>
 
-namespace Devices {
+namespace Hal {
 
 // MotorReading — one motor's latest published sample. Devices-local
 // counterpart to msg::MotorState's position/velocity/applied fields (issue
@@ -76,4 +76,4 @@ enum class Neutral : uint8_t {
   Brake,
 };
 
-}  // namespace Devices
+}  // namespace Hal

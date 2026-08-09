@@ -21,7 +21,7 @@
 // for, not by anything here). What THIS file proves, specifically:
 //
 //   1. A default-constructed SimHarness (configureMotor() NEVER called)
-//      observes Devices::MotorConfig{}'s own all-zero default for both
+//      observes Hal::MotorConfig{}'s own all-zero default for both
 //      ports, and isConfigured() is false.
 //   2. configureMotor() with values that differ from that (all-zero)
 //      default takes effect per PORT and is readable back via
@@ -81,18 +81,18 @@ int main() {
   std::printf("=== TestSim::SimHarness::configureMotor() / isConfigured() (113-002, 115-006) ===\n\n");
 
   // --- Scenario 1: default construction, never configured -- observes
-  //     Devices::MotorConfig{}'s own all-zero default for BOTH ports, and
+  //     Hal::MotorConfig{}'s own all-zero default for BOTH ports, and
   //     isConfigured() is false. ---
   {
-    beginScenario("default-constructed SimHarness observes Devices::MotorConfig{}'s own "
+    beginScenario("default-constructed SimHarness observes Hal::MotorConfig{}'s own "
                   "all-zero default (114-001: no self-configuration baseline anymore)");
     TestSim::SimHarness sim;
     sim.boot();
 
     checkFloatEq(sim.motorConfig(1).wheelTravelCalib, 0.0f,
-                 "left motorConfig starts at Devices::MotorConfig{}'s zero default");
+                 "left motorConfig starts at Hal::MotorConfig{}'s zero default");
     checkFloatEq(sim.motorConfig(2).wheelTravelCalib, 0.0f,
-                 "right motorConfig starts at Devices::MotorConfig{}'s zero default");
+                 "right motorConfig starts at Hal::MotorConfig{}'s zero default");
     checkFalse(sim.isConfigured(), "isConfigured() is false before any configureMotor() call");
   }
 
@@ -104,11 +104,11 @@ int main() {
     TestSim::SimHarness sim;
     sim.boot();
 
-    // 125-003: velFiltAlpha is deleted from Devices::MotorConfig -- this
+    // 125-003: velFiltAlpha is deleted from Hal::MotorConfig -- this
     // scenario now discriminates on wheelTravelCalib instead (any other
     // still-live nonzero field would do equally well; this one was already
     // in scope here via fwdSign's own neighbor field).
-    Devices::MotorConfig cfgL;
+    Hal::MotorConfig cfgL;
     cfgL.port = 1;
     cfgL.fwdSign = -1;
     cfgL.wheelTravelCalib = 0.87f;
@@ -119,7 +119,7 @@ int main() {
     checkFloatEq(sim.motorConfig(2).wheelTravelCalib, 0.0f,
                  "right motorConfig unaffected by configureMotor(1, ...)");
 
-    Devices::MotorConfig cfgR;
+    Hal::MotorConfig cfgR;
     cfgR.port = 2;
     cfgR.fwdSign = 1;
     cfgR.wheelTravelCalib = 0.42f;
@@ -141,12 +141,12 @@ int main() {
 
     checkFalse(sim.isConfigured(), "isConfigured() false immediately after construction");
 
-    Devices::MotorConfig cfgL;
+    Hal::MotorConfig cfgL;
     cfgL.port = 1;
     sim.configureMotor(1, cfgL);
     checkFalse(sim.isConfigured(), "isConfigured() still false after ONLY the left port is configured");
 
-    Devices::MotorConfig cfgR;
+    Hal::MotorConfig cfgR;
     cfgR.port = 2;
     sim.configureMotor(2, cfgR);
     checkTrue(sim.isConfigured(), "isConfigured() true once BOTH ports are configured");

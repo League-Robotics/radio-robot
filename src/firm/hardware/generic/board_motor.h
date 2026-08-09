@@ -1,5 +1,5 @@
-// board_motor.h -- Devices::BoardMotor: one channel of ANY
-// Devices::MotorBoard, presented as a Devices::Motor. Board-agnostic by
+// board_motor.h -- Hardware::BoardMotor: one channel of ANY
+// Hal::MotorBoard, presented as a Hal::Motor. Board-agnostic by
 // construction: everything register-shaped lives in the board class.
 //
 // NOT WIRED IN YET: nothing constructs this class today. Wiring
@@ -16,26 +16,26 @@
 
 #include <cstdint>
 
-#include "devices/device_config.h"
-#include "devices/device_types.h"
-#include "devices/motor.h"
-#include "devices/motor_board.h"
+#include "hal/device_config.h"
+#include "hal/device_types.h"
+#include "hal/motor.h"
+#include "hal/motor_board.h"
 
-namespace Devices {
+namespace Hardware {
 
-class BoardMotor : public Motor {
+class BoardMotor : public Hal::Motor {
  public:
-  BoardMotor(MotorBoard& board, int channel, const MotorConfig& config)
+  BoardMotor(Hal::MotorBoard& board, int channel, const Hal::MotorConfig& config)
       : board_(board), channel_(channel), config_(config) {}
 
   void begin() override;
   void requestSample() override {}  // no split-phase latch on these boards
   void setDuty(float duty) override;  // [-1, 1] -> board speed command
-  void setNeutral(Neutral) override;
+  void setNeutral(Hal::Neutral) override;
   void applyTravelCalib(float travelCalib) override {
     config_.wheelTravelCalib = travelCalib;
   }
-  [[nodiscard]] bool reconfigure(const MotorConfig& config) override;
+  [[nodiscard]] bool reconfigure(const Hal::MotorConfig& config) override;
   void tick(uint64_t nowUs) override;  // [us]
 
   float position() const override { return position_; }   // [mm]
@@ -73,9 +73,9 @@ class BoardMotor : public Motor {
            static_cast<float>(config_.fwdSign);
   }
 
-  MotorBoard& board_;
+  Hal::MotorBoard& board_;
   int channel_;
-  MotorConfig config_;
+  Hal::MotorConfig config_;
   int32_t offset_ = 0;      // [counts] software zero (resetPosition)
   float position_ = 0.0f;   // [mm]
   float velocity_ = 0.0f;   // [mm/s]
@@ -92,4 +92,4 @@ class BoardMotor : public Motor {
   int deltaRingN_ = 0;
 };
 
-}  // namespace Devices
+}  // namespace Hardware

@@ -56,10 +56,10 @@ _ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"
 # (or transitively motion/executor.h -> vendor/ruckig) at all, so none of
 # those sources are compiled into this harness any more.
 
-_NEZHA_MOTOR_SRC = _SOURCE_DIR / "devices" / "nezha_motor.cpp"
-_OTOS_SRC = _SOURCE_DIR / "devices" / "otos.cpp"
-_COLOR_SENSOR_SRC = _SOURCE_DIR / "devices" / "color_sensor.cpp"
-_LINE_SENSOR_SRC = _SOURCE_DIR / "devices" / "line_sensor.cpp"
+_NEZHA_MOTOR_SRC = _SOURCE_DIR / "hardware" / "nezha" / "nezha_motor.cpp"
+_OTOS_SRC = _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp"
+_COLOR_SENSOR_SRC = _SOURCE_DIR / "hardware" / "planetx" / "color_sensor.cpp"
+_LINE_SENSOR_SRC = _SOURCE_DIR / "hardware" / "planetx" / "line_sensor.cpp"
 _CLOCK_HOST_FAKE_SRC = _INFRA_SIM_DIR / "sim_clock.cpp"
 
 # 114-004: robot_loop.cpp now #includes config/persisted_tuning.h and calls

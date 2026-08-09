@@ -1,4 +1,4 @@
-// motor_board.h -- Devices::MotorBoard: the interface every multi-channel
+// motor_board.h -- Hal::MotorBoard: the interface every multi-channel
 // smart motor-driver board implements.
 //
 // NOT WIRED IN YET: nothing constructs a MotorBoard today. Wiring
@@ -11,7 +11,7 @@
 // loop, and report cumulative encoder counts. This interface is exactly
 // that contract, so swapping boards is one new implementation class
 // plus one line in the composition root -- no change to
-// Devices::BoardMotor, App::Drive, the planner, or anything above.
+// Hardware::BoardMotor, App::Drive, the planner, or anything above.
 //
 // Deliberately NOT in the interface: register maps, I2C addresses,
 // motor-type configuration, unit scaling. Those are each board's own
@@ -22,7 +22,7 @@
 
 #include <cstdint>
 
-namespace Devices {
+namespace Hal {
 
 class MotorBoard {
  public:
@@ -108,4 +108,4 @@ class MotorBoard {
   uint64_t lastExchangeUs_ = 0;  // [us] cycle guard
 };
 
-}  // namespace Devices
+}  // namespace Hal

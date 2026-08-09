@@ -38,8 +38,8 @@ e.g.:
         src/firm/app/robot_loop.cpp src/firm/app/comms.cpp src/firm/app/telemetry.cpp \\
         src/firm/app/deadman.cpp src/firm/app/drive.cpp src/firm/app/odometry.cpp \\
         src/firm/app/preamble.cpp src/firm/platform/host/sim_clock.cpp \\
-        src/firm/devices/nezha_motor.cpp src/firm/devices/otos.cpp \\
-        src/firm/devices/color_sensor.cpp src/firm/devices/line_sensor.cpp \\
+        src/firm/hardware/nezha/nezha_motor.cpp src/firm/hardware/generic/real_otos.cpp \\
+        src/firm/hardware/planetx/color_sensor.cpp src/firm/hardware/planetx/line_sensor.cpp \\
         src/firm/messages/wire.cpp src/firm/messages/wire_runtime.cpp src/motion/body_kinematics.cpp \\
     && /tmp/scripted_twist_demo
 """
@@ -113,10 +113,10 @@ _APP_SOURCES = [
 _MOTION_SOURCES = []
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
-    _SOURCE_DIR / "devices" / "nezha_motor.cpp",
-    _SOURCE_DIR / "devices" / "otos.cpp",
-    _SOURCE_DIR / "devices" / "color_sensor.cpp",
-    _SOURCE_DIR / "devices" / "line_sensor.cpp",
+    _SOURCE_DIR / "hardware" / "nezha" / "nezha_motor.cpp",
+    _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp",
+    _SOURCE_DIR / "hardware" / "planetx" / "color_sensor.cpp",
+    _SOURCE_DIR / "hardware" / "planetx" / "line_sensor.cpp",
 ]
 # 114-004: robot_loop.cpp now #includes config/persisted_tuning.h and calls
 # its pure serializeSnapshot()/Config::TuningStore seam directly.

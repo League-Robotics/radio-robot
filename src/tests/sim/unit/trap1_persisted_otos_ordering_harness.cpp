@@ -4,7 +4,7 @@
 // only does so when App::RobotGraph::loadPersistedTuning() runs AFTER
 // App::RobotLoop::boot() -- never before.
 //
-// Root cause this proves closed: every Devices::RealOtos setter
+// Root cause this proves closed: every Hardware::RealOtos setter
 // (setLinearScalar()/setAngularScalar()/setOffset()) is a no-op until
 // begin() sets initialized_ = true (otos.cpp's own guards), and begin()
 // itself only ever runs inside boot()'s own Preamble::step() loop
@@ -27,7 +27,7 @@
 // (src/firm/platform/host/sim_plant.cpp handleOtosWrite()) captures a real firmware
 // write to the chip's REG_SCALAR_LINEAR/REG_SCALAR_ANGULAR registers into
 // OtosPlant -- a genuine round trip through App::configureOtos()'s
-// scaleToRegister() conversion and Devices::RealOtos's own bus-write
+// scaleToRegister() conversion and Hardware::RealOtos's own bus-write
 // path, not a shortcut through Configurator's cached copy.
 //
 // Two scenarios:
@@ -48,7 +48,7 @@
 #include <string>
 
 #include "config/persisted_tuning.h"
-#include "devices/otos.h"
+#include "hardware/generic/real_otos.h"
 #include "sim_harness.h"
 
 namespace {
@@ -138,8 +138,8 @@ int main() {
     sim.boot();  // begin() runs here -- initialized_ becomes true, baked identity scale written
     sim.loadPersistedTuning();  // 132-015 order: runs AFTER boot(), setLinearScalar() now lands
 
-    const int8_t expectedLinearReg = Devices::scaleToRegister(1.05f);
-    const int8_t expectedAngularReg = Devices::scaleToRegister(0.98f);
+    const int8_t expectedLinearReg = Hardware::scaleToRegister(1.05f);
+    const int8_t expectedAngularReg = Hardware::scaleToRegister(0.98f);
     checkIntEq(sim.plant().otosPlant().linearScalarReg(), expectedLinearReg,
                "chip-level linear scalar register reflects the PERSISTED value, not baked identity");
     checkIntEq(sim.plant().otosPlant().angularScalarReg(), expectedAngularReg,
@@ -162,7 +162,7 @@ int main() {
     sim.loadPersistedTuning();  // pre-132-015 order: RealOtos setter no-ops, initialized_ false
     sim.boot();                 // begin() now overwrites with the baked identity scale regardless
 
-    const int8_t bakedIdentityReg = Devices::scaleToRegister(1.0f);  // == 0
+    const int8_t bakedIdentityReg = Hardware::scaleToRegister(1.0f);  // == 0
     checkIntEq(sim.plant().otosPlant().linearScalarReg(), bakedIdentityReg,
                "chip-level linear scalar register is left at the BAKED default -- the persisted "
                "1.05 scale never reached the chip");

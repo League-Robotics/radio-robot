@@ -10,7 +10,7 @@
 
 #include <cstdint>
 
-namespace Devices {
+namespace Hal {
 
 // MotorConfig — one motor channel's calibration plus the armor tuning
 // MotorArmor::configureArmor() caches. Devices-local counterpart to
@@ -67,4 +67,4 @@ struct LineConfig {
   float filtAlpha = 0.0f;    // dimensionless EMA smoothing coefficient
 };
 
-}  // namespace Devices
+}  // namespace Hal

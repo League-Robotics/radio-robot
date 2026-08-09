@@ -44,7 +44,7 @@
 //   | DRIVE         | yes   | `Drive::configure(config_)` (132-007)             | Stage A per-wheel gain/intercept + crawl pulse, via the existing `setWheelCorrection()`/`setCrawlPulse()`. NOT persisted (132-013) -- no old curated live-tuning wire message ever existed for these fields, so the persistence precedent leaves them boot-only-persisted (i.e. reset to the baked JSON default every reboot until live-tuned again) |
 //   | WHEEL_CONTROL | yes   | `Drive::configure(config_)` (132-007)             | SAME call as DRIVE -- Drive::configure() pulls Stage B/C gains/bounds from `config_.wheelControl` in the same pass it reads `config_.drive` from; one re-appliable unit from Drive's own point of view, two ConfigGroupTargets on the wire. PERSISTED (132-013) -- these 5 fields (pid_kp/pid_ki/pid_i_max/pid_kaff/pid_max) are the direct successor of the old curated Motor live-tuning message's kp/ki/i_max/kff/kaw, which already persisted |
 //   | MOTORS        | yes   | `App::configureMotor()` x2 (132-007), GUARDED     | refuses (returns false, applies nothing) while that side reports itself in motion -- surfaced as `ERR_BUSY`, never swallowed, so a caller can retry at rest. PARTIALLY PERSISTED (132-013) -- only travel_calib_left/travel_calib_right (the one MotorConfig field App::configureMotor() still live-applies, boot_calibration.h's own doc comment), matching the old curated Motor live-tuning message's travel_calib precedent exactly; fwd_sign/output_deadband/reversal_dwell/vel_* never persisted before and still don't |
-//   | OTOS          | yes   | `App::configureOtos()` (132-007/010)              | trap 3 CLOSED (132-010): `linear_scale`/`angular_scale` are converted through `Devices::scaleToRegister()` before reaching `setLinearScalar()`/`setAngularScalar()`, matching `RealOtos::begin()`'s own boot-time conversion -- a live push and a boot bake now agree on what a given multiplier means. PERSISTED IN FULL (132-013) -- offset_x/offset_y/offset_yaw/linear_scale/angular_scale mirror the old curated Otos live-tuning message's own 5 scale/offset fields exactly (its 6th field, `init`, was a fire-and-forget trigger with no Config::Robot-shaped successor and was never persisted either) |
+//   | OTOS          | yes   | `App::configureOtos()` (132-007/010)              | trap 3 CLOSED (132-010): `linear_scale`/`angular_scale` are converted through `Hardware::scaleToRegister()` before reaching `setLinearScalar()`/`setAngularScalar()`, matching `RealOtos::begin()`'s own boot-time conversion -- a live push and a boot bake now agree on what a given multiplier means. PERSISTED IN FULL (132-013) -- offset_x/offset_y/offset_yaw/linear_scale/angular_scale mirror the old curated Otos live-tuning message's own 5 scale/offset fields exactly (its 6th field, `init`, was a fire-and-forget trigger with no Config::Robot-shaped successor and was never persisted either) |
 //   | ESTIMATOR     | yes   | -- (`ERR_UNIMPLEMENTED`, PERMANENT)               | trap 2 CLOSED (132-010) by making the dead end EXPLICIT rather than inventing a consumer: `App::StateEstimator` was deleted outright as dead code (sprint 128 ticket 016), and its one candidate successor -- `Motion::PoseTracker::blendHeading()` (`src/motion/planner/estimation.h`) -- had its only call site AND its own config fields (`PlannerLimits::headingOtosWeight`/`otosStaleness`) deleted outright by 130-009, in favor of a from-scratch fusion redesign tracked at `clasi/issues/later/estimator-v2-otos-fusion-sim-first.md`. Building a real consumer today would mean either resurrecting logic 130-009 deliberately retired, or building estimator-v2 itself -- both out of this ticket's scope (and the latter explicitly deferred by its own tracked issue). `Configurator` therefore holds NO estimator-shaped reference; `config_.estimator` still decodes correctly for read-back (`applyGroup()` never skips the decode for a live-classified target), but `install(ESTIMATOR)` returns `ERR_UNIMPLEMENTED` permanently until estimator-v2 gives it something real to call. NEVER PERSISTED (132-013, following the old curated Estimator live-tuning message's own explicit precedent -- "a reboot always reverts to the baked JSON default") -- unaffected by ESTIMATOR's own permanent ERR_UNIMPLEMENTED above; the two are independent facts that happen to agree |
 //
 //   | NAVIGATOR     | yes   | writes `config_.navigator`'s fields directly into the `Motion::NavigatorLimits` this class holds a reference to (135-004) | NOT a setter call -- `Motion::Navigator` holds its `NavigatorLimits` by const reference (navigator.h), so `tick()` sees a live push on its very next call with no re-apply step to invoke. `App::configureNavigator()` (app/boot_calibration.h) does the field-by-field copy, sourcing `trackWidth` from `config_.effectiveTrackWidth()` rather than a `config_.navigator` field (robot_config.proto's Navigator message deliberately has none). NOT persisted -- same "no old curated live-tuning message for this field set" reasoning DRIVE/PLANNER_SHAPER's own rows give |
@@ -82,7 +82,7 @@
 //      own doc comment for the full reshape and the re-appliability
 //      table's own PERSISTENCE SCOPE note above for WHICH groups.
 //   3. Pushing values into the subsystems that OWN them: motor gains and
-//      per-wheel calibration -> App::Drive and the two Devices::Motor
+//      per-wheel calibration -> App::Drive and the two Hal::Motor
 //      leaves, shaper ceilings -> Motion::Planner, OTOS scalars and
 //      offsets -> the OTOS leaf. The OLD curated Estimator live-tuning
 //      message's own weight_heading_otos/weight_omega_otos/staleness_ms
@@ -114,8 +114,8 @@
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
 #include "config/robot.h"
-#include "devices/motor.h"
-#include "devices/otos.h"
+#include "hal/motor.h"
+#include "hardware/generic/real_otos.h"
 #include "messages/envelope.h"
 #include "messages/robot_config.h"
 #include "motion/navigator/arc_solver.h"
@@ -144,8 +144,8 @@ class Configurator {
   // Motion::Navigator was constructed with a reference to (boot_wiring.h's
   // RobotGraph) -- install(NAVIGATOR) writes straight into it, per this
   // class's own re-appliability table NAVIGATOR row above.
-  Configurator(Drive& drive, Devices::Motor& motorL, Devices::Motor& motorR,
-               Devices::Otos& otos, Motion::Planner& planner,
+  Configurator(Drive& drive, Hal::Motor& motorL, Hal::Motor& motorR,
+               Hal::Otos& otos, Motion::Planner& planner,
                Motion::NavigatorLimits& navigatorLimits,
                Config::TuningStore* tuningStore = nullptr);
 
@@ -202,7 +202,7 @@ class Configurator {
   // loadBaked(), reading config() for its data exactly the way this method
   // does. MOTORS/OTOS boot values are installed even earlier, at
   // CONSTRUCTION (boot_wiring.cpp's own bakeBootValues() feeds
-  // Devices::Motor's/RealOtos's constructors directly) -- this method does
+  // Hal::Motor's/RealOtos's constructors directly) -- this method does
   // not re-touch them at boot; only a LIVE push reaches configureMotor()/
   // configureOtos() (install(target) below).
   //
@@ -358,9 +358,9 @@ class Configurator {
   void persistTuningIfChanged();
 
   Drive& drive_;
-  Devices::Motor& motorL_;
-  Devices::Motor& motorR_;
-  Devices::Otos& otos_;
+  Hal::Motor& motorL_;
+  Hal::Motor& motorR_;
+  Hal::Otos& otos_;
   Motion::Planner& planner_;
   Motion::NavigatorLimits& navigatorLimits_;
 
