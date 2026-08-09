@@ -206,14 +206,42 @@ msg::Verb bodyKindToVerb(msg::ReplyEnvelope::BodyKind kind) {
 
 }  // namespace
 
+Comms::Comms(const char* banner, const char* idLine)
+    : banner_(banner), idLine_(idLine) {}
+
 Comms::Comms(Transport& serialLink, Transport& radioLink, const char* banner, const char* idLine)
-    : serialLink_(serialLink), radioLink_(radioLink), banner_(banner), idLine_(idLine) {}
+    : banner_(banner), idLine_(idLine) {
+  // Serial first, then radio -- pump() offers transports a line in
+  // registration order, so this preserves the precedence the previous
+  // two-named-slot pump() had exactly.
+  (void)addTransport(serialLink);
+  (void)addTransport(radioLink);
+}
+
+bool Comms::addTransport(Transport& transport) {
+  if (transportCount_ >= kMaxTransports) return false;
+  transports_[transportCount_++] = &transport;
+  return true;
+}
+
+void Comms::broadcast(const uint8_t* data, uint16_t len) {
+  for (uint8_t i = 0; i < transportCount_; ++i) transports_[i]->send(data, len);
+}
+
+void Comms::broadcastReliable(const char* line) {
+  for (uint8_t i = 0; i < transportCount_; ++i) transports_[i]->sendReliable(line);
+}
 
 void Comms::pump(uint32_t now) {
   for (uint8_t consumed = 0; consumed < kPumpMaxLines; ++consumed) {
-    if (pumpTransport(serialLink_, now)) continue;
-    if (pumpTransport(radioLink_, now)) continue;
-    return;  // both transports dry
+    bool any = false;
+    for (uint8_t i = 0; i < transportCount_; ++i) {
+      if (pumpTransport(*transports_[i], now)) {
+        any = true;
+        break;  // one line per outer iteration, first-registered wins a tie
+      }
+    }
+    if (!any) return;  // every transport dry
   }
 }
 
@@ -446,13 +474,11 @@ void Comms::sendReply(const msg::ReplyEnvelope& reply) {
   std::memcpy(line + nameLen + 1, cobsOut, cobsLen);
   const uint16_t lineLen = static_cast<uint16_t>(nameLen + 1 + cobsLen);
 
-  serialLink_.send(line, lineLen);
-  radioLink_.send(line, lineLen);
+  broadcast(line, lineLen);
 }
 
 void Comms::sendBanner() {
-  serialLink_.sendReliable(banner_);
-  radioLink_.sendReliable(banner_);
+  broadcastReliable(banner_);
 }
 
 void Comms::sendStatus(Transport& t) {
@@ -511,16 +537,14 @@ void Comms::sendTlmReply(TlmAction action) {
 }
 
 void Comms::sendReady() {
-  serialLink_.sendReliable("READY");
-  radioLink_.sendReliable("READY");
+  broadcastReliable("READY");
 }
 
 #if defined(ROBOT_DEBUG) || defined(HOST_BUILD)
 void Comms::sendDebug(const char* line) {
   char buf[210];
   std::snprintf(buf, sizeof(buf), "DBG:%s", line);
-  serialLink_.sendReliable(buf);
-  radioLink_.sendReliable(buf);
+  broadcastReliable(buf);
 }
 #endif  // ROBOT_DEBUG || HOST_BUILD
 

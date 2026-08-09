@@ -164,7 +164,60 @@ class Comms {
 
   void sendTlmReply(TlmAction action);
 
+  // Comms registers a COLLECTION of transports, not two named slots. Every
+  // registered transport is pumped for inbound lines and receives every
+  // broadcast (banner, READY, telemetry); a reply goes back out the one
+  // transport its command arrived on.
+  //
+  // Fixed-size, no heap, like the rest of this codebase: kMaxTransports is
+  // the ceiling and registration past it is dropped (see addTransport()).
+  // Registration happens once, at Robot-composition time, before boot.
+  //
+  // Ordering IS significant and is the caller's: pump() offers each
+  // transport a line in registration order, so the first-registered
+  // transport wins a tie when two have traffic in the same cycle. The
+  // composition roots register serial first, then radio, which preserves
+  // the exact precedence the previous two-slot pump() had.
+  static constexpr uint8_t kMaxTransports = 4;
+
+  // The two-transport convenience form every current composition root
+  // uses. Equivalent to default-constructing and calling addTransport()
+  // twice, in this order.
   Comms(Transport& serialLink, Transport& radioLink, const char* banner, const char* idLine = "ID:unknown");
+
+  explicit Comms(const char* banner, const char* idLine = "ID:unknown");
+
+  // Register one more transport. Returns false if kMaxTransports are
+  // already registered -- a caller that ignores it silently loses a link,
+  // so this is [[nodiscard]].
+  [[nodiscard]] bool addTransport(Transport& transport);
+
+  uint8_t transportCount() const { return transportCount_; }
+
+  // --- On the WiFi transport this reorganization does NOT ship ---
+  //
+  // The structural block the reorganization proposal named is gone: Comms
+  // held two named slots, and adding a third transport meant changing this
+  // class. It no longer does -- a composition root registers what the robot
+  // has, and Core::composeRobot() still takes the serial/radio pair every
+  // robot in this fleet has while a caller adds extras through
+  // addTransport() before boot().
+  //
+  // What is NOT here is Core::WifiTransport around the Ai-WB2-12F module.
+  // It is not a missing wrapper -- it needs a whole layer that does not
+  // exist yet: a Platform::Uart interface (every device in this tree today
+  // is I2C), an AT-command driver in hardware/ for the module, and then
+  // this class on top of them. The proposal itself says the UART platform
+  // surface "should be shaped by the first Raspberry-Pi or WiFi-module port
+  // that actually needs them, rather than speculatively designed now."
+  //
+  // There is also a measured hardware reason not to rush it. The bench AT
+  // bridge (src/tests/bench/wifi/atbridge_main.cpp) records that CODAL's
+  // UARTE RX drops ~5-10% of characters at a sustained 115200 on this board
+  // and runs the module side at 57600 to widen the IRQ race window (bench
+  // finding 2026-08-08). A Transport built on that link today would be
+  // lossy by construction, which is a bench project with its own hardware
+  // acceptance, not a mechanical addition to a reorganization.
 
   void pump(uint32_t now);  // [ms]
 
@@ -205,8 +258,15 @@ class Comms {
 
   void decodeBinaryFrame(const uint8_t* command, size_t commandLen, const uint8_t* data, uint16_t dataLen, Cmd& out);
 
-  Transport& serialLink_;
-  Transport& radioLink_;
+  // Pointers, not references: a fixed-size array of references is not a
+  // thing C++ has. Every entry below transportCount_ is non-null by
+  // construction (addTransport() takes a reference).
+  Transport* transports_[kMaxTransports] = {};
+  uint8_t transportCount_ = 0;
+
+  // broadcast helpers -- every registered transport, in registration order.
+  void broadcast(const uint8_t* data, uint16_t len);
+  void broadcastReliable(const char* line);
   const char* banner_;
   const char* idLine_;
 

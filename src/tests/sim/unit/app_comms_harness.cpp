@@ -1362,7 +1362,96 @@ void scenarioDbgFaultInjectionArmsStillParseUnchanged() {
 
 }  // namespace
 
+// ---------------------------------------------------------------------------
+// Transport COLLECTION (platform/hardware/hal reorganization). Core::Comms
+// used to hold two named Transport& slots -- `serialLink_` and `radioLink_`
+// -- which is what blocked a third transport (WiFi) without a structural
+// change. It now holds a fixed-size array registered at composition time.
+//
+// Three things have to hold for that to be a safe swap:
+//   1. The two-argument convenience constructor still registers serial
+//      first, then radio, so pump()'s tie-break precedence is unchanged.
+//   2. A THIRD transport really works -- it gets pumped and it gets
+//      broadcasts.
+//   3. Registration past kMaxTransports fails LOUDLY (returns false) rather
+//      than silently dropping a link.
+// ---------------------------------------------------------------------------
+
+void scenarioTwoArgConstructorRegistersSerialThenRadio() {
+  beginScenario("Comms(serial, radio): registers exactly two, serial first");
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  Core::Comms comms(serialFake, radioFake, banner);
+
+  checkTrue(comms.transportCount() == 2, "two transports registered");
+
+  // Both have a line ready. pump() offers transports in registration
+  // order, so the FIRST-registered (serial) is consumed first -- the same
+  // precedence the two-named-slot pump() had.
+  serialFake.enqueueInbound("PING");
+  radioFake.enqueueInbound("PING");
+  comms.pump(0);
+
+  // Both replies land (pump loops until every transport is dry), and each
+  // reply goes back out the transport its command arrived on.
+  checkTrue(!serialFake.sentReliable().empty(),
+            "serial PING answered on the serial transport");
+  checkTrue(!radioFake.sentReliable().empty(),
+            "radio PING answered on the radio transport");
+}
+
+void scenarioThirdTransportIsPumpedAndBroadcastTo() {
+  beginScenario("addTransport(): a THIRD transport is pumped and broadcast to");
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  FakeTransport serialFake;
+  FakeTransport radioFake;
+  FakeTransport thirdFake;  // stands in for a future WifiTransport
+  Core::Comms comms(serialFake, radioFake, banner);
+
+  checkTrue(comms.addTransport(thirdFake), "a third transport registers");
+  checkTrue(comms.transportCount() == 3, "three transports registered");
+
+  // Inbound: a command arriving ONLY on the third transport is seen, and
+  // its reply goes back out that same transport.
+  thirdFake.enqueueInbound("PING");
+  comms.pump(0);
+  checkTrue(!thirdFake.sentReliable().empty(),
+            "a PING on the third transport is pumped and answered there");
+  checkTrue(serialFake.sentReliable().empty(),
+            "the reply did NOT leak onto the serial transport");
+
+  // Outbound broadcast: the banner goes to every registered transport.
+  // FakeTransport has no reset, so compare counts before and after.
+  const size_t serialBefore = serialFake.sentReliable().size();
+  const size_t radioBefore = radioFake.sentReliable().size();
+  const size_t thirdBefore = thirdFake.sentReliable().size();
+  comms.sendBanner();
+  checkTrue(serialFake.sentReliable().size() == serialBefore + 1,
+            "banner reaches serial");
+  checkTrue(radioFake.sentReliable().size() == radioBefore + 1,
+            "banner reaches radio");
+  checkTrue(thirdFake.sentReliable().size() == thirdBefore + 1,
+            "banner reaches the third transport too -- a broadcast is to ALL");
+}
+
+void scenarioRegistrationBeyondCapacityFailsLoudly() {
+  beginScenario("addTransport(): registration past kMaxTransports returns false");
+  static char banner[] = "DEVICE:NEZHA2:robot:test:1234";
+  FakeTransport t0, t1, t2, t3, overflow;
+  Core::Comms comms(t0, t1, banner);
+  checkTrue(comms.addTransport(t2), "third registers");
+  checkTrue(comms.addTransport(t3), "fourth registers (kMaxTransports == 4)");
+  checkTrue(!comms.addTransport(overflow),
+            "a fifth is REFUSED -- a silently dropped link is the failure "
+            "mode this return value exists to prevent");
+  checkTrue(comms.transportCount() == 4, "count stays at the ceiling");
+}
+
 int main() {
+  scenarioTwoArgConstructorRegistersSerialThenRadio();
+  scenarioThirdTransportIsPumpedAndBroadcastTo();
+  scenarioRegistrationBeyondCapacityFailsLoudly();
   scenarioMoveRoundTrip();
   scenarioMalformedUnrecognizedTextLineRejected();
   scenarioMalformedCobsFrameRejected();
