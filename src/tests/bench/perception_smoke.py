@@ -34,7 +34,7 @@ Background, so a future reader does not re-derive it:
 - The colour channels are scaled against the ADC's TRUE full scale
   (1025 * (256 - ATIME) = 4100 at the shipped ATIME=252), not 65535. Before
   2026-08-08 they were packed with a bare `>> 8`, which left only 16 of 256
-  codes usable and pinned r/g/b at 0 -- see Devices::ColorSensorLeaf::
+  codes usable and pinned r/g/b at 0 -- see Hardware::ColorSensorLeaf::
   fullScale(). If every channel reads 0 again, suspect that packing first.
 """
 from __future__ import annotations

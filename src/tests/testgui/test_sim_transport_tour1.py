@@ -152,7 +152,7 @@ def test_tour_shaped_sequence_via_direct_twist_calls_drives_and_closes(sim_trans
 # Full run_tour(TOUR_1) -- was known-unreliable in Sim (see the closed issue
 # below): WheelPlant::reportedPosition() reported a stopped wheel's position
 # with zero noise, so a stopped wheel emitted byte-identical tenths every
-# cycle and starved Devices::MotorArmor::updateWedgeDetector() of the jitter
+# cycle and starved Hardware::MotorArmor::updateWedgeDetector() of the jitter
 # a real, healthy encoder always has at rest, latching kFaultWedgeLatch at
 # every leg boundary. Fixed by ticket 108-011 (a per-wheel, rest-gated,
 # seeded ±1 LSB dither in WheelPlant::reportedPosition()'s nominal branch --

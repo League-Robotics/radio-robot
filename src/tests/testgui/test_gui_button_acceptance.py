@@ -189,7 +189,7 @@ MANAGED_ANGLE_REL_TOL = 0.10
 #
 # TEMPORARILY WIDENED 3.0 -> 6.5 (125-003, sprint 125, dated 2026-07-26;
 # revert to 3.0 once ticket 006 lands -- see below for why). Sprint 125
-# Decision 2 relocates the wheel velocity PID off Devices::NezhaMotor
+# Decision 2 relocates the wheel velocity PID off Hardware::NezhaMotor
 # entirely (to an interim Core::DifferentialDrive-owned instance, see drive.h's own
 # header) -- structurally, this adds exactly one extra loop cycle (~40ms)
 # of measured-velocity staleness to the closed loop: the pre-125-003 design

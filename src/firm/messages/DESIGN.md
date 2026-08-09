@@ -166,7 +166,7 @@ firmware runtime; the device itself never sees protobuf. It also emits
   bullet originally made (`0x00`-free, `0x0A` reserved as the two-terminator
   demux's OWN split byte). `Core::FrameKind` (`src/firm/core/comms.h`,
   cited by the pre-124-005 wording here) no longer exists — see
-  [`../app/DESIGN.md`](../app/DESIGN.md) §1 and
+  [`../app/DESIGN.md`](../core/DESIGN.md) §1 and
   [`../com/DESIGN.md`](../com/DESIGN.md) §2 for the uniform-grammar
   replacement. See `docs/protocol-v5.md` §2 for the full frame layout and
   byte-budget derivation.
@@ -461,7 +461,7 @@ firmware runtime; the device itself never sees protobuf. It also emits
   `Devices::Motor::rebaseline()` — never `Motor::resetPosition()`, which
   can still choose a real bus-touching hard reset and is forbidden
   outright for this policy by stakeholder ruling. See
-  [`../app/DESIGN.md`](../app/DESIGN.md) for the policy's own trigger/
+  [`../app/DESIGN.md`](../core/DESIGN.md) for the policy's own trigger/
   clamp mechanism. `EncoderReading.time` is RENAMED `age` (field 3,
   `(max) = 255` ms) in the same pass — an absolute robot-clock timestamp
   cannot be packed small (it grows for the whole session), so it could
@@ -596,7 +596,7 @@ that conversion — it only defines the wire-side shape.
   generators."
 - **`app/` (via `Core::Comms`/`Core::Telemetry`):** the only consumer of the
   decode/encode entry points at runtime — see
-  [app/DESIGN.md](../app/DESIGN.md) for how a decoded `CommandEnvelope`
+  [app/DESIGN.md](../core/DESIGN.md) for how a decoded `CommandEnvelope`
   reaches the loop's dispatch and how a `ReplyEnvelope` gets
   CRC-then-COBS framed and sent (the only outbound top-level message —
   `TelemetrySecondary` is deleted, 124-009).

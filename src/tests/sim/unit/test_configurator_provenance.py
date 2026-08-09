@@ -54,7 +54,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _DEVICE_SOURCES = [
-    # Devices::Otos's virtual destructor is defined out-of-line.
+    # Hal::Otos's virtual destructor is defined out-of-line.
     _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp",
 ]
 

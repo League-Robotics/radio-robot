@@ -1,7 +1,7 @@
 """Off-hardware acceptance proof for ticket DB-006 (device-bus-tickets.md).
 
 Compiles ``devices_sensors_harness.cpp`` together with ``TestSim::SimPlant``
-(``src/firm/platform/host/sim_plant.cpp`` — ticket 108-002's real Devices::I2CBus
+(``src/firm/platform/host/sim_plant.cpp`` — ticket 108-002's real Platform::I2CBus
 implementation) plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
 physics dependencies, and the real ``src/firm/hardware/planetx/color_sensor.cpp``
 and ``src/firm/hardware/planetx/line_sensor.cpp`` against the SAME ``src/firm/devices/``
@@ -10,7 +10,7 @@ headers every ARM build compiles, with ``-DHOST_BUILD``. Mirrors
 compiler, run the resulting binary, assert it exits 0.
 
 Migrated by sprint 108 ticket 009 off the deleted ``src/firm/devices/
-i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see
+i2c_bus_host.cpp`` scripted-FIFO Platform::I2CBus fake — see
 ``devices_sensors_harness.cpp``'s own header and ``scripted_i2c_hook.h`` for
 the migration rationale.
 
@@ -72,7 +72,7 @@ def _all_sources():
 
 
 def test_devices_sensors_harness_compiles_and_passes(tmp_path):
-    """Compile the Devices::ColorSensorLeaf/LineSensorLeaf leaves, SimPlant,
+    """Compile the Hardware::ColorSensorLeaf/LineSensorLeaf leaves, SimPlant,
     and the harness; assert every scenario passes."""
     sources = _all_sources()
     for src in sources:

@@ -3,7 +3,7 @@
 
 Compiles ``app_odometry_harness.cpp`` together with the HOST_BUILD
 implementations it needs (``src/firm/core/odometry.cpp``,
-``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
+``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's real Platform::I2CBus
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
 physics dependencies, ``src/firm/hardware/nezha/nezha_motor.cpp``,
 ``src/firm/hardware/generic/real_otos.cpp``, ``src/firm/kinematics/differential_kinematics.cpp``) with
@@ -17,7 +17,7 @@ motion-local wheel-velocity PID class that 128-015 later deleted -- this
 harness doesn't touch Core::DifferentialDrive, so it needs neither).
 
 Migrated by sprint 108 ticket 009 off the deleted ``src/firm/devices/
-i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see
+i2c_bus_host.cpp`` scripted-FIFO Platform::I2CBus fake — see
 ``app_odometry_harness.cpp``'s own header and ``scripted_i2c_hook.h`` for
 the migration rationale.
 

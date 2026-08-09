@@ -12,8 +12,8 @@ config/boot_config.cpp, messages/wire.cpp, messages/wire_runtime.cpp,
 hardware/generic/real_otos.cpp, and the standalone Motion::Planner sources
 (planner.cpp/profile.cpp/estimation.cpp/shape.cpp), runs the resulting
 binary, and asserts it exits 0 -- printing its own human-readable
-per-scenario trace. No I2C bus, no sim plant: every Devices::Motor/
-Devices::Otos this harness touches is a small in-file test double
+per-scenario trace. No I2C bus, no sim plant: every Hal::Motor/
+Hal::Otos this harness touches is a small in-file test double
 implementing the pure interface directly (mirrors
 configurator_applygroup_harness.cpp's own source-list shape, 132-008).
 
@@ -68,7 +68,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _DEVICE_SOURCES = [
-    # Devices::Otos's virtual destructor is declared out-of-line (otos.h)
+    # Hal::Otos's virtual destructor is declared out-of-line (otos.h)
     # and defined here -- RecordingOtos's own dtor chain needs the symbol
     # even though this harness never constructs a RealOtos.
     _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp",

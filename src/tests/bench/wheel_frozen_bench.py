@@ -11,7 +11,7 @@ the ticket calls for):
   1. **Positive case** (`--stall-wheel left|right`): commands ONLY the
      named wheel to a nonzero target speed for an extended window. This
      is a GATED, motion-qualified detector
-     (`Devices::MotorArmor::wedgeSuspect()`) — it only latches if the
+     (`Hardware::MotorArmor::wedgeSuspect()`) — it only latches if the
      wheel is commanded to move AND its encoder genuinely does not
      advance for `kWedgeThreshold` (10) consecutive ~50 ms cycles
      (~0.5 s). On the stand the wheels spin FREE (no ground contact, no

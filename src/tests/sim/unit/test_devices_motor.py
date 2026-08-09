@@ -1,7 +1,7 @@
 """Off-hardware acceptance proof for ticket DB-004 (device-bus-tickets.md).
 
 Compiles ``devices_motor_harness.cpp`` together with ``TestSim::SimPlant``
-(``src/firm/platform/host/sim_plant.cpp`` — ticket 108-002's real Devices::I2CBus
+(``src/firm/platform/host/sim_plant.cpp`` — ticket 108-002's real Platform::I2CBus
 implementation) plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
 physics dependencies, and ``hardware/nezha/nezha_motor.cpp`` against the SAME
 ``src/firm/devices/`` headers every ARM build compiles, with
@@ -12,13 +12,13 @@ exactly: compile with the system C++ compiler, run the resulting binary,
 assert it exits 0.
 
 125-003: ``devices/velocity_pid.cpp`` is no longer compiled into this
-harness — ``Devices::NezhaMotor``'s embedded velocity PID was deleted
+harness — ``Hardware::NezhaMotor``'s embedded velocity PID was deleted
 outright (relocated to a motion-local wheel-velocity PID class, itself
 deleted outright by 128-015 -- Core::DifferentialDrive holds no controller of its own;
 see ``src/firm/motion/DESIGN.md``'s "wheel control generations" note).
 
 Migrated by sprint 108 ticket 009 off the deleted ``src/firm/devices/
-i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see
+i2c_bus_host.cpp`` scripted-FIFO Platform::I2CBus fake — see
 ``devices_motor_harness.cpp``'s own header and ``scripted_i2c_hook.h`` for
 the migration rationale (SimPlant + a FIFO-scripting hook, in place of the
 deleted concrete fake's own queueWrite()/queueRead() surface).

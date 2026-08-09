@@ -243,7 +243,7 @@ def _compensating_scale(raw_error: float) -> float:
     the multiplier into the OTOS chip's raw int8 register value
     (0.1%-per-LSB, the pre-132 ``OL``/``OA`` text-verb domain). That
     encoding moved FIRMWARE-side in 132-010 -- ``Core::configureOtos()``
-    runs the multiplier through ``Devices::scaleToRegister()`` itself now,
+    runs the multiplier through ``Hardware::scaleToRegister()`` itself now,
     so a live push and a boot bake finally agree on what a given
     multiplier means (see ``push.otos_kwargs()``'s own docstring). Pushing
     a pre-encoded register value over the new ``OTOS`` group would be

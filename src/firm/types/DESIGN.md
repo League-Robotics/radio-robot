@@ -100,7 +100,7 @@ key=value token struct. `version_generated.h` is emitted by
   restructure) wired `RobotLoop` to own a persistent `state_` member,
   publish each section at its coherence point exactly once per cycle, and
   call `Telemetry::update(state_)` as the ONE projection point — see
-  [`../app/DESIGN.md`](../app/DESIGN.md) §2/§4 for the exact call sites.
+  [`../app/DESIGN.md`](../core/DESIGN.md) §2/§4 for the exact call sites.
   `Motion::StateEstimator::update(state_, now)` and `Telemetry::
   update(state_)` are both now real, live consumers of a genuinely
   RobotLoop-owned instance, not a throwaway local.

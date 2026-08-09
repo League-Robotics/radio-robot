@@ -54,7 +54,7 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
         // reshape retarget -- was control.output_deadband/control.
         // reversal_dwell_ms before the grouped-shape migration; sprint 114
         // ticket 003, config-as-truth completion). REQUIRED as of that
-        // ticket: Devices::NezhaMotor no longer substitutes a ship default
+        // ticket: Hardware::NezhaMotor no longer substitutes a ship default
         // when these arrive unset, so every build must emit a real value.
         out[i].setOutputDeadband(0.03f);   // [-1,1] fraction
         out[i].setReversalDwell(100.0f);   // [ms]
@@ -352,7 +352,7 @@ msg::Otos defaultOtosGroup() {
     // otos_linear_scale/otos_angular_scale -- otos_boot_config_values()
     // above. These are the config MULTIPLIER domain (1.0 = no correction),
     // same as the robot JSON -- Core::configureOtos() (app/boot_calibration.
-    // cpp) converts through Devices::scaleToRegister() before reaching the
+    // cpp) converts through Hardware::scaleToRegister() before reaching the
     // chip, the SAME conversion RealOtos::begin() applies to this baked
     // value at boot (132-010 closed the live/boot domain mismatch, trap 3,
     // sprint.md).

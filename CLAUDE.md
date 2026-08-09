@@ -41,32 +41,57 @@ data plane, then send plain commands with no `>` prefix; `rogo`/`robot_radio` us
 the older `>`-prefix protocol and cannot reach the robot through the current relay
 firmware). Check there before re-deriving comms or hardware behavior.
 
-# Architecture — Two Firmware Layers (base vs. motion library)
+# Architecture — layered firmware, all under `src/firm`
 
-The firmware is split into two layers (sprint 122, stakeholder directive
-2026-07-24): a hardened **firmware base** (`src/firm`) — buses, devices,
-the wire, the loop schedule — meant to eventually freeze and move to its
-own repository (`git subtree split`); and a **motion library**
-(`src/motion`, a sibling tree, not a child of `src/firm`) — twist
-decomposition, shaping, estimation, odometry, and (125-003) the
-closed-loop velocity PID (`Motion::WheelVelocityPid`, relocated out of
-the base since encoder freshness bounds its effective update rate at or
-below the loop rate regardless of where it runs) — still under active
-development, with its own standalone, Python-free `motion_tests` build
-plus `src/motion/planner/`'s own standalone `planner_tests` build. The
-two communicate through `Types::RobotState::Wheel::cmdVelocity`
-(`src/firm/types/robot_state.h`): whichever subsystem currently owns
-motion — `Motion::Planner` (`src/motion/planner/`) for a queued Move,
-`App::Drive` for WHEELS teleop — writes this cycle's commanded wheel
-speed directly onto that shared blackboard field, and `App::RobotLoop::
-cycle()` reads it back for actuation. (Sprint 128 ticket 014 deleted the
-122-era `Motion::WheelSink` boundary INTERFACE — `Motion::MoveQueue`,
-`Motion::StopCondition`, and `Motion::VelocityShaper` alongside it — as
-dead code with zero callers; `Motion::Planner` had already superseded
-that whole generation path without ever routing through it.) See
-[`docs/design/design.md`](docs/design/design.md) §2/§5 for the
-system-level split and [`src/motion/DESIGN.md`](src/motion/DESIGN.md)
-for the motion library's own current orientation — `src/motion` is real,
-current documentation but deliberately outside `.clasi/config.yaml`'s
-validated `sources:` (`[src/firm, src/host]`, unchanged), the same
-treatment `src/sim`/`src/protos`/`src/scripts` already get.
+The firmware is one tree, `src/firm`, layered bottom to top. Dependencies
+run strictly downward:
+
+```
+platform/    Platform::I2CBus / Clock / Sleeper + per-target impls
+             (microbit/ = CODAL, host/ = the sim, was src/sim)
+hardware/    concrete drivers, filed by who could reuse them:
+             generic/ nezha/ hiwonder/ planetx/
+hal/         Hal::Motor / MotorBoard / Otos / ColorSensor / LineSensor
+             -- interfaces only, no chip knowledge
+kinematics/  Kinematics::Model + Differential / Mecanum -- the ONLY home
+             for chassis geometry (track width, wheelbase)
+motion/      Motion::Planner / Navigator / Odometry -- still under active
+             development, own Python-free CMake builds
+core/        Core::RobotLoop, Core::composeRobot(), Comms, Telemetry,
+             DifferentialDrive, Configurator, Preamble  (was app/)
+com/ config/ messages/ types/   cross-cutting floors
+```
+
+`src/tests/sim/unit/test_layer_isolation.py` enforces the platform/hal/
+hardware boundaries mechanically. `motion/` keeps its own, narrower rule:
+it imports nothing from the rest of `src/firm` except `messages/` and
+`firm/types/`, which is what keeps it portable.
+
+**Everything is under `src/firm` on purpose.** That is the tree meant to
+eventually freeze and move to its own repository (`git subtree split`), so
+the whole firmware has to travel together. Sprint 122's sibling `src/motion`
+tree and the old `src/sim` were folded back in for exactly this reason
+(August 2026 reorganization).
+
+The base/motion actuation boundary is unchanged:
+`Types::RobotState::Wheel::cmdVelocity` (`src/firm/types/robot_state.h`).
+Whichever subsystem currently owns motion — `Motion::Planner` for a queued
+Move, `Core::DifferentialDrive` for WHEELS teleop — writes this cycle's
+commanded wheel speed directly onto that shared blackboard field, and
+`Core::RobotLoop::cycle()` reads it back for actuation. There is no
+interface: sprint 128 ticket 014 deleted the 122-era `Motion::WheelSink`
+along with `Motion::MoveQueue`, `Motion::StopCondition` and
+`Motion::VelocityShaper` as dead code with zero callers.
+
+**The wheel-speed control law lives in `Core::DifferentialDrive`**
+(`fastPid()` plus the Stage A/B/C correction, adaptation and stall
+machinery in `core/differential_drive.cpp`) — NOT in
+`Motion::WheelVelocityPid`, which this section used to name and which no
+longer exists: sprint 128 ticket 015 deleted `wheel_velocity_pid.{h,cpp}`
+as a zero-instantiation class. Moving that law down to a `Hal::Wheel` is
+real, wanted work that has not happened; see
+[`src/firm/hal/DESIGN.md`](src/firm/hal/DESIGN.md) §4.
+
+See [`docs/design/design.md`](docs/design/design.md) §2 for the full
+subsystem map and each subsystem's own co-located `DESIGN.md` for its
+contract.

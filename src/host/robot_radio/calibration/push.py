@@ -179,7 +179,7 @@ def otos_kwargs(config: Any) -> "dict[str, float]":
     verbs (which carried the chip's raw int8 register scalar,
     ``scale_to_int8()``-encoded), the live wire push applies NO such
     encoding: ``Core::configureOtos()`` (132-010, trap 3 closed) converts
-    the multiplier through ``Devices::scaleToRegister()`` FIRMWARE-side
+    the multiplier through ``Hardware::scaleToRegister()`` FIRMWARE-side
     now, so a live push and a boot bake finally agree on what a given
     multiplier means. ``binary_bridge.py``'s ``OL <scale>``/``OA <scale>``
     verbs already pass their argument straight through as the multiplier

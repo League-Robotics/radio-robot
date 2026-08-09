@@ -1,6 +1,6 @@
 """src/host/robot_radio/calibration/sim_boot_config.py -- ticket 113-004.
 
-Tier-2 (boot-only) ``Devices::MotorConfig`` scalar mapping helper: computes
+Tier-2 (boot-only) ``Hal::MotorConfig`` scalar mapping helper: computes
 the SAME field values ``gen_boot_config.py`` bakes into a real robot's
 ``boot_config.cpp`` at build time, but from an already-loaded host
 ``RobotConfig`` (or a raw robot-JSON dict) at *sim-open* time -- see sprint

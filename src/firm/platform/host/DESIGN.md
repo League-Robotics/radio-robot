@@ -1,6 +1,15 @@
-# Sim (`src/firm/platform/host`) — Host-Build Firmware Simulator
+# Host platform (`src/firm/platform/host`) — the Host-Build Firmware Simulator
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-21 · **Status:** in-flux
+**Owner:** Eric Busboom · **Last reviewed:** 2026-08-09 · **Status:** in-flux
+
+> **Was `src/sim/`.** The August 2026 platform/hardware/hal reorganization
+> made it a PLATFORM, alongside `platform/microbit/`, because that is what
+> it always was: real firmware built against substituted bus and clock
+> primitives, calling the SAME `Core::composeRobot()` the ARM `main.cpp`
+> calls. It is excluded from the ARM firmware build by a
+> `list(FILTER ... EXCLUDE REGEX "/platform/host/")` in the root
+> `CMakeLists.txt` — without that filter its host-only sources land in the
+> firmware image.
 
 ---
 
@@ -92,8 +101,8 @@ field 20 is `reserved`, not reused — sprint 116's planned MOVE protocol
 reintroduces a `Move`-shaped arm at a fresh number, never 20). The
 current command surface this simulator drives is **TWIST + STOP +
 CONFIG{motor,otos} + deadman only** — see
-[`../firm/DESIGN.md`](../firm/DESIGN.md) and
-[`../firm/app/DESIGN.md`](../firm/app/DESIGN.md) for the firmware side of
+[`../firm/DESIGN.md`](../../DESIGN.md) and
+[`../firm/app/DESIGN.md`](../../core/DESIGN.md) for the firmware side of
 the same statement.
 
 Everything below traces one concrete TWIST round trip, with file/line
@@ -242,7 +251,7 @@ void step(int cycles = 1) {
 **File: `src/firm/core/robot_loop.cpp` — one `cycle()`**
 
 The cycle is the same schedule described in
-[`../firm/app/DESIGN.md`](../firm/app/DESIGN.md) §2/§4 — left-motor
+[`../firm/app/DESIGN.md`](../../core/DESIGN.md) §2/§4 — left-motor
 request/settle/collect/PID, comms pump + command dispatch, telemetry
 emit, right-motor request/settle/collect/PID, deadman check, trailing
 perception+odometry+pace block. The command-relevant slice:
@@ -268,8 +277,8 @@ perception+odometry+pace block. The command-relevant slice:
    ```
    The immediate `ack(env.corr_id, 0)` rides the next telemetry frame's
    single ack slot (`flags` bit 5, `ack_corr`/`ack_err`) — see
-   [`../firm/messages/DESIGN.md`](../firm/messages/DESIGN.md) and
-   [`../firm/app/DESIGN.md`](../firm/app/DESIGN.md) §4.
+   [`../firm/messages/DESIGN.md`](../../messages/DESIGN.md) and
+   [`../firm/app/DESIGN.md`](../../core/DESIGN.md) §4.
 4. The deadman check runs in the same settle block right after
    `processMessage()`: `deadman_.expired()` forces `drive_.stop()` and
    `driving_ = false` if the armed duration has elapsed with no
@@ -319,14 +328,14 @@ encoder scale/slip/tick-quantization error, OTOS drift/raw-scale error)
 that `SimPlant`'s own `set*` methods (and the matching
 `sim_set_wheel_*`/`sim_set_enc_*`/`sim_set_otos_*` ctypes exports)
 expose to Python test code — see
-[`../tests/DESIGN.md`](../tests/DESIGN.md) §2.
+[`../tests/DESIGN.md`](../../../tests/DESIGN.md) §2.
 
 ---
 
 ## 5. Encoder read-back
 
 Split-phase, exactly as on hardware (see
-[`../firm/devices/DESIGN.md`](../firm/devices/DESIGN.md) §4):
+[`../firm/devices/DESIGN.md`](../../hardware/DESIGN.md) §4):
 
 1. **Request** — `NezhaMotor::requestSample()` writes the encoder-select
    frame `{0xFF,0xF9,port,0x00,0x46,0x00,0xF5,0x00}`. `SimPlant`'s
@@ -341,7 +350,7 @@ Split-phase, exactly as on hardware (see
 3. **Convert + estimate velocity** — `NezhaMotor::tick()` converts the
    raw count to mm and updates `filteredVelocity_` via the freshness-gated
    EMA/line-fit estimator (see
-   [`../firm/devices/DESIGN.md`](../firm/devices/DESIGN.md) §4).
+   [`../firm/devices/DESIGN.md`](../../hardware/DESIGN.md) §4).
    `velocity()` is the "encoder velocity" the GUI displays.
 
 ---
@@ -350,7 +359,7 @@ Split-phase, exactly as on hardware (see
 
 `RobotLoop`'s `updateTlm()`/`Telemetry::emit()` stage and send the
 primary frame exactly as described in
-[`../firm/app/DESIGN.md`](../firm/app/DESIGN.md) §4 — `EncoderReading`
+[`../firm/app/DESIGN.md`](../../core/DESIGN.md) §4 — `EncoderReading`
 per wheel (position + velocity + sample time), `OtosReading` (position +
 heading + v_x/v_y/omega + burst time), the single `flags` word, the
 single ack slot, packed line/color words — every 40 ms firmware cycle,
@@ -437,18 +446,18 @@ either executed by the tick thread (fire-and-forget via
   (`sim_cmd_vel_left/right`, `sim_set_pid_enabled`). `sim_inject_move`
   and every planner/pilot/heading-source accessor are gone (see §2).
 - **`libfirmware_host.dylib`** itself — the build artifact `SimLoop`
-  loads; see [`../tests/DESIGN.md`](../tests/DESIGN.md) for the CMake
+  loads; see [`../tests/DESIGN.md`](../../../tests/DESIGN.md) for the CMake
   target that produces it.
 
 ### Consumes
 
 - **`src/firm/` (compiled `-DHOST_BUILD`)** — the real firmware graph;
-  see [`../firm/DESIGN.md`](../firm/DESIGN.md) §4 "Two build targets, one
+  see [`../firm/DESIGN.md`](../../DESIGN.md) §4 "Two build targets, one
   tree."
 - **`src/tests/sim/plant/`'s `WheelPlant`/`OtosPlant`** and
   **`src/tests/sim/support/`'s `FakeTransport`/`wire_test_codec.h`** —
   physics and transport doubles this directory's own code never
-  reimplements; see [`../tests/DESIGN.md`](../tests/DESIGN.md) §2.
+  reimplements; see [`../tests/DESIGN.md`](../../../tests/DESIGN.md) §2.
 
 ## 8. Open Questions / Known Limitations
 
@@ -463,7 +472,7 @@ either executed by the tick thread (fire-and-forget via
   fresh field number). `SimLoop.move()` itself is not deleted — it is
   dead-but-reachable code, left in place because the host-side
   planner/tour machinery it serves is DORMANT-by-stakeholder-decision
-  (see [`../host/robot_radio/DESIGN.md`](../host/robot_radio/DESIGN.md)),
+  (see [`../host/robot_radio/DESIGN.md`](../../../host/robot_radio/DESIGN.md)),
   not because it still works. Do not use the managed Test S/T path as a
   reference for "how TWIST works" — use `run_unmanaged()`.
 - **`src/tests/sim/plant/wheel_plant.h`'s own header comment describes a

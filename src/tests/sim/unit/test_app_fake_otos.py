@@ -1,6 +1,6 @@
 """Off-hardware acceptance proof for Core::FakeOtos
 (``src/firm/core/fake_otos.{h,cpp}``) -- the bench implementation of the
-Devices::Otos interface introduced by the otos-fake-seam refactor.
+Hal::Otos interface introduced by the otos-fake-seam refactor.
 
 Compiles ``app_fake_otos_harness.cpp`` together with the HOST_BUILD
 implementations it needs (``src/firm/core/fake_otos.cpp``,
@@ -26,7 +26,7 @@ _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_fake_otos_harness.
 _FAKE_OTOS_SRC = _SOURCE_DIR / "core" / "fake_otos.cpp"
 _ODOMETRY_SRC = _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp"
 _BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "kinematics" / "differential_kinematics.cpp"
-# otos.cpp carries the abstract Devices::Otos base's out-of-line anchor
+# otos.cpp carries the abstract Hal::Otos base's out-of-line anchor
 # (~Otos / vtable / typeinfo) that any concrete subclass -- FakeOtos -- links.
 _OTOS_SRC = _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp"
 

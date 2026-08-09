@@ -42,7 +42,7 @@ _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 # _MESSAGE_SOURCES/_KINEMATICS_SOURCES lists exactly -- this harness composes
 # the SAME Core::composeRobot() graph sim_api_harness.cpp does (via
 # Core::RobotGraph/Core::composeRobot(), app/boot_wiring.h), just with a
-# custom Devices::Sleeper (JitterySleeper) instead of TestSim::SimHarness's
+# custom Platform::Sleeper (JitterySleeper) instead of TestSim::SimHarness's
 # fixed internal one. Keep this list in sync with test_sim_api.py's own if
 # composeRobot()'s own dependency graph ever grows -- see this codebase's
 # established per-harness source-list duplication convention

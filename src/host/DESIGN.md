@@ -107,7 +107,7 @@ in which file is which) is in
   [`robot_radio/DESIGN.md`](robot_radio/DESIGN.md) for the file-by-file
   detail.
 - **Consumes the simulator** — `io/sim_loop.py` loads
-  [`src/firm/platform/host`](../sim/DESIGN.md)'s dylib (the real firmware compiled
+  [`src/firm/platform/host`](../firm/platform/host/DESIGN.md)'s dylib (the real firmware compiled
   `-DHOST_BUILD`) and drives it over the same `CommandEnvelope` surface
   as a real robot: one command-in Sim, not a second code path.
 - **Consumes per-robot calibration** — `data/robots/*.json` via

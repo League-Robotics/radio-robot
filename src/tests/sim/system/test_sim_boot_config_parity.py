@@ -17,7 +17,7 @@ is DELETED, not ported -- `msg::PlannerConfig` itself, and the
 Tier-2 golden-parity mechanism (`sim_configure_motor()`/
 `sim_read_motor_config()` -- unaffected by the gut) survives.
 
-Rewritten AGAIN 125-003 (Devices::MotorConfig::velFiltAlpha deleted --
+Rewritten AGAIN 125-003 (Hal::MotorConfig::velFiltAlpha deleted --
 sprint.md Decision 2, "protection vs. control": the EMA velocity estimator
 it fed was measurement conditioning, deleted outright pending ticket 004's
 Core::WheelObserver, not relocated with a config surface of its own yet).

@@ -50,7 +50,7 @@ boundary interface; see §5's Drive bullet and
 `RobotLoop`'s own call ordering. See this file's own "122
 (motion-library extraction)"/"125–128" notes at the end of this section
 for the full before/after, and
-[`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) for their current
+[`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) for their current
 orientation and standalone test builds.
 
 This is the seam that owns the robot's *timing* — every I2C
@@ -350,7 +350,7 @@ ships). The third change (ticket 2, LANDED): a compile-time `FAKE_OTOS` bench
 build variant that reports the dead-reckoned `Odometry` pose in place of a
 real OTOS burst read. **This mechanism was later reshaped by the
 otos-fake-seam refactor** (see §2's "Otos call site" and
-[`devices/DESIGN.md`](../devices/DESIGN.md)): what shipped in 120-002 as a
+[`devices/DESIGN.md`](../hardware/DESIGN.md)): what shipped in 120-002 as a
 `Devices::Otos::feedSyntheticSample()` method + a per-cycle `#ifdef
 FAKE_OTOS` branch in `RobotLoop::cycle()` is now `Devices::Otos` as an
 abstract interface with two implementations — `Devices::RealOtos` (the
@@ -410,7 +410,7 @@ mention of `Core::MoveQueue`/`Core::Odometry`/`Core::StateEstimator`,
 `src/firm/motion/`/`src/firm/kinematics/` earlier in this file's own
 history (115-121) is an accurate PRE-122 record of where that code lived
 and what it was called AT THE TIME — not restated or renamed throughout
-this document — see [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) for
+this document — see [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) for
 the current orientation, module list, and boundary contract, and
 `docs/design/design.md` §2/§5 for the two-layer split at the system
 level. Zero behavior change (this was a pure mechanical move, sprint
@@ -570,7 +570,7 @@ file's own "Both `MoveQueue::landAtZero()`..."/"118 ticket 004"/
 "119-005"/"121-003" paragraphs above, is additionally preserved verbatim
 as dated design history:
 [`docs/design/history/land-at-zero-margin-derivation.md`](../../../docs/design/history/land-at-zero-margin-derivation.md).
-See [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) for the motion
+See [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) for the motion
 library's own current orientation and `robot_state.h`'s own `cmdVelocity`
 field comment for the boundary's current, exact writer/consumer
 contract.
@@ -730,7 +730,7 @@ pose + `BodyKinematics`-fused wheel twist) — is chosen ONCE at the
 `main.cpp` composition root under `#ifdef FAKE_OTOS`, the only place that
 macro appears (otos-fake-seam refactor, superseding 120-002's per-cycle
 branch + the deleted `Devices::Otos::feedSyntheticSample()`). See
-[`devices/DESIGN.md`](../devices/DESIGN.md) for the `Otos` interface /
+[`devices/DESIGN.md`](../hardware/DESIGN.md) for the `Otos` interface /
 `RealOtos` split and [`app/fake_otos.h`](fake_otos.h) for the fake.
 
 **Predict-to-now estimation (`RobotLoop`'s `StateEstimator::update()`
@@ -1287,7 +1287,7 @@ called with real elapsed time between calls).
   header for the exact current contract.
 - **`Motion::Odometry::integrate(leftPosition, rightPosition)`/
   `pathLength()`:** (122-002, MOVED to `src/firm/motion/` — see
-  [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) for the current,
+  [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) for the current,
   exact contract; no longer holds a `Devices::Motor&`, takes the
   caller's current wheel positions as plain float parameters instead.)
   `integrate()` — call once per cycle, after both motors' own `tick()`
@@ -1313,7 +1313,7 @@ called with real elapsed time between calls).
   `tick(state)`/`update(state)`/`active()`/`shaperConfigured()`:** (125–128
   — the live motion decider, superseding `Motion::MoveQueue`, deleted as
   dead code in sprint 128 ticket 014 after being confirmed to have zero
-  callers; see [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) §2/§4/§5
+  callers; see [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) §2/§4/§5
   and `planner/planner.h`'s own doc comment for the current, exact
   contract — this file does not re-derive it.) `move()` applies
   `replace`/enqueue semantics; `tick(state)` profiles/shapes the active
@@ -1331,7 +1331,7 @@ called with real elapsed time between calls).
 - **`Motion::StateEstimator::update(input, now)`/`wheelAt(wheel, t)`/
   `bodyAt(t)`/`whereAmI(now)`/`wheelNow(wheel)`/`reset(x, y, heading)`/
   `innovations()`/`setWeights(weights)`** (117, MOVED to `src/firm/motion/` at
-  122-002 — see [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) and
+  122-002 — see [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) and
   `state_estimator.h`'s own doc comment for the current, exact contract;
   `update()` now takes a plain `Motion::StateEstimator::Input` struct
   instead of `Core::Telemetry::Frame`, since this tree may not depend on
@@ -1398,7 +1398,7 @@ called with real elapsed time between calls).
 - **`Devices::NezhaMotor`, `Devices::Otos`, `Devices::ColorSensorLeaf`,
   `Devices::LineSensorLeaf`, `Devices::I2CBus`, `Devices::Clock`,
   `Devices::Sleeper`:** the device leaves and time/bus seams `app/` drives
-  — see [devices/DESIGN.md](../devices/DESIGN.md).
+  — see [devices/DESIGN.md](../hardware/DESIGN.md).
 - **`BodyKinematics::inverse()`/`forward()`:** stateless twist↔wheel math
   — moved to `src/firm/motion/body_kinematics.{h,cpp}` at 122-001 (from
   `src/firm/kinematics/`); `Motion::Planner` calls `inverse()`-equivalent
@@ -1407,7 +1407,7 @@ called with real elapsed time between calls).
   `forward()` directly here in `app/` to fuse the two leaves' measured
   velocities into `state_.pose.v_x/v_y/omega` (124-009 — formerly
   `frame_.twist`/`updateTlm()`; `Drive::trackWidth()`'s own doc comment).
-  See [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) and
+  See [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) and
   [`src/firm/kinematics/DESIGN.md`](../kinematics/DESIGN.md) (retired,
   redirects to the current doc) for the full derivation.
 - **`msg::CommandEnvelope`/`ReplyEnvelope`/`Telemetry`,
@@ -1424,12 +1424,12 @@ called with real elapsed time between calls).
 - **`Motion::Planner`** (`src/firm/motion/planner/`, 125–128): the bounded-Move
   stop/timeout/completion decision, profiling, and shaping — superseding
   the deleted `Motion::StopCondition`/`Motion::MoveQueue` (116/122,
-  deleted 128 as dead code; see [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md)
+  deleted 128 as dead code; see [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md)
   §1's own "128" note for the deletion and
   [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md), retired since 122,
   for that stack's own historical derivation). `src/firm/motion/` contains
   only the modules listed in
-  [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) §2.
+  [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) §2.
 - **`Types::RobotState`** (124-007/009, `src/firm/types/robot_state.h`,
   superseding this entry's former `Telemetry::Frame`/hand-copied
   `Motion::StateEstimator::Input` description): the dependency-free

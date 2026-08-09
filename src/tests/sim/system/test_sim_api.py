@@ -2,7 +2,7 @@
 SimApi (``src/tests/sim/support/sim_api.{h,cpp}``, deleted ticket 108-003) onto
 TestSim::SimHarness/TestSim::SimPlant (``src/firm/platform/host/``), the composed,
 steppable harness wiring the REAL ``Core::RobotLoop`` against the REAL plant
-(``src/tests/sim/plant/``) and a REAL, wire-protocol-parsing ``Devices::I2CBus``
+(``src/tests/sim/plant/``) and a REAL, wire-protocol-parsing ``Platform::I2CBus``
 implementation.
 
 Compiles ``sim_api_harness.cpp`` together with ``sim_plant.cpp``,

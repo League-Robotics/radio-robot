@@ -109,7 +109,7 @@ _DEFAULT_TRACKWIDTH = 128.0  # [mm]
 # Sim mode's tick thread keeps streaming telemetry forever once connected
 # (not just during a tour/drive) -- and ticket 108-011's rest-encoder dither
 # (WheelPlant's opt-in +-1 wire-LSB alternation while at rest, added so a
-# stopped wheel doesn't false-positive Devices::MotorArmor's wedge-latch
+# stopped wheel doesn't false-positive Hardware::MotorArmor's wedge-latch
 # detector -- see tests/sim/plant/wheel_plant.h's own "Rest-dither tuning"
 # comment) means a genuinely-idle sim's encoder-derived pose micro-jitters by
 # a fraction of a millimetre every frame, forever. Every _feed_* helper below

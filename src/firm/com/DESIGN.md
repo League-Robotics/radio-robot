@@ -15,7 +15,7 @@ the micro:bit radio (`Radio`), plus persisted radio-channel storage
 (`radio_channel.h`). It owns the two physical byte pipes the robot talks
 over and the framing each one needs to turn bytes into complete lines — and
 nothing else. It does not know what a line means; that is `app/Comms`'s job
-(see [../app/DESIGN.md](../app/DESIGN.md)). The seam exists because these two
+(see [../app/DESIGN.md](../core/DESIGN.md)). The seam exists because these two
 transports are the only code in the firmware that must touch `MicroBit.h`
 directly outside `devices/microbit_*` and `main.cpp` — isolating them here is
 what keeps the rest of the tree `HOST_BUILD`-clean (the system doc's
@@ -42,7 +42,7 @@ distinction for `readLine()`/`poll()` to make at this layer at all.
 `Core::Comms` decides text vs. binary one layer up, by parsing the
 `<COMMAND>` prefix off the complete line and looking it up in the
 generated command registry (`messages/commands.h`'s `kVerbTable[]`) — see
-[../app/DESIGN.md](../app/DESIGN.md) §1/§4. Two senders keep their
+[../app/DESIGN.md](../core/DESIGN.md) §1/§4. Two senders keep their
 pre-124 drop policies, now unified on the SAME trailing delimiter rather
 than split by it: `send(const uint8_t* data, uint16_t len)` is ASYNC/
 drop-on-full (the transport appends the trailing `\n` itself); `sendReliable
@@ -238,7 +238,7 @@ hardware to catch up, not a scheduling primitive).
   rules.
 - **`Core::Transport` (from `app/`):** `com/` is consumed BY `app/comms.h`'s
   `SerialTransport`/`RadioTransport` adapters, not the other way around;
-  `com/` has no include on `app/`. See [../app/DESIGN.md](../app/DESIGN.md).
+  `com/` has no include on `app/`. See [../app/DESIGN.md](../core/DESIGN.md).
 
 ## 6. Open Questions / Known Limitations
 

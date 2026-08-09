@@ -21,8 +21,8 @@ for the `RobotState`/`Telemetry`-projection side. Every claim below was
 cross-checked against the actual shipped source
 (`src/protos/commands.proto`, `src/protos/envelope.proto`,
 `src/protos/telemetry.proto`, `src/protos/options.proto`,
-`src/firm/app/comms.{h,cpp}`, `src/firm/app/robot_loop.cpp`,
-`src/firm/app/telemetry.{h,cpp}`, `src/firm/types/robot_state.h`,
+`src/firm/core/comms.{h,cpp}`, `src/firm/core/robot_loop.cpp`,
+`src/firm/core/telemetry.{h,cpp}`, `src/firm/types/robot_state.h`,
 `src/firm/messages/wire_runtime.h`, `src/firm/messages/wire.h`,
 `src/firm/main.cpp`, `src/host/robot_radio/io/wire_codec.py`,
 `src/host/robot_radio/io/serial_conn.py`,
@@ -80,7 +80,7 @@ rewrite**, not a command-surface rewrite.
 
 **Sprint 124 replaces sprint 123's `0x00`-delimited COBS+CRC frame (with
 a separate `\r`?`\n`-terminated text rump sharing the same byte stream,
-demuxed by `App::FrameKind`) with one uniform grammar, keyed on the SAME
+demuxed by `Core::FrameKind`) with one uniform grammar, keyed on the SAME
 byte the grammar's own terminator uses.** The command surface itself
 (§3+) is unaffected — this is a framing-layer and reply-plane change
 only.
@@ -101,7 +101,7 @@ This is unambiguous by construction, not by guessing: a COBS-encoded
 frame body can never contain an embedded `0x0A` (§2.2's delimiter
 parameterization makes `0x0A` — not `0x00` — the byte COBS excludes), and
 a cleartext line never legitimately contains one either (`\n` always ends
-it). `App::Comms::dispatchLine()` (`src/firm/app/comms.cpp`) parses the
+it). `Core::Comms::dispatchLine()` (`src/firm/core/comms.cpp`) parses the
 `<COMMAND>` prefix from an already-`\n`-delimited line — the FIRST `':'`
 ends the command; every later byte, including further `':'` bytes, is
 data — then looks that name up in the registry (§2.4) and dispatches by
@@ -112,7 +112,7 @@ terminal artifact, never legitimate binary content, since every binary
 verb always carries a `':'`-prefixed body, even an empty one). An
 unrecognized `<COMMAND>` increments `malformedCount_` — the SAME counter
 a COBS/CRC failure already increments — one fault-bit source
-(`kFlagFaultCommsMalformed`), not two. `App::Comms::pump()` reads at most
+(`kFlagFaultCommsMalformed`), not two. `Core::Comms::pump()` reads at most
 one complete line per call from serial first, falling back to radio only
 if serial had nothing.
 
@@ -138,7 +138,7 @@ not apply there.
 
 ### 2.2 COBS + CRC framing (binary verbs only)
 
-- **Delimiter: `0x0A`, not `0x00`** (`App::kCobsDelimiter`, `comms.h`;
+- **Delimiter: `0x0A`, not `0x00`** (`Core::kCobsDelimiter`, `comms.h`;
   `wire_codec.py`'s `encode_frame()`/`decode_frame()` hard-code
   `delimiter=0x0A`). `WireRuntime::cobsEncode()`/`cobsDecode()`
   (`wire_runtime.{h,cpp}`) gained a trailing `delimiter` byte parameter
@@ -269,8 +269,8 @@ two-verb rump invited.
 | `MOVE` | host→robot | binary | `CommandEnvelope.cmd.move` (§3/§4) |
 | `CONFIG` | host→robot | binary | `CommandEnvelope.cmd.config` (§3/§6) |
 | `STOP` | host→robot | binary | `CommandEnvelope.cmd.stop` (§3/§5.6) — **a PLANNED stop since the command-ingestion rework**: it enters `Motion::Planner`'s queue and executes in sequence, coming to rest before it completes. NOT "halt now" |
-| `WHEELS` | host→robot | binary | `CommandEnvelope.cmd.wheels` (§3) — the dumb teleop primitive: a per-wheel velocity pair held for a REQUIRED `duration`, routed straight to `App::Drive` with no planner involvement |
-| `ESTOP` | host→robot | binary | `CommandEnvelope.cmd.estop` (§3) — halt everything NOW: zero `App::Drive` and clear the planner's active + pending queue, no completion acks for the discarded entries. This is what `STOP` meant before the rework |
+| `WHEELS` | host→robot | binary | `CommandEnvelope.cmd.wheels` (§3) — the dumb teleop primitive: a per-wheel velocity pair held for a REQUIRED `duration`, routed straight to `Core::DifferentialDrive` with no planner involvement |
+| `ESTOP` | host→robot | binary | `CommandEnvelope.cmd.estop` (§3) — halt everything NOW: zero `Core::DifferentialDrive` and clear the planner's active + pending queue, no completion acks for the discarded entries. This is what `STOP` meant before the rework |
 | `GET_CONFIG` | host→robot | binary | `CommandEnvelope.cmd.get_config` (§3/§6.1) — 132-011: request a read-back of one `ConfigGroupTarget`'s current value |
 | `SET_FIELD` | host→robot | binary | `CommandEnvelope.cmd.set_field` (§3/§6.2) — 132-012: write exactly one already-live field, addressed by `(ConfigGroupTarget, protobuf field number)` — deliberately spelled shorter than the `SetConfigField` message it carries (§6.2 explains why) |
 | `TLM` | robot→host | binary | `ReplyEnvelope{tlm: Telemetry}` — the primary reply arm, emitted every cycle (§8) |
@@ -334,13 +334,13 @@ protocol v4**:
 
 | Arm | Field # | Payload | Handler | Wire verb name (§2.4) | Destination |
 |---|---|---|---|---|---|
-| `config` | 6 | `ConfigDelta` (§6) | `RobotLoop::routeCommand()` | `CONFIG` | `App::Configurator` |
+| `config` | 6 | `ConfigDelta` (§6) | `RobotLoop::routeCommand()` | `CONFIG` | `Core::Configurator` |
 | `stop` | 13 | `Stop{id}` | `RobotLoop::handleStop()` | `STOP` | `Motion::Planner::plannedStop()` — queued, in sequence |
 | `move` | 21 | `Move` (§4) | `RobotLoop::handleMove()` | `MOVE` | `Motion::Planner::move()` — twist OR wheels velocity, any stop kind |
-| `wheels` | 22 | `Wheels{v_left, v_right, duration, id}` | `RobotLoop::handleWheels()` | `WHEELS` | `App::Drive::command()` — supersedes the planner |
-| `estop` | 23 | `Estop{}` (zero fields) | `RobotLoop::handleEstop()` | `ESTOP` | `App::Drive::estop()` **and** `Motion::Planner::estop()` |
-| `get_config` | 24 | `GetConfig{target}` (§6.1) | `RobotLoop::handleGetConfig()` | `GET_CONFIG` | `App::Configurator::encodeSnapshot()` — replies directly, does NOT ride the ack ring |
-| `set_field` | 25 | `SetConfigField{target, field, value}` (§6.2) | `RobotLoop::routeCommand()` | `SET_FIELD` | `App::Configurator::applyField()` |
+| `wheels` | 22 | `Wheels{v_left, v_right, duration, id}` | `RobotLoop::handleWheels()` | `WHEELS` | `Core::DifferentialDrive::command()` — supersedes the planner |
+| `estop` | 23 | `Estop{}` (zero fields) | `RobotLoop::handleEstop()` | `ESTOP` | `Core::DifferentialDrive::estop()` **and** `Motion::Planner::estop()` |
+| `get_config` | 24 | `GetConfig{target}` (§6.1) | `RobotLoop::handleGetConfig()` | `GET_CONFIG` | `Core::Configurator::encodeSnapshot()` — replies directly, does NOT ride the ack ring |
+| `set_field` | 25 | `SetConfigField{target, field, value}` (§6.2) | `RobotLoop::routeCommand()` | `SET_FIELD` | `Core::Configurator::applyField()` |
 
 `corr_id` (field 1) is present on every `CommandEnvelope` and is echoed
 back via the ack ring (§7.1) for every arm EXCEPT `get_config`, which
@@ -360,7 +360,7 @@ so every arm name must be the lowercase spelling of its verb in
 `commands.proto`. Renaming an arm silently breaks every frame's CRC.
 
 **Exactly one subsystem owns motion at a time**, enforced at routing:
-a `WHEELS` command clears the planner, a `MOVE` clears `App::Drive`'s armed
+a `WHEELS` command clears the planner, a `MOVE` clears `Core::DifferentialDrive`'s armed
 command. That is also why routing every `MOVE` to the planner closed a live
 gap — a wheels-velocity `MOVE` carrying a DISTANCE stop used to be diverted
 into `Drive`, which has no odometry, and therefore ran to its timeout
@@ -370,7 +370,7 @@ backstop instead of stopping on the odometer.
 
 `STOP` and `ESTOP` are not synonyms and not a rename:
 
-- **`ESTOP`** — halt everything now. Zeroes `App::Drive`'s targets and
+- **`ESTOP`** — halt everything now. Zeroes `Core::DifferentialDrive`'s targets and
   clears `Motion::Planner`'s active + pending queue in the same cycle. The
   discarded entries get **no** completion acks: the host asked for a halt,
   not for a report that the things it cancelled finished.
@@ -389,7 +389,7 @@ Every caller that means "halt now" belongs on `ESTOP`
 
 ### 3.2 Command ingestion
 
-`App::Comms` buffers decoded commands in a ring (`kCmdRingDepth` = 12).
+`Core::Comms` buffers decoded commands in a ring (`kCmdRingDepth` = 12).
 `Comms::pump()` drains **both** transports into it and is called from
 inside each of `RobotLoop::cycle()`'s four existing pacing windows, so the
 transports are freed several times per cycle instead of once; the loop then
@@ -456,7 +456,7 @@ by this sprint.
 per-cycle `MoveQueue::tick()` schedule, land-at-zero completion,
 approach shaping (`Motion::VelocityShaper`), the "no completion ack for a
 flushed-while-pending `Move`" AS-BUILT behavior, the no-deadman
-structural safety property (SUC-053), velocity staging (`App::Drive`),
+structural safety property (SUC-053), velocity staging (`Core::DifferentialDrive`),
 and the config-completeness gate are all identical to
 [`docs/protocol-v4.md`](protocol-v4.md) §5.1-§5.7. This sprint's own
 `RobotLoop`/`Telemetry` restructure (124-009) changed HOW state is
@@ -478,7 +478,7 @@ characterization session can plausibly accumulate that much *net signed*
 travel if direction isn't perfectly balanced. Each cycle, after a wheel's
 position is read, if `|position| >= 30000` mm (a 2000 mm margin below the
 32000 mm wire bound), `RobotLoop` calls the wheel's EXISTING, UNMODIFIED
-`Devices::Motor::rebaseline()` — a pure software re-anchor (folds the
+`Hal::Motor::rebaseline()` — a pure software re-anchor (folds the
 current position back into the device's own offset and zeroes the local
 cache, issuing **zero I2C bus traffic**, the same model a vendor motor
 controller uses: read raw, hold a software offset, report
@@ -494,7 +494,7 @@ knows a rebase occurred even if it missed the exact boundary frame — it
 may ignore the discontinuity (accepting at most one cycle's worth of
 uncertainty at the boundary) or sum each epoch's final observed value
 into a running total if it cares about total travel since connect.
-`Devices::Motor`/`NezhaMotor`/`MotorArmor` are unmodified by this
+`Hal::Motor`/`NezhaMotor`/`MotorArmor` are unmodified by this
 policy — `RobotLoop` calls an existing primitive, it does not add one.
 
 ---
@@ -522,14 +522,14 @@ outcome rides the ack ring), `GetConfig` is a genuine request/reply pair:
 - **Reply** — `ReplyEnvelope.body.cfg` (`ConfigSnapshot{target, body}`),
   field 12, sent SYNCHRONOUSLY via `Comms::sendReply()` — the second live
   call site that method has ever had (the first, and only other one, is
-  `App::Telemetry::emitPrimary()`'s unsolicited `tlm` push). `body` is
+  `Core::Telemetry::emitPrimary()`'s unsolicited `tlm` push). `body` is
   `target`'s own group message, encoded exactly the way a future
   `SetConfigGroup.body` push would be (the SAME generated per-group codec,
   `msg::wire::encode(<Group>&, ...)` — 132-011's own encode-direction
   addition to the `msg::wire::decode(<Group>&, ...)` family 132-008 first
   added).
 - **Firmware path** — `RobotLoop::handleGetConfig()` calls
-  `App::Configurator::encodeSnapshot(target, snapshot)`, which reads
+  `Core::Configurator::encodeSnapshot(target, snapshot)`, which reads
   `Configurator::config()`'s matching group DIRECTLY — no derivation, no
   merge — and encodes it. **Not gated by the applyGroup()/install()
   re-appliability table**: read-back succeeds for every
@@ -602,7 +602,7 @@ number)`**, never a string key:
   (§6.1), which genuinely needs one (a group's worth of values has no room
   in a ring entry; a single field's `err` code does).
 - **Firmware path** — `RobotLoop::routeCommand()` calls
-  `App::Configurator::applyField(target, field, value)`, which:
+  `Core::Configurator::applyField(target, field, value)`, which:
   1. Rejects a boot-only `target` (`GEOMETRY`/`PLANNER`) with
      `ERR_NOT_LIVE` — the SAME `isLiveConfigurable()` gate
      `applyGroup()`/`install(target)` already use (§6), consulted BEFORE
@@ -672,7 +672,7 @@ single-scalar "freshest ack" slot either** (protocol v4's `ack_corr`/
 alongside the ring, are DELETED outright: `telemetry.proto` fields 5/6
 are `reserved`, not reused, and bit 5 is RESERVED). Every command's
 outcome rides `Telemetry` (§8) inside the next push —
-`App::Telemetry::ack(corrId, errCode)` pushes onto the bounded ack ring
+`Core::Telemetry::ack(corrId, errCode)` pushes onto the bounded ack ring
 ONLY now:
 
 - **`acks`** (§8.1 field 14) — a bounded ring, depth 4 (`kAckRingDepth`),
@@ -699,7 +699,7 @@ has exactly ONE: `RobotLoop::handleGetConfig()`'s own `ERR_BADARG` reply
 to an unrecognized `GetConfig.target` (§6.1) — a wire sniffer CAN observe
 a `ReplyEnvelope{err: ...}` frame today, though only in that one
 circumstance. `Comms::sendReply()` now has TWO live call sites, not one:
-`App::Telemetry::emitPrimary()` (`body_kind = TLM`, every cycle,
+`Core::Telemetry::emitPrimary()` (`body_kind = TLM`, every cycle,
 unsolicited) and `RobotLoop::handleGetConfig()` (`body_kind = CFG` or
 `ERR`, on demand, corr-id-matched). A wire sniffer will never observe a
 `ReplyEnvelope{ok: ...}` frame from this firmware.
@@ -771,7 +771,7 @@ this sprint added no new code and changed no code's live-producer status.
 
 Rides `ReplyEnvelope{corr_id=0, tlm: Telemetry}` (unsolicited, `corr_id`
 always 0), emitted **every loop cycle** — primary period == cycle period,
-~25 Hz / 40 ms (`App::Telemetry::kPrimaryPeriod`), unchanged from v4.
+~25 Hz / 40 ms (`Core::Telemetry::kPrimaryPeriod`), unchanged from v4.
 **There is only ever one telemetry frame now** — `msg::TelemetrySecondary`,
 the slower ~5 Hz diagnostic frame protocol v4 §8.4 described, is DELETED
 outright (sprint 124 ticket 009), not merely unused: it emitted nothing
@@ -782,7 +782,7 @@ to survive — nothing did. "The frame is the dataset" is now unqualified:
 one timestamped frame every iteration is the entire dataset-construction
 path.
 
-**Source: `RobotState`, not a hand-copied struct.** `App::RobotLoop`
+**Source: `RobotState`, not a hand-copied struct.** `Core::RobotLoop`
 publishes `Types::RobotState` (`src/firm/types/robot_state.h`) — a
 dependency-free blackboard struct, the sole cross-subsystem AND
 cross-tree (`src/firm`↔`src/motion`) data contract — once per cycle, each
@@ -790,7 +790,7 @@ section at its own coherence point. `Telemetry::update(const RobotState&)`
 is the ONE method that reads it and stages the whole next wire frame:
 `RobotLoop::cycle()` contains exactly one `tlm_.update(state)` call and
 zero direct `tlm_.setFlag()` calls (grep-enforceable:
-`grep setFlag src/firm/app/robot_loop.cpp` returns nothing) —
+`grep setFlag src/firm/core/robot_loop.cpp` returns nothing) —
 `kFlagFaultMoveTimeout`/`kFlagFaultShapingDisabled` are the one
 documented exception, set via `tlm_.setLiveFlag()` after
 `MoveQueue::tick()` runs, since their defining condition isn't known at
@@ -821,7 +821,7 @@ documented exception, set via `tlm_.setLiveFlag()` after
 |---|---|---|---|
 | `position` | 1 | `sint32`, `(scale)=1.0`, `(abs_max)=32000` | [mm] accumulated — see §5's rebaseline policy |
 | `velocity` | 2 | `sint32`, `(scale)=0.1`, `(abs_max)=4000` | [mm/s] signed, measured |
-| `age` | 3 | `uint32`, `(max)=255` | [ms] `now` minus this sample's own genuine collect time (`Devices::Motor::sampleTime()`) — NOT an absolute timestamp; renamed from v4's `time` field, which read absolute `[ms]` |
+| `age` | 3 | `uint32`, `(max)=255` | [ms] `now` minus this sample's own genuine collect time (`Hal::Motor::sampleTime()`) — NOT an absolute timestamp; renamed from v4's `time` field, which read absolute `[ms]` |
 | `position_epoch` | 4 | `uint32`, `(max)=127` (sizing-only; real storage is a full 8-bit counter) | wraps; +1 each `RobotLoop`-triggered `rebaseline()` (§5) — NEW this sprint, no v4 equivalent |
 
 **`OtosReading`** (one burst):
@@ -839,7 +839,7 @@ a `float` (fixed32, flat 4 bytes) in protocol v4 is now a protobuf
 `sint32` (zigzag varint) with a GENERATED `(scale)` conversion
 (`options.proto` extension 50007) — the generator emits a
 `pack<Field>(float) -> int32_t`/`unpack<Field>(int32_t) -> float` method
-pair on each field's own generated struct; every caller (`App::Telemetry::
+pair on each field's own generated struct; every caller (`Core::Telemetry::
 update()`) uses these, never hand-copied inline arithmetic. A
 zigzag-mapped small-magnitude value costs far fewer bytes than a `float`'s
 flat 4 (e.g. `0` costs 1 byte) — this shrink, together with `acks`'
@@ -938,7 +938,7 @@ proto.move_wheels(100.0, 100.0, stop_distance=300.0, timeout=4000.0,
 # halt-now -- see §3.1 "Two stops".
 proto.stop()
 
-# Panic stop: halt everything NOW -- zeroes App::Drive's targets AND
+# Panic stop: halt everything NOW -- zeroes Core::DifferentialDrive's targets AND
 # clears the planner's active + pending queue in the same cycle. This is
 # what every "halt now" call site (a geofence breach, Ctrl-C, an
 # emergency-stop button) must call, never stop() above. Measured on

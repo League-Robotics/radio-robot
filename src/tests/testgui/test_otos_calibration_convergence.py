@@ -10,7 +10,7 @@ drives.
    109-007) against a known true pose (``set_true_pose()``).
 3. Confirm the firmware's own decoded OTOS reading (the primary TLM frame's
    ``otos=`` field, ``Core::Odometry``'s ``frame.hasOtos``/``frame.otos`` --
-   ``Devices::Otos::pose()`` read back over the real wire) diverges from
+   ``Hal::Otos::pose()`` read back over the real wire) diverges from
    truth by the injected fraction -- SimPlant's OTOS burst-read response is
    `truth * rawError`, exactly as sim_plant.h documents.
 4. Push the COMPENSATING scale via a ``SetConfigField{OTOS, linear_scale}``
@@ -22,7 +22,7 @@ drives.
 
 This is a lower-level (no Qt, no GUI) but MORE literal exercise of "applies
 OtosConfigPatch (ticket 004)" than sim_fidelity_harness.cpp's C++-level
-scenario 3 (which drives ``Devices::Otos::setLinearScalar()`` directly) --
+scenario 3 (which drives ``Hal::Otos::setLinearScalar()`` directly) --
 this test goes through the actual wire envelope/ack round trip the TestGUI
 itself uses.
 
@@ -65,7 +65,7 @@ def _compensating_scale(raw_error: float) -> float:
     passed the config value straight through to a setter expecting the
     chip's raw int8 register, installing a 1-LSB scalar instead of the
     intended multiplier), ``Core::configureOtos()`` now converts this
-    multiplier through ``Devices::scaleToRegister()`` FIRMWARE-side before
+    multiplier through ``Hardware::scaleToRegister()`` FIRMWARE-side before
     calling ``setLinearScalar()`` -- so the host pushes the multiplier
     directly, no int8 pre-encoding."""
     return 1.0 / (1.0 + raw_error)

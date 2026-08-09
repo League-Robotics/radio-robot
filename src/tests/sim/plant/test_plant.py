@@ -3,9 +3,9 @@ deterministic motor+OTOS plant (``src/tests/sim/plant/{wheel,otos}_plant.{h,cpp}
 
 Compiles ``plant_harness.cpp`` together with the plant classes themselves,
 ``TestSim::SimPlant`` (``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's
-real ``Devices::I2CBus`` implementation these plant classes' wheel/pose
+real ``Platform::I2CBus`` implementation these plant classes' wheel/pose
 physics feed; ticket 108-004 migrated this harness onto it, replacing the
-deleted scripted-FIFO ``Devices::I2CBus`` fake ticket 108-001 removed), and
+deleted scripted-FIFO ``Platform::I2CBus`` fake ticket 108-001 removed), and
 the HOST_BUILD Devices/App/Kinematics sources they exercise
 (``src/firm/hardware/nezha/nezha_motor.cpp``, ``src/firm/hardware/generic/real_otos.cpp``,
 ``src/firm/kinematics/differential_kinematics.cpp``, ``src/firm/core/odometry.cpp``) with

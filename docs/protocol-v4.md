@@ -694,7 +694,7 @@ always 0 for this arm), emitted **every loop cycle** — primary period ==
 cycle period, ~25 Hz / 40 ms
 (`App::Telemetry::kPrimaryPeriod`, unchanged by sprint 116; restored to
 its genuine 40ms/~25Hz value by sprint 118 — see
-[`src/firm/app/DESIGN.md`](../src/firm/app/DESIGN.md) §1's "118 (loop
+[`src/firm/app/DESIGN.md`](../src/firm/core/DESIGN.md) §1's "118 (loop
 schedule truth)" note). "The frame
 is the dataset": with no on-chip measurement ring and no dump command,
 a timestamped frame every iteration is the entire dataset-construction

@@ -248,7 +248,7 @@ def test_calibration_commands_pushes_the_multiplier_directly_not_int8_encoded() 
     """132-014: OL/OA now carry the config MULTIPLIER directly (1.0 = no
     correction) -- the live wire push (set_config_field(OTOS,
     "linear_scale"/"angular_scale", value)) is applied through
-    Devices::scaleToRegister() FIRMWARE-side now (132-010, trap 3 closed),
+    Hardware::scaleToRegister() FIRMWARE-side now (132-010, trap 3 closed),
     so the host no longer pre-encodes via scale_to_int8() the way the
     pre-132 OL/OA text verbs did -- e.g. otos.linear_scale=1.027 ->
     ``OL 1.027``, not the old register-domain ``OL 27``."""

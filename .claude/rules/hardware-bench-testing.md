@@ -144,7 +144,7 @@ generated from one command registry; four cleartext verbs — `HELLO`/
 `PING`/`ID`/`VER` — plus a binary command plane with exactly three arms,
 `move`/`config`/`stop`; and an always-on binary telemetry push) —
 dispatched by
-[src/firm/app/robot_loop.cpp](../../src/firm/app/robot_loop.cpp)'s
+[src/firm/core/robot_loop.cpp](../../src/firm/core/robot_loop.cpp)'s
 `processMessage()`. There is no bare-command REPL shape any more: every
 motion is a bounded `Move` sent through `NezhaProtocol`
 ([src/host/robot_radio/robot/protocol.py](../../src/host/robot_radio/robot/protocol.py)),

@@ -1,11 +1,11 @@
 """Off-hardware acceptance proof for ticket 108-008 (clasi/issues/
 color-sensor-apds-probe-success-on-failure.md, 2026-07-13 code review
-finding M4): Devices::ColorSensorLeaf::beginStep()'s APDS probe must not
+finding M4): Hardware::ColorSensorLeaf::beginStep()'s APDS probe must not
 latch present()==true on a NAK'd bus read.
 
 Compiles ``devices_color_sensor_apds_probe_harness.cpp`` together with the
 REAL ``src/firm/hardware/planetx/color_sensor.cpp`` and ticket 108-002's real
-``Devices::I2CBus`` implementation, ``TestSim::SimPlant``
+``Platform::I2CBus`` implementation, ``TestSim::SimPlant``
 (``src/firm/platform/host/sim_plant.cpp`` -- itself named as this exact ticket's
 consumer in its own header comment) plus SimPlant's own
 ``wheel_plant.cpp``/``otos_plant.cpp`` dependencies, with ``-DHOST_BUILD``,

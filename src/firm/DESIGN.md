@@ -25,6 +25,17 @@ is the current, reconciled source for all of that restructuring. Only
 this file's wire-framing content (§4) is kept current — updated again
 for sprint 124 ticket 014's protocol v5 doc pass.
 
+**Also not updated for the August 2026 platform/hardware/hal
+reorganization**, which is the larger of the two gaps now: `src/firm` is
+layered `platform/` → `hardware/` → `hal/` → `kinematics/` → `motion/` →
+`core/`, and the flat `app/` + `devices/` split this file's diagrams show
+no longer exists. The `Core::`-prefixed names appearing in the historical
+prose below were mechanically renamed from `App::` along with the code —
+read them as "the class that is called this NOW", not as evidence that any
+of the surrounding module layout is current. See
+[`docs/design/design.md`](../../docs/design/design.md) §2 for the real
+map and each subsystem's own co-located `DESIGN.md` for its contract.
+
 It is the **plant** end of the host/robot split — the host side is
 [`src/host`](../host/DESIGN.md). The host plans motion (currently just
 profiled twists / wheel-velocity MOVEs); the firmware **follows bounded
@@ -44,7 +55,7 @@ consume it is a later sprint, gated on this one being bench-proven).
 Everything under this directory compiles into one image (`main.cpp` is
 the ARM entry point); the same modules minus the ARM adapters also
 compile under `-DHOST_BUILD` for host-side tests and simulation
-([`src/firm/platform/host`](../sim/DESIGN.md)) — see §4.
+([`src/firm/platform/host`](platform/host/DESIGN.md)) — see §4.
 
 `src/firm` is one of the two declared design-doc-set source roots
 (`.clasi/config.yaml`'s `sources:` — the other is `src/host`). Each
@@ -62,10 +73,10 @@ One row per one-level-down directory, each linking to its own co-located
 
 | Subsystem | Role |
 |---|---|
-| [`app/`](app/DESIGN.md) | The single cooperatively-timed control loop (`Core::RobotLoop`) and its passive modules: Comms, Telemetry, Drive, Odometry, MoveQueue, StateEstimator, Preamble. |
+| [`app/`](core/DESIGN.md) | The single cooperatively-timed control loop (`Core::RobotLoop`) and its passive modules: Comms, Telemetry, Drive, Odometry, MoveQueue, StateEstimator, Preamble. |
 | [`com/`](com/DESIGN.md) | ARM-only raw transports: USB CDC serial, the micro:bit radio, persisted radio-channel storage. |
 | [`config/`](config/DESIGN.md) | Generated boot configuration — per-robot calibration baked at build time from `data/robots/active_robot.json`. |
-| [`devices/`](devices/DESIGN.md) | I2C-attached device leaves (Nezha motors, OTOS, color/line sensors), the shared `MotorArmor` policy, the velocity PID, and the pure `I2CBus`/`Clock`/`Sleeper` hardware seams. |
+| [`devices/`](hardware/DESIGN.md) | I2C-attached device leaves (Nezha motors, OTOS, color/line sensors), the shared `MotorArmor` policy, the velocity PID, and the pure `I2CBus`/`Clock`/`Sleeper` hardware seams. |
 | [`kinematics/`](kinematics/DESIGN.md) | Stateless differential-drive math: inverse/forward twist↔wheel maps, curvature-preserving saturation. |
 | [`messages/`](messages/DESIGN.md) | The wire schema: generated message structs, the generated envelope codec, the hand-written byte-level wire runtime. |
 | [`motion/`](motion/DESIGN.md) | Pure, bounded-motion stop/timeout comparison logic (`Motion::StopCondition`) — a fresh, tiny directory (116), not a revival of the larger `motion/` tree sprint 115 deleted. |
@@ -147,7 +158,7 @@ twice: as the ARM firmware image (`main.cpp` entry, real
 `MicroBit.h`-backed transports and I2C), and — minus the explicitly
 ARM-only files — under `-DHOST_BUILD` with no `MicroBit.h` anywhere in
 the translation unit, linked into the host-side simulator and unit tests
-([`src/firm/platform/host`](../sim/DESIGN.md), `src/tests/sim/`). Hardware seams
+([`src/firm/platform/host`](platform/host/DESIGN.md), `src/tests/sim/`). Hardware seams
 (`I2CBus`, `Clock`, `Sleeper`, the transports) are plain virtual bases
 with an ARM implementation and a host/sim implementation — never
 `#ifdef` forks inside a shared header. This dual-target discipline is

@@ -482,7 +482,7 @@ needs this; every other interpolated field uses plain `lerp()`.
   read "not yet wired into the loop's cycle" — that gap is closed:
   `RobotLoop::updateLineColor()` now ticks one of the two leaves per
   cycle, alternating, from the trailing pace block (see
-  [`../app/DESIGN.md`](../app/DESIGN.md) §2), and `Telemetry`'s packed
+  [`../app/DESIGN.md`](../core/DESIGN.md) §2), and `Telemetry`'s packed
   `line`/`color` words carry the result. Left as a dated note rather
   than deleted outright, so a reader who only remembers the old gap can
   see it was closed and when.

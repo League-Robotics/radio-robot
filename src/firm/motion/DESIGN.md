@@ -54,7 +54,7 @@ outright (~1,500 lines) along with their `motion_tests` ctest targets.
 **`planner/` is now the larger, live half of this tree** — see §2/§4
 below. The land-at-zero completion predicate's own empirical derivation
 (118/119/121) is preserved as dated history, not lost:
-[`docs/design/history/land-at-zero-margin-derivation.md`](../../docs/design/history/land-at-zero-margin-derivation.md).
+[`docs/design/history/land-at-zero-margin-derivation.md`](../../../docs/design/history/land-at-zero-margin-derivation.md).
 
 **Wheel control generations (128 ticket 015; superseded 130-005; generation
 2 deleted outright by 130-007).** Four generations of the wheel
@@ -145,14 +145,14 @@ documents the CURRENT orientation of the whole tree (what's here, the
 boundary, the build). The original multi-sprint design derivation for
 `BodyKinematics` (moved from `src/firm/kinematics/`, ticket 122-001) is
 NOT re-derived here; it is kept, unchanged and still authoritative, in
-[`src/firm/kinematics/DESIGN.md`](../firm/kinematics/DESIGN.md), which
+[`src/firm/kinematics/DESIGN.md`](../kinematics/DESIGN.md), which
 redirects here for current orientation but retains the original
 math/rationale/tuning-history prose. The now-deleted `StopCondition`/
 `VelocityShaper`/`MoveQueue` stack's own pre-128 design history remains
-in [`src/firm/motion/DESIGN.md`](../firm/motion/DESIGN.md) (marked
+in [`src/firm/motion/DESIGN.md`](DESIGN.md) (marked
 RETIRED there since 122, kept solely as a historical derivation record —
 math at a location the code no longer occupies) and
-[`src/firm/core/DESIGN.md`](../firm/app/DESIGN.md) (`MoveQueue`/pre-122
+[`src/firm/core/DESIGN.md`](../core/DESIGN.md) (`MoveQueue`/pre-122
 history sections) — neither file is rewritten to remove that history;
 see each file's own header for the "why this stays" rationale.
 
@@ -160,7 +160,7 @@ see each file's own header for the "why this stays" rationale.
 
 | File / directory | Role |
 |---|---|
-| `body_kinematics.{h,cpp}` | `BodyKinematics` — stateless differential-drive twist/wheel-speed maps (`inverse`/`forward`) and curvature-preserving `saturate`. Moved verbatim from `src/firm/kinematics/` (122-001; that directory is retired, folded flat here rather than nested as `src/firm/motion/kinematics/`). The one permitted `src/firm` dependency: `#include "messages/common.h"` for the array-form overloads' `msg::BodyTwist3` parameter. Full derivation: [`src/firm/kinematics/DESIGN.md`](../firm/kinematics/DESIGN.md) and [`docs/kinematics-model.md`](../../docs/kinematics-model.md). |
+| `body_kinematics.{h,cpp}` | `BodyKinematics` — stateless differential-drive twist/wheel-speed maps (`inverse`/`forward`) and curvature-preserving `saturate`. Moved verbatim from `src/firm/kinematics/` (122-001; that directory is retired, folded flat here rather than nested as `src/firm/motion/kinematics/`). The one permitted `src/firm` dependency: `#include "messages/common.h"` for the array-form overloads' `msg::BodyTwist3` parameter. Full derivation: [`src/firm/kinematics/DESIGN.md`](../kinematics/DESIGN.md) and [`docs/kinematics-model.md`](../../../docs/kinematics-model.md). |
 | `odometry.{h,cpp}` | `Motion::Odometry` — encoder-only dead-reckoning: integrates both wheels' position deltas through `BodyKinematics::forward()` into a world pose (`x`/`y`/`theta`) plus cumulative `pathLength()`. `integrate()` takes the caller's current wheel positions as plain float parameters — no `Devices::Motor&` held. `Types::RobotState::pose`'s ONE writer (128 ticket 016 — see "Estimator roster" in §1). OTOS sampling (`applyOtosSample()`) stays base-side (`src/firm/core/otos_sample.{h,cpp}`) since it needs `Devices::Otos&`/telemetry types, neither of which this tree may depend on. |
 | `state_estimator.{h,cpp}` | **Deleted (128 ticket 016).** Was: `Motion::StateEstimator`, predict-to-now wheel/body PEER state estimates via ZOH extrapolation plus a v1 complementary OTOS blend — a per-cycle computation with no consumer. See "Estimator roster" in §1 for the full accounting and what remains (`Odometry`, `Planner`'s own internal `PoseTracker`). |
 | `planner/` | **`Motion::Planner`** — the on-robot motion decider (125–128, superseding the deleted `Motion::MoveQueue`): its own STANDALONE CMake project (`planner/CMakeLists.txt`), not built by this directory's own `CMakeLists.txt`. Profile generation (`profile.{h,cpp}`), jerk-limited shaping (`shape.{h,cpp}`), wheel-command estimation (`estimation.{h,cpp}`), and the top-level `Planner` (`planner.{h,cpp}`) that ties them together and writes `Types::RobotState::Wheel::cmdVelocity` directly every cycle — no boundary interface, the blackboard field IS the boundary (128). The duty-stage closed loop (`wheel_pid.{h,cpp}`, PARKED from the live tick as of 128-015) is **DELETED outright (130-007)** — see "Wheel control generations" in §1. `wheel_trim.{h,cpp}` (the velocity-domain trim loop that used to be summed into `cmdVelocity` here) is **DELETED outright (130-005)** — `Motion::Planner` publishes the bare profiled command now; the wheel-speed controller lives entirely in `Core::DifferentialDrive` (`src/firm/core/differential_drive.{h,cpp}`) — see "Wheel control generations" in §1. `capi.cpp` builds the `motionplanner` shared library, the ctypes surface `src/tests/bench/planner_harness.py` drives. Its own `tests/` directory holds seven ctest executables (`profile_test`, `shape_test`, `estimation_test`, `planner_scenarios_test`, `planner_noise_test`, `ratio_lock_test`, `pose_ownership_test` — 128-016's own regression guard for `Odometry` being `state.pose`'s sole writer; 130-007 removed `wheel_pid_test`/`planner_duty_scenarios_test` with the deleted duty stage), run via the `planner_tests` custom target. See §4 below. |
@@ -287,7 +287,7 @@ bench-side planner exercising outside the full sim harness. See
 
 - **`BodyKinematics::inverse()`/`forward()`/`saturate()`** (scalar and
   `msg::BodyTwist3`/`wheels[2]` array-form overloads) — see
-  [`src/firm/kinematics/DESIGN.md`](../firm/kinematics/DESIGN.md) §5.
+  [`src/firm/kinematics/DESIGN.md`](../kinematics/DESIGN.md) §5.
 - **`Motion::Odometry(trackWidth, initialLeftPosition,
   initialRightPosition)` / `integrate(leftPosition, rightPosition)` /
   `pathLength()` / `reset(x, y, heading)`** — see `odometry.h`'s own doc
@@ -342,11 +342,11 @@ bench-side planner exercising outside the full sim harness. See
   set further.
 - **Historical derivation for the retired generation stack lives in two
   separate pre-128 documents**, not consolidated here (deliberate — see
-  §1's own note): [`src/firm/motion/DESIGN.md`](../firm/motion/DESIGN.md)
+  §1's own note): [`src/firm/motion/DESIGN.md`](DESIGN.md)
   (StopCondition/VelocityShaper, RETIRED since 122) and
-  [`src/firm/core/DESIGN.md`](../firm/app/DESIGN.md) (MoveQueue, marked
+  [`src/firm/core/DESIGN.md`](../core/DESIGN.md) (MoveQueue, marked
   there as pre-128 history), plus
-  [`docs/design/history/land-at-zero-margin-derivation.md`](../../docs/design/history/land-at-zero-margin-derivation.md)
+  [`docs/design/history/land-at-zero-margin-derivation.md`](../../../docs/design/history/land-at-zero-margin-derivation.md)
   for the land-at-zero completion predicate specifically. A future
   `consolidate-architecture` pass may choose to fold all of it into this
   file; not attempted by ticket 128-014, which is scoped to

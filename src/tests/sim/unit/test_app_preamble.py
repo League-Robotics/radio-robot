@@ -5,8 +5,8 @@ Compiles ``app_preamble_harness.cpp`` together with the HOST_BUILD
 implementations it needs (``src/firm/core/preamble.cpp``,
 ``src/firm/devices/{nezha_motor,otos,color_sensor,
 line_sensor}.cpp``, ``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's
-real Devices::I2CBus implementation -- ``src/firm/platform/host/sim_clock.cpp``
--- ticket 108-010's TestSim::SimClock, the Devices::Clock host-test fake --
+real Platform::I2CBus implementation -- ``src/firm/platform/host/sim_clock.cpp``
+-- ticket 108-010's TestSim::SimClock, the Platform::Clock host-test fake --
 plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp`` physics
 dependencies) with ``-DHOST_BUILD``, against the SAME headers every ARM
 build compiles. Mirrors ``test_app_drive.py``/``test_devices_otos.py``'s
@@ -19,7 +19,7 @@ touch Core::DifferentialDrive, so it needs neither that nor
 ``motion/wheel_velocity_pid.cpp``.
 
 Migrated by sprint 108 ticket 009 off the deleted ``src/firm/devices/
-i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see
+i2c_bus_host.cpp`` scripted-FIFO Platform::I2CBus fake — see
 ``app_preamble_harness.cpp``'s own header and ``scripted_i2c_hook.h`` for
 the migration rationale.
 

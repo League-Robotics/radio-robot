@@ -189,7 +189,7 @@ def test_field_numbers_match_pb2_descriptors():
     # ERR_NOT_CONFIGURED (8, 114-001): composition root refused MOVE --
     # config-completeness gate not yet satisfied. ERR_NOT_LIVE (9, 132-008)
     # / ERR_BUSY (10, 132-008): a push to a boot-only ConfigGroupTarget /
-    # a guarded subsystem (Devices::Motor) refusing while in motion --
+    # a guarded subsystem (Hal::Motor) refusing while in motion --
     # pre-existing as of this ticket (132-011), added to this dict here
     # because this test's own assert on `expected_cmd_numbers`/
     # `expected_body_numbers` above previously failed FIRST and masked

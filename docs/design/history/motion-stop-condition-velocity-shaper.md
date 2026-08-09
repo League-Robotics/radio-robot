@@ -23,7 +23,7 @@ root: ../../../docs/design/design.md
 > (`docs/design/design.md`, `src/firm/core/DESIGN.md`, `docs/protocol-v5.md`)
 > link to it by this path. **For current orientation, the module list,
 > the boundary contract, and the `motion_tests` build, see
-> [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md)** — this file is the
+> [`src/firm/motion/DESIGN.md`](../../../src/firm/motion/DESIGN.md)** — this file is the
 > historical derivation record only; treat every "Orientation"/
 > "Interfaces" section below as accurate MATH at a location this
 > subsystem no longer occupies.

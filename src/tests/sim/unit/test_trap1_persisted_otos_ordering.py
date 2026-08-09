@@ -2,7 +2,7 @@
 regression proof for trap 1 (the-configuration-object.md): persisted OTOS
 tuning must reach the chip-level calibration-scalar register, which only
 happens when Core::RobotGraph::loadPersistedTuning() runs AFTER
-Core::RobotLoop::boot() -- never before (every Devices::RealOtos setter is a
+Core::RobotLoop::boot() -- never before (every Hardware::RealOtos setter is a
 no-op until begin() sets initialized_ = true, and begin() itself only runs
 inside boot()'s own Preamble loop).
 

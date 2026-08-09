@@ -62,14 +62,32 @@ docs living outside those two roots.
 
 | Subsystem | Role |
 |---|---|
-| [`app/`](../../src/firm/app/DESIGN.md) | The single cooperatively-timed control loop (`App::RobotLoop`) and its BASE-side passive modules: Comms, Telemetry, Drive (owns WHEELS teleop and wheel-speed-to-duty actuation), Preamble. `RobotLoop` also constructs and drives the motion-library's `Motion::Planner`/`Motion::Odometry`/`Motion::StateEstimator` (122 — moved to [`src/firm/motion/`](../../src/firm/motion/DESIGN.md), a sibling tree, see §5), which write `Types::RobotState::Wheel::cmdVelocity` directly (128 — the plain blackboard field IS the boundary, no interface). |
+| [`platform/`](../../src/firm/platform/DESIGN.md) | Board/runtime primitives ONLY: `Platform::I2CBus`, `Platform::Clock`/`Sleeper`, and their per-target implementations — `microbit/` (CODAL) and `host/` (the sim, was `src/sim`). Knows nothing about what is on the bus. |
+| [`hardware/`](../../src/firm/hardware/DESIGN.md) | Concrete device drivers, one class per physical part, filed by who else could reuse them: `generic/` (RealOtos, MotorArmor, BoardMotor), `nezha/`, `hiwonder/`, `planetx/`. Register maps, timing quirks, and hardware workarounds live here and nowhere else. |
+| [`hal/`](../../src/firm/hal/DESIGN.md) | Interfaces for composable devices — `Hal::Motor`, `Hal::MotorBoard`, `Hal::Otos`, `Hal::ColorSensor`, `Hal::LineSensor` — plus the plain-aggregate reading/config vocabulary they speak in. Interfaces only: no chip knowledge. |
+| [`kinematics/`](../../src/firm/kinematics/DESIGN.md) | `Kinematics::Model`, the swappable twist↔wheel-speed map, with `DifferentialKinematics` (the former `BodyKinematics` math) and `MecanumKinematics` behind it. The one sanctioned home for chassis geometry (track width, wheelbase). |
+| [`motion/`](../../src/firm/motion/DESIGN.md) | The motion-control library: `Motion::Planner`, `Motion::Navigator`, `Motion::Odometry`. Under active development, with its own standalone Python-free CMake builds (`motion_tests`, `planner_tests`, `navigator_tests`). Imports nothing from the rest of `src/firm` except `messages/` and `firm/types/`. |
+| [`core/`](../../src/firm/core/DESIGN.md) | Orchestration (was `app/`): the single cooperatively-timed control loop (`Core::RobotLoop`), the Robot composition root (`Core::composeRobot()`/`RobotGraph`), and the passive modules the loop owns — Comms, Telemetry, `DifferentialDrive`, Configurator, Preamble. `RobotLoop` drives the motion library, which writes `Types::RobotState::Wheel::cmdVelocity` directly (128 — the plain blackboard field IS the boundary, no interface). |
 | [`com/`](../../src/firm/com/DESIGN.md) | ARM-only raw transports: USB CDC serial, the micro:bit radio, persisted radio-channel storage. |
 | [`config/`](../../src/firm/config/DESIGN.md) | Generated boot configuration — per-robot calibration baked at build time from `data/robots/active_robot.json`. |
-| [`devices/`](../../src/firm/devices/DESIGN.md) | I2C-attached device leaves (Nezha motors, OTOS, color/line sensors), the shared `MotorArmor` policy, the velocity PID, and the pure `I2CBus`/`Clock`/`Sleeper` hardware seams. |
-| [`kinematics/`](../../src/firm/kinematics/DESIGN.md) | **Retired (122) — code moved to [`src/firm/motion/`](../../src/firm/motion/DESIGN.md).** `BodyKinematics` (stateless differential-drive twist↔wheel maps, curvature-preserving saturation) now lives in the sibling `src/firm/motion` tree; this directory keeps only a redirect `DESIGN.md` (the original derivation, unchanged) so the validator has a doc for this still-declared child of `src/firm`. |
 | [`messages/`](../../src/firm/messages/DESIGN.md) | The wire schema: generated message structs, the generated envelope codec, the hand-written byte-level wire runtime. |
-| [`motion/`](../../src/firm/motion/DESIGN.md) | **Retired (122) — code moved to [`src/firm/motion/`](../../src/firm/motion/DESIGN.md).** `Motion::StopCondition`/`Motion::VelocityShaper` (bounded-motion stop/timeout comparison and the decel-into-the-goal speed shaper) now live in the sibling `src/firm/motion` tree; this directory keeps only a redirect `DESIGN.md` (the original derivation, unchanged) so the validator has a doc for this still-declared child of `src/firm`. |
-| [`types/`](../../src/firm/types/DESIGN.md) | `Types::RobotState` (sprint 124) — the dependency-free, per-cycle blackboard struct that is now a SECOND shared floor `src/firm` and `src/firm/motion` both stand on; its own `Wheel::cmdVelocity` field is THE base/motion actuation boundary (128, see §5's "Wire boundary" note and the dependency graph below). Also holds vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
+| [`types/`](../../src/firm/types/DESIGN.md) | `Types::RobotState` (sprint 124) — the dependency-free, per-cycle blackboard struct that is a shared floor the whole tree stands on; its own `Wheel::cmdVelocity` field is THE core/motion actuation boundary (128, see §5's "Wire boundary" note and the dependency graph below). Also holds vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
+
+The rows above are listed in **dependency order, bottom to top**: platform →
+hardware → hal → kinematics → motion → core, with `com/`, `config/`,
+`messages/` and `types/` as cross-cutting floors any layer may stand on.
+Dependencies run strictly downward — `hal/` names no bus, `hardware/`
+reaches down to `platform/` and up only as far as the `hal/` interface it
+implements, and `motion/` imports nothing from the rest of `src/firm`
+except `messages/` and `firm/types/`.
+`src/tests/sim/unit/test_layer_isolation.py` enforces the first three
+mechanically.
+
+This layout replaced a flat `app/` + `devices/` split, and folded the
+sibling `src/motion` and `src/sim` trees back in, in August 2026 —
+see [`clasi/issues/proposal-platform-hardware-hal-core-reorganization.md`](../../clasi/issues/proposal-platform-hardware-hal-core-reorganization.md)
+for the motivation and each subsystem's own `DESIGN.md` for what was and
+was not carried out.
 
 (`src/firm/README-DESIGN.md` is a one-paragraph pointer back to this
 document — `src/firm` itself has no co-located `DESIGN.md`; see §4.)
@@ -89,8 +107,8 @@ even though nothing requires it:
 
 | Subsystem | Role |
 |---|---|
-| [`src/firm/motion/`](../../src/firm/motion/DESIGN.md) | The motion-control library (sprint 122's two-layer base/motion split): `StateEstimator`, `Odometry`, `BodyKinematics`, `WheelVelocityPid`, and `planner/` — `Motion::Planner`, its own standalone CMake project, the larger and now-live half of this tree, writing `Types::RobotState::Wheel::cmdVelocity` directly (128 — the plain blackboard field is the boundary; `MoveQueue`/`WheelSink`/`StopCondition`/`VelocityShaper` were deleted as dead code, zero callers). A SIBLING tree of `src/firm` (not a child), imports nothing from `src/firm` except `messages/`/`firm/types`, and builds its own standalone `motion_tests` CMake target (no sim library, no Python). Real, current documentation — deliberately kept OUTSIDE the validated `sources:` list (Design Rationale Decision 3, sprint 122), same unvalidated-but-real treatment this table's other rows already get. |
-| [`src/firm/platform/host/`](../../src/firm/platform/host/DESIGN.md) | The host-build firmware simulator: compiles the real firmware into a shared library, drives it from Python over an `extern "C"` ABI. One sim object shared by the pytest suite and the TestGUI. |
+| ~~`src/firm/motion/`~~ | **Moved into the `src/firm` table above** (August 2026 reorganization) — it is a validated subsystem now, not an unvalidated sibling. Historical description follows: the motion-control library (sprint 122's two-layer base/motion split): `StateEstimator`, `Odometry`, `BodyKinematics`, `WheelVelocityPid`, and `planner/` — `Motion::Planner`, its own standalone CMake project, the larger and now-live half of this tree, writing `Types::RobotState::Wheel::cmdVelocity` directly (128 — the plain blackboard field is the boundary; `MoveQueue`/`WheelSink`/`StopCondition`/`VelocityShaper` were deleted as dead code, zero callers). A SIBLING tree of `src/firm` (not a child), imports nothing from `src/firm` except `messages/`/`firm/types`, and builds its own standalone `motion_tests` CMake target (no sim library, no Python). Real, current documentation — deliberately kept OUTSIDE the validated `sources:` list (Design Rationale Decision 3, sprint 122), same unvalidated-but-real treatment this table's other rows already get. |
+| [`src/firm/platform/host/`](../../src/firm/platform/host/DESIGN.md) | (Was `src/sim/`.) The host-build firmware simulator: compiles the real firmware into a shared library, drives it from Python over an `extern "C"` ABI. One sim object shared by the pytest suite and the TestGUI. |
 | [`src/protos/`](../../src/protos/DESIGN.md) | The wire-schema source of truth (`.proto` files) both the firmware and host codegen compile from. |
 | [`src/scripts/`](../../src/scripts/DESIGN.md) | Build-time code generators (messages, host protobuf bindings, boot config, firmware version) plus one CI-only config-sync lint. |
 | [`src/tests/`](../../src/tests/DESIGN.md) | Three never-combined test domains (`sim/`, `bench/`, `playfield/`) plus flat `unit/`/`tools/`/`notebooks/`/`testgui/` categories. |
@@ -266,7 +284,7 @@ recreated as a fresh, tiny directory containing only
 `Motion::StopCondition` — pure stop/timeout comparison logic, unrelated
 to and much smaller than the deleted `Motion::Executor`/
 `Motion::JerkTrajectory` tree above. See
-[`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) and
+[`src/firm/core/DESIGN.md`](../../src/firm/core/DESIGN.md) and
 [`src/firm/motion/DESIGN.md`](../../src/firm/motion/DESIGN.md) for the
 full detail.
 
@@ -290,7 +308,7 @@ validation (leave-one-out one-step-ahead RMS analysis) runs host-side
 directly against the raw `EncoderReading`/`OtosReading` fields sprint 115
 already telemetered, via a captured TLM-log CSV, not a live query
 against the on-chip estimator instance. See
-[`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) for the full
+[`src/firm/core/DESIGN.md`](../../src/firm/core/DESIGN.md) for the full
 detail. **HISTORICAL as of 132-013 (patch-surface retirement) / 128-016
 (`App::StateEstimator` itself deleted as dead code):** `ConfigDelta` and
 the curated per-target live-tuning messages it carried (drivetrain/motor/
@@ -331,7 +349,7 @@ architecture, diagrams, and Design Rationale (why a velocity sink, why
 is a standalone CMake target). See
 [`src/firm/motion/DESIGN.md`](../../src/firm/motion/DESIGN.md) for the
 motion library's own current orientation and
-[`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) for the base's.
+[`src/firm/core/DESIGN.md`](../../src/firm/core/DESIGN.md) for the base's.
 
 **123 (firmware base hardening: COBS+CRC binary framing + telemetry
 migration) — landed.** The wire's `*B<base64>\r\n` line armor is
@@ -351,7 +369,7 @@ frame (fields 15/16) every cycle. See sprint 123's own `sprint.md` for
 the full architecture and Design Rationale (CRC width choice, the
 COBS-vs-length-prefix-vs-SLIP alternatives considered), and
 [`src/firm/messages/DESIGN.md`](../../src/firm/messages/DESIGN.md) §3/§4
-and [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) §1/§4 for
+and [`src/firm/core/DESIGN.md`](../../src/firm/core/DESIGN.md) §1/§4 for
 the subsystem-level detail.
 
 **124 (protocol v5, `RobotState` blackboard, radio bench gate) —
@@ -389,7 +407,7 @@ never a device command, when a wheel's position nears the wire's ±32m
 bound, owning a new `positionEpoch` counter the host can watch for a
 rebase), and
 [`src/firm/messages/DESIGN.md`](../../src/firm/messages/DESIGN.md) §3/§4
-and [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) §1/§4/§5 for
+and [`src/firm/core/DESIGN.md`](../../src/firm/core/DESIGN.md) §1/§4/§5 for
 the subsystem-level detail.
 
 **125–127 (velocity-PID relocation + `Motion::Planner` integration —
@@ -430,7 +448,7 @@ derivation (118/119/121, ~250 lines of sweep history) is preserved,
 verbatim, as dated design history rather than lost with the code:
 [`docs/design/history/land-at-zero-margin-derivation.md`](history/land-at-zero-margin-derivation.md).
 See [`src/firm/motion/DESIGN.md`](../../src/firm/motion/DESIGN.md) and
-[`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) for the
+[`src/firm/core/DESIGN.md`](../../src/firm/core/DESIGN.md) for the
 subsystem-level detail.
 
 Flow of one cycle, at orientation altitude:
@@ -452,7 +470,7 @@ Flow of one cycle, at orientation altitude:
    `Drive` immediately; config/queries reply via the primary telemetry
    frame's bounded ack ring (sprint 124 ticket 008 deleted the older
    single scalar ack slot — ring membership alone means "acked" — see
-   [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) §2/§4).
+   [`src/firm/core/DESIGN.md`](../../src/firm/core/DESIGN.md) §2/§4).
 3. **Motor service** — the loop runs each `Devices::NezhaMotor`'s
    split-phase encoder request → settle → collect → PID → duty-write
    sequence, with the settle/clearance gaps expressed as
@@ -595,14 +613,14 @@ single scalar "freshest ack" slot is deleted). Schema source of truth:
 [`docs/protocol-v5.md`](../protocol-v5.md) for the full wire reference
 (supersedes `docs/protocol-v4.md`),
 [`src/firm/messages/DESIGN.md`](../../src/firm/messages/DESIGN.md) and
-[`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) for the
+[`src/firm/core/DESIGN.md`](../../src/firm/core/DESIGN.md) for the
 dispatch/codec detail, and
 [`src/protos/DESIGN.md`](../../src/protos/DESIGN.md) for the schema
 source of truth itself.
 
 **Open, firmware-tree-wide items** (each subsystem doc's own §6 carries
 its local ones): line/color steady-state sampling has since landed
-(115-005 — see [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md)
+(115-005 — see [`src/firm/core/DESIGN.md`](../../src/firm/core/DESIGN.md)
 §2's `updateLineColor()`); `src/firm/messages/event.h` remains orphaned
 dead code (see that doc's own §6); `src/firm/types/` remains a
 vestigial grab-bag (see that doc's own §6); sprint 116's MOVE protocol
@@ -610,7 +628,7 @@ has landed — `Twist` (arm 19) and `ConfigDelta.watchdog` (field 4) are
 `reserved`, not reused; `App::Deadman` is deleted; see
 [`src/firm/motion/DESIGN.md`](../../src/firm/motion/DESIGN.md) for the
 new `Motion::StopCondition` module. Sprint 117's `App::StateEstimator`
-has landed — see [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md)
+has landed — see [`src/firm/core/DESIGN.md`](../../src/firm/core/DESIGN.md)
 for its full boundary/interface detail.
 
 ## 6. Open Questions / Known Limitations (system-level)
@@ -656,7 +674,7 @@ for its full boundary/interface detail.
   own §5 "123" paragraph above and "Wire boundary" note for the full
   change, [`src/firm/messages/DESIGN.md`](../../src/firm/messages/DESIGN.md)
   §3/§4 for the codec/budget detail, and
-  [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md) §1/§4 for the
+  [`src/firm/core/DESIGN.md`](../../src/firm/core/DESIGN.md) §1/§4 for the
   `Comms`/`Telemetry` detail. `cycle_busy`/`cycle_period` complete the
   migration 122-003 forward-referenced, moving from `TelemetrySecondary`
   (now `reserved` fields 11/12) onto the primary `Telemetry` frame
@@ -668,7 +686,7 @@ for its full boundary/interface detail.
   boundary" note for the full change,
   [`src/firm/messages/DESIGN.md`](../../src/firm/messages/DESIGN.md) §3/§4
   for the codec/registry/size-budget detail (now `kReplyEnvelopeMaxEncodedSize
-  <= 130` bytes), and [`src/firm/app/DESIGN.md`](../../src/firm/app/DESIGN.md)
+  <= 130` bytes), and [`src/firm/core/DESIGN.md`](../../src/firm/core/DESIGN.md)
   §1/§4/§5 for the `Comms`/`Telemetry`/`RobotLoop` detail. The Drive/
   Sensors device-ownership reshuffle the blackboard issue's own cycle-body
   sketch illustrates is explicitly deferred to sprint 125 (Design

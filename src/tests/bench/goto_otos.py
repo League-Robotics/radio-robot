@@ -152,7 +152,7 @@ class Robot:
 
         Two bugs fixed here, both measured on the playfield 2026-08-06:
 
-        1. HEADING MUST BE WRAPPED to [-pi, pi]. ``Devices::Otos::setPose()``
+        1. HEADING MUST BE WRAPPED to [-pi, pi]. ``Hal::Otos::setPose()``
            rotates the configured lever arm (tovez ``otos.offset_x`` =
            -47.7mm) by whatever heading it is handed, so an out-of-range
            angle rotates that correction the wrong way and lands the

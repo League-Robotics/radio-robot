@@ -4,7 +4,7 @@ Compiles ``sim_fidelity_harness.cpp`` together with ``sim_plant.cpp``
 (``src/firm/platform/host/``), ``otos.cpp`` (``src/firm/devices/`` -- the REAL firmware
 leaf), and the two plant sources (``src/tests/sim/plant/``) -- a much
 lighter dependency graph than ``test_sim_api.py``/``test_fault_knobs.py``
-need (no Core::RobotLoop, no messages/, no motion/Ruckig): Devices::Otos and
+need (no Core::RobotLoop, no messages/, no motion/Ruckig): Hal::Otos and
 every TestSim:: plant class are devices/-isolation-invariant leaves with no
 messages/app dependency, so this harness needs only the devices+plant
 sources themselves. Mirrors every other ``tests/sim/system/`` harness's

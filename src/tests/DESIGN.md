@@ -180,7 +180,7 @@ e2e) would cut across that constraint rather than track it.
 **One sim object, shared by tests and the TestGUI.** `sim/support`'s
 `SimApi`/`FakeTransport` and `src/firm/platform/host/`'s `SimHarness`/`SimPlant` are the
 same command-in/telemetry-out path the TestGUI drives when connected via
-its Sim transport (see [`../sim/DESIGN.md`](../sim/DESIGN.md)) — a test
+its Sim transport (see [`../sim/DESIGN.md`](../firm/platform/host/DESIGN.md)) — a test
 in `sim/system/` therefore exercises exactly what a developer watching
 the TestGUI would see, not a divergent, test-only code path.
 
@@ -194,7 +194,7 @@ the TestGUI would see, not a divergent, test-only code path.
   HITL CLI entry points, invoked directly with `uv run python`.
 - **`src/tests/sim/plant/`'s `WheelPlant`/`OtosPlant`** — the physics
   model `src/firm/platform/host/sim_plant.cpp` delegates to; see
-  [`../sim/DESIGN.md`](../sim/DESIGN.md) §2.
+  [`../sim/DESIGN.md`](../firm/platform/host/DESIGN.md) §2.
 - **`src/tests/sim/support/fake_transport.h`** — the `Core::Transport`
   HOST_BUILD double used by both the sim harness and host-build unit
   harnesses.
@@ -206,7 +206,7 @@ the TestGUI would see, not a divergent, test-only code path.
   `-DHOST_BUILD`; see [`../firm/DESIGN.md`](../firm/DESIGN.md) §4.
 - **`src/firm/platform/host/`** — the composition root (`SimHarness`) `sim/system/`'s
   Python-level tests drive over ctypes; see
-  [`../sim/DESIGN.md`](../sim/DESIGN.md).
+  [`../sim/DESIGN.md`](../firm/platform/host/DESIGN.md).
 - **`src/host/robot_radio/`** — `testgui/` and `unit/`'s protocol tests
   exercise the host package directly; see
   [`../host/robot_radio/DESIGN.md`](../host/robot_radio/DESIGN.md).

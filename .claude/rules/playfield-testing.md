@@ -76,7 +76,7 @@ on `vevov` 2026-08-03 across 16/16 reproductions, is that it does nothing:
 The Nezha brick physically latches its last commanded speed and does not reset
 on an nRF52 reset, so a lost zero write is permanent, not a glitch that clears
 itself. Sprint 133 ticket 001 fixed both halves of the firmware gap (a
-derived-idle safety arbitration step in `App::RobotLoop`, and arming the stop
+derived-idle safety arbitration step in `Core::RobotLoop`, and arming the stop
 re-assertion window on the commanded nonzero→zero transition instead of on an
 encoder reading). That fix is verified in sim and by construction; **hardware
 re-verification on `tovez` is sprint 133 ticket 004 and has not happened yet.**

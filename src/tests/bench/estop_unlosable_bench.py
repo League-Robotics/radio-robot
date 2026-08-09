@@ -3,7 +3,7 @@
 bench acceptance: `estop()` must stop the wheels EVERY time, consecutively,
 without a power cycle.
 
-Root cause this proves fixed: `Devices::NezhaMotor::writeRawDuty()` used to
+Root cause this proves fixed: `Hardware::NezhaMotor::writeRawDuty()` used to
 suppress a duty write equal to the last one it ATTEMPTED
 (`pct == lastWrittenPct_`), but the Nezha brick physically LATCHES its last
 commanded speed and does not reset on an nRF52 reset -- only power does. One

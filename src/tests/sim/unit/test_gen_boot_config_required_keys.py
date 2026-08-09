@@ -21,7 +21,7 @@ gated on the compiled sim lib.
 
 UPDATE (sprint 114 ticket 003, "eliminate nezha_motor.h's write-shaping ship
 defaults"): ``control.output_deadband``/``control.reversal_dwell_ms`` joined
-``_REQUIRED_KEY_PATHS`` below the same way -- Devices::NezhaMotor's own
+``_REQUIRED_KEY_PATHS`` below the same way -- Hardware::NezhaMotor's own
 kDefaultOutputDeadband/kDefaultReversalDwell ship-default substitution is
 gone (folded into ``NezhaMotor::reconfigure()``, sprint 114 ticket 001's own
 Revision 1), so these two fields now fail the build exactly like every

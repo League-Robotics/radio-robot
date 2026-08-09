@@ -302,7 +302,7 @@ does — their gating and baseline semantics are unchanged.
   model; see [`../../firm/config/DESIGN.md`](../../firm/config/DESIGN.md)
   §5 for the firmware-side consumer of the same JSON files.
 - **`io.sim_loop.SimLoop`** — loads `src/firm/platform/host/`'s dylib, drives it via
-  `twist()`/`stop()`; see [`../../sim/DESIGN.md`](../../sim/DESIGN.md).
+  `twist()`/`stop()`; see [`../../sim/DESIGN.md`](../../firm/platform/host/DESIGN.md).
   **`configure_from_robot()`** (113, extended 119 ticket 001) is a
   three-tier push over one shared `SimConfigConn`: Tier 1
   (`calibration_kwargs()` → `NezhaProtocol.set_config()`, the live
@@ -334,7 +334,7 @@ does — their gating and baseline semantics are unchanged.
   `scripts/gen_pb2.py`)** — the compiled Python protobuf bindings for
   the wire schema; see [`../../protos/DESIGN.md`](../../protos/DESIGN.md).
 - **`src/firm/platform/host/`** — the simulator dylib, via `io/sim_loop.py`; see
-  [`../../sim/DESIGN.md`](../../sim/DESIGN.md).
+  [`../../sim/DESIGN.md`](../../firm/platform/host/DESIGN.md).
 - **`data/robots/*.json`** — per-robot calibration, via
   `config/robot_config.py`.
 - **AprilCam** (`aprilcam.client.control.DaemonControl`) — `field/`,

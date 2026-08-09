@@ -48,7 +48,7 @@ def _find_cxx_compiler() -> str:
 
 
 def test_devices_clock_harness_compiles_and_passes(tmp_path):
-    """Compile the Devices::Clock/Sleeper HOST_BUILD fake + harness and assert every scenario passes."""
+    """Compile the Platform::Clock/Sleeper HOST_BUILD fake + harness and assert every scenario passes."""
     assert _HARNESS_SRC.is_file(), f"harness source missing: {_HARNESS_SRC}"
     assert _HOST_FAKE_SRC.is_file(), f"HOST_BUILD fake missing: {_HOST_FAKE_SRC}"
     assert _SOURCE_DIR.is_dir(), f"src/firm/ tree missing: {_SOURCE_DIR}"

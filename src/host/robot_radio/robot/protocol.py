@@ -457,7 +457,7 @@ class TLMFrame:
       - ``fault_wheel_frozen_left``/``fault_wheel_frozen_right`` (bits
         19/20, 129-002, wheel-frozen-fault-flag-in-telemetry.md) — that
         wheel was commanded a nonzero duty for N consecutive cycles with
-        NO encoder change (``Devices::MotorArmor::wedgeSuspect()``, the
+        NO encoder change (``Hardware::MotorArmor::wedgeSuspect()``, the
         GATED, motion-qualified stall detector) — deliberately NOT the
         same signal as ``fault_wedge_latch`` (bit 7, the raw,
         unconditional stuck-encoder latch that also fires on a healthy
@@ -622,7 +622,7 @@ class TLMFrame:
     def fault_wheel_frozen_left(self) -> bool:
         """Bit 19 (129-002) -- the LEFT wheel was commanded a nonzero duty
         for N consecutive cycles with NO encoder change
-        (``Devices::MotorArmor::wedgeSuspect()``, GATED/motion-qualified --
+        (``Hardware::MotorArmor::wedgeSuspect()``, GATED/motion-qualified --
         see this class's own docstring for why this is deliberately NOT
         ``fault_wedge_latch``)."""
         return self._flag(_FLAG_FAULT_WHEEL_FROZEN_LEFT)

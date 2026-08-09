@@ -6,9 +6,9 @@ Compiles ``app_robot_loop_harness.cpp`` together with every HOST_BUILD
 implementation it needs (``robot_loop.cpp`` itself, every ``app/`` module it
 composes, every ``devices/`` leaf those modules touch,
 ``TestSim::SimClock``/``TestSim::SimSleeper`` (``src/firm/platform/host/
-sim_clock.cpp`` -- ticket 108-010's Devices::Clock/Sleeper host-test fakes),
+sim_clock.cpp`` -- ticket 108-010's Platform::Clock/Sleeper host-test fakes),
 ``TestSim::SimPlant`` (``src/firm/platform/host/sim_plant.cpp`` -- ticket
-108-002's real Devices::I2CBus implementation, plus its own ``src/tests/sim/
+108-002's real Platform::I2CBus implementation, plus its own ``src/tests/sim/
 plant/{wheel,otos}_plant.cpp`` physics dependencies), and the wire codec
 ``Core::Comms``/``Core::Telemetry`` need to encode/decode) with
 ``-DHOST_BUILD``, against the SAME headers every ARM build compiles --
@@ -18,7 +18,7 @@ this graph (the ticket's own acceptance criterion). Mirrors
 with the system C++ compiler, run the resulting binary, assert it exits 0.
 
 Migrated by sprint 108 ticket 009 off the deleted ``src/firm/devices/
-i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see
+i2c_bus_host.cpp`` scripted-FIFO Platform::I2CBus fake — see
 ``app_robot_loop_harness.cpp``'s own header and ``scripted_i2c_hook.h`` for
 the migration rationale.
 

@@ -14,7 +14,7 @@ boot_calibration.cpp, config/boot_config.cpp, and the standalone
 Motion::Planner sources (planner.cpp/profile.cpp/estimation.cpp/shape.cpp),
 runs the resulting binary, and asserts it exits 0 -- printing its own
 human-readable per-scenario trace. No I2C bus, no sim plant: every
-Devices::Motor/Devices::Otos this harness touches is a small in-file test
+Hal::Motor/Hal::Otos this harness touches is a small in-file test
 double implementing the pure interface directly.
 
     uv run python -m pytest src/tests/sim/unit/test_configure_entry_points.py -v -s
@@ -52,7 +52,7 @@ _CONFIG_SOURCES = [
     _SOURCE_DIR / "config" / "boot_config.cpp",
 ]
 _DEVICE_SOURCES = [
-    # Devices::Otos's virtual destructor is declared out-of-line (otos.h)
+    # Hal::Otos's virtual destructor is declared out-of-line (otos.h)
     # and defined here -- RecordingOtos's own dtor chain needs the symbol
     # even though this harness never constructs a RealOtos.
     _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp",
