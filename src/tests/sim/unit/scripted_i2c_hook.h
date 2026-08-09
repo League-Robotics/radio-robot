@@ -4,9 +4,9 @@
 // Ticket 108-009 (clasi/sprints/108-pure-i2cbus-clock-interfaces-and-a-real-
 // simplant-simulator-sim-mode-tours/tickets/009-migrate-the-13-register-
 // level-unit-tests-to-python-simplant-hook-tests-delete-c-harnesses.md).
-// Sprint 108 deleted the concrete Devices::I2CBus's HOST_BUILD scripted-FIFO
+// Sprint 108 deleted the concrete Platform::I2CBus's HOST_BUILD scripted-FIFO
 // fake (src/firm/devices/i2c_bus_host.cpp, ticket 001) in favor of a pure
-// Devices::I2CBus interface plus TestSim::SimPlant -- a REAL, physics-backed
+// Platform::I2CBus interface plus TestSim::SimPlant -- a REAL, physics-backed
 // implementation with a read/write hook seam (tests/_infra/sim/sim_plant.h).
 // Several src/tests/sim/unit/ harnesses ported by this ticket still need EXACT,
 // deterministic per-call register-level control (a specific NAK, a specific
@@ -20,14 +20,14 @@
 // src/firm/devices/i2c_bus_host.cpp's own header comment, git history
 //660d7cb2~1) -- but AS a SimPlant read/write hook, following
 // architecture-update.md Decision 1's "the hook (middleware, on SimPlant --
-// not on I2CBus)" design, not as a second concrete Devices::I2CBus.
+// not on I2CBus)" design, not as a second concrete Platform::I2CBus.
 //
 // Usage: construct one ScriptedI2CHook per TestSim::SimPlant instance --
 // installs itself as that plant's read/write hook for its own lifetime.
 // Script expected calls with queueWrite()/queueRead(), then pass the SAME
 // SimPlant reference (NOT this object) to whatever Devices:: leaf is under
 // test -- SimPlant::write()/read() dispatch through this hook automatically
-// because SimPlant IS-A Devices::I2CBus. The destructor clears both hooks so
+// because SimPlant IS-A Platform::I2CBus. The destructor clears both hooks so
 // a SimPlant that outlives this object is left clean.
 //
 // Source placement: HOST_BUILD-only test infrastructure, alongside the

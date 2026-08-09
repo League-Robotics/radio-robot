@@ -3,13 +3,13 @@
 //
 // Ticket 105-003 (SUC-020). Per architecture-update.md Decision 2, this
 // plant is LEAF-GETTER-DRIVEN, not bus-byte-driven: it never intercepts a
-// raw Devices::I2CBus write payload (the HOST_BUILD scripted fake does not
+// raw Platform::I2CBus write payload (the HOST_BUILD scripted fake does not
 // even record one -- i2c_bus.h's own comment). Instead it reads
 // Devices::NezhaMotor::appliedDuty() (a public getter reflecting whatever
 // armor/slew/write-on-change already decided was actually written to the
 // simulated hardware) and integrates a first-order duty->velocity->position
 // response, then SCHEDULES the resulting encoder reading onto the shared
-// Devices::I2CBus for the leaf's NEXT requestSample()/tick() pair to
+// Platform::I2CBus for the leaf's NEXT requestSample()/tick() pair to
 // consume -- the exact two-write-one-read convention
 // devices_motor_harness.cpp's scriptEncoderRequestCollect() already
 // establishes (scenario 6, "PID-on chases a velocity target").
@@ -146,9 +146,9 @@ class WheelPlant {
   // comment) -- NEVER touches step()'s own duty->velocity->position
   // integration.
   //
-  // Formerly packaged as scriptEncoderResponse(Devices::I2CBus&, ...),
+  // Formerly packaged as scriptEncoderResponse(Platform::I2CBus&, ...),
   // which pushed the selected position (plus a scripted status) onto the
-  // scripted-FIFO Devices::I2CBus fake sprint 108 ticket 001 deleted
+  // scripted-FIFO Platform::I2CBus fake sprint 108 ticket 001 deleted
   // (I2CBus is now a pure interface with no scriptWrite()/scriptRead()).
   // The fault-knob precedence logic itself is UNCHANGED -- only its
   // packaging moved: TestSim::SimPlant (tests/_infra/sim/sim_plant.cpp) is

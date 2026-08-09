@@ -2,9 +2,9 @@
 //
 // Sprint 108 ticket 002 (clasi/issues/plan-pure-i2cbus-clock-interfaces-a-
 // real-simplant-simulator.md, Stage 2). Ticket 001 reduced
-// `Devices::I2CBus` to a pure interface (source/devices/i2c_bus.h);
+// `Platform::I2CBus` to a pure interface (source/devices/i2c_bus.h);
 // `SimPlant` is the SECOND concrete implementation, alongside
-// `Devices::MicroBitI2CBus` (source/devices/microbit_i2c_bus.h) on the ARM
+// `Platform::MicroBitI2CBus` (source/devices/microbit_i2c_bus.h) on the ARM
 // side.
 //
 // This class RESPONDS to whatever bytes firmware actually put on the wire
@@ -28,7 +28,7 @@
 // here.
 //
 // The hook wrapper (architecture-update.md's "The hook (middleware, on
-// SimPlant -- not on I2CBus)"): read()/write() (the Devices::I2CBus
+// SimPlant -- not on I2CBus)"): read()/write() (the Platform::I2CBus
 // overrides) each check for a registered Python-facing hook and, if
 // present, call IT instead of the default protocol handler; the hook may
 // call defaultRead()/defaultWrite() itself for pass-through (full access to
@@ -60,7 +60,7 @@
 #include <cstdint>
 #include <functional>
 
-#include "devices/i2c_bus.h"
+#include "platform/i2c_bus.h"
 #include "otos_plant.h"
 #include "wheel_plant.h"
 
@@ -74,10 +74,10 @@ namespace TestSim {
 // header comment on why the two must agree.
 constexpr float kDefaultTrackWidth = 128.0f;  // [mm]
 
-class SimPlant : public Devices::I2CBus {
+class SimPlant : public Platform::I2CBus {
  public:
   // addr/data/len only -- no repeated/preClear/postClear parameter. Those
-  // three exist on Devices::I2CBus::write()/read() purely to schedule real-
+  // three exist on Platform::I2CBus::write()/read() purely to schedule real-
   // bus clearance timing (MicroBitI2CBus's own concern); SimPlant has no
   // clearance timers (clearanceSafetyNetCount() below always returns 0), so
   // a hook has nothing useful to do with them. See this file's header for
@@ -87,7 +87,7 @@ class SimPlant : public Devices::I2CBus {
 
   explicit SimPlant(float trackWidth = kDefaultTrackWidth);
 
-  // ---- Devices::I2CBus overrides -- hook wrappers only, see file header ----
+  // ---- Platform::I2CBus overrides -- hook wrappers only, see file header ----
   int write(uint16_t address, uint8_t* data, int len, bool repeated = false,
             uint32_t preClear = 0, uint32_t postClear = 0) override;
   int read(uint16_t address, uint8_t* data, int len, bool repeated = false,
@@ -115,7 +115,7 @@ class SimPlant : public Devices::I2CBus {
   void clearWriteHook() { writeHook_ = nullptr; }
 
   // ---- Fault-injection knobs -- plain SimPlant/plant-owned methods, NOT
-  // on Devices::I2CBus (architecture-update.md Decision 1). port: 1 = left
+  // on Platform::I2CBus (architecture-update.md Decision 1). port: 1 = left
   // (matches Nezha motorId 1), 2 = right (motorId 2) -- the same port
   // numbering the real Nezha frame's byte [2] carries. ----
   void setDisconnected(int port, bool disconnected);

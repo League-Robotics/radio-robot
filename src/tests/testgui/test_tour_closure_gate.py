@@ -12,7 +12,7 @@ infrastructure earlier tickets already proved:
 
 - ``robot_radio.io.sim_loop.SimLoop`` (108-005/006) -- a real, ctypes-bound
   handle onto the REAL compiled firmware simulator
-  (``src/sim/build/libfirmware_host.{dylib,so}``), the exact object
+  (``src/firm/platform/host/build/libfirmware_host.{dylib,so}``), the exact object
   ``testgui.transport.SimTransport`` wraps for the TestGUI's own Sim mode.
 - ``sim_true_x/y/h`` (108-00x) / ``SimLoop.get_true_pose()`` -- ``SimPlant``'s
   own ground-truth pose, bypassing every drift/noise fault knob -- the only
@@ -41,7 +41,7 @@ Run with::
 
     uv run python -m pytest src/tests/testgui/test_tour_closure_gate.py -v
 
-Requires the compiled ``src/sim/build/libfirmware_host.{dylib,so}``
+Requires the compiled ``src/firm/platform/host/build/libfirmware_host.{dylib,so}``
 (``python build.py``) -- skips cleanly if not present.
 """
 from __future__ import annotations
@@ -57,7 +57,7 @@ from robot_radio.testgui.transport import _SimConfigConn, _sim_lib_path
 
 pytestmark = pytest.mark.skipif(
     not _sim_lib_path().exists(),
-    reason="sim lib not built -- cmake --build src/sim/build (or `python build.py`)",
+    reason="sim lib not built -- cmake --build src/firm/platform/host/build (or `python build.py`)",
 )
 
 _TRACK_WIDTH = 128.0  # [mm] matches TestGUI's own default trackwidth

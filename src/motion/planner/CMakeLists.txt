@@ -57,7 +57,7 @@ add_executable(pose_ownership_test tests/pose_ownership_test.cpp
 target_link_libraries(pose_ownership_test PRIVATE planner)
 # odometry.cpp/body_kinematics.cpp use the qualified #include "motion/..."
 # spelling every other src/motion consumer uses (root CMakeLists.txt,
-# src/sim/CMakeLists.txt) -- src/ (two levels up from this file), not
+# src/firm/platform/host/CMakeLists.txt) -- src/ (two levels up from this file), not
 # src/motion, is the include root that resolves it.
 target_include_directories(pose_ownership_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..)
 add_test(NAME pose_ownership_test COMMAND pose_ownership_test)

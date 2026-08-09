@@ -13,7 +13,7 @@ namespace {
 
 // The brick's mandatory encoder select->read settle, one window per motor.
 // This wait is NOT optional and NOT avoidable by deleting the window:
-// Devices::I2CBus::waitForClearance() enforces the same clearance from
+// Platform::I2CBus::waitForClearance() enforces the same clearance from
 // requestSample()'s postClear, so zeroing kSettle measures identical
 // wall-clock (verified on tovez 2026-08-07) while losing the comms pump
 // that runs inside the window. Spending the mandatory wait usefully is the
@@ -71,14 +71,14 @@ uint32_t packColor(const Devices::ColorReading& reading, uint32_t fullScale) {  
 
 }  // namespace
 
-RobotLoop::RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
+RobotLoop::RobotLoop(Platform::I2CBus& bus, Devices::Motor& motorL,
                       Devices::Motor& motorR, Devices::Otos& otos,
                       Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
                       Comms& comms, Telemetry& tlm, Drive& drive,
                       Configurator& configurator, Motion::Odometry& odom,
                       Motion::Planner& planner, Motion::Navigator& navigator,
-                      Preamble& preamble, const Devices::Clock& clock,
-                      Devices::Sleeper& sleeper)
+                      Preamble& preamble, const Platform::Clock& clock,
+                      Platform::Sleeper& sleeper)
     : bus_(bus),
       motorL_(motorL),
       motorR_(motorR),

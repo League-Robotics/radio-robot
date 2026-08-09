@@ -5,7 +5,7 @@
 // BootOverrides (trackWidth, controlPeriod/actuationDelay, otosConfig; see
 // app/boot_wiring.h's own header) and nothing else.
 //
-// Cannot construct a REAL Devices::MicroBitI2CBus host-side (CODAL-only),
+// Cannot construct a REAL Platform::MicroBitI2CBus host-side (CODAL-only),
 // so this harness does not build two full RobotGraphs and diff them
 // end-to-end. Instead it proves the property that actually matters: the
 // SAME boot_calibration.h functions (App::bootPlannerLimits(),

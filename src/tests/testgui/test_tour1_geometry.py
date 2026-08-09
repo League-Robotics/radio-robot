@@ -11,7 +11,7 @@ an operator exercises. Only the BACKING transport is fake; nothing about
 What changed from the pre-107-004 version of this file
 --------------------------------------------------------
 The original file drove tours against a real ``SimTransport`` wrapping the
-``src/sim`` ctypes firmware simulator (built via ``cmake --build
+``src/firm/platform/host`` ctypes firmware simulator (built via ``cmake --build
 build`` in that directory), gated the whole file behind an ``_LIB_PRESENT``
 ``skipif`` when that library wasn't built. Two independent, later changes
 made that approach dead:

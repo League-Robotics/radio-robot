@@ -2,7 +2,7 @@
 migrated by sprint 108 ticket 010 to the pure-interface split.
 
 Compiles ``devices_clock_harness.cpp`` together with the TestSim::SimClock/
-SimSleeper host-test fake implementation (``src/sim/
+SimSleeper host-test fake implementation (``src/firm/platform/host/
 sim_clock.cpp``) against ``src/firm/devices/clock.h`` (now a pure interface,
 every ARM build compiles the same header) with ``-DHOST_BUILD``, matching
 every other src/tests/sim/unit harness's own compile shape — no MicroBit.h, no
@@ -24,7 +24,7 @@ import pytest
 # src/tests/sim/unit/test_devices_clock.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "devices_clock_harness.cpp"
 _HOST_FAKE_SRC = _INFRA_SIM_DIR / "sim_clock.cpp"
 

@@ -29,7 +29,7 @@
 //   finite accel/decel ceilings (TestPlanner::benchLimits(), the same
 //   bench-plausible limits the sketch-verification suite already uses)
 //   rather than TestSim::SimHarness's own "effectively unshaped" sim
-//   defaults (aMax ~1e6, src/sim/sim_harness.h's simPlannerLimits()) -- an
+//   defaults (aMax ~1e6, src/firm/platform/host/sim_harness.h's simPlannerLimits()) -- an
 //   unshaped ceiling would let the profiler jump straight to cruise in one
 //   step regardless of the carried-velocity mismatch, hiding exactly the
 //   discontinuity ticket 005 needs measured.
@@ -53,7 +53,7 @@
 //   own Stage B/C coverage instead.
 //
 //   The duplicate-id sanity check (scenarioDuplicateIdSanityNoOp) drives
-//   the real TestSim::SimHarness (src/sim/sim_harness.h) instead, because
+//   the real TestSim::SimHarness (src/firm/platform/host/sim_harness.h) instead, because
 //   the dedup short-circuit it exercises is NOT inside Motion::Planner at
 //   all -- it lives one layer up, in App::RobotLoop::handleMove()
 //   (alreadyAccepted()/recordAccepted(), src/firm/app/robot_loop.cpp

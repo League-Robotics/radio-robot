@@ -1,12 +1,12 @@
 """src/tests/testgui/test_sim_loop.py — real end-to-end tests for
 ``robot_radio.io.sim_loop.SimLoop`` (sprint 108 ticket 006) against the
-REAL compiled ``src/sim/build/libfirmware_host.{dylib,so}`` --
+REAL compiled ``src/firm/platform/host/build/libfirmware_host.{dylib,so}`` --
 this is exactly the seam that needs a real check, not a mock (per this
 ticket's own Testing plan).
 
 Skips cleanly (module-level ``skipif``) if the lib has not been built yet
-(``cmake -S src/sim -B src/sim/build && cmake --build
-src/sim/build``).
+(``cmake -S src/firm/platform/host -B src/firm/platform/host/build && cmake --build
+src/firm/platform/host/build``).
 
 Run with::
 
@@ -24,7 +24,7 @@ from robot_radio.io.sim_loop import SimLoop, _DEFAULT_LIB_PATH
 
 pytestmark = pytest.mark.skipif(
     not _DEFAULT_LIB_PATH.exists(),
-    reason="sim lib not built -- cmake --build src/sim/build",
+    reason="sim lib not built -- cmake --build src/firm/platform/host/build",
 )
 
 # 114-006: the sim now fail-closed refuses MOTION (twist/move) until it has

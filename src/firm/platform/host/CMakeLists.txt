@@ -15,11 +15,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_definitions(-DHOST_BUILD=1)
 
 # ---------------------------------------------------------------------------
-# Repo root: grandparent of this CMakeLists.txt's directory
-# (src/sim/CMakeLists.txt -> src/sim -> src -> repo root is TWO levels up
-# from CMAKE_SOURCE_DIR, which IS this directory).
+# Repo root: FOUR levels above this CMakeLists.txt's directory
+# (src/firm/platform/host -> src/firm/platform -> src/firm -> src -> repo
+# root), CMAKE_SOURCE_DIR being this directory itself. It was TWO levels
+# while this tree lived at src/sim; the host platform is a child of
+# src/firm now, so the walk-up is correspondingly longer.
 # ---------------------------------------------------------------------------
-get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../.." ABSOLUTE)
+get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../../../.." ABSOLUTE)
 set(SOURCE_DIR "${REPO_ROOT}/src/firm")
 set(SUPPORT_DIR "${REPO_ROOT}/src/tests/sim/support")
 set(PLANT_DIR "${REPO_ROOT}/src/tests/sim/plant")

@@ -24,7 +24,7 @@ of the same material, kept in sync with it.
 
 Three never-combined domains, plus two flat "kept categories":
 
-- **`sim/`** — runs on a developer laptop against `src/sim/`'s host-build
+- **`sim/`** — runs on a developer laptop against `src/firm/platform/host/`'s host-build
   firmware simulator, no hardware. `unit/` (per-module `App::`/
   `Devices::` host-build harnesses, one `*_harness.cpp` + `test_*.py`
   pair per module), `plant/` (`TestSim::WheelPlant`/`OtosPlant` — a
@@ -178,7 +178,7 @@ camera-covered table (`playfield/`) — a tiering scheme (unit/integration/
 e2e) would cut across that constraint rather than track it.
 
 **One sim object, shared by tests and the TestGUI.** `sim/support`'s
-`SimApi`/`FakeTransport` and `src/sim/`'s `SimHarness`/`SimPlant` are the
+`SimApi`/`FakeTransport` and `src/firm/platform/host/`'s `SimHarness`/`SimPlant` are the
 same command-in/telemetry-out path the TestGUI drives when connected via
 its Sim transport (see [`../sim/DESIGN.md`](../sim/DESIGN.md)) — a test
 in `sim/system/` therefore exercises exactly what a developer watching
@@ -193,7 +193,7 @@ the TestGUI would see, not a divergent, test-only code path.
 - **`src/tests/bench/*.py`, `src/tests/playfield/*.py`** — standalone
   HITL CLI entry points, invoked directly with `uv run python`.
 - **`src/tests/sim/plant/`'s `WheelPlant`/`OtosPlant`** — the physics
-  model `src/sim/sim_plant.cpp` delegates to; see
+  model `src/firm/platform/host/sim_plant.cpp` delegates to; see
   [`../sim/DESIGN.md`](../sim/DESIGN.md) §2.
 - **`src/tests/sim/support/fake_transport.h`** — the `App::Transport`
   HOST_BUILD double used by both the sim harness and host-build unit
@@ -204,7 +204,7 @@ the TestGUI would see, not a divergent, test-only code path.
 - **`src/firm/` (HOST_BUILD)** — every `sim/unit/*_harness.cpp` and
   `sim/system/*.cpp` links the real firmware modules compiled under
   `-DHOST_BUILD`; see [`../firm/DESIGN.md`](../firm/DESIGN.md) §4.
-- **`src/sim/`** — the composition root (`SimHarness`) `sim/system/`'s
+- **`src/firm/platform/host/`** — the composition root (`SimHarness`) `sim/system/`'s
   Python-level tests drive over ctypes; see
   [`../sim/DESIGN.md`](../sim/DESIGN.md).
 - **`src/host/robot_radio/`** — `testgui/` and `unit/`'s protocol tests

@@ -13,7 +13,7 @@
 // the register value.
 //
 // This is the Stage-4-adjacent Python-hook test pattern's C++ half: this
-// sprint's ticket 108-002 real Devices::I2CBus implementation, TestSim::
+// sprint's ticket 108-002 real Platform::I2CBus implementation, TestSim::
 // SimPlant (tests/_infra/sim/sim_plant.{h,cpp}), already NAKs every
 // unrecognized/absent-device address by default -- including the color
 // sensor's 0x39/0x43 addresses (sim_plant.cpp's own header comment names

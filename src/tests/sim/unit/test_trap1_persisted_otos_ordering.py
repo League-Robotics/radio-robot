@@ -27,7 +27,7 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _UNIT_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _UNIT_DIR.parent / "support"
 _PLANT_DIR = _UNIT_DIR.parent / "plant"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 
 _HARNESS_SRC = _UNIT_DIR / "trap1_persisted_otos_ordering_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"

@@ -7,11 +7,11 @@ Deletes and replaces the dead ``robot_radio.io.sim_conn.SimConnection`` --
 that module bound a ~40-symbol ABI (``Hal::PhysicsWorld``/``Hal::SimOdometer``)
 from a subsystem graph deleted by the same greenfield rebuild that
 introduced this sprint's own ``TestSim::SimHarness``/``TestSim::SimPlant``
-composition (``src/sim/sim_harness.h``/``sim_plant.h``);
+composition (``src/firm/platform/host/sim_harness.h``/``sim_plant.h``);
 ``SimConnection.connect()`` has unconditionally returned "Sim library not
 found" since commit ``72d8be7e`` (the library it targeted was never
 rebuilt against the current tree). This module targets the NEW, real
-19-symbol ABI (``src/sim/sim_ctypes.cpp``) instead -- see that
+19-symbol ABI (``src/firm/platform/host/sim_ctypes.cpp``) instead -- see that
 file's own header comment for the full export list and hook contract this
 module binds.
 
@@ -139,13 +139,13 @@ logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Lib path resolution -- same convention the deleted predecessor used
-# (io/ -> ../../../../src/sim/build), and the same one
+# (io/ -> ../../../../src/firm/platform/host/build), and the same one
 # testgui/transport.py's own _sim_lib_path() independently resolves.
 # ---------------------------------------------------------------------------
 
 _LIB_NAME = "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmware_host.so"
 _HERE = pathlib.Path(__file__).parent
-_DEFAULT_LIB_PATH = (_HERE / "../../../../src/sim/build" / _LIB_NAME).resolve()
+_DEFAULT_LIB_PATH = (_HERE / "../../../../src/firm/platform/host/build" / _LIB_NAME).resolve()
 
 # One sim cycle == 32ms of sim/firmware time (TestSim::SimHarness::kCycleDtUs,
 # sim_harness.h -- itself derived from firmware's own App::RobotLoop::kCycle,
@@ -310,7 +310,7 @@ def _bind_ctypes(lib: ctypes.CDLL) -> None:
     # item 8), so the line may legitimately contain an embedded 0x00 byte
     # that a strlen()-based recovery would truncate at -- exactly the
     # pre-124-005 assumption this signature replaces (see
-    # `SimHarness::injectCommand()`, src/sim/sim_harness.h, for the C++-side
+    # `SimHarness::injectCommand()`, src/firm/platform/host/sim_harness.h, for the C++-side
     # fix to the same trap).
     lib.sim_inject_command.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_int]
     lib.sim_inject_command.restype = None
@@ -528,14 +528,14 @@ class SimLoop:
         """Load the sim lib, create a ``SimHandle`` (booted), and optionally
         start the background tick thread. Idempotent -- a no-op if already
         connected. Raises ``FileNotFoundError`` if the lib has not been
-        built (``cmake --build`` in ``src/sim/build``)."""
+        built (``cmake --build`` in ``src/firm/platform/host/build``)."""
         if self.is_connected:
             return
         if not self._lib_path.exists():
             raise FileNotFoundError(
                 f"sim lib not found at {self._lib_path} -- build it: "
-                f"cmake -S src/sim -B src/sim/build && "
-                f"cmake --build src/sim/build")
+                f"cmake -S src/firm/platform/host -B src/firm/platform/host/build && "
+                f"cmake --build src/firm/platform/host/build")
 
         self._lib = ctypes.CDLL(str(self._lib_path))
         _bind_ctypes(self._lib)

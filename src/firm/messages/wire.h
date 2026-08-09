@@ -20,7 +20,7 @@
 // default member initializer). This is CONDITIONALLY-SUPPORTED under strict
 // C++11/C++14 wording but unconditionally well-defined from C++17 onward --
 // and this project's actual compiled standard is `-std=gnu++20` (root
-// CMakeLists.txt / src/sim/CMakeLists.txt both override the
+// CMakeLists.txt / src/firm/platform/host/CMakeLists.txt both override the
 // vendored codal-microbit-v2 target's nominal C++11 pin), so offsetof here
 // is standard-guaranteed, not merely "GCC/Clang define it in practice". See
 // src/firm/messages/layout_checks.h (095-003) for the day-one gate that

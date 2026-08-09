@@ -6,7 +6,7 @@ configurator_.install() in place of the old RobotGraph::Resolved +
 install*Calibration() sequence.
 
 Compiles ``configurator_loadbaked_harness.cpp`` together with
-``sim_plant.cpp`` (``src/sim/``), ``bench_test_config.cpp``, the plant
+``sim_plant.cpp`` (``src/firm/platform/host/``), ``bench_test_config.cpp``, the plant
 sources, and the same full HOST_BUILD Devices/App/messages/kinematics
 dependency graph every sibling ``test_*.py`` in this directory already
 compiles, runs the resulting binary, and asserts it exits 0 -- printing its
@@ -34,7 +34,7 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _SYSTEM_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _SYSTEM_DIR.parent / "support"
 _PLANT_DIR = _SYSTEM_DIR.parent / "plant"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 
 _HARNESS_SRC = _SYSTEM_DIR / "configurator_loadbaked_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"

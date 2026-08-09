@@ -23,7 +23,7 @@
 // shipped. Every scenario below therefore asserts on EVERY cycle of the
 // tail and reports the FIRST offending cycle index, not a final value.
 //
-// Built on TestSim::SimHarness (src/sim/sim_harness.h) -- the composition
+// Built on TestSim::SimHarness (src/firm/platform/host/sim_harness.h) -- the composition
 // root that mirrors src/firm/main.cpp via App::composeRobot(), so the
 // App::RobotLoop under test here is the shipped graph, not a hand-wired
 // stand-in. Same choice, and for the same reason, as

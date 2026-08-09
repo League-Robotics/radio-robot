@@ -11,7 +11,7 @@ TestGUI button-acceptance suite (stakeholder directive, 2026-07-22):
 This module builds the REAL ``robot_radio.testgui.__main__`` window headless
 (``QT_QPA_PLATFORM=offscreen``, see ``conftest.py``), connects it against the
 REAL Sim stack (``SimTransport`` -> ``robot_radio.io.sim_loop.SimLoop`` ->
-the compiled ``src/sim/build/libfirmware_host`` firmware simulator) via the
+the compiled ``src/firm/platform/host/build/libfirmware_host`` firmware simulator) via the
 ACTUAL "Sim" transport-combo + Connect-button click -- so the connect-time
 calibration/config push (``__main__.py``'s ``_on_connect()``:
 ``transport.connect()``'s own Tier 1 + Tier 2 push, THEN
@@ -114,7 +114,7 @@ from ._button_acceptance_support import (
 pytestmark = [
     pytest.mark.skipif(
         not _sim_lib_path().exists(),
-        reason="sim lib not built -- cmake --build src/sim/build (or `python build.py`)",
+        reason="sim lib not built -- cmake --build src/firm/platform/host/build (or `python build.py`)",
     ),
     pytest.mark.slow,
 ]

@@ -2,7 +2,7 @@
 sprint's own Definition of Done: the headless scripted-twist demo.
 
 Compiles ``scripted_twist_demo_harness.cpp`` together with ``sim_plant.cpp``
-(``src/sim/`` -- ticket 108-004's migration off the deleted
+(``src/firm/platform/host/`` -- ticket 108-004's migration off the deleted
 ``sim_api.cpp``), ``wire_test_codec.cpp``, the plant sources, and the same
 full HOST_BUILD Devices/App/messages/kinematics dependency graph
 ``test_sim_api.py``/``test_fault_knobs.py`` already compile, with
@@ -30,14 +30,14 @@ pytest assertion machinery at all, compile and run the harness directly,
 e.g.:
 
     c++ -std=c++20 -DHOST_BUILD -I source -I src/tests/sim/support -I src/tests/sim/plant \\
-        -I src/sim \\
+        -I src/firm/platform/host \\
         -o /tmp/scripted_twist_demo \\
         src/tests/sim/system/scripted_twist_demo_harness.cpp \\
-        src/sim/sim_plant.cpp src/tests/sim/support/wire_test_codec.cpp \\
+        src/firm/platform/host/sim_plant.cpp src/tests/sim/support/wire_test_codec.cpp \\
         src/tests/sim/plant/wheel_plant.cpp src/tests/sim/plant/otos_plant.cpp \\
         src/firm/app/robot_loop.cpp src/firm/app/comms.cpp src/firm/app/telemetry.cpp \\
         src/firm/app/deadman.cpp src/firm/app/drive.cpp src/firm/app/odometry.cpp \\
-        src/firm/app/preamble.cpp src/sim/sim_clock.cpp \\
+        src/firm/app/preamble.cpp src/firm/platform/host/sim_clock.cpp \\
         src/firm/devices/nezha_motor.cpp src/firm/devices/otos.cpp \\
         src/firm/devices/color_sensor.cpp src/firm/devices/line_sensor.cpp \\
         src/firm/messages/wire.cpp src/firm/messages/wire_runtime.cpp src/motion/body_kinematics.cpp \\
@@ -56,7 +56,7 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _SYSTEM_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _SYSTEM_DIR.parent / "support"
 _PLANT_DIR = _SYSTEM_DIR.parent / "plant"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 
 _HARNESS_SRC = _SYSTEM_DIR / "scripted_twist_demo_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
@@ -78,7 +78,7 @@ _APP_SOURCES = [
     # TestSim::SimHarness's constructor always calls
     # App::setDebugSink(&comms_) now (HOST_BUILD is defined below,
     # so the real, non-stub setDebugSink()/debugf() are what this
-    # graph links), mirroring src/sim/CMakeLists.txt's own
+    # graph links), mirroring src/firm/platform/host/CMakeLists.txt's own
     # APP_SOURCES entry.
     _SOURCE_DIR / "app" / "debug.cpp",
     # configurator.cpp -- App::Configurator (command-ingestion-ring-buffered-

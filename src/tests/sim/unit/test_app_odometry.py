@@ -3,7 +3,7 @@
 
 Compiles ``app_odometry_harness.cpp`` together with the HOST_BUILD
 implementations it needs (``src/firm/app/odometry.cpp``,
-``src/sim/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
+``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
 physics dependencies, ``src/firm/devices/nezha_motor.cpp``,
 ``src/firm/devices/otos.cpp``, ``src/motion/body_kinematics.cpp``) with
@@ -34,7 +34,7 @@ import pytest
 # src/tests/sim/unit/test_app_odometry.py -> unit -> sim -> tests -> repo root
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_odometry_harness.cpp"
 _ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"

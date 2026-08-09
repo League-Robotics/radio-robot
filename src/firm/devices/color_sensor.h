@@ -14,7 +14,7 @@
 // non-zero — a wake-once version fails to detect a chip that was still
 // powering up on the first attempt (docs/knowledge/encoders-read-zero-i2c-
 // bus-hang.md). beginStep(nowUs) is a non-blocking single-step state
-// machine driven by Devices::Clock, paced instead of blocked on
+// machine driven by Platform::Clock, paced instead of blocked on
 // fiber_sleep(50) — the caller (the fiber detection preamble) calls it once
 // per cycle until detectDone() is true (see the "No leaf sleeps or blocks"
 // invariant, DESIGN.md §3): no devices/ leaf may fiber_sleep() itself.
@@ -39,7 +39,7 @@
 
 #include "devices/device_config.h"
 #include "devices/device_types.h"
-#include "devices/i2c_bus.h"
+#include "platform/i2c_bus.h"
 
 namespace Devices {
 
@@ -48,7 +48,7 @@ constexpr uint8_t kColorDeviceAddrAlt = 0x43;
 
 class ColorSensorLeaf {
  public:
-  ColorSensorLeaf(I2CBus& bus, const ColorConfig& config);
+  ColorSensorLeaf(Platform::I2CBus& bus, const ColorConfig& config);
 
   // Non-blocking single detection step. Call once per fiber cycle (DB-007's
   // detection preamble) until detectDone() is true; a no-op once it is.
@@ -109,7 +109,7 @@ class ColorSensorLeaf {
  private:
   enum class DetectPhase : uint8_t { AltProbe, ApdsProbe, Done };
 
-  I2CBus& bus_;
+  Platform::I2CBus& bus_;
   ColorConfig config_;
 
   DetectPhase phase_ = DetectPhase::AltProbe;

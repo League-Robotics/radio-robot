@@ -23,7 +23,7 @@ per ``tests/CLAUDE.md``'s three-domain split -- ``src/tests/playfield/`` is HITL
 CLI tooling, not a pytest suite) -- this file lives under ``src/tests/unit/``
 and reaches the script module by inserting ``tests/playfield`` onto
 ``sys.path`` directly, the SAME pattern ``src/tests/sim/unit/
-test_pose_fix_end_to_end.py`` uses for its own sibling ``src/sim``
+test_pose_fix_end_to_end.py`` uses for its own sibling ``src/firm/platform/host``
 import. Importing the script module touches no hardware -- every
 camera/robot call in it lives inside a function, never at module scope
 (verified separately: ``uv run python -c "import ast; ast.parse(...)"`` and

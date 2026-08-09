@@ -102,12 +102,12 @@ in which file is which) is in
   bytes-on-the-wire; every transport/decoder module
   (`robot_radio/io/serial_conn.py`, `io/sim_loop.py`, `io/cli.py`,
   `io/sim_config.py`, `testgui/transport.py`, `robot/protocol.py`, and
-  `src/sim/sim_ctypes.cpp`'s Python-side counterpart) imports from here
+  `src/firm/platform/host/sim_ctypes.cpp`'s Python-side counterpart) imports from here
   rather than re-implementing the codec — see
   [`robot_radio/DESIGN.md`](robot_radio/DESIGN.md) for the file-by-file
   detail.
 - **Consumes the simulator** — `io/sim_loop.py` loads
-  [`src/sim`](../sim/DESIGN.md)'s dylib (the real firmware compiled
+  [`src/firm/platform/host`](../sim/DESIGN.md)'s dylib (the real firmware compiled
   `-DHOST_BUILD`) and drives it over the same `CommandEnvelope` surface
   as a real robot: one command-in Sim, not a second code path.
 - **Consumes per-robot calibration** — `data/robots/*.json` via

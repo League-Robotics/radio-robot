@@ -7,8 +7,8 @@ when the sim lib is missing (not exercised here). Run with::
 
     QT_QPA_PLATFORM=offscreen uv run pytest src/tests/testgui/test_transport.py -q
 
-Requires the compiled ``src/sim/build/libfirmware_host.{dylib,so}``
-(``python src/sim/build.py``) — every test here skips cleanly if it
+Requires the compiled ``src/firm/platform/host/build/libfirmware_host.{dylib,so}``
+(``python src/firm/platform/host/build.py``) — every test here skips cleanly if it
 is not present.
 """
 from __future__ import annotations
@@ -24,7 +24,7 @@ from robot_radio.testgui.transport import SimTransport, _sim_lib_path
 
 pytestmark = pytest.mark.skipif(
     not _sim_lib_path().exists(),
-    reason="sim lib not built -- run `python src/sim/build.py` first",
+    reason="sim lib not built -- run `python src/firm/platform/host/build.py` first",
 )
 
 # Bounded wait for the tick-thread to reach a particular state.  Generous

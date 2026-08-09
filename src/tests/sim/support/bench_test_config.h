@@ -12,7 +12,7 @@
 //
 // Origin: TestSim::SimHarness used to bake these SAME values in unconditionally
 // (its own now-deleted private makeExecutorConfig()/makeMotorConfig() --
-// src/sim/sim_harness.h), so every freshly-constructed harness was always
+// src/firm/platform/host/sim_harness.h), so every freshly-constructed harness was always
 // already configured. Ticket 114-001 built a configuration-completeness gate
 // (App::RobotLoop::isConfigured()/markConfigured()) that makes "unconfigured"
 // a real, refusable state -- SimHarness itself must not carry a hardcoded
@@ -31,7 +31,7 @@
 // are unaffected and stay bench-tuned).
 //
 // This header is explicitly TEST-TREE-ONLY -- it lives under
-// src/tests/sim/support/, never under src/sim/ or src/firm/, so it can never
+// src/tests/sim/support/, never under src/firm/platform/host/ or src/firm/, so it can never
 // be mistaken for (or accidentally reached from) production composition-root
 // code. A real robot's actual configuration always comes from
 // data/robots/*.json via gen_boot_config.py (main.cpp) or

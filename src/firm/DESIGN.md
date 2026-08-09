@@ -44,7 +44,7 @@ consume it is a later sprint, gated on this one being bench-proven).
 Everything under this directory compiles into one image (`main.cpp` is
 the ARM entry point); the same modules minus the ARM adapters also
 compile under `-DHOST_BUILD` for host-side tests and simulation
-([`src/sim`](../sim/DESIGN.md)) — see §4.
+([`src/firm/platform/host`](../sim/DESIGN.md)) — see §4.
 
 `src/firm` is one of the two declared design-doc-set source roots
 (`.clasi/config.yaml`'s `sources:` — the other is `src/host`). Each
@@ -147,7 +147,7 @@ twice: as the ARM firmware image (`main.cpp` entry, real
 `MicroBit.h`-backed transports and I2C), and — minus the explicitly
 ARM-only files — under `-DHOST_BUILD` with no `MicroBit.h` anywhere in
 the translation unit, linked into the host-side simulator and unit tests
-([`src/sim`](../sim/DESIGN.md), `src/tests/sim/`). Hardware seams
+([`src/firm/platform/host`](../sim/DESIGN.md), `src/tests/sim/`). Hardware seams
 (`I2CBus`, `Clock`, `Sleeper`, the transports) are plain virtual bases
 with an ARM implementation and a host/sim implementation — never
 `#ifdef` forks inside a shared header. This dual-target discipline is

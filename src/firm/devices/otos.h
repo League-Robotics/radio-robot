@@ -4,7 +4,7 @@
 
 #include "devices/device_config.h"
 #include "devices/device_types.h"
-#include "devices/i2c_bus.h"
+#include "platform/i2c_bus.h"
 
 namespace Devices {
 
@@ -54,7 +54,7 @@ class Otos {
 
 class RealOtos : public Otos {
  public:
-  RealOtos(I2CBus& bus, const OtosConfig& config);
+  RealOtos(Platform::I2CBus& bus, const OtosConfig& config);
 
   void begin() override;
 
@@ -94,7 +94,7 @@ class RealOtos : public Otos {
   void init() override;
 
  private:
-  I2CBus& bus_;
+  Platform::I2CBus& bus_;
   OtosConfig config_;
 
   bool initialized_ = false;

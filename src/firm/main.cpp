@@ -1,8 +1,8 @@
 // main.cpp -- the ARM entry point. Owns the real MicroBit hardware
 // singleton, constructs the ONE leaf that differs from the sim build (the
-// real Devices::MicroBitI2CBus), and hands everything else to
+// real Platform::MicroBitI2CBus), and hands everything else to
 // App::composeRobot() (app/boot_wiring.h) -- the SAME composition root
-// TestSim::SimHarness (src/sim/sim_harness.h) calls. 130-002 (unify-sim-
+// TestSim::SimHarness (src/firm/platform/host/sim_harness.h) calls. 130-002 (unify-sim-
 // and-robot-composition-roots.md): before this ticket, this file hand-
 // wired the whole App::/Motion:: graph itself, and TestSim::SimHarness
 // hand-wired an independently-drifted copy of the same graph. See
@@ -23,8 +23,8 @@
 #include "com/serial_port.h"
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
-#include "devices/microbit_clock.h"
-#include "devices/microbit_i2c_bus.h"
+#include "platform/microbit/microbit_clock.h"
+#include "platform/microbit/microbit_i2c_bus.h"
 #include "types/version_generated.h"
 
 static MicroBit uBit;
@@ -159,9 +159,9 @@ int main() {
   // bus. Everything downstream of `bus` is built by App::composeRobot(),
   // the SAME function TestSim::SimHarness calls with a TestSim::SimPlant
   // in this slot instead (app/boot_wiring.h).
-  static Devices::MicroBitI2CBus bus(uBit.i2c);
-  static Devices::MicroBitClock clock;
-  static Devices::MicroBitSleeper sleeper;
+  static Platform::MicroBitI2CBus bus(uBit.i2c);
+  static Platform::MicroBitClock clock;
+  static Platform::MicroBitSleeper sleeper;
   static App::SerialTransport serialLink(serial);
   static App::RadioTransport radioLink(radio);
   static Config::MicroBitTuningStore tuningStore(uBit.storage);

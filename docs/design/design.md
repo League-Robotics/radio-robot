@@ -90,7 +90,7 @@ even though nothing requires it:
 | Subsystem | Role |
 |---|---|
 | [`src/motion/`](../../src/motion/DESIGN.md) | The motion-control library (sprint 122's two-layer base/motion split): `StateEstimator`, `Odometry`, `BodyKinematics`, `WheelVelocityPid`, and `planner/` — `Motion::Planner`, its own standalone CMake project, the larger and now-live half of this tree, writing `Types::RobotState::Wheel::cmdVelocity` directly (128 — the plain blackboard field is the boundary; `MoveQueue`/`WheelSink`/`StopCondition`/`VelocityShaper` were deleted as dead code, zero callers). A SIBLING tree of `src/firm` (not a child), imports nothing from `src/firm` except `messages/`/`firm/types`, and builds its own standalone `motion_tests` CMake target (no sim library, no Python). Real, current documentation — deliberately kept OUTSIDE the validated `sources:` list (Design Rationale Decision 3, sprint 122), same unvalidated-but-real treatment this table's other rows already get. |
-| [`src/sim/`](../../src/sim/DESIGN.md) | The host-build firmware simulator: compiles the real firmware into a shared library, drives it from Python over an `extern "C"` ABI. One sim object shared by the pytest suite and the TestGUI. |
+| [`src/firm/platform/host/`](../../src/firm/platform/host/DESIGN.md) | The host-build firmware simulator: compiles the real firmware into a shared library, drives it from Python over an `extern "C"` ABI. One sim object shared by the pytest suite and the TestGUI. |
 | [`src/protos/`](../../src/protos/DESIGN.md) | The wire-schema source of truth (`.proto` files) both the firmware and host codegen compile from. |
 | [`src/scripts/`](../../src/scripts/DESIGN.md) | Build-time code generators (messages, host protobuf bindings, boot config, firmware version) plus one CI-only config-sync lint. |
 | [`src/tests/`](../../src/tests/DESIGN.md) | Three never-combined test domains (`sim/`, `bench/`, `playfield/`) plus flat `unit/`/`tools/`/`notebooks/`/`testgui/` categories. |
@@ -198,7 +198,7 @@ this cleanly: their real children (`app`/`com`/`config`/`devices`/
 `src/host`) become the one-level-down subsystems the validator expects
 — matching the actual doc placement exactly — while `src/vendor`,
 `src/archive`, `src/libraries`, `src/protos`,
-`src/scripts`, `src/sim`, `src/tests`, and `src/utils` never enter the
+`src/scripts`, `src/firm/platform/host`, `src/tests`, and `src/utils` never enter the
 enumeration at all, not even as a required stub. Most of those trees
 still have real, current `DESIGN.md` files (§2's "Other source trees"
 table) — they are simply unvalidated-but-real documentation, kept honest
@@ -235,7 +235,7 @@ and streams telemetry; there is no deadman. Everything under this
 directory compiles into one image
 (`main.cpp` is the ARM entry point); the same modules minus the ARM
 adapters also compile under `-DHOST_BUILD` for host-side tests and
-simulation (`src/sim/`).
+simulation (`src/firm/platform/host/`).
 
 **Architecture: a single cooperatively-timed loop** (`App::RobotLoop`)
 owns all I2C bus access and all timing, calling into passive modules
@@ -482,7 +482,7 @@ Flow of one cycle, at orientation altitude:
    settle/clearance budget, regressed to a fictional 20ms/~50Hz by commit
    `5f5a2ba7`; the sim's own `SimHarness::kCycleDtUs` still matches
    `kCycle` exactly, closing the sim/firmware cadence gap — see
-   [`src/sim/DESIGN.md`](../../src/sim/DESIGN.md).)
+   [`src/firm/platform/host/DESIGN.md`](../../src/firm/platform/host/DESIGN.md).)
 
 Boot is a separate loop: `App::Preamble` steps per-device detection (one
 bounded probe per pass) while telemetry frames report detection status;

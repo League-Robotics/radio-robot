@@ -5,7 +5,7 @@ atomic COBS+CRC wire cutover): pure-Python tests for
 
 Covers the "host-side half of SUC-002" acceptance criterion from ticket 003
 (corrupted frame dropped via CRC, not mis-parsed) plus round-trip/known-answer
-coverage for the codec itself. No hardware, no ``src/sim`` ctypes bridge --
+coverage for the codec itself. No hardware, no ``src/firm/platform/host`` ctypes bridge --
 these are pure functions over ``bytes``.
 """
 

@@ -46,7 +46,7 @@ int32_t decodeRawEncoder(const uint8_t resp[4]) {
 }
 }
 
-NezhaMotor::NezhaMotor(I2CBus& bus, const MotorConfig& config)
+NezhaMotor::NezhaMotor(Platform::I2CBus& bus, const MotorConfig& config)
     : bus_(bus)
 {
     (void)reconfigure(config);
@@ -302,7 +302,7 @@ void NezhaMotor::requestEncoder()
     // postClear is load-bearing: it is the ONLY thing that makes the paired
     // collectEncoder() (which passes 0/0) honour the brick's select->read
     // settle. preClear is deliberately 0 -- it was 4000 and was measured to
-    // be dead weight (tovez, 2026-08-07). Devices::I2CBus tracks lastEnd
+    // be dead weight (tovez, 2026-08-07). Platform::I2CBus tracks lastEnd
     // PER-DEVICE, so whichever 0x10 write preceded this select already set
     // readyAt = its own lastEnd + 4000 via its postClear; a preClear here
     // recomputes that same deadline and the max() is a no-op. Traffic to

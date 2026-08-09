@@ -16,7 +16,7 @@
 // call (a SimApi::DutyPredictor-only hint for its now-deleted scripted-FIFO
 // bus) is simply gone -- SimPlant responds live to whatever firmware
 // actually writes, so there is nothing left to hint. The timing scenario
-// now reads Devices::Sleeper deltas directly off `sim.sleeper()`
+// now reads Platform::Sleeper deltas directly off `sim.sleeper()`
 // (SimHarness's own accessor) instead of a bespoke SimApi::
 // CycleTimingReport/measureOneCycle() wrapper -- same formula (105-004's
 // own derivation: 3 non-final 4ms settle/clear blocks + the observed final
@@ -365,7 +365,7 @@ void scenarioVirtualCycleTimingDiagnostic() {
   sim.boot();
 
   // Reproduces the deleted SimApi::measureOneCycle()'s own deltas directly
-  // off Devices::Sleeper (sim.sleeper(), added to SimHarness by ticket
+  // off Platform::Sleeper (sim.sleeper(), added to SimHarness by ticket
   // 106-001).
   TestSim::SimSleeper& sleeper = sim.sleeper();
   int sleepsBefore = sleeper.sleepCount();

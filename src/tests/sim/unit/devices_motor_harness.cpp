@@ -26,8 +26,8 @@
 // (clasi/sprints/108-pure-i2cbus-clock-interfaces-and-a-real-simplant-
 // simulator-sim-mode-tours/tickets/009-migrate-the-13-register-level-unit-
 // tests-to-python-simplant-hook-tests-delete-c-harnesses.md) off the deleted
-// src/firm/devices/i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket
-// 001 reduced Devices::I2CBus to a pure interface and removed it).
+// src/firm/devices/i2c_bus_host.cpp scripted-FIFO Platform::I2CBus fake (ticket
+// 001 reduced Platform::I2CBus to a pure interface and removed it).
 //
 // Modeled on src/tests/sim/unit/motor_policy_harness.cpp (the MockMotor-style
 // armor scenarios), per device-bus-tickets.md's DB-004 acceptance criteria.
@@ -427,7 +427,7 @@ void scenarioWedgeLatchAndSuspectDeriveAsBefore() {
   }
 }
 
-// --- Devices::NezhaMotor scenarios (real leaf, scripted Devices::I2CBus) ---
+// --- Devices::NezhaMotor scenarios (real leaf, scripted Platform::I2CBus) ---
 
 // Packs positionMm into the little-endian int32 tenths-of-degree raw
 // encoder reading NezhaMotor::collectEncoder() decodes (mirrors

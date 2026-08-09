@@ -1,7 +1,7 @@
 """Off-hardware acceptance proof for ticket DB-005 (device-bus-tickets.md).
 
 Compiles ``devices_otos_harness.cpp`` together with ``TestSim::SimPlant``
-(``src/sim/sim_plant.cpp`` — ticket 108-002's real Devices::I2CBus
+(``src/firm/platform/host/sim_plant.cpp`` — ticket 108-002's real Devices::I2CBus
 implementation) plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
 physics dependencies, and the real ``src/firm/devices/otos.cpp`` against the
 SAME ``src/firm/devices/`` headers every ARM build compiles, with
@@ -28,7 +28,7 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _DEVICES_DIR = _SOURCE_DIR / "devices"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "devices_otos_harness.cpp"

@@ -1,4 +1,4 @@
-// clock.h — Devices::Clock / Devices::Sleeper: the time/yield seam the
+// clock.h — Platform::Clock / Platform::Sleeper: the time/yield seam the
 // loop's own cycle is parameterized on. Plain virtual bases (no
 // preprocessor forks); the real ARM implementation lives in
 // microbit_clock.h/.cpp, the host-test fake under tests/.
@@ -12,7 +12,7 @@
 #pragma once
 #include <cstdint>
 
-namespace Devices {
+namespace Platform {
 
 // Clock — [us] time source the fiber cycle reads via nowMicros(). The real
 // impl wraps system_timer_current_time_us(); the test-infra impl is a
@@ -41,4 +41,4 @@ class Sleeper {
   virtual void yield() = 0;  // hand the processor to another fiber
 };
 
-}  // namespace Devices
+}  // namespace Platform

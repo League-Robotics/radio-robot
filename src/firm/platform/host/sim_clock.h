@@ -1,14 +1,14 @@
 // sim_clock.h -- TestSim::SimClock / TestSim::SimSleeper: the steppable
-// host-test fakes for Devices::Clock / Devices::Sleeper.
+// host-test fakes for Platform::Clock / Platform::Sleeper.
 //
 // Sprint 108 ticket 010 (clasi/issues/plan-pure-i2cbus-clock-interfaces-a-
 // real-simplant-simulator.md, Stage 5). Ticket 010 reduced
-// `Devices::Clock`/`Devices::Sleeper` to pure interfaces
+// `Platform::Clock`/`Platform::Sleeper` to pure interfaces
 // (source/devices/clock.h); SimClock/SimSleeper are the SECOND concrete
-// implementations, alongside `Devices::MicroBitClock`/`MicroBitSleeper`
+// implementations, alongside `Platform::MicroBitClock`/`MicroBitSleeper`
 // (source/devices/microbit_clock.h) on the ARM side -- mirrors
 // tests/_infra/sim/sim_plant.h's own relationship to
-// Devices::MicroBitI2CBus (ticket 001/002).
+// Platform::MicroBitI2CBus (ticket 001/002).
 //
 // Moved verbatim from the deleted source/devices/clock_host.cpp's own
 // `#ifdef HOST_BUILD` fork -- no behavior change, only the class names and
@@ -25,12 +25,12 @@
 
 #include <cstdint>
 
-#include "devices/clock.h"
+#include "platform/clock.h"
 
 namespace TestSim {
 
 // SimClock -- per-instance fake, advances ONLY when stepped.
-class SimClock : public Devices::Clock {
+class SimClock : public Platform::Clock {
  public:
   SimClock() = default;
 
@@ -44,7 +44,7 @@ class SimClock : public Devices::Clock {
 };
 
 // SimSleeper -- records requested sleeps/yields; never blocks.
-class SimSleeper : public Devices::Sleeper {
+class SimSleeper : public Platform::Sleeper {
  public:
   SimSleeper() = default;
 

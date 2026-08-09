@@ -209,7 +209,7 @@ it likewise has no control flow of its own to describe here — its
   yet built).
 - **`PROTO_TAG_OK/ERR/EVT/TLM/CFG/ID`, `PROTO_VERSION`, `FIRMWARE_VERSION`,
   `ReplyFn`/`ReplyCtx`, `KVPair`:** declared, header-only, no current
-  callers in `src/firm` or `src/sim` (verified by repo-wide grep — see §6).
+  callers in `src/firm` or `src/firm/platform/host` (verified by repo-wide grep — see §6).
   Any future consumer would take these as-is; no contract beyond the C++
   types themselves.
 
@@ -239,7 +239,7 @@ it likewise has no control flow of its own to describe here — its
   tree, deleted from the live build in sprints 102–107) — `Protocol.h`,
   `CommandTypes.h`, `Superstructure.h`, `CommandProcessor.*`,
   `MotionCommands.cpp`, etc. Nothing under `src/firm/app`, `src/firm/com`,
-  `src/firm/devices`, `src/firm/messages`, `src/firm/config`, or `src/sim`
+  `src/firm/devices`, `src/firm/messages`, `src/firm/config`, or `src/firm/platform/host`
   includes `types/protocol.h` at all. `main.cpp`'s banner
   (`DEVICE:NEZHA2:robot:<name>:<serial>`) is hand-formatted from name and
   serial only; it does not use `FIRMWARE_VERSION` or `PROTO_VERSION`.

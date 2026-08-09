@@ -2,7 +2,7 @@
 deterministic motor+OTOS plant (``src/tests/sim/plant/{wheel,otos}_plant.{h,cpp}``).
 
 Compiles ``plant_harness.cpp`` together with the plant classes themselves,
-``TestSim::SimPlant`` (``src/sim/sim_plant.cpp`` -- ticket 108-002's
+``TestSim::SimPlant`` (``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's
 real ``Devices::I2CBus`` implementation these plant classes' wheel/pose
 physics feed; ticket 108-004 migrated this harness onto it, replacing the
 deleted scripted-FIFO ``Devices::I2CBus`` fake ticket 108-001 removed), and
@@ -31,7 +31,7 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _PLANT_DIR = pathlib.Path(__file__).resolve().parent
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 
 _HARNESS_SRC = _PLANT_DIR / "plant_harness.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"

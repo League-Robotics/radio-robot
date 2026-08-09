@@ -214,7 +214,7 @@ build today:
   `hiwonder_board.cpp` and `board_motor.cpp` are **already compiled and
   linked** into the firmware image as dead code. No CMake change is
   needed for the firmware build; the cost is a little flash.
-- **Sim/tests:** `src/sim/CMakeLists.txt` lists sources explicitly, as
+- **Sim/tests:** `src/firm/platform/host/CMakeLists.txt` lists sources explicitly, as
   do the per-test translation-unit lists in `src/tests/sim/unit/*.py`
   (grep `nezha_motor.cpp` for the pattern). The new files are in none
   of them — the sim is untouched.
@@ -246,7 +246,7 @@ To wire the board in as the drivetrain:
    scale on vogop: ~5250–5350 counts/s at command 0.75 (~7000 c/s full
    scale). Zero the Nezha-tuned trim gains (§2, duty map note).
 5. **Sim:** when a simulated variant is wanted, add the two `.cpp`s to
-   `src/sim/CMakeLists.txt`'s explicit list and implement the 0x34
+   `src/firm/platform/host/CMakeLists.txt`'s explicit list and implement the 0x34
    register protocol in `TestSim::SimPlant` — same wire-level approach
    as the other simulated devices.
 6. **Safety check before first drive:** verify every stop path

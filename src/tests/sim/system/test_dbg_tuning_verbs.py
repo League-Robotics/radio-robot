@@ -30,7 +30,7 @@ exhaustively (including every malformed form). This file covers the part
 that harness cannot: that the staged action actually reaches a Drive setter
 and comes back out on the wire.
 
-Requires the compiled `src/sim/build/libfirmware_host.{dylib,so}`; skips
+Requires the compiled `src/firm/platform/host/build/libfirmware_host.{dylib,so}`; skips
 cleanly if absent, matching every other file in this tier.
 """
 from __future__ import annotations
@@ -44,11 +44,11 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 
 _LIB_NAME = "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmware_host.so"
-_SIM_LIB_PATH = _REPO_ROOT / "src" / "sim" / "build" / _LIB_NAME
+_SIM_LIB_PATH = _REPO_ROOT / "src" / "firm" / "platform" / "host" / "build" / _LIB_NAME
 
 pytestmark = pytest.mark.skipif(
     not _SIM_LIB_PATH.exists(),
-    reason="sim lib not built -- just build-sim (or cmake --build src/sim/build)",
+    reason="sim lib not built -- just build-sim (or cmake --build src/firm/platform/host/build)",
 )
 
 

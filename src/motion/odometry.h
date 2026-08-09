@@ -109,7 +109,7 @@ class Odometry {
   // old baseline. This is the in-session pose reset a future wire verb will
   // drive (no binary arm exists yet -- see DESIGN.md §6); it is exercised
   // today by the host simulator's teleport-to-origin
-  // (src/sim/sim_harness.h SimHarness::setTruePose()). Additive: no
+  // (src/firm/platform/host/sim_harness.h SimHarness::setTruePose()). Additive: no
   // existing caller's behaviour changes unless it calls reset(). Does NOT
   // touch pathLength() -- see that accessor's own doc comment above. Also
   // does NOT touch lastLeftEpoch_/lastRightEpoch_ (131-004) -- reset() is a

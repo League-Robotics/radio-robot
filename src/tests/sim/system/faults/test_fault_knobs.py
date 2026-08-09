@@ -3,14 +3,14 @@ WheelPlant's three fault-injection knobs (``setDisconnected()``/
 ``freezePosition()``/``setDropoutRate()``, ``src/tests/sim/plant/wheel_plant.h``)
 driven through the deleted ``TestSim::SimApi`` (105-005, SUC-022) onto the
 same knobs now surfaced per-port on ``TestSim::SimPlant``
-(``src/sim/sim_plant.h``) via ``TestSim::SimHarness::plant()``, and
+(``src/firm/platform/host/sim_plant.h``) via ``TestSim::SimHarness::plant()``, and
 asserted against the FIRMWARE's own observable reaction in decoded
 telemetry -- the retargeted ``sim-hardware-fault-injection.md`` issue's ask,
 delivered against this sprint's own plant/harness rather than the deleted
 SimMotor sim.
 
 Compiles ``fault_knobs_harness.cpp`` together with ``sim_plant.cpp``
-(``src/sim/`` -- replacing the deleted ``sim_api.cpp``),
+(``src/firm/platform/host/`` -- replacing the deleted ``sim_api.cpp``),
 ``wire_test_codec.cpp``, the plant sources, and the same full HOST_BUILD
 Devices/App/messages/kinematics dependency graph ``test_sim_api.py`` already
 compiles, with ``-DHOST_BUILD``, against the SAME headers every ARM build
@@ -36,7 +36,7 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _FAULTS_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _FAULTS_DIR.parent.parent / "support"
 _PLANT_DIR = _FAULTS_DIR.parent.parent / "plant"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 
 _HARNESS_SRC = _FAULTS_DIR / "fault_knobs_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
@@ -58,7 +58,7 @@ _APP_SOURCES = [
     # TestSim::SimHarness's constructor always calls
     # App::setDebugSink(&comms_) now (HOST_BUILD is defined below,
     # so the real, non-stub setDebugSink()/debugf() are what this
-    # graph links), mirroring src/sim/CMakeLists.txt's own
+    # graph links), mirroring src/firm/platform/host/CMakeLists.txt's own
     # APP_SOURCES entry.
     _SOURCE_DIR / "app" / "debug.cpp",
     # configurator.cpp -- App::Configurator (command-ingestion-ring-buffered-

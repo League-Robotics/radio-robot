@@ -604,7 +604,7 @@ void sim_configure_drivetrain(SimHandle h, float gainPos, float offsetPos,  // [
 // App::Drive's own boot calibration -- the sim-side counterpart of main.cpp's
 // setDutyPerSpeed()/setCrawlPulse() seam, which reads the same values out of
 // Config::defaultDriveConfig(). That generated config is deliberately absent
-// from the sim CMake target (src/sim/CMakeLists.txt bakes the active robot
+// from the sim CMake target (src/firm/platform/host/CMakeLists.txt bakes the active robot
 // JSON at ARM build time only), so the values arrive over ctypes instead,
 // host-side, from sim_boot_config.py's own drive_boot_config_for() -- see that
 // function's docstring for why the sim went without a drive calibration

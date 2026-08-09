@@ -41,7 +41,7 @@ _UNIT_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _UNIT_DIR.parent / "support"
 _PLANT_DIR = _UNIT_DIR.parent / "plant"
 _TESTS_SIM_DIR = _UNIT_DIR.parent  # src/tests/sim -- resolves "support/..."-qualified includes
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _MOTION_PLANNER_DIR = _REPO_ROOT / "src" / "motion" / "planner"  # resolves planner.h's own includes
 
 _HARNESS_SRC = _UNIT_DIR / "test_app_robot_loop_dedup_harness.cpp"
@@ -63,7 +63,7 @@ _APP_SOURCES = [
     # TestSim::SimHarness's constructor always calls
     # App::setDebugSink(&comms_) now (HOST_BUILD is defined below,
     # so the real, non-stub setDebugSink()/debugf() are what this
-    # graph links), mirroring src/sim/CMakeLists.txt's own
+    # graph links), mirroring src/firm/platform/host/CMakeLists.txt's own
     # APP_SOURCES entry.
     _SOURCE_DIR / "app" / "debug.cpp",
     _SOURCE_DIR / "app" / "configurator.cpp",

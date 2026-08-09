@@ -32,7 +32,7 @@ from robot_radio.testgui.transport import SimTransport, _sim_lib_path
 
 pytestmark = pytest.mark.skipif(
     not _sim_lib_path().exists(),
-    reason="sim lib not built -- cmake --build src/sim/build (or `python build.py`)",
+    reason="sim lib not built -- cmake --build src/firm/platform/host/build (or `python build.py`)",
 )
 
 

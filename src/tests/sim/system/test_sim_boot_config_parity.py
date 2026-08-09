@@ -62,8 +62,8 @@ Run with::
 
     uv run python -m pytest src/tests/sim/system/test_sim_boot_config_parity.py -v -s
 
-Requires the compiled ``src/sim/build/libfirmware_host.{dylib,so}``
-(``python build.py`` or ``cmake --build src/sim/build``) -- skips cleanly if
+Requires the compiled ``src/firm/platform/host/build/libfirmware_host.{dylib,so}``
+(``python build.py`` or ``cmake --build src/firm/platform/host/build``) -- skips cleanly if
 not present.
 """
 from __future__ import annotations
@@ -90,11 +90,11 @@ if str(_SCRIPTS_DIR) not in sys.path:
 import gen_boot_config as gbc  # noqa: E402  (path must be set up before this import)
 
 _LIB_NAME = "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmware_host.so"
-_SIM_LIB_PATH = _REPO_ROOT / "src" / "sim" / "build" / _LIB_NAME
+_SIM_LIB_PATH = _REPO_ROOT / "src" / "firm" / "platform" / "host" / "build" / _LIB_NAME
 
 pytestmark = pytest.mark.skipif(
     not _SIM_LIB_PATH.exists(),
-    reason="sim lib not built -- cmake --build src/sim/build (or `python build.py`)",
+    reason="sim lib not built -- cmake --build src/firm/platform/host/build (or `python build.py`)",
 )
 
 _TRACK_WIDTH = 128.0  # [mm] matches both tovez.json AND tovez_nocal.json's own geometry.trackwidth

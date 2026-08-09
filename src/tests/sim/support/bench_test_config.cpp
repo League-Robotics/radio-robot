@@ -1,7 +1,7 @@
 // bench_test_config.cpp -- see bench_test_config.h's own file header for
 // scope and rationale (114-001). benchTestMotorConfig() below is byte-for-
 // byte the deleted TestSim::SimHarness::makeMotorConfig(uint32_t) body
-// (src/sim/sim_harness.h) -- every field and every explanatory comment
+// (src/firm/platform/host/sim_harness.h) -- every field and every explanatory comment
 // carried over verbatim; only the enclosing function name/namespace and the
 // #include this file needs to reach TestSim::SimHarness's public
 // configureMotor() surface (configureSimForBenchTest(), below) changed.

@@ -18,7 +18,7 @@ frozen copy of the text-plane TLM parser 097-003 retired from
 that ticket converted every other internal consumer onto. Two independent,
 structural reasons block the binary move for this file specifically: (1)
 ``_iter_run()`` drives an in-process ``Sim()`` ctypes wrapper
-(``src/sim/firmware.py``), never a ``SerialConnection`` — there is
+(``src/firm/platform/host/firmware.py``), never a ``SerialConnection`` — there is
 no ``_binary_tlm_queue`` on this path; (2) even if there were, ``encpose``
 is structurally ABSENT from ``telemetry.proto``'s ``Telemetry`` message
 (096-001 Decision 6 trimmed it to fit the binary envelope's 186-byte
@@ -46,7 +46,7 @@ JSONL, transport-agnostic — one JSON object per line, one of two shapes:
         fusion is enabled).
 
 This sprint's own recorder (``record_sim_run``) produces this shape from a
-``Sim()`` instance ONLY (``src/sim/firmware.py``). A HIL recorder
+``Sim()`` instance ONLY (``src/firm/platform/host/firmware.py``). A HIL recorder
 producing the identical shape from a live serial/relay connection is a
 follow-up task's concern — see architecture-update.md Open Question 1.
 
@@ -707,7 +707,7 @@ def _repo_root() -> Path:
 def _default_sim_factory() -> Callable[[], Any]:
     """Build a sim-factory usable by the CLI's ``record``/``fit`` modes.
 
-    Lazily imports ``firmware.Sim`` (``src/sim/firmware.py``),
+    Lazily imports ``firmware.Sim`` (``src/firm/platform/host/firmware.py``),
     inserting that directory onto ``sys.path`` first (mirrors
     ``tests/conftest.py``'s own sys.path setup) — this is dev-repo-only
     tooling, never shipped as part of the installed ``robot_radio`` package,

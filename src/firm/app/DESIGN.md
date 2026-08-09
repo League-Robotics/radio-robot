@@ -1362,7 +1362,7 @@ called with real elapsed time between calls).
   opt-in CMake option — `CMakeLists.txt`'s `option(ROBOT_DEBUG ...)`,
   mirroring the existing `FAKE_OTOS` pattern; select via `cmake
   -DROBOT_DEBUG=ON` or `build.py --robot-debug`) **or `HOST_BUILD`**
-  (`src/sim/CMakeLists.txt` always defines it, so Sim/host tests always
+  (`src/firm/platform/host/CMakeLists.txt` always defines it, so Sim/host tests always
   have the channel). Neither is defined in the plain, shipped
   `cmake .. -DROBOT_DEBUG=OFF` (the default) ARM build, so there
   `debugf()`/`DBG_EVERY()`/`setDebugSink()` are inline no-ops and

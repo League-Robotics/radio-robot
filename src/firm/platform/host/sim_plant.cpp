@@ -287,7 +287,7 @@ void SimPlant::tick(float dt) {
 }
 
 // ---------------------------------------------------------------------------
-// Fault-injection knobs -- plain methods, not on Devices::I2CBus.
+// Fault-injection knobs -- plain methods, not on Platform::I2CBus.
 // ---------------------------------------------------------------------------
 
 void SimPlant::setDisconnected(int port, bool disconnected) {

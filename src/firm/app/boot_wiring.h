@@ -1,6 +1,6 @@
 // boot_wiring.h -- App::RobotGraph / App::composeRobot(): the ONE shared
 // composition root src/firm/main.cpp (ARM) and TestSim::SimHarness (sim,
-// src/sim/sim_harness.h) both build the whole App::/Motion:: dependency
+// src/firm/platform/host/sim_harness.h) both build the whole App::/Motion:: dependency
 // graph through. 130-002 (unify-sim-and-robot-composition-roots.md):
 // before this file existed, main.cpp and SimHarness each hand-wired their
 // own copy of this graph, and the two copies had already drifted once --
@@ -9,7 +9,7 @@
 // disabling the trim in every sim session. composeRobot() makes that
 // drift structurally impossible: both roots call the SAME function, and
 // the only thing that differs between an ARM build and a sim build is
-// which Devices::I2CBus implementation (Devices::MicroBitI2CBus vs.
+// which Platform::I2CBus implementation (Platform::MicroBitI2CBus vs.
 // TestSim::SimPlant) the caller constructs and passes in -- everything
 // downstream of the bus is the identical call.
 //
@@ -65,10 +65,10 @@
 #include "app/telemetry.h"
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
-#include "devices/clock.h"
+#include "platform/clock.h"
 #include "devices/color_sensor.h"
 #include "devices/device_config.h"
-#include "devices/i2c_bus.h"
+#include "platform/i2c_bus.h"
 #include "devices/line_sensor.h"
 #include "devices/motor_armor.h"
 #include "devices/nezha_motor.h"
@@ -203,7 +203,7 @@ class RobotGraph {
   // calibration -- genuinely root-specific, not a drift risk.
   // tuningStore may be null (sim/test roots): persistence disabled,
   // everything else unchanged (mirrors Configurator's own contract).
-  RobotGraph(Devices::I2CBus& bus, const Devices::Clock& clock, Devices::Sleeper& sleeper,
+  RobotGraph(Platform::I2CBus& bus, const Platform::Clock& clock, Platform::Sleeper& sleeper,
              Transport& serialTransport, Transport& radioTransport,
              Config::TuningStore* tuningStore, const char* banner, const char* idLine,
              const BootOverrides& overrides = {});
@@ -324,7 +324,7 @@ class RobotGraph {
 
   // otos_ binds to whichever OTOS implementation this build selects.
   // fakeOtos_ (FAKE_OTOS builds only -- never true for HOST_BUILD/sim,
-  // src/sim/CMakeLists.txt never defines it) needs odom_/armorL_/armorR_,
+  // src/firm/platform/host/CMakeLists.txt never defines it) needs odom_/armorL_/armorR_,
   // so both must be declared AFTER odom_ above -- matching main.cpp's own
   // pre-130-002 order, where the FAKE_OTOS ifdef block came after odom's
   // construction for the same reason.
@@ -359,7 +359,7 @@ class RobotGraph {
 // wrapper so both call sites read the same way; RobotGraph's own
 // constructor does the real work. See RobotGraph's own doc comment above
 // for the parameter contract.
-RobotGraph composeRobot(Devices::I2CBus& bus, const Devices::Clock& clock, Devices::Sleeper& sleeper,
+RobotGraph composeRobot(Platform::I2CBus& bus, const Platform::Clock& clock, Platform::Sleeper& sleeper,
                         Transport& serialTransport, Transport& radioTransport,
                         Config::TuningStore* tuningStore, const char* banner, const char* idLine,
                         const BootOverrides& overrides = {});

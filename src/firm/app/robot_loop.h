@@ -1,6 +1,6 @@
 // robot_loop.h -- App::RobotLoop: the boot loop and main per-cycle
 // schedule. run() = boot() once then cycle() forever; host tests call
-// boot()/cycle() directly. Timing goes through the Devices::Clock/Sleeper
+// boot()/cycle() directly. Timing goes through the Platform::Clock/Sleeper
 // seam so this compiles under -DHOST_BUILD. Design: DESIGN.md.
 //
 // Command ingestion (command-ingestion-ring-buffered-comms-subsystem-
@@ -29,9 +29,9 @@
 #include "app/drive.h"
 #include "app/preamble.h"
 #include "app/telemetry.h"
-#include "devices/clock.h"
+#include "platform/clock.h"
 #include "devices/color_sensor.h"
-#include "devices/i2c_bus.h"
+#include "platform/i2c_bus.h"
 #include "devices/line_sensor.h"
 #include "devices/motor.h"
 #include "devices/otos.h"
@@ -91,7 +91,7 @@ class RobotLoop {
   // settles, one per motor, which the Nezha brick requires. Those are the
   // kSettle windows and they cost NOTHING in wall clock -- zeroing them
   // measured identical to keeping them, because the same wait simply
-  // reappears inside Devices::I2CBus::waitForClearance()'s fiber_sleep.
+  // reappears inside Platform::I2CBus::waitForClearance()'s fiber_sleep.
   // The windows are where that mandatory wait gets spent USEFULLY (the
   // comms pump runs inside them); waitForClearance just sleeps.
   //
@@ -121,14 +121,14 @@ class RobotLoop {
   // (main.cpp or a harness) owns construction and wiring order. The
   // persisted-tuning store is NOT a parameter here any more -- it belongs
   // to App::Configurator, which owns the whole CONFIG lifecycle.
-  RobotLoop(Devices::I2CBus& bus, Devices::Motor& motorL,
+  RobotLoop(Platform::I2CBus& bus, Devices::Motor& motorL,
             Devices::Motor& motorR, Devices::Otos& otos,
             Devices::ColorSensorLeaf& color, Devices::LineSensorLeaf& line,
             Comms& comms, Telemetry& tlm, Drive& drive,
             Configurator& configurator, Motion::Odometry& odom,
             Motion::Planner& planner, Motion::Navigator& navigator,
-            Preamble& preamble, const Devices::Clock& clock,
-            Devices::Sleeper& sleeper);
+            Preamble& preamble, const Platform::Clock& clock,
+            Platform::Sleeper& sleeper);
 
   [[noreturn]] void run();
 
@@ -359,7 +359,7 @@ class RobotLoop {
   float dbgDutyPerSpeedBaseRight_ = 0.0f;  // [duty/(mm/s)]
 #endif
 
-  Devices::I2CBus& bus_;
+  Platform::I2CBus& bus_;
   Devices::Motor& motorL_;
   Devices::Motor& motorR_;
   Devices::Otos& otos_;
@@ -373,8 +373,8 @@ class RobotLoop {
   Motion::Planner& planner_;
   Motion::Navigator& navigator_;
   Preamble& preamble_;
-  const Devices::Clock& clock_;
-  Devices::Sleeper& sleeper_;
+  const Platform::Clock& clock_;
+  Platform::Sleeper& sleeper_;
 
   // The blackboard: each section written by the cycle step that owns it,
   // at its point of coherence; tlm_.update(state_) is the one assembly

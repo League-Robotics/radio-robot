@@ -3,7 +3,7 @@
 
 Constructs a REAL ``SimTransport`` (``robot_radio.testgui.transport``),
 ``connect()``s it against the REAL compiled firmware simulator
-(``src/sim/build/libfirmware_host.{dylib,so}``), reads
+(``src/firm/platform/host/build/libfirmware_host.{dylib,so}``), reads
 ``.protocol`` (a live ``SimLoop`` — see that class's own docstring), and
 drives real twist/stop commands against it — exactly the path
 ``__main__.py``'s ``_TourRunner.run()`` takes once a Sim connection is live
@@ -28,7 +28,7 @@ from robot_radio.testgui.transport import SimTransport, _sim_lib_path
 
 pytestmark = pytest.mark.skipif(
     not _sim_lib_path().exists(),
-    reason="sim lib not built -- cmake --build src/sim/build",
+    reason="sim lib not built -- cmake --build src/firm/platform/host/build",
 )
 
 

@@ -45,7 +45,7 @@ python build.py
 
 Run `build.py` from the **repository root** (the directory that contains
 `source/`, `host/`, and `tests/`).  The library is built into
-`src/sim/build/libfirmware_host.{dylib,so}`.
+`src/firm/platform/host/build/libfirmware_host.{dylib,so}`.
 
 If the library is missing when you click Connect, a warning dialog appears with
 the build command.

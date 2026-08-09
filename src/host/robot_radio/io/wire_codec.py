@@ -6,7 +6,7 @@ grammar cutover).
 This is the ONE place the host encodes/decodes the wire's binary framing --
 every producer/consumer of a binary frame (``io/serial_conn.py``,
 ``io/sim_loop.py``, ``io/sim_config.py``, ``io/cli.py``,
-``testgui/transport.py``, ``robot/protocol.py``, ``src/sim/sim_ctypes.cpp``'s
+``testgui/transport.py``, ``robot/protocol.py``, ``src/firm/platform/host/sim_ctypes.cpp``'s
 Python-side counterpart) imports from here rather than re-implementing the
 byte-level codec at each call site -- mirrors ``wire_runtime.h``'s own
 "ONE hand-written, schema-agnostic byte-level codec toolkit" role on the

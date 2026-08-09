@@ -173,7 +173,7 @@ endif()
 # Comms via App::setDebugSink(). OFF (default) is the shipped build: those
 # same call sites compile to inline no-ops, so DBG costs zero flash and
 # emits zero wire traffic -- see debug.h's own header for the full
-# compile-gate contract (this option OR HOST_BUILD, which src/sim/
+# compile-gate contract (this option OR HOST_BUILD, which src/firm/platform/host/
 # CMakeLists.txt always defines, so Sim/host tests always have DBG
 # regardless of this flag). Select via `cmake .. -DROBOT_DEBUG=ON`, or
 # build.py's own --robot-debug flag (which, like --fake-otos, always
@@ -315,6 +315,26 @@ RECURSIVE_FIND_FILE(CC_FILES "${PROJECT_SOURCE_DIR}/${CODAL_APP_SOURCE_DIR}" "*.
 list(APPEND SOURCE_FILES ${S_FILES})
 list(APPEND SOURCE_FILES ${C_FILES})
 list(APPEND SOURCE_FILES ${CC_FILES})
+
+# src/firm/platform/host -- the HOST platform (was src/sim before the
+# platform/hardware/hal reorganization). It lives under src/firm now so
+# that the whole firmware travels together on a `git subtree split`, which
+# means the recursive glob above reaches it -- and it must not. Its sources
+# are the SIM plant/clock/ctypes bridge: host-only C++ (std::, dlopen-style
+# C ABI, no CODAL) the ARM toolchain cannot build, and sim_ctypes.cpp is a
+# shared-library entry point with no place in a firmware image. This is the
+# same shape of exclusion the motion planner/navigator trees already carry
+# below, for the same reason.
+#
+# The trailing "/" matters: it excludes the tree's CONTENTS without
+# depending on where the repo happens to be checked out. A nested CMake
+# build directory (src/firm/platform/host/build, where `just build-sim`
+# configures) is covered by the same filter -- CMake's own generated
+# feature-test sources (CompilerId*.cpp) must never reach the image.
+list(FILTER SOURCE_FILES EXCLUDE REGEX "/platform/host/")
+# INCLUDE_DIRS entries are directories, so they have no trailing slash --
+# hence the alternation rather than reusing the source filter verbatim.
+list(FILTER INCLUDE_DIRS EXCLUDE REGEX "/platform/host(/|$)")
 
 # vendor/ruckig's GLOB+append (sprint 109 ticket 001) was removed by
 # sprint 115 ticket 002 (the motion-stack excision) along with vendor/ruckig/

@@ -1,5 +1,5 @@
-// microbit_i2c_bus.h — Devices::MicroBitI2CBus: the real ARM implementation
-// of Devices::I2CBus, wrapping MicroBitI2C. Holds the MicroBitI2C& member,
+// microbit_i2c_bus.h — Platform::MicroBitI2CBus: the real ARM implementation
+// of Platform::I2CBus, wrapping MicroBitI2C. Holds the MicroBitI2C& member,
 // re-entrancy guard, lazy preClear/postClear clearance timers, per-device
 // stats, and the transaction ring log.
 //
@@ -54,10 +54,10 @@
 //   contract rule 3: "Nothing here is ISR-safe, by design").
 #pragma once
 #include "MicroBit.h"
-#include "devices/i2c_bus.h"
+#include "platform/i2c_bus.h"
 #include <cstdint>
 
-namespace Devices {
+namespace Platform {
 
 class MicroBitI2CBus : public I2CBus {
  public:
@@ -230,4 +230,4 @@ class MicroBitI2CBus : public I2CBus {
   void record(uint16_t addr7, int status);
 };
 
-}  // namespace Devices
+}  // namespace Platform

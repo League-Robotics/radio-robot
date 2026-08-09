@@ -4,7 +4,7 @@ App::RobotLoop::publishWheel()'s software position rebaseline, against the
 REAL, live-responding TestSim::SimHarness/TestSim::SimPlant.
 
 Compiles ``rebaseline_pose_harness.cpp`` together with ``sim_plant.cpp``
-(``src/sim/``), ``wire_test_codec.cpp``, the plant sources, and the same
+(``src/firm/platform/host/``), ``wire_test_codec.cpp``, the plant sources, and the same
 full HOST_BUILD Devices/App/messages/kinematics dependency graph every
 sibling ``test_*.py`` in this directory already compiles, runs the
 resulting binary, and asserts it exits 0 -- printing its own
@@ -29,7 +29,7 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _SYSTEM_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _SYSTEM_DIR.parent / "support"
 _PLANT_DIR = _SYSTEM_DIR.parent / "plant"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 
 _HARNESS_SRC = _SYSTEM_DIR / "rebaseline_pose_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"

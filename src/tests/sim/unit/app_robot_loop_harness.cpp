@@ -6,7 +6,7 @@
 // every leaf/app module RobotLoop needs over a TestSim::SimPlant (108-002),
 // scripted deterministically via TestSim::ScriptedI2CHook (108-009), and a
 // TestSim::SimClock/SimSleeper pair (tests/_infra/sim/sim_clock.cpp, the
-// Devices::Clock/Sleeper host-test fakes -- sprint 108 ticket 010), a
+// Platform::Clock/Sleeper host-test fakes -- sprint 108 ticket 010), a
 // minimal App::Transport stub in place of real serial/radio, drives boot()
 // to completion, then cycle() a few times, and asserts: no bus script
 // under/over-run (proves cycle ordering matches what main.cpp's
@@ -14,15 +14,15 @@
 // velocity() reflect the scripted samples (proves the request/settle/collect
 // timing survived the move), the Sleeper recorded a sleep for every
 // runAndWait/pace point (proves markTime()/sleepUntil() now route through
-// Devices::Clock/Sleeper, not system_timer_current_time()/uBit.sleep()), and
+// Platform::Clock/Sleeper, not system_timer_current_time()/uBit.sleep()), and
 // Telemetry emitted real bytes on both the primary and (given enough
 // cycles) secondary cadence. No MicroBit.h is included by this file,
 // robot_loop.h, or robot_loop.cpp -- compiled with -DHOST_BUILD against the
 // same headers the ARM build uses.
 //
 // Migrated by sprint 108 ticket 009 off the deleted src/firm/devices/
-// i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket 001 reduced
-// Devices::I2CBus to a pure interface and removed it) -- see
+// i2c_bus_host.cpp scripted-FIFO Platform::I2CBus fake (ticket 001 reduced
+// Platform::I2CBus to a pure interface and removed it) -- see
 // devices_motor_harness.cpp's/scripted_i2c_hook.h's own header for the
 // migration rationale. Every scenario below is otherwise UNCHANGED from the
 // pre-migration harness -- only the bus/scripting plumbing moved. This
@@ -508,7 +508,7 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
   checkTrue(preamble.rightConnected(), "rightConnected() true after boot()");
   checkTrue(preamble.otosConnected(), "otosConnected() true after boot()");
   checkTrue(sleeper.sleepCount() > sleepsBeforeBoot,
-            "boot()'s own pacing sleep (kPreamblePace) went through Devices::Sleeper, "
+            "boot()'s own pacing sleep (kPreamblePace) went through Platform::Sleeper, "
             "not uBit.sleep()");
   checkUintEq(bus.errCount(Devices::kNezhaDeviceAddr), 0, "no script under-run: motor (boot)");
   checkUintEq(bus.errCount(Devices::kOtosDeviceAddr), 0, "no script under-run: otos (boot)");
@@ -531,7 +531,7 @@ void scenarioBootThenAFewCyclesRunToCompletion() {
     int sleepsBefore = sleeper.sleepCount();
     robotLoop.cycle();
     checkTrue(sleeper.sleepCount() > sleepsBefore,
-              "cycle() paces via Devices::Sleeper (three runAndWait blocks + final "
+              "cycle() paces via Platform::Sleeper (three runAndWait blocks + final "
               "sleepUntil), not uBit.sleep()");
   }
 
@@ -881,7 +881,7 @@ void scenarioConfigPersistWritePolicySkipsRedundantSave() {
 // integration. Unlike the three scenarios above (which need a
 // ScriptedI2CHook's EXACT bus-transaction budget), these run against a
 // LIVE, UNSCRIPTED TestSim::SimPlant -- the same "always answers correctly,
-// no pre-loaded script" property src/sim/sim_harness.h's own header
+// no pre-loaded script" property src/firm/platform/host/sim_harness.h's own header
 // documents (motorL_/motorR_'s baseMotorConfig() leaves velGains at
 // Devices::Gains{}'s all-zero default, so commanded duty is always 0 and
 // the plant's wheels never actually move -- exactly what a Kind::Distance
@@ -2546,7 +2546,7 @@ void scenarioClampToPositionWireBoundClampsAndFlagsOutOfRangeValues() {
 // applies, just spread across the cycle at the real sub-cycle points a
 // genuine wall clock would advance it, which is exactly the skew this
 // scenario needs to observe.
-class TickingSleeper : public Devices::Sleeper {
+class TickingSleeper : public Platform::Sleeper {
  public:
   explicit TickingSleeper(TestSim::SimClock& clock) : clock_(clock) {}
   void sleepMillis(uint32_t duration) override {
@@ -2641,14 +2641,14 @@ void scenarioEncoderAgesAreIndependentAndReflectRealCollectSkew() {
 // (test_robot_loop_tlm.py). This whole file was ALREADY -DHOST_BUILD
 // compile-broken before sprint 125 started (an unrelated, independent
 // motion-library rework -- "Planner integration," dated 2026-07-26 per
-// src/sim/sim_harness.h's own comments -- changed App::RobotLoop's
+// src/firm/platform/host/sim_harness.h's own comments -- changed App::RobotLoop's
 // constructor from 15 to 16 arguments and removed App::Drive::
 // gainsLeft()/gainsRight(); this file's LiveFixture and every other
 // RobotLoop-construction call site here still use the pre-Planner shape),
 // so the 4 scenarios 125-003 originally wrote here never actually ran --
 // see test_app_robot_loop.py's own xfail marker. 125-006 (issue Part 8's
 // own acceptance ticket) declined to leave acceptance resting on dead
-// code and moved them onto TestSim::SimHarness (src/sim/sim_harness.h),
+// code and moved them onto TestSim::SimHarness (src/firm/platform/host/sim_harness.h),
 // which IS current on the Planner/Configurator shape (it mirrors
 // main.cpp's own composition root) -- see the relocated file's own header
 // for the full rationale. Repairing THIS file's ~20 RobotLoop

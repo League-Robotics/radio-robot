@@ -2,7 +2,7 @@
 safety-arbitration step ``App::RobotLoop::zeroUnownedMotion()``.
 
 Compiles ``stop_path_safety_harness.cpp`` against TestSim::SimHarness
-(``src/sim/sim_harness.h``) plus its full dependency graph, with
+(``src/firm/platform/host/sim_harness.h``) plus its full dependency graph, with
 ``-DHOST_BUILD``, against the SAME headers every ARM build compiles.
 Mirrors ``test_robot_loop_tlm.py``'s exact shape (same composition root,
 same ``_APP_SOURCES``-style source lists) -- see that file's own header for
@@ -40,7 +40,7 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _SYSTEM_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _SYSTEM_DIR.parent / "support"
 _PLANT_DIR = _SYSTEM_DIR.parent / "plant"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 
 _HARNESS_SRC = _SYSTEM_DIR / "stop_path_safety_harness.cpp"
 _ROBOT_LOOP_SRC = _SOURCE_DIR / "app" / "robot_loop.cpp"

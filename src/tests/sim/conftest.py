@@ -1,8 +1,8 @@
 """src/tests/sim/conftest.py — SIM domain fixtures.
 
 105-006: this file used to carry `build_lib`/`sim` fixtures (081-005)
-wired to `src/sim/sim_api.cpp` (a compiled `libfirmware_host` C
-ABI) and `src/sim/firmware.py`'s ctypes `Sim` wrapper, built via
+wired to `src/firm/platform/host/sim_api.cpp` (a compiled `libfirmware_host` C
+ABI) and `src/firm/platform/host/firmware.py`'s ctypes `Sim` wrapper, built via
 a `just build-sim` recipe. All three -- the compiled lib, the Python
 wrapper, and the justfile recipe -- were deleted before this ticket
 (confirmed by reading both `tests/_infra/` and the `justfile` directly),

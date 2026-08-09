@@ -6,7 +6,7 @@ latch present()==true on a NAK'd bus read.
 Compiles ``devices_color_sensor_apds_probe_harness.cpp`` together with the
 REAL ``src/firm/devices/color_sensor.cpp`` and ticket 108-002's real
 ``Devices::I2CBus`` implementation, ``TestSim::SimPlant``
-(``src/sim/sim_plant.cpp`` -- itself named as this exact ticket's
+(``src/firm/platform/host/sim_plant.cpp`` -- itself named as this exact ticket's
 consumer in its own header comment) plus SimPlant's own
 ``wheel_plant.cpp``/``otos_plant.cpp`` dependencies, with ``-DHOST_BUILD``,
 against the SAME ``src/firm/devices/`` headers every ARM build compiles.
@@ -27,7 +27,7 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _DEVICES_DIR = _SOURCE_DIR / "devices"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "devices_color_sensor_apds_probe_harness.cpp"

@@ -1,4 +1,4 @@
-# Sim (`src/sim`) — Host-Build Firmware Simulator
+# Sim (`src/firm/platform/host`) — Host-Build Firmware Simulator
 
 **Owner:** Eric Busboom · **Last reviewed:** 2026-07-21 · **Status:** in-flux
 
@@ -6,7 +6,7 @@
 
 ## 1. Purpose
 
-`src/sim/` compiles the real `src/firm/` control loop into a host shared
+`src/firm/platform/host/` compiles the real `src/firm/` control loop into a host shared
 library (`build/libfirmware_host.dylib`) and drives it from Python over a
 small `extern "C"` ABI. It exists so that "does the firmware behave
 correctly" can be answered on a developer laptop, with no hardware and no
@@ -183,7 +183,7 @@ def twist(self, v_x: float, omega: float, duration: float) -> int:
 `_run_or_enqueue()` marshals the ctypes call onto the sim tick thread —
 the only thread that ever touches the ctypes handle.
 
-**File: `src/sim/sim_ctypes.cpp` → `src/sim/sim_harness.h`**
+**File: `src/firm/platform/host/sim_ctypes.cpp` → `src/firm/platform/host/sim_harness.h`**
 
 `sim_inject_twist()` → `SimHarness::injectTwist()` → a convenience
 wrapper over `TestSupport::armorTwistCommand()` that armors a
@@ -208,7 +208,7 @@ wall-clock interval at 1× speed factor.
 > Note (118 ticket 003, resolved — see §8's own former Open Question):
 > `SimHarness::kCycleDtUs` is **derived from firmware's own
 > `App::RobotLoop::kCycle`** (`kCycleDtUs = App::RobotLoop::kCycle *
-> 1000`, `src/sim/sim_harness.h`, with a `static_assert` pinning the two
+> 1000`, `src/firm/platform/host/sim_harness.h`, with a `static_assert` pinning the two
 > together so they cannot drift apart independently again), not an
 > independently-hardcoded literal. Both are 40 ms/~25 Hz. `sim_step(1)`
 > now corresponds to EXACTLY one 40 ms firmware cycle — "N `sim_step()`
@@ -223,7 +223,7 @@ wall-clock interval at 1× speed factor.
 > exactly the (now-equal) cycle/throttle period does not need a coarser
 > sim step to avoid it.
 
-**File: `src/sim/sim_harness.h`**
+**File: `src/firm/platform/host/sim_harness.h`**
 
 `sim_step()` → `SimHarness::step()`, whose ordering is the harness's one
 invariant — plant physics **before** the loop reads it:
@@ -360,7 +360,7 @@ the two are no longer two different step sizes. `Comms::sendReply()`
 armors and broadcasts on both
 `FakeTransport`s; `FakeTransport::send()` appends to its `sent_` capture.
 
-**File: `src/sim/sim_harness.h` / `src/sim/sim_ctypes.cpp`**
+**File: `src/firm/platform/host/sim_harness.h` / `src/firm/platform/host/sim_ctypes.cpp`**
 
 `SimHarness::drainRawTelemetry()` returns every not-yet-drained armored
 line from `serialLink_.sent()` (its own drain index, separate from the

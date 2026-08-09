@@ -5,7 +5,7 @@
 // A pure DECORATOR over Devices::Motor (motor.h): construct a motor, hand
 // it to MotorArmor, hand the armor to whatever wants a Motor. Don't want
 // the armor? Hand the motor over directly. The sim does exactly that
-// (src/sim/sim_harness.h — bare motors); the ARM build wraps
+// (src/firm/platform/host/sim_harness.h — bare motors); the ARM build wraps
 // (src/firm/main.cpp).
 //
 // The write gate (reversal dwell + output deadband) is NOT here — it is

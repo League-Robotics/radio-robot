@@ -1,9 +1,9 @@
-// microbit_clock.cpp — Devices::MicroBitClock / Devices::MicroBitSleeper
+// microbit_clock.cpp — Platform::MicroBitClock / Platform::MicroBitSleeper
 // real implementation. Compiled ONLY in the real ARM build (this file
 // includes MicroBit.h, so it is never part of the HOST_BUILD graph).
-#include "devices/microbit_clock.h"
+#include "platform/microbit/microbit_clock.h"
 
-namespace Devices {
+namespace Platform {
 
 uint64_t MicroBitClock::nowMicros() const {
   return system_timer_current_time_us();  // [us]
@@ -22,4 +22,4 @@ void MicroBitSleeper::yield() {
   schedule();
 }
 
-}  // namespace Devices
+}  // namespace Platform

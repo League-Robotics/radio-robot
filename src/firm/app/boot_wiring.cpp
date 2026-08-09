@@ -62,7 +62,7 @@ RobotGraph::BootValues RobotGraph::bakeBootValues(const BootOverrides& overrides
   return r;
 }
 
-RobotGraph::RobotGraph(Devices::I2CBus& bus, const Devices::Clock& clock, Devices::Sleeper& sleeper,
+RobotGraph::RobotGraph(Platform::I2CBus& bus, const Platform::Clock& clock, Platform::Sleeper& sleeper,
                        Transport& serialTransport, Transport& radioTransport,
                        Config::TuningStore* tuningStore, const char* banner, const char* idLine,
                        const BootOverrides& overrides)
@@ -85,7 +85,7 @@ RobotGraph::RobotGraph(Devices::I2CBus& bus, const Devices::Clock& clock, Device
       // variant that synthesizes the OTOS reading from encoder kinematics
       // instead of reading the real chip, selected by ONE compile-time
       // macro at this composition root. Never defined for HOST_BUILD/sim
-      // (src/sim/CMakeLists.txt never adds -DFAKE_OTOS), so this branch
+      // (src/firm/platform/host/CMakeLists.txt never adds -DFAKE_OTOS), so this branch
       // only ever compiles into an opt-in ARM bench image.
       fakeOtos_(odom_, armorL_, armorR_, bootValues_.trackWidth),
       otos_(fakeOtos_),
@@ -106,7 +106,7 @@ RobotGraph::RobotGraph(Devices::I2CBus& bus, const Devices::Clock& clock, Device
   // Wires the bench/Sim-only DBG debug channel to this graph's own Comms --
   // a no-op call unless ROBOT_DEBUG is defined (app/debug.h's own compile
   // gate) or, for the host/sim build, always live (HOST_BUILD, per
-  // src/sim/CMakeLists.txt's own APP_SOURCES comment).
+  // src/firm/platform/host/CMakeLists.txt's own APP_SOURCES comment).
   App::setDebugSink(&comms_);
 
   // 132-006 (the-configuration-object.md): loadBaked() + install() replace
@@ -169,7 +169,7 @@ void RobotGraph::loadPersistedTuning() {
   }
 }
 
-RobotGraph composeRobot(Devices::I2CBus& bus, const Devices::Clock& clock, Devices::Sleeper& sleeper,
+RobotGraph composeRobot(Platform::I2CBus& bus, const Platform::Clock& clock, Platform::Sleeper& sleeper,
                         Transport& serialTransport, Transport& radioTransport,
                         Config::TuningStore* tuningStore, const char* banner, const char* idLine,
                         const BootOverrides& overrides) {

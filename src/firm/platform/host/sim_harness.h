@@ -1,14 +1,14 @@
 // sim_harness.h -- TestSim::SimHarness: the composition root wiring the REAL
 // App::RobotLoop firmware graph to a SimPlant (tests/_infra/sim/sim_plant.{h,cpp}).
 // Supersedes tests/sim/support/sim_api.{h,cpp} (TestSim::SimApi + its
-// DutyPredictor) -- full history: src/sim/DESIGN.md. THIN composition root
+// DutyPredictor) -- full history: src/firm/platform/host/DESIGN.md. THIN composition root
 // -- no simulation logic (SimPlant/WheelPlant/OtosPlant), no firmware
 // dispatch logic (App::RobotLoop, unmodified). 130-002 (unify-sim-and-
 // robot-composition-roots.md): the whole App::/Motion:: graph is now built
 // by the SAME App::composeRobot() (src/firm/app/boot_wiring.h) src/firm/
 // main.cpp calls -- this class constructs the ONE leaf that differs
-// (TestSim::SimPlant, in the Devices::I2CBus& slot main.cpp fills with a
-// real Devices::MicroBitI2CBus) and hands everything else to that shared
+// (TestSim::SimPlant, in the Platform::I2CBus& slot main.cpp fills with a
+// real Platform::MicroBitI2CBus) and hands everything else to that shared
 // function. Before this ticket, this file hand-wired its own independent
 // copy of the graph (simPlannerLimits()'s own hand-picked literals), which
 // had already drifted from main.cpp's boot values once -- the wheel-trim
@@ -22,7 +22,7 @@
 //
 // The one invariant that matters: tick the plant BEFORE the loop reads it,
 // every cycle -- step(n) calls plant_.tick(dt) FIRST, then robotLoop_.
-// cycle(), never the other order (src/sim/DESIGN.md's "Invariants worth
+// cycle(), never the other order (src/firm/platform/host/DESIGN.md's "Invariants worth
 // keeping" #1; SimPlant::tick()'s own doc comment has the physics-side
 // half). Two entry points, matching RobotLoop's own boot()/cycle() split --
 // boot() drives App::Preamble to done() via direct preamble_.step() calls
@@ -76,7 +76,7 @@ class SimHarness {
         // PARITY (130-002): composeRobot() is the SAME function
         // src/firm/main.cpp calls -- the only leaf substituted here is the
         // bus (plant_, a TestSim::SimPlant, in main.cpp's
-        // Devices::MicroBitI2CBus slot) and the transports (FakeTransport
+        // Platform::MicroBitI2CBus slot) and the transports (FakeTransport
         // in main.cpp's real SerialTransport/RadioTransport slots).
         //
         // THREE deliberate, explicit overrides (BootOverrides -- see its
@@ -418,7 +418,7 @@ class SimHarness {
   // itself (private).
   App::Configurator& configurator() { return graph_.configurator(); }
 
-  // Concrete TestSim::SimClock&, not Devices::Clock& -- callers need the
+  // Concrete TestSim::SimClock&, not Platform::Clock& -- callers need the
   // setMicros()/advanceMicros() stepping surface only the concrete fake
   // exposes.
   TestSim::SimClock& clock() { return clock_; }
@@ -434,7 +434,7 @@ class SimHarness {
   // exactly, or every sim-tuned finding is measured on a materially
   // different control period than what ships). Pre-118 history (a
   // hand-picked 50ms that never was a deliberate fidelity choice):
-  // src/sim/DESIGN.md. 130-002: kSimControlPeriod (the PlannerLimits
+  // src/firm/platform/host/DESIGN.md. 130-002: kSimControlPeriod (the PlannerLimits
   // controlPeriod/actuationDelay override passed to composeRobot(), this
   // file's own constructor) derives from the SAME App::RobotLoop::kCycle
   // constant as this -- one source, not two hand-kept literals that can

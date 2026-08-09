@@ -24,7 +24,7 @@ iterate against instead of the full `libfirmware_host` sim harness.
 exactly `[src/firm, src/host]` — stakeholder-locked, sprint 122 Design
 Rationale Decision 3's own consequence). This directory is real, current
 documentation, unvalidated by the mechanical design-doc checker — the
-same treatment `src/sim`/`src/protos`/`src/scripts`/`src/tests`/
+same treatment `src/firm/platform/host`/`src/protos`/`src/scripts`/`src/tests`/
 `src/utils` already get (see `docs/design/design.md` §2's "Other source
 trees" table and §4's rationale for why the validated root set is
 narrower than a bare `[src]`). Do not add `src/motion` to `sources:` —
@@ -199,7 +199,7 @@ see each file's own header for the "why this stays" rationale.
   `src/firm` caller (e.g. `src/firm/app/robot_loop.h`'s `#include
   "motion/odometry.h"`/`#include "motion/planner/planner.h"`). Both the
   ARM build (root
-  `CMakeLists.txt`) and the sim build (`src/sim/CMakeLists.txt`) add
+  `CMakeLists.txt`) and the sim build (`src/firm/platform/host/CMakeLists.txt`) add
   `src/` itself (the parent of both `src/firm` and `src/motion`) as an
   include root, so the directory literally being named `motion` at its
   top-level location keeps every qualified include text valid with zero
@@ -221,7 +221,7 @@ only thing tying `planner/` to the rest of this tree is that both halves
 write into the SAME `Types::RobotState` blackboard, from the base's own
 composition root -- `App::composeRobot()`/`App::RobotGraph`
 (`src/firm/app/boot_wiring.h`), the ONE function both `main.cpp` and
-`src/sim/sim_harness.h` call (130-002, unify-sim-and-robot-composition-
+`src/firm/platform/host/sim_harness.h` call (130-002, unify-sim-and-robot-composition-
 roots.md) -- never from one motion-library module calling into another
 across the `planner/` boundary.
 

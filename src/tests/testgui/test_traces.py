@@ -23,7 +23,7 @@ Run with::
 
     QT_QPA_PLATFORM=offscreen uv run pytest src/tests/testgui/test_traces.py -q
 
-Most tests here require the compiled ``src/sim/build/libfirmware_host.
+Most tests here require the compiled ``src/firm/platform/host/build/libfirmware_host.
 {dylib,so}`` (``just build-sim``) and are marked ``@_needs_sim_lib`` so they
 skip cleanly if it is not present. 121-001's
 ``test_encoder_dead_reckoner_ingests_motion_tail_after_active_drops`` is the

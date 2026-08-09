@@ -37,7 +37,7 @@ documenting at length.
 ## 3. Constraints and Invariants
 
 - **Nothing here is project source.** This directory has no dependency
-  on `src/firm/`, `src/sim/`, or `src/host/`, and nothing in those trees
+  on `src/firm/`, `src/firm/platform/host/`, or `src/host/`, and nothing in those trees
   depends on it at runtime — only the build/deploy tooling (CMake
   configure step, `mbdeploy`) invokes these scripts. Do not add
   project-behavioral code here; it belongs in `src/firm/` or

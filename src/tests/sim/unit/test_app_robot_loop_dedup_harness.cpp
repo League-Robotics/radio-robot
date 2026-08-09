@@ -27,7 +27,7 @@
 // definition; alreadyAccepted()/recordAccepted() are read-only references
 // here, exactly as the ticket requires.
 //
-// Drives the real TestSim::SimHarness (src/sim/sim_harness.h) -- the dedup
+// Drives the real TestSim::SimHarness (src/firm/platform/host/sim_harness.h) -- the dedup
 // short-circuit lives one layer above Motion::Planner, in
 // App::RobotLoop::handleMove() itself, so a bare Planner (the scaffolding
 // test_app_robot_loop_replace_harness.cpp's cases 1-5 use) has no id memory

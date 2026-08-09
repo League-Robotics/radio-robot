@@ -24,7 +24,7 @@ int8_t scaleToRegister(float scale)
 
 Otos::~Otos() = default;
 
-RealOtos::RealOtos(I2CBus& bus, const OtosConfig& config)
+RealOtos::RealOtos(Platform::I2CBus& bus, const OtosConfig& config)
     : bus_(bus), config_(config)
 {
 }

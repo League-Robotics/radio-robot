@@ -4,7 +4,7 @@ bench-and-sim.md).
 
 Proves the FULL real C++ plumbing end to end through the compiled sim
 library, not a Python stub: ``App::setDebugSink()`` (wired by
-``TestSim::SimHarness``'s own constructor, ``src/sim/sim_harness.h``) ->
+``TestSim::SimHarness``'s own constructor, ``src/firm/platform/host/sim_harness.h``) ->
 ``App::debugf()`` (``src/firm/app/debug.h``/``.cpp``) -> ``App::Comms::
 sendDebug()`` (``comms.h``/``.cpp``, a real cleartext ``"DBG:<message>"``
 wire line via ``sendReliable()``) -> ``SimHarness::drainReliable()`` ->
@@ -22,7 +22,7 @@ Deterministic manual stepping (``connect(start_tick_thread=False)``,
 mirroring ``test_sim_wire_loopback.py``'s own ``_make_loop()`` -- no
 background tick thread, no timing races).
 
-Requires the compiled ``src/sim/build/libfirmware_host.{dylib,so}``
+Requires the compiled ``src/firm/platform/host/build/libfirmware_host.{dylib,so}``
 (``just build-sim``) -- skips cleanly if not present (same convention as
 every other ``src/tests/sim/system/`` file in this tier).
 """
@@ -39,11 +39,11 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 
 _LIB_NAME = "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmware_host.so"
-_SIM_LIB_PATH = _REPO_ROOT / "src" / "sim" / "build" / _LIB_NAME
+_SIM_LIB_PATH = _REPO_ROOT / "src" / "firm" / "platform" / "host" / "build" / _LIB_NAME
 
 pytestmark = pytest.mark.skipif(
     not _SIM_LIB_PATH.exists(),
-    reason="sim lib not built -- just build-sim (or cmake --build src/sim/build)",
+    reason="sim lib not built -- just build-sim (or cmake --build src/firm/platform/host/build)",
 )
 
 

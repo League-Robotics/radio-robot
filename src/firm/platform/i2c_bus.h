@@ -1,11 +1,11 @@
-// i2c_bus.h — Devices::I2CBus: pure abstract I2C bus interface. Plain
+// i2c_bus.h — Platform::I2CBus: pure abstract I2C bus interface. Plain
 // virtual base (no preprocessor forks); the real ARM implementation lives
-// in microbit_i2c_bus.h/.cpp (Devices::MicroBitI2CBus).
+// in microbit_i2c_bus.h/.cpp (Platform::MicroBitI2CBus).
 //
 // Surface: exactly the 3 methods any command handler or device leaf calls
 // — write(), read(), and clearanceSafetyNetCount(). The diagnostic/stats
 // surface (txnCount/errCount/lastErr/clear/reentryViolations/resetStats/
-// dumpRecent/setLogging) stays on the concrete Devices::MicroBitI2CBus
+// dumpRecent/setLogging) stays on the concrete Platform::MicroBitI2CBus
 // class, not this interface. (The full-transaction IRQ guard that used to
 // live here too — setIrqGuard()/irqGuard() — was removed, 128-013; see
 // microbit_i2c_bus.h's removal note.)
@@ -14,7 +14,7 @@
 #pragma once
 #include <cstdint>
 
-namespace Devices {
+namespace Platform {
 
 class I2CBus {
  public:
@@ -51,4 +51,4 @@ class I2CBus {
   virtual uint32_t clearanceSafetyNetCount() const = 0;
 };
 
-}  // namespace Devices
+}  // namespace Platform

@@ -44,7 +44,7 @@ _UNIT_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _UNIT_DIR.parent / "support"
 _PLANT_DIR = _UNIT_DIR.parent / "plant"
 _TESTS_SIM_DIR = _UNIT_DIR.parent  # src/tests/sim -- resolves "support/..."-qualified includes
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _MOTION_PLANNER_DIR = _REPO_ROOT / "src" / "motion" / "planner"  # resolves navigator.h's own "planner.h"
 
 _HARNESS_SRC = _UNIT_DIR / "test_app_robot_loop_goto_harness.cpp"

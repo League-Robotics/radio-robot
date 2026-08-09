@@ -58,7 +58,7 @@ Run with::
     uv run python -m pytest src/tests/testgui/test_sim_speed_factor.py -v
     uv run python -m pytest src/tests/testgui/ -k "speed_factor or sim_loop or speedup"
 
-Requires the compiled ``src/sim/build/libfirmware_host.{dylib,so}``
+Requires the compiled ``src/firm/platform/host/build/libfirmware_host.{dylib,so}``
 (``python build.py``) -- skips cleanly if not present.
 """
 from __future__ import annotations
@@ -69,7 +69,7 @@ from robot_radio.testgui.transport import _sim_lib_path
 
 pytestmark = pytest.mark.skipif(
     not _sim_lib_path().exists(),
-    reason="sim lib not built -- cmake --build src/sim/build (or `python build.py`)",
+    reason="sim lib not built -- cmake --build src/firm/platform/host/build (or `python build.py`)",
 )
 
 # The five multiples the TestGUI's own sim_speed_combo offers

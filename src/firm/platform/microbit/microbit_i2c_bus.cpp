@@ -1,11 +1,11 @@
-// microbit_i2c_bus.cpp — Devices::MicroBitI2CBus real implementation.
+// microbit_i2c_bus.cpp — Platform::MicroBitI2CBus real implementation.
 // Design/rationale: DESIGN.md.
-#include "devices/microbit_i2c_bus.h"
+#include "platform/microbit/microbit_i2c_bus.h"
 #include "codal_target_hal.h"  // target_disable_irq() / target_enable_irq()
 #include "MicroBit.h"          // system_timer_current_time_us()
 #include <cstdio>
 
-namespace Devices {
+namespace Platform {
 
 // ---------------------------------------------------------------------------
 // Construction
@@ -312,4 +312,4 @@ void MicroBitI2CBus::record(uint16_t addr7, int status) {
   }
 }
 
-}  // namespace Devices
+}  // namespace Platform

@@ -20,7 +20,7 @@
 // robot_loop.h's kCycle doc comment and robot_loop.cpp's runAndWaitUntil()/
 // cycle() call site).
 //
-// JitterySleeper (below) is a small, purpose-built Devices::Sleeper that
+// JitterySleeper (below) is a small, purpose-built Platform::Sleeper that
 // wraps a TestSim::SimClock and advances it by MORE than the requested
 // duration on every sleepMillis() call -- modeling both components
 // 130-011's own on-robot investigation named as the likely cause
@@ -39,7 +39,7 @@
 //
 // Deliberately built directly on App::composeRobot() (app/boot_wiring.h,
 // 130-002's shared composition root), NOT TestSim::SimHarness
-// (src/sim/sim_harness.h): SimHarness's own step() always advances its
+// (src/firm/platform/host/sim_harness.h): SimHarness's own step() always advances its
 // internal SimClock by exactly kCycleDtUs BEFORE calling cycle() and owns
 // a fixed, non-substitutable SimSleeper -- there is no seam to inject a
 // jittery Sleeper through it (see sim_api_harness.cpp's own
@@ -47,7 +47,7 @@
 // consequence: that scenario's fake clock cannot represent intra-cycle
 // elapsed time at all, so it cannot prove this convergence claim --  this
 // harness exists to prove it instead). composeRobot() takes a plain
-// Devices::Sleeper&, the same interface seam main.cpp/SimHarness already
+// Platform::Sleeper&, the same interface seam main.cpp/SimHarness already
 // use, so this harness supplies its own JitterySleeper there.
 //
 // Compiled and run by test_app_robot_loop_pacing.py (subprocess, exit
@@ -58,7 +58,7 @@
 
 #include "app/boot_wiring.h"
 #include "app/robot_loop.h"
-#include "devices/clock.h"
+#include "platform/clock.h"
 #include "fake_transport.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
@@ -81,7 +81,7 @@ void checkTrue(bool condition, const char* what) {
 // sleepMillis() call, and by a small fixed amount on yield() (a real
 // fiber yield still costs some scheduler time on hardware -- kept
 // nonzero so a degenerate all-yield cycle cannot look free).
-class JitterySleeper : public Devices::Sleeper {
+class JitterySleeper : public Platform::Sleeper {
  public:
   explicit JitterySleeper(TestSim::SimClock& clock) : clock_(clock) {}
 
@@ -134,7 +134,7 @@ int main() {
       plant, clock, sleeper, serialFake, radioFake, /*tuningStore=*/nullptr,
       "DEVICE:NEZHA2:pacing_test:test:1", "ID:unknown", App::BootOverrides{});
 
-  // Boot: unlike TestSim::SimHarness::driveBootToDone() (src/sim/
+  // Boot: unlike TestSim::SimHarness::driveBootToDone() (src/firm/platform/host/
   // sim_harness.h), no manual clock pre-seeding/stepping is needed here --
   // RobotLoop::boot() itself loops `preamble_.step(); sleeper_.
   // sleepMillis(kPreamblePace);` until Preamble::done(), and THIS

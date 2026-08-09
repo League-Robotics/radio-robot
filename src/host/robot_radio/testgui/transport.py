@@ -79,7 +79,7 @@ SimTransport()
     through unchanged (already radians).
 
     Before connecting, if the sim lib
-    (src/sim/build/libfirmware_host.{dylib,so}) is missing, a
+    (src/firm/platform/host/build/libfirmware_host.{dylib,so}) is missing, a
     QMessageBox.warning is shown (when Qt is available) and connect() returns
     without connecting.
 
@@ -1681,7 +1681,7 @@ def set_sim_lib_override(path: "pathlib.Path | None") -> None:
 def _sim_lib_path() -> pathlib.Path:
     """Return the path for the firmware host simulation library.
 
-    Normally src/sim/build/ relative to the repo root, resolved from this
+    Normally src/firm/platform/host/build/ relative to the repo root, resolved from this
     file's location regardless of cwd. If a hot-reload override is set
     (set_sim_lib_override), that fresh-copy path is returned instead.
     """
@@ -1692,7 +1692,7 @@ def _sim_lib_path() -> pathlib.Path:
     _here = pathlib.Path(__file__).parent   # testgui/
     _src = _here.parent.parent.parent       # src/
     _repo = _src.parent                     # repo root
-    return _repo / "src" / "sim" / "build" / _sim_lib_name()
+    return _repo / "src" / "firm" / "platform" / "host" / "build" / _sim_lib_name()
 
 
 # ---------------------------------------------------------------------------
@@ -1757,7 +1757,7 @@ _CONFIG_SUPPORTED_KEYS = frozenset(protocol._SET_KEY_TARGETS) - _CONFIG_UNSUPPOR
 
 class SimTransport(Transport):
     """Transport backend that drives the real compiled firmware simulator
-    (``src/sim/build/libfirmware_host.{dylib,so}``) via
+    (``src/firm/platform/host/build/libfirmware_host.{dylib,so}``) via
     ``robot_radio.io.sim_loop.SimLoop`` (108-007 rewire -- see this class's
     own module-docstring entry above for the full reconciliation from the
     deleted ``SimConnection``).
@@ -1913,7 +1913,7 @@ class SimTransport(Transport):
             msg = (
                 f"Sim library not found: {lib_path}\n"
                 f"Build it with:  python build.py\n"
-                f"(run from src/sim/)"
+                f"(run from src/firm/platform/host/)"
             )
             self._log(f"[ERROR] {msg}")
             _log.warning("SimTransport: lib missing at %s", lib_path)
@@ -2623,7 +2623,7 @@ class SimTransport(Transport):
                     "Build required",
                     f"Simulator library not found:\n{lib_path}\n\n"
                     "Run:  python build.py\n"
-                    "(from src/sim/)",
+                    "(from src/firm/platform/host/)",
                 )
         except ImportError:
             # PySide6 not installed — warning was already emitted via on_log.

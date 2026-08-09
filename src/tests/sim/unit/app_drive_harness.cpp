@@ -41,8 +41,8 @@
 // body_kinematics.cpp.
 //
 // Migrated by sprint 108 ticket 009 off the deleted src/firm/devices/
-// i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket 001 reduced
-// Devices::I2CBus to a pure interface and removed it) onto a
+// i2c_bus_host.cpp scripted-FIFO Platform::I2CBus fake (ticket 001 reduced
+// Platform::I2CBus to a pure interface and removed it) onto a
 // TestSim::SimPlant scripted deterministically via TestSim::ScriptedI2CHook
 // -- see devices_motor_harness.cpp's/scripted_i2c_hook.h's own header for
 // the migration rationale.

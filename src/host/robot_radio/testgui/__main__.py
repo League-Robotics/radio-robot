@@ -3536,7 +3536,7 @@ def _build_main_window():  # type: ignore[return]
             steps = [
                 [sys.executable, "src/scripts/gen_version.py"],
                 [sys.executable, "src/scripts/gen_messages.py"],
-                ["cmake", "--build", "src/sim/build", "--parallel", "--target", "firmware_host"],
+                ["cmake", "--build", "src/firm/platform/host/build", "--parallel", "--target", "firmware_host"],
             ]
             for cmd in steps:
                 try:
@@ -3552,7 +3552,7 @@ def _build_main_window():  # type: ignore[return]
             if ok:
                 _reload_counter["n"] += 1
                 suffix = ".dylib" if sys.platform == "darwin" else ".so"
-                built = _repo_root / "src" / "sim" / "build" / f"libfirmware_host{suffix}"
+                built = _repo_root / "src" / "firm" / "platform" / "host" / "build" / f"libfirmware_host{suffix}"
                 fresh = _pathlib.Path(_tempfile.gettempdir()) / f"sim_reload_{_os.getpid()}_{_reload_counter['n']}{suffix}"
                 try:
                     _shutil.copy2(built, fresh)

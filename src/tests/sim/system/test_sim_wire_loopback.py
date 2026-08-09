@@ -24,7 +24,7 @@ the same function every production ``SimLoop`` consumer (TestGUI Sim mode,
 This is the exact encode -> COBS -> transmit -> demux -> decode chain both
 123 bugs lived in, now exercised entirely off-hardware (no ``pyocd``
 probe, no ``/dev/cu.usbmodem*`` needed -- just the compiled
-``src/sim/build/libfirmware_host.{dylib,so}``).
+``src/firm/platform/host/build/libfirmware_host.{dylib,so}``).
 
 ADDITIVE, not a replacement
 ----------------------------
@@ -72,7 +72,7 @@ suite): reintroduce the 0x0A corruption by skipping the delimiter XOR in
 ``WireRuntime::cobsEncode()``/``cobsDecode()`` (``src/firm/messages/
 wire_runtime.cpp``) -- i.e. treat every byte as delimiter-0x00-keyed
 regardless of the ``delimiter`` argument -- rebuild
-``src/sim/build/libfirmware_host.dylib`` (``just build-sim``), rerun this
+``src/firm/platform/host/build/libfirmware_host.dylib`` (``just build-sim``), rerun this
 file, confirm it fails, then revert and rebuild again. See the ticket's
 own completion notes for the exact observed failure.
 
@@ -80,7 +80,7 @@ Run with::
 
     uv run python -m pytest src/tests/sim/system/test_sim_wire_loopback.py -v -s
 
-Requires the compiled ``src/sim/build/libfirmware_host.{dylib,so}``
+Requires the compiled ``src/firm/platform/host/build/libfirmware_host.{dylib,so}``
 (``just build-sim``) -- skips cleanly if not present (same convention as
 every other ``src/tests/sim/system/`` file in this tier).
 """
@@ -99,11 +99,11 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _ROBOTS_DIR = _REPO_ROOT / "data" / "robots"
 
 _LIB_NAME = "libfirmware_host.dylib" if sys.platform == "darwin" else "libfirmware_host.so"
-_SIM_LIB_PATH = _REPO_ROOT / "src" / "sim" / "build" / _LIB_NAME
+_SIM_LIB_PATH = _REPO_ROOT / "src" / "firm" / "platform" / "host" / "build" / _LIB_NAME
 
 pytestmark = pytest.mark.skipif(
     not _SIM_LIB_PATH.exists(),
-    reason="sim lib not built -- just build-sim (or cmake --build src/sim/build)",
+    reason="sim lib not built -- just build-sim (or cmake --build src/firm/platform/host/build)",
 )
 
 _TRACK_WIDTH = 128.0  # [mm] matches tovez_nocal.json's own geometry.trackwidth

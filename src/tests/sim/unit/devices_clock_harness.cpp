@@ -1,9 +1,9 @@
 // devices_clock_harness.cpp — off-hardware acceptance harness for ticket
 // DB-003 (device-bus-tickets.md), migrated by sprint 108 ticket 010 to the
 // pure-interface split: proves TestSim::SimClock (tests/_infra/sim/
-// sim_clock.h, the Devices::Clock host-test fake) advances ONLY when a
+// sim_clock.h, the Platform::Clock host-test fake) advances ONLY when a
 // test steps it explicitly (setMicros()/advanceMicros()), never on its
-// own, and that TestSim::SimSleeper (the Devices::Sleeper host-test fake)
+// own, and that TestSim::SimSleeper (the Platform::Sleeper host-test fake)
 // records every requested sleepMillis()/yield() call without blocking on a
 // wall clock or sleeping for real.
 //

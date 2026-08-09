@@ -185,10 +185,10 @@ class OtosPlant {
   void reset(float x, float y, float heading,          // [mm] [mm] [rad]
              float baseLeft = 0.0f, float baseRight = 0.0f);  // [mm] [mm]
 
-  // Formerly this class also had scriptPoseResponse(Devices::I2CBus&,
+  // Formerly this class also had scriptPoseResponse(Platform::I2CBus&,
   // uint16_t) const, which packed a 12-byte POSITION_XL+VELOCITY_XL burst
   // (little-endian int16 sextuple, kPosMmPerLsb/kHdgRadPerLsb-scaled) onto
-  // the scripted-FIFO Devices::I2CBus fake sprint 108 ticket 001 deleted.
+  // the scripted-FIFO Platform::I2CBus fake sprint 108 ticket 001 deleted.
   // That packing is now done directly by TestSim::SimPlant
   // (tests/_infra/sim/sim_plant.cpp's handleOtosRead()) straight off this
   // class's own x()/y()/heading() accessors -- no bus/wire-format

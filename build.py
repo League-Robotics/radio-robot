@@ -47,9 +47,9 @@ parser.add_option('-d', '--dev', dest='dev', action="store_true", help='enable d
 parser.add_option('-g', '--generate-docs', dest='generate_docs', action="store_true", help='generate documentation for the current target', default=False)
 parser.add_option('-j', '--parallelism', dest='parallelism', action="store", help='Set the number of parallel threads to build with, if supported', default=10)
 parser.add_option('-n', '--lines', dest='detail_lines', action="store", help="Sets the number of detail lines to output (only relevant to --status)", default=3 )
-parser.add_option('--fw-only', dest='fw_only', action="store_true", help='Build ONLY the micro:bit firmware; skip the host-simulation library. By default build.py builds BOTH the bench firmware (MICROBIT.hex) and the full-simulation library (src/sim/build/libfirmware_host).', default=False)
-parser.add_option('--fake-otos', dest='fake_otos', action="store_true", help='Build the bench FAKE_OTOS variant (120-002; otos-fake-seam refactor): main.cpp binds the loop\'s Devices::Otos& to an App::FakeOtos that reports the dead-reckoned Odometry pose + wheel twist as if it were the chip, instead of the real Devices::RealOtos I2C leaf. Firmware (MICROBIT.hex) ONLY -- never affects the host-sim build (src/sim uses its own OtosPlant, unrelated to this flag). Always passes an explicit -DFAKE_OTOS=ON/OFF to cmake so a stale CMakeCache.txt from a prior invocation can never leave this flag silently stuck.', default=False)
-parser.add_option('--robot-debug', dest='robot_debug', action="store_true", help='Build the bench ROBOT_DEBUG variant (129-003; DBG debug message channel): compiles in App::debugf()/DBG_EVERY()/DBG_MILLI() (src/firm/app/debug.h) and App::Comms::sendDebug(), and main.cpp wires the channel via App::setDebugSink(). Firmware (MICROBIT.hex) ONLY -- the host-sim build (src/sim, HOST_BUILD) always has the DBG channel regardless of this flag (debug.h: ROBOT_DEBUG OR HOST_BUILD). Always passes an explicit -DROBOT_DEBUG=ON/OFF to cmake, mirroring --fake-otos, so a stale CMakeCache.txt can never leave this flag silently stuck.', default=False)
+parser.add_option('--fw-only', dest='fw_only', action="store_true", help='Build ONLY the micro:bit firmware; skip the host-simulation library. By default build.py builds BOTH the bench firmware (MICROBIT.hex) and the full-simulation library (src/firm/platform/host/build/libfirmware_host).', default=False)
+parser.add_option('--fake-otos', dest='fake_otos', action="store_true", help='Build the bench FAKE_OTOS variant (120-002; otos-fake-seam refactor): main.cpp binds the loop\'s Devices::Otos& to an App::FakeOtos that reports the dead-reckoned Odometry pose + wheel twist as if it were the chip, instead of the real Devices::RealOtos I2C leaf. Firmware (MICROBIT.hex) ONLY -- never affects the host-sim build (src/firm/platform/host uses its own OtosPlant, unrelated to this flag). Always passes an explicit -DFAKE_OTOS=ON/OFF to cmake so a stale CMakeCache.txt from a prior invocation can never leave this flag silently stuck.', default=False)
+parser.add_option('--robot-debug', dest='robot_debug', action="store_true", help='Build the bench ROBOT_DEBUG variant (129-003; DBG debug message channel): compiles in App::debugf()/DBG_EVERY()/DBG_MILLI() (src/firm/app/debug.h) and App::Comms::sendDebug(), and main.cpp wires the channel via App::setDebugSink(). Firmware (MICROBIT.hex) ONLY -- the host-sim build (src/firm/platform/host, HOST_BUILD) always has the DBG channel regardless of this flag (debug.h: ROBOT_DEBUG OR HOST_BUILD). Always passes an explicit -DROBOT_DEBUG=ON/OFF to cmake, mirroring --fake-otos, so a stale CMakeCache.txt can never leave this flag silently stuck.', default=False)
 
 (options, args) = parser.parse_args()
 
@@ -213,14 +213,14 @@ def _project_version():
 
 
 def build_host_sim(clean):
-    """Build the host-simulation library (libfirmware_host) via the src/sim
+    """Build the host-simulation library (libfirmware_host) via the src/firm/platform/host
     CMake build (HOST_BUILD) — the 'full simulation' target the pytest harness
     uses. Fast: ~8s clean, <1s incremental. Uses absolute paths from __file__ so
     it is correct regardless of the current working directory. Raises on failure.
     """
     import subprocess
     root = os.path.dirname(os.path.abspath(__file__))
-    sim_dir = os.path.join(root, "src", "sim")
+    sim_dir = os.path.join(root, "src", "firm", "platform", "host")
     build_dir = os.path.join(sim_dir, "build")
     if clean and os.path.isdir(build_dir):
         shutil.rmtree(build_dir)
@@ -238,7 +238,7 @@ def build_host_sim(clean):
 def _host_sim_dir():
     """Absolute path to the host-sim CMake project, wherever tests/ currently lives."""
     root = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(root, "src", "sim")
+    return os.path.join(root, "src", "firm", "platform", "host")
 
 
 def print_build_summary(fw_only, fake_otos=False, robot_debug=False):
@@ -255,9 +255,9 @@ def print_build_summary(fw_only, fake_otos=False, robot_debug=False):
     if fw_only:
         print("  host sim lib   (skipped: --fw-only)")
     elif not os.path.isdir(_host_sim_dir()):
-        print("  host sim lib   (skipped: src/sim/ absent -- parked in tests_old/, 077-001)")
+        print("  host sim lib   (skipped: src/firm/platform/host/ absent -- parked in tests_old/, 077-001)")
     else:
-        print("  host sim lib   v%s   (HOST_BUILD)   -> src/sim/build/libfirmware_host" % ver)
+        print("  host sim lib   v%s   (HOST_BUILD)   -> src/firm/platform/host/build/libfirmware_host" % ver)
     print()
 
 
@@ -292,17 +292,17 @@ if not options.test_platform:
     # build always leaves both artifacts in sync — no guessing which you have.
     # --fw-only skips this. The host-sim build is fast (~8s clean, <1s incremental).
     #
-    # 077-001: also skipped (structurally) while src/sim/ does not
+    # 077-001: also skipped (structurally) while src/firm/platform/host/ does not
     # exist -- it is parked under tests_old/ by the greenfield rebuild's test
     # rename, and a fresh sim harness under tests/sim/ is later-ticket work
     # (architecture-update.md: "Host-side sim/test builds reference old paths
     # — expected broken; do not chase them this ticket"). Self-heals once
-    # src/sim/ (or its replacement) reappears.
+    # src/firm/platform/host/ (or its replacement) reappears.
     if not options.fw_only:
         if os.path.isdir(_host_sim_dir()):
             build_host_sim(options.clean)
         else:
-            print("\nbuild.py: src/sim/ absent -- skipping host-sim build (077-001)")
+            print("\nbuild.py: src/firm/platform/host/ absent -- skipping host-sim build (077-001)")
 
     print_build_summary(options.fw_only, options.fake_otos, options.robot_debug)
     exit(0)

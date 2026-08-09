@@ -73,7 +73,7 @@ Run with::
 
     QT_QPA_PLATFORM=offscreen uv run pytest src/tests/testgui/test_error_divergence.py -q
 
-Requires the compiled ``src/sim/build/libfirmware_host.{dylib,so}``
+Requires the compiled ``src/firm/platform/host/build/libfirmware_host.{dylib,so}``
 (``just build-sim``) — skips cleanly if not present.
 """
 from __future__ import annotations

@@ -4,12 +4,12 @@
 // own REAL begin()/beginStep(nowUs) entry point over a TestSim::SimPlant
 // (108-002), scripted deterministically via TestSim::ScriptedI2CHook
 // (108-009), and TestSim::SimClock (tests/_infra/sim/sim_clock.cpp, the
-// Devices::Clock host-test fake -- sprint 108 ticket 010) -- no MicroBitI2C,
+// Platform::Clock host-test fake -- sprint 108 ticket 010) -- no MicroBitI2C,
 // no CODAL, no real hardware, no wall clock.
 //
 // Migrated by sprint 108 ticket 009 off the deleted src/firm/devices/
-// i2c_bus_host.cpp scripted-FIFO Devices::I2CBus fake (ticket 001 reduced
-// Devices::I2CBus to a pure interface and removed it) -- see
+// i2c_bus_host.cpp scripted-FIFO Platform::I2CBus fake (ticket 001 reduced
+// Platform::I2CBus to a pure interface and removed it) -- see
 // devices_motor_harness.cpp's/scripted_i2c_hook.h's own header for the
 // migration rationale. Every scenario below is otherwise UNCHANGED from the
 // pre-migration harness -- only the bus/scripting plumbing moved. This

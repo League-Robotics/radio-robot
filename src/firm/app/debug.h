@@ -7,7 +7,7 @@
 // ROBOT_DEBUG is defined (a bench firmware build's own opt-in CMake
 // option -- see CMakeLists.txt's own ROBOT_DEBUG block, mirroring the
 // existing FAKE_OTOS pattern) or HOST_BUILD is defined (Sim/host tests
-// always have it, per src/sim/CMakeLists.txt's `-DHOST_BUILD=1`). The
+// always have it, per src/firm/platform/host/CMakeLists.txt's `-DHOST_BUILD=1`). The
 // shipped ARM release build defines neither, so debugf()/DBG_EVERY()/
 // DBG_MILLI() are inline no-ops there instead -- zero flash cost, zero
 // wire traffic. The same macro gates App::Comms::sendDebug() (comms.h/.cpp,

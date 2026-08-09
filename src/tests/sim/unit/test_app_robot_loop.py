@@ -5,9 +5,9 @@ extracted from ``src/firm/main.cpp``.
 Compiles ``app_robot_loop_harness.cpp`` together with every HOST_BUILD
 implementation it needs (``robot_loop.cpp`` itself, every ``app/`` module it
 composes, every ``devices/`` leaf those modules touch,
-``TestSim::SimClock``/``TestSim::SimSleeper`` (``src/sim/
+``TestSim::SimClock``/``TestSim::SimSleeper`` (``src/firm/platform/host/
 sim_clock.cpp`` -- ticket 108-010's Devices::Clock/Sleeper host-test fakes),
-``TestSim::SimPlant`` (``src/sim/sim_plant.cpp`` -- ticket
+``TestSim::SimPlant`` (``src/firm/platform/host/sim_plant.cpp`` -- ticket
 108-002's real Devices::I2CBus implementation, plus its own ``src/tests/sim/
 plant/{wheel,otos}_plant.cpp`` physics dependencies), and the wire codec
 ``App::Comms``/``App::Telemetry`` need to encode/decode) with
@@ -36,7 +36,7 @@ import pytest
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[4]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _TESTS_SIM_DIR = _REPO_ROOT / "src" / "tests" / "sim"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _PLANT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "plant"
 _SUPPORT_DIR = _REPO_ROOT / "src" / "tests" / "sim" / "support"
 _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "app_robot_loop_harness.cpp"
@@ -117,7 +117,7 @@ def _find_cxx_compiler() -> str:
         "scenarios' bus-script ordering any more, it does not COMPILE at "
         "all. Confirmed by direct -DHOST_BUILD compile (125-006, "
         "2026-07-29): an unrelated, independent motion-library rework "
-        "('Planner integration,' dated 2026-07-26 per src/sim/"
+        "('Planner integration,' dated 2026-07-26 per src/firm/platform/host/"
         "sim_harness.h's own comments) changed App::RobotLoop's "
         "constructor from 15 to 16 arguments (added App::Configurator, "
         "replaced the Motion::MoveQueue& slot with Motion::Planner&) and "
@@ -130,7 +130,7 @@ def _find_cxx_compiler() -> str:
         "therefore never actually run; 125-006 relocated them to "
         "src/tests/sim/system/robot_loop_tlm_harness.cpp "
         "(test_robot_loop_tlm.py), built on TestSim::SimHarness "
-        "(src/sim/sim_harness.h) -- the composition root that IS current "
+        "(src/firm/platform/host/sim_harness.h) -- the composition root that IS current "
         "on the Planner/Configurator shape (it mirrors main.cpp) -- where "
         "they compile and pass for real; see that file's own header for "
         "the full rationale. Repairing THIS file's ~20 call sites for the "

@@ -6,7 +6,7 @@ namespace App {
 
 Preamble::Preamble(Devices::Motor& left, Devices::Motor& right,
                     Devices::Otos& otos, Devices::ColorSensorLeaf& color,
-                    Devices::LineSensorLeaf& line, const Devices::Clock& clock)
+                    Devices::LineSensorLeaf& line, const Platform::Clock& clock)
     : left_(left),
       right_(right),
       otos_(otos),

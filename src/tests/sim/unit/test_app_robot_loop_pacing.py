@@ -31,7 +31,7 @@ _UNIT_DIR = pathlib.Path(__file__).resolve().parent
 _TESTS_SIM_DIR = _REPO_ROOT / "src" / "tests" / "sim"
 _SUPPORT_DIR = _TESTS_SIM_DIR / "support"
 _PLANT_DIR = _TESTS_SIM_DIR / "plant"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 
 _HARNESS_SRC = _UNIT_DIR / "app_robot_loop_pacing_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"

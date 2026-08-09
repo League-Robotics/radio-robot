@@ -13,7 +13,7 @@
 //     forwards everything, and adds the observation/recovery policies
 //     (wedge detection, standstill-guarded resets).
 //
-// The sim composes the bare NezhaMotor directly (src/sim/sim_harness.h —
+// The sim composes the bare NezhaMotor directly (src/firm/platform/host/sim_harness.h —
 // no armor in the loop); the ARM build wraps each NezhaMotor in a
 // MotorArmor (src/firm/main.cpp) before handing it to the app graph.
 //

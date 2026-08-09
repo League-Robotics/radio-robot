@@ -31,7 +31,7 @@
 // scenarios directly into src/tests/sim/unit/app_robot_loop_harness.cpp,
 // but that harness was ALREADY broken before sprint 125 even started --
 // an unrelated, independent motion-library rework ("Planner integration",
-// dated 2026-07-26 per src/sim/sim_harness.h's own comments) changed
+// dated 2026-07-26 per src/firm/platform/host/sim_harness.h's own comments) changed
 // App::RobotLoop's constructor from 15 to 16 arguments (adding
 // App::Configurator, and replacing the Motion::MoveQueue& slot with
 // Motion::Planner&), and removed App::Drive::gainsLeft()/gainsRight().
@@ -48,7 +48,7 @@
 // dead code.
 //
 // This file re-homes 125-003's 4 TLM scenarios onto TestSim::SimHarness
-// (src/sim/sim_harness.h) instead -- the SAME composition root
+// (src/firm/platform/host/sim_harness.h) instead -- the SAME composition root
 // src/tests/sim/system/sim_api_harness.cpp
 // already uses successfully (confirmed compiling and passing today), which
 // IS current on the Planner/Configurator constructor shape because it is

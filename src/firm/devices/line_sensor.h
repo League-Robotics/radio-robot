@@ -27,7 +27,7 @@
 
 #include "devices/device_config.h"
 #include "devices/device_types.h"
-#include "devices/i2c_bus.h"
+#include "platform/i2c_bus.h"
 
 namespace Devices {
 
@@ -35,7 +35,7 @@ constexpr uint8_t kLineDeviceAddr = 0x1A;
 
 class LineSensorLeaf {
  public:
-  LineSensorLeaf(I2CBus& bus, const LineConfig& config);
+  LineSensorLeaf(Platform::I2CBus& bus, const LineConfig& config);
 
   // Non-blocking single detection step. Call once per fiber cycle until
   // detectDone() is true; a no-op once it is.
@@ -73,7 +73,7 @@ class LineSensorLeaf {
  private:
   enum class DetectPhase : uint8_t { Probing, Done };
 
-  I2CBus& bus_;
+  Platform::I2CBus& bus_;
   LineConfig config_;
 
   DetectPhase phase_ = DetectPhase::Probing;

@@ -6,7 +6,7 @@ end-to-end GO_TO over the real wire codec (both frames), and a
 streamed-target EXTERNAL-mode scenario.
 
 Compiles ``goto_protocol_harness.cpp`` together with ``sim_plant.cpp``
-(``src/sim/``), ``wire_test_codec.cpp``, the plant sources, and the same full
+(``src/firm/platform/host/``), ``wire_test_codec.cpp``, the plant sources, and the same full
 HOST_BUILD Devices/App/messages/kinematics/motion dependency graph every
 sibling ``test_*.py`` in this directory already compiles (now including
 ``src/motion/navigator/{arc_solver,navigator}.cpp``, landed by ticket 004),
@@ -31,7 +31,7 @@ _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _SYSTEM_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _SYSTEM_DIR.parent / "support"
 _PLANT_DIR = _SYSTEM_DIR.parent / "plant"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 _MOTION_PLANNER_DIR = _REPO_ROOT / "src" / "motion" / "planner"  # resolves navigator.h's own "planner.h"
 
 _HARNESS_SRC = _SYSTEM_DIR / "goto_protocol_harness.cpp"

@@ -24,7 +24,7 @@
 // LOOKS-correct-but-isn't-applied gap is trap 1 itself: a GET_CONFIG
 // read-back of the OTOS group would have reported the persisted value
 // even while the real chip silently kept running the baked one). SimPlant
-// (src/sim/sim_plant.cpp handleOtosWrite()) captures a real firmware
+// (src/firm/platform/host/sim_plant.cpp handleOtosWrite()) captures a real firmware
 // write to the chip's REG_SCALAR_LINEAR/REG_SCALAR_ANGULAR registers into
 // OtosPlant -- a genuine round trip through App::configureOtos()'s
 // scaleToRegister() conversion and Devices::RealOtos's own bus-write

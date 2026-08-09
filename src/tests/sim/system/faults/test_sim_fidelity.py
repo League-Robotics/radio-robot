@@ -1,7 +1,7 @@
 """Ticket 109-007 (sim-honors-otos-calibration.md) acceptance proof.
 
 Compiles ``sim_fidelity_harness.cpp`` together with ``sim_plant.cpp``
-(``src/sim/``), ``otos.cpp`` (``src/firm/devices/`` -- the REAL firmware
+(``src/firm/platform/host/``), ``otos.cpp`` (``src/firm/devices/`` -- the REAL firmware
 leaf), and the two plant sources (``src/tests/sim/plant/``) -- a much
 lighter dependency graph than ``test_sim_api.py``/``test_fault_knobs.py``
 need (no App::RobotLoop, no messages/, no motion/Ruckig): Devices::Otos and
@@ -28,7 +28,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[5]
 _SOURCE_DIR = _REPO_ROOT / "src" / "firm"
 _FAULTS_DIR = pathlib.Path(__file__).resolve().parent
 _PLANT_DIR = _FAULTS_DIR.parent.parent / "plant"
-_INFRA_SIM_DIR = _REPO_ROOT / "src" / "sim"
+_INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
 
 _HARNESS_SRC = _FAULTS_DIR / "sim_fidelity_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"

@@ -22,8 +22,8 @@ uv run python src/tests/system/systest.py run --tier sim \
   send_line/true_pose`). `--robot-config` defaults to
   `data/robots/tovez_nocal.json`; `--speed N` scales sim time (dwells and
   EXPECT timeouts stay wall-clock — fine at 1, approximate above).
-- The sim tier needs `src/sim/build/libfirmware_host.dylib`:
-  `cmake -S src/sim -B src/sim/build && cmake --build src/sim/build -j8`
+- The sim tier needs `src/firm/platform/host/build/libfirmware_host.dylib`:
+  `cmake -S src/firm/platform/host -B src/firm/platform/host/build && cmake --build src/firm/platform/host/build -j8`
   (run `uv run python src/scripts/gen_version.py` first in a fresh
   checkout — the version header is generated, gitignored).
 

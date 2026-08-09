@@ -6,7 +6,7 @@
 # the sim harness/pytest.
 #
 # This is a SEPARATE CMake project from the repo root's own CMakeLists.txt
-# (the ARM firmware build), src/sim/CMakeLists.txt (the libfirmware_host
+# (the ARM firmware build), src/firm/platform/host/CMakeLists.txt (the libfirmware_host
 # HOST_BUILD sim library), and src/motion/planner/CMakeLists.txt (the
 # Motion::Planner standalone build, its own project entirely --
 # self-contained, no dependency on this directory's `motion` library) --
@@ -37,7 +37,7 @@ add_definitions(-DHOST_BUILD=1)
 # Repo root: grandparent of this CMakeLists.txt's directory
 # (src/motion/CMakeLists.txt -> src/motion -> src -> repo root is TWO
 # levels up from CMAKE_SOURCE_DIR, which IS this directory) -- same
-# convention as src/sim/CMakeLists.txt's own REPO_ROOT.
+# convention as src/firm/platform/host/CMakeLists.txt's own REPO_ROOT.
 # ---------------------------------------------------------------------------
 get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../.." ABSOLUTE)
 set(MOTION_DIR "${CMAKE_SOURCE_DIR}")
@@ -67,7 +67,7 @@ add_library(motion STATIC
 # "${REPO_ROOT}/src" resolves this tree's own qualified `#include
 # "motion/..."` style includes (the SAME include text these headers used
 # back when they lived under src/firm/motion/ -- see the root
-# CMakeLists.txt / src/sim/CMakeLists.txt's own matching comment).
+# CMakeLists.txt / src/firm/platform/host/CMakeLists.txt's own matching comment).
 # "${REPO_ROOT}/src/firm" resolves body_kinematics.h's ONE allowed
 # src/firm dependency, `#include "messages/common.h"` -- the single
 # exception the sprint's boundary rule permits (messages/ only, never
