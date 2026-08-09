@@ -510,7 +510,7 @@ msg::ErrCode Configurator::install(msg::ConfigGroupTarget target) {
       // means making this dead end EXPLICIT, not inventing a call site.
       // App::StateEstimator was deleted outright as dead code (sprint 128
       // ticket 016); its one candidate successor, Motion::PoseTracker::
-      // blendHeading() (src/motion/planner/estimation.h), had its only
+      // blendHeading() (src/firm/motion/planner/estimation.h), had its only
       // call site AND its own config fields (PlannerLimits::
       // headingOtosWeight/otosStaleness) deleted outright by 130-009 in
       // favor of a from-scratch fusion redesign tracked at

@@ -40,7 +40,7 @@ e.g.:
         src/firm/app/preamble.cpp src/firm/platform/host/sim_clock.cpp \\
         src/firm/hardware/nezha/nezha_motor.cpp src/firm/hardware/generic/real_otos.cpp \\
         src/firm/hardware/planetx/color_sensor.cpp src/firm/hardware/planetx/line_sensor.cpp \\
-        src/firm/messages/wire.cpp src/firm/messages/wire_runtime.cpp src/motion/body_kinematics.cpp \\
+        src/firm/messages/wire.cpp src/firm/messages/wire_runtime.cpp src/firm/motion/body_kinematics.cpp \\
     && /tmp/scripted_twist_demo
 """
 
@@ -90,14 +90,14 @@ _APP_SOURCES = [
     # Planner integration (2026-07-26): the on-robot Motion::Planner now
     # drives the loop -- its library core joins every RobotLoop-linking
     # dependency graph.
-    _REPO_ROOT / "src" / "motion" / "planner" / "profile.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "estimation.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "shape.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "planner.cpp",
-    _REPO_ROOT / "src" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
-    _REPO_ROOT / "src" / "motion" / "navigator" / "navigator.cpp",  # 135-004
+    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "profile.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "estimation.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "shape.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "planner.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
+    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
     _SOURCE_DIR / "app" / "drive.cpp",
-    _REPO_ROOT / "src" / "motion" / "odometry.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
     # 130-002 -- the shared composition root (App::composeRobot()/
     # RobotGraph) sim_harness.h now boots through, plus its
@@ -109,7 +109,7 @@ _APP_SOURCES = [
 # 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
 # entry here) is gone outright -- zero instantiations; App::Drive holds no
 # controller of its own (open-loop duty from calibrated speed, drive.h's
-# own header). See src/motion/DESIGN.md's "wheel control generations" note.
+# own header). See src/firm/motion/DESIGN.md's "wheel control generations" note.
 _MOTION_SOURCES = []
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
@@ -132,7 +132,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _KINEMATICS_SOURCES = [
-    _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "body_kinematics.cpp",
 ]
 
 _CXX_STANDARD = "c++20"
@@ -186,7 +186,7 @@ def test_scripted_twist_demo_compiles_and_tells_the_story(tmp_path):
             "-I",
             str(_REPO_ROOT / "src"),
             "-I",
-            str(_REPO_ROOT / "src" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
+            str(_REPO_ROOT / "src" / "firm" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
             "-I",
             str(_SUPPORT_DIR),
             "-I",

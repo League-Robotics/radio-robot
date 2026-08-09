@@ -2,7 +2,7 @@
 
 **Status: normative.** This describes the chart produced by
 `src/tests/bench/square_tour_velocity.py` (relocated 128-010 from
-`src/motion/planner/bench/`)
+`src/firm/motion/planner/bench/`)
 (`square_tour_velocity_trim.png`). That chart is the reference rendering for
 square-tour results. Every other tour chart in this project — the hardware
 one in `src/tests/bench/planner_square_tour.py` included — conforms to this

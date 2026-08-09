@@ -2,7 +2,7 @@
 // file implements and why it exists.
 //
 // Every offset below is looked up by FIELD NAME via offsetof(), exactly
-// like plannerLimitsOffsets() (src/motion/planner/capi.cpp:93-117). That
+// like plannerLimitsOffsets() (src/firm/motion/planner/capi.cpp:93-117). That
 // choice is what makes the guard catch a mid-struct insertion rather than
 // just a size change: offsetof(T, someField) always reports wherever
 // `someField` REALLY sits in the current robot_config.h, so if a field is

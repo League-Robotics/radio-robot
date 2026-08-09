@@ -4,7 +4,7 @@
 // Planner::move(next, replace=true)/plannedStop() calls into a REAL
 // Motion::Planner it holds a reference to.
 //
-// Dependency boundary (sprint.md Architecture Overview #2, src/motion/
+// Dependency boundary (sprint.md Architecture Overview #2, src/firm/motion/
 // DESIGN.md §3): depends on Motion::Planner's public surface (move(),
 // plannedStop(), estop(), active(), lifecycle(), tick()'s TickResult) and
 // Types::RobotState (for OTOS pose) -- NO other src/firm dependency. Does
@@ -100,7 +100,7 @@ inline constexpr float kNavRefreshFraction = 0.5f;             // [1]
 // measured, and reconciled on the host TODAY by every bench script's own
 // `YAW_SIGN = -1.0` (e.g. src/tests/bench/goto_otos.py:54, "commanded
 // omega is opposite to world CCW (measured)"; matches
-// src/motion/planner/planner.cpp:509-512's own comment naming the RIGHT
+// src/firm/motion/planner/planner.cpp:509-512's own comment naming the RIGHT
 // fix as "the body kinematics' omega sign", deliberately deferred --
 // Option B, out of scope this sprint, ticket 008's own "Scope" section).
 //

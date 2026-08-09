@@ -69,7 +69,7 @@ One row per one-level-down directory, each linking to its own co-located
 | [`kinematics/`](kinematics/DESIGN.md) | Stateless differential-drive math: inverse/forward twist↔wheel maps, curvature-preserving saturation. |
 | [`messages/`](messages/DESIGN.md) | The wire schema: generated message structs, the generated envelope codec, the hand-written byte-level wire runtime. |
 | [`motion/`](motion/DESIGN.md) | Pure, bounded-motion stop/timeout comparison logic (`Motion::StopCondition`) — a fresh, tiny directory (116), not a revival of the larger `motion/` tree sprint 115 deleted. |
-| [`types/`](types/DESIGN.md) | `Types::RobotState` (sprint 124) — the dependency-free per-cycle blackboard struct `src/firm` and `src/motion` both stand on, alongside `Motion::WheelSink`. Also holds vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
+| [`types/`](types/DESIGN.md) | `Types::RobotState` (sprint 124) — the dependency-free per-cycle blackboard struct `src/firm` and `src/firm/motion` both stand on, alongside `Motion::WheelSink`. Also holds vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
 
 (`src/firm` has no README stub — this file *is* the tree overview. The
 former `src/firm/README-DESIGN.md` pointer, which existed only while a

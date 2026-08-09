@@ -16,9 +16,9 @@ single-arc tangent-circle solver, its curvature slew clamp, and their
 supporting plant-derived constants -- are DELETED as of sprint 135. Sprint
 135 (`clasi/sprints/135-go-to-navigator-in-the-motion-library/`) moved
 single-target arc-solving into the firmware itself
-(``Motion::ArcSolver``, `src/motion/navigator/arc_solver.{h,cpp}`, ticket
+(``Motion::ArcSolver``, `src/firm/motion/navigator/arc_solver.{h,cpp}`, ticket
 002) -- a direct C++ port of this same geometry and slew-clamp derivation,
-ctest-covered by `src/motion/navigator/tests/arc_solver_test.cpp` (17
+ctest-covered by `src/firm/motion/navigator/tests/arc_solver_test.cpp` (17
 checks: on-heading/off-heading/symmetric solves, the target-behind guard,
 the zero-distance degenerate case, the slew-clamp ramp/reversal behavior,
 purity, and the structural "never an Angle-stopped move" guarantee --

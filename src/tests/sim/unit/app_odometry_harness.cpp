@@ -1,5 +1,5 @@
 // app_odometry_harness.cpp -- off-hardware acceptance harness for
-// Motion::Odometry (src/motion/odometry.{h,cpp}). Proves:
+// Motion::Odometry (src/firm/motion/odometry.{h,cpp}). Proves:
 // Odometry::integrate() accumulates world x/y/theta correctly for a
 // straight-line case (equal wheel deltas) and a pure-rotation case
 // (equal-and-opposite wheel deltas), reading the REAL Hardware::NezhaMotor

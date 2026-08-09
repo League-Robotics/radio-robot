@@ -46,7 +46,7 @@ namespace Motion {
 //
 // This bound exists for exactly one reason: to keep a `replace=true`
 // transition from landing as an abrupt step while the firmware's own
-// profiler cannot ramp it cleanly (src/motion/planner/planner.cpp
+// profiler cannot ramp it cleanly (src/firm/motion/planner/planner.cpp
 // reinterprets the carried profileVelocity_ under the NEW move's own
 // axis/body-speed ratio on every replace -- a firmware defect tracked at
 // clasi/issues/replace-rescales-carried-profile-velocity-by-new-shape.md).
@@ -112,7 +112,7 @@ inline constexpr float kArcSolverMaxWheelStepDefault =
 // into a module that has none) and definitely not msg::Pose2D (a wire
 // type, raw/scale packed) -- this keeps ArcSolver constructible and
 // testable with hand-fed numbers alone, matching every other leaf in this
-// tree (src/motion/DESIGN.md §3's dependency constraint).
+// tree (src/firm/motion/DESIGN.md §3's dependency constraint).
 struct Pose {
   float x = 0.0f;        // [mm]
   float y = 0.0f;        // [mm]

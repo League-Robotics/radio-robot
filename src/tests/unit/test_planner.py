@@ -19,7 +19,7 @@ target-behind guard's own give-up message), and ``_sendVerifiedTwist()``
 alongside the functions/classes they served -- ``Motion::Navigator`` now
 owns material-change throttling, liveness, per-move timeouts, and
 bearing/pivot handling entirely firmware-side (ctest-covered by
-`src/motion/navigator/tests/navigator_test.cpp`, tickets 002-003) -- and
+`src/firm/motion/navigator/tests/navigator_test.cpp`, tickets 002-003) -- and
 this file's own coverage of them is deleted, not left red, per the
 ticket's own instruction. What survives, tests the SAME thing it always
 did (give-up is explicit and reachable; the id allocator is strictly

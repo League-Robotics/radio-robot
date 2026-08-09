@@ -61,14 +61,14 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "debug.cpp",
     _SOURCE_DIR / "app" / "configurator.cpp",
     _SOURCE_DIR / "app" / "telemetry.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "profile.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "estimation.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "shape.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "planner.cpp",
-    _REPO_ROOT / "src" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
-    _REPO_ROOT / "src" / "motion" / "navigator" / "navigator.cpp",  # 135-004
+    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "profile.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "estimation.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "shape.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "planner.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
+    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
     _SOURCE_DIR / "app" / "drive.cpp",
-    _REPO_ROOT / "src" / "motion" / "odometry.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
     _SOURCE_DIR / "app" / "boot_wiring.cpp",
     _SOURCE_DIR / "app" / "boot_calibration.cpp",
@@ -89,7 +89,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _KINEMATICS_SOURCES = [
-    _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "body_kinematics.cpp",
 ]
 
 _CXX_STANDARD = "c++20"
@@ -146,7 +146,7 @@ def test_stop_path_safety_harness_compiles_and_passes(tmp_path):
             "-I",
             str(_REPO_ROOT / "src"),
             "-I",
-            str(_REPO_ROOT / "src" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
+            str(_REPO_ROOT / "src" / "firm" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
             "-I",
             str(_SUPPORT_DIR),
             "-I",

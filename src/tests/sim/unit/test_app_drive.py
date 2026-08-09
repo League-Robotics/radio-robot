@@ -6,11 +6,11 @@ implementations it needs (``src/firm/app/drive.cpp``,
 ``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's real Devices::I2CBus
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
 physics dependencies, ``src/firm/hardware/nezha/nezha_motor.cpp``,
-``src/motion/body_kinematics.cpp``) with ``-DHOST_BUILD``, against the SAME
+``src/firm/motion/body_kinematics.cpp``) with ``-DHOST_BUILD``, against the SAME
 headers every ARM build compiles. App::Drive holds no controller of its own
 (open-loop duty from calibrated speed, drive.h's own header) -- 128-015
 deleted the zero-instantiation motion-local wheel-velocity PID class
-(``src/motion/wheel_velocity_pid.cpp``) this harness used to (needlessly)
+(``src/firm/motion/wheel_velocity_pid.cpp``) this harness used to (needlessly)
 link in.
 Mirrors ``test_devices_motor.py``/``test_app_telemetry.py``'s exact shape:
 compile with the system C++ compiler, run the resulting binary, assert it
@@ -42,7 +42,7 @@ _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "hardware" / "nezha" / "nezha_motor.cpp"
-_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "motion" / "body_kinematics.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard.
 _CXX_STANDARD = "c++20"

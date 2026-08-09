@@ -8,7 +8,7 @@ issue/sprint.
 `clasi/issues/motion-library-development-kickoff-parallel-effort.md`,
 `clasi/sprints/124-.../issues/robot-state-blackboard-one-struct-for-all-shared-state-and-telemetry.md`,
 `docs/design/base-explicit-loop-sketch.md`,
-`src/motion/DESIGN.md`.
+`src/firm/motion/DESIGN.md`.
 
 ## 1. What we are building, in one paragraph
 
@@ -268,7 +268,7 @@ when the base's duty primitive and observer exist. The planner's
 interface doesn't change shape: it writes whichever command fields the
 contract of record says.
 
-## 6. Relationship to the existing `src/motion` modules
+## 6. Relationship to the existing `src/firm/motion` modules
 
 | Existing | Fate |
 |---|---|

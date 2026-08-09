@@ -317,7 +317,7 @@ float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->driveTargetVelRight(
 // is a control decision, not hardware protection, and relocated to a
 // motion-local wheel-velocity PID class -- itself deleted outright by
 // 128-015, zero instantiations; App::Drive holds no controller of its own,
-// see src/motion/DESIGN.md's "wheel control generations" note). This C ABI
+// see src/firm/motion/DESIGN.md's "wheel control generations" note). This C ABI
 // export is kept (not deleted) purely so host/robot_radio/io/sim_loop.py's
 // ctypes symbol lookup at import time does not break -- it has no effect on
 // firmware behavior; the one duty-stage controller that still exists

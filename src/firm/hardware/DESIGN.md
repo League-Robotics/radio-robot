@@ -181,7 +181,7 @@ state out → pace) and the schedule these leaves are ticked from, see root
   velocity control law's output used to be exactly the PI (+ feedforward)
   law with no separate feedforward path layered on top of it. 125-003
   relocated the whole control law off this leaf to the motion library
-  (`src/motion/wheel_velocity_pid.h`) — this section describes the
+  (`src/firm/motion/wheel_velocity_pid.h`) — this section describes the
   pre-move design; see that header for the current one.
 
 ## 4. Design
@@ -328,7 +328,7 @@ safe to run while the wheel is actually moving.
 back-calculation anti-windup.** This subsection describes the control law
 that used to be embedded here, before 125-003 relocated it wholesale to a
 standalone class in the motion library — itself later deleted outright
-(128-015, zero instantiations; see `src/motion/DESIGN.md`'s "wheel control
+(128-015, zero instantiations; see `src/firm/motion/DESIGN.md`'s "wheel control
 generations" note) — kept for history, not current architecture.
 The control law is a discrete PI (+ feedforward, `Gains::kff`) with
 back-calculation anti-windup against `Gains::iMax`, plus one integrator

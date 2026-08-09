@@ -17,7 +17,7 @@ ticket 005 owns the fuller system-level wire-codec test. Covers:
      Planner's queue.
 
 Landmine 2 (Aligning-phase stall) and Landmine 4 (omega sign) are covered
-by src/motion/navigator/tests/navigator_test.cpp's own ctest scenarios
+by src/firm/motion/navigator/tests/navigator_test.cpp's own ctest scenarios
 (testPivotThenCruiseNotBlockedBehindAligning/
 testYawSignMatchesGotoOtosConvention) -- cheaper to extend there, per this
 ticket's own Testing section, since neither needs the full RobotLoop wire
@@ -45,7 +45,7 @@ _SUPPORT_DIR = _UNIT_DIR.parent / "support"
 _PLANT_DIR = _UNIT_DIR.parent / "plant"
 _TESTS_SIM_DIR = _UNIT_DIR.parent  # src/tests/sim -- resolves "support/..."-qualified includes
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
-_MOTION_PLANNER_DIR = _REPO_ROOT / "src" / "motion" / "planner"  # resolves navigator.h's own "planner.h"
+_MOTION_PLANNER_DIR = _REPO_ROOT / "src" / "firm" / "motion" / "planner"  # resolves navigator.h's own "planner.h"
 
 _HARNESS_SRC = _UNIT_DIR / "test_app_robot_loop_goto_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
@@ -67,10 +67,10 @@ _APP_SOURCES = [
     _MOTION_PLANNER_DIR / "estimation.cpp",
     _MOTION_PLANNER_DIR / "shape.cpp",
     _MOTION_PLANNER_DIR / "planner.cpp",
-    _REPO_ROOT / "src" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
-    _REPO_ROOT / "src" / "motion" / "navigator" / "navigator.cpp",  # 135-004
+    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
+    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
     _SOURCE_DIR / "app" / "drive.cpp",
-    _REPO_ROOT / "src" / "motion" / "odometry.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
     _SOURCE_DIR / "app" / "boot_wiring.cpp",
     _SOURCE_DIR / "app" / "boot_calibration.cpp",
@@ -92,7 +92,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _KINEMATICS_SOURCES = [
-    _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "body_kinematics.cpp",
 ]
 
 _CXX_STANDARD = "c++20"

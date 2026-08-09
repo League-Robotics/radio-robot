@@ -85,7 +85,7 @@ void configureSimForBenchTest(TestSim::SimHarness& sim) {
   // ERR_FULL, ...) against a FIXED, hand-counted cycle budget that assumes
   // a commanded velocity lands in the wheel's target in ONE step -- not
   // motion-shaping fidelity, which has its own dedicated coverage in
-  // src/motion/planner/tests/. Restore the historical unshaped ceilings
+  // src/firm/motion/planner/tests/. Restore the historical unshaped ceilings
   // here, explicitly, so those fixed-cycle-count assertions keep meaning
   // what they always meant -- never let the real shaping in via silence.
   sim.planner().applyShaperLimits(/*aMax=*/1.0e6f, /*aDecel=*/1.0e6f, /*alphaMax=*/1.0e5f,

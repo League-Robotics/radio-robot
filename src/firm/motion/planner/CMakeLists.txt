@@ -1,8 +1,8 @@
 # Standalone Motion::Planner build (motion-planner sketch §7): host-only,
 # no firmware, no Python in the build/test path. Configure/build/test:
 #
-#   cmake -S src/motion/planner -B src/motion/planner/build
-#   cmake --build src/motion/planner/build --target planner_tests
+#   cmake -S src/firm/motion/planner -B src/firm/motion/planner/build
+#   cmake --build src/firm/motion/planner/build --target planner_tests
 #
 # `planner_tests` builds every test executable and runs them via ctest,
 # exiting nonzero on any failure. The `motionplanner` shared library is the
@@ -31,7 +31,8 @@ add_library(planner STATIC
 # sprint's own contract, so this adds no firmware coupling.
 target_include_directories(planner PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
-  ${CMAKE_CURRENT_SOURCE_DIR}/../../firm)
+  ${CMAKE_CURRENT_SOURCE_DIR}/../..
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
 
 add_library(motionplanner SHARED capi.cpp)
 target_link_libraries(motionplanner PRIVATE planner)
@@ -56,10 +57,10 @@ add_executable(pose_ownership_test tests/pose_ownership_test.cpp
   ${CMAKE_CURRENT_SOURCE_DIR}/../body_kinematics.cpp)
 target_link_libraries(pose_ownership_test PRIVATE planner)
 # odometry.cpp/body_kinematics.cpp use the qualified #include "motion/..."
-# spelling every other src/motion consumer uses (root CMakeLists.txt,
+# spelling every other src/firm/motion consumer uses (root CMakeLists.txt,
 # src/firm/platform/host/CMakeLists.txt) -- src/ (two levels up from this file), not
-# src/motion, is the include root that resolves it.
-target_include_directories(pose_ownership_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../..)
+# src/firm/motion, is the include root that resolves it.
+target_include_directories(pose_ownership_test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
 add_test(NAME pose_ownership_test COMMAND pose_ownership_test)
 list(APPEND PLANNER_TESTS pose_ownership_test)
 

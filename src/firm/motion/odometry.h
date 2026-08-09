@@ -8,12 +8,12 @@
 // Hal::Motor::position() and passes the two floats in), fusing with
 // OTOS/camera (the host's job), and OTOS sampling itself (App::
 // applyOtosSample(), src/firm/app/otos_sample.{h,cpp} -- base-side, since it
-// needs Hal::Otos& and Telemetry::Frame&, neither of which src/motion may
+// needs Hal::Otos& and Telemetry::Frame&, neither of which src/firm/motion may
 // depend on; sprint 122 ticket 002 split it out of this file, which used to
 // hold both).
 //
 // 122-002 (motion-library extraction): moved from src/firm/app/odometry.*
-// into src/motion/, behind the velocity-sink boundary (wheel_sink.h). This
+// into src/firm/motion/, behind the velocity-sink boundary (wheel_sink.h). This
 // class no longer holds a Hal::Motor& -- integrate()/the constructor
 // take the CURRENT wheel positions as plain float parameters instead, the
 // same values Hal::Motor::position() already returns, read by the

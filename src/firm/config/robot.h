@@ -43,8 +43,8 @@
 // gives the App:: layer (boot_calibration.h's configureMotor()/
 // configureOtos(), alongside its existing toDeviceMotorConfig()) the
 // Config::Robot-consuming entry point instead -- see that file's own
-// header for the full rationale. src/motion/planner/ is stricter still
-// (src/motion/DESIGN.md §3: "No Devices::*, App::*, or bus/timing
+// header for the full rationale. src/firm/motion/planner/ is stricter still
+// (src/firm/motion/DESIGN.md §3: "No Devices::*, App::*, or bus/timing
 // collaborator anywhere in this tree" -- Config::* included, explicitly,
 // by name, elsewhere in that same section) -- Motion::Planner::
 // configure() is therefore likewise NOT a member method; boot_

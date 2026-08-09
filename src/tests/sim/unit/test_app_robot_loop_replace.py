@@ -13,12 +13,12 @@ Compiles ``test_app_robot_loop_replace_harness.cpp`` against TWO source
 sets, matched to what each half of the harness needs:
 
   - Cases 1-5 drive a bare ``Motion::Planner`` directly
-    (``src/motion/planner/planner.cpp`` + its own leaf modules --
+    (``src/firm/motion/planner/planner.cpp`` + its own leaf modules --
     profile/shape/estimation (130-005: wheel_trim deleted; 130-007:
     wheel_pid/the parked M4 duty stage deleted too -- the wheel-speed
     controller now lives entirely in App::Drive) -- plus the test-only
-    zero-Python scaffolding at ``src/motion/planner/tests/test_support.h``,
-    the SAME machinery ``src/motion/planner/tests/
+    zero-Python scaffolding at ``src/firm/motion/planner/tests/test_support.h``,
+    the SAME machinery ``src/firm/motion/planner/tests/
     planner_scenarios_test.cpp``'s own ``testReplacePreempts()`` already
     uses). No RobotLoop, no wire codec, no App::/Devices:: graph.
   - The duplicate-id sanity check drives the real
@@ -49,7 +49,7 @@ _SUPPORT_DIR = _UNIT_DIR.parent / "support"
 _PLANT_DIR = _UNIT_DIR.parent / "plant"
 _TESTS_SIM_DIR = _UNIT_DIR.parent  # src/tests/sim -- resolves "support/..."-qualified includes
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
-_MOTION_PLANNER_DIR = _REPO_ROOT / "src" / "motion" / "planner"  # resolves test_support.h's own "planner.h"
+_MOTION_PLANNER_DIR = _REPO_ROOT / "src" / "firm" / "motion" / "planner"  # resolves test_support.h's own "planner.h"
 
 _HARNESS_SRC = _UNIT_DIR / "test_app_robot_loop_replace_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
@@ -84,10 +84,10 @@ _APP_SOURCES = [
     _MOTION_PLANNER_DIR / "estimation.cpp",
     _MOTION_PLANNER_DIR / "shape.cpp",
     _MOTION_PLANNER_DIR / "planner.cpp",
-    _REPO_ROOT / "src" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
-    _REPO_ROOT / "src" / "motion" / "navigator" / "navigator.cpp",  # 135-004
+    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
+    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
     _SOURCE_DIR / "app" / "drive.cpp",
-    _REPO_ROOT / "src" / "motion" / "odometry.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
     # 130-002 -- the shared composition root (App::composeRobot()/
     # RobotGraph) sim_harness.h now boots through, plus its
@@ -99,7 +99,7 @@ _APP_SOURCES = [
 # 128-015: the deleted closed-loop wheel-velocity PID (formerly the sole
 # entry here) is gone outright -- zero instantiations; App::Drive holds no
 # controller of its own (open-loop duty from calibrated speed, drive.h's
-# own header). See src/motion/DESIGN.md's "wheel control generations" note.
+# own header). See src/firm/motion/DESIGN.md's "wheel control generations" note.
 _MOTION_SOURCES = []
 _DEVICE_SOURCES = [
     _INFRA_SIM_DIR / "sim_clock.cpp",
@@ -120,7 +120,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _KINEMATICS_SOURCES = [
-    _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "body_kinematics.cpp",
 ]
 
 _CXX_STANDARD = "c++20"
@@ -178,7 +178,7 @@ def test_app_robot_loop_replace_harness_compiles_and_passes(tmp_path):
             "-I",
             str(_REPO_ROOT / "src"),
             "-I",
-            str(_REPO_ROOT / "src" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
+            str(_REPO_ROOT / "src" / "firm" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
             "-I",
             str(_SUPPORT_DIR),
             "-I",

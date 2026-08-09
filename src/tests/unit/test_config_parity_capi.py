@@ -6,7 +6,7 @@ Proves the generated C++ Config::Robot group structs
 protos/robot_config.proto -- ticket 002) and the generated pydantic model
 (src/host/robot_radio/config/robot_config_generated.py, same generator run)
 have not structurally drifted from each other -- mirroring
-src/motion/planner/capi.cpp's plannerStructSizes()/plannerLimitsOffsets()
+src/firm/motion/planner/capi.cpp's plannerStructSizes()/plannerLimitsOffsets()
 pattern (capi.cpp:69,93) and its Python counterpart
 src/tests/bench/planner_harness.py:207-212's own ctypes-walk approach. This
 is the mechanical guarantee that replaces check_config_sync.py's 58-entry
@@ -33,7 +33,7 @@ Compiles config_parity_capi.cpp (src/firm/config/) as a HOST_BUILD shared
 library via subprocess -- the same throwaway-binary-per-test-run convention
 every src/tests/sim/unit/ harness already uses (no shared CMake build step),
 just producing a `-shared` object instead of an executable so it can be
-`ctypes.CDLL`-loaded, mirroring how src/motion/planner/capi.cpp is built
+`ctypes.CDLL`-loaded, mirroring how src/firm/motion/planner/capi.cpp is built
 into libmotionplanner for planner_harness.py.
 
     uv run python -m pytest src/tests/unit/test_config_parity_capi.py -v

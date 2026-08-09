@@ -4,7 +4,7 @@ Hardware characterization the host-only planner cannot derive for itself.
 This doc, and the scripts it covers (`encoder_refresh.py`, `hil_drive.py`,
 `hil_square_tour.py`, `plant_id.py`, `square_tour_sim.py`,
 `square_tour_velocity.py`, `planner_harness.py`), relocated here (128-010)
-from `src/motion/planner/bench/` and `src/motion/planner/py/` — bench/
+from `src/firm/motion/planner/bench/` and `src/firm/motion/planner/py/` — bench/
 tooling artifacts inside the C++ library tree, joining the rest of the
 bench-tool catalog. `square_tour_sim.py`'s own committed capture is named
 `motionlib_square_tour_sim.png` (not `square_tour_sim.png`) to avoid

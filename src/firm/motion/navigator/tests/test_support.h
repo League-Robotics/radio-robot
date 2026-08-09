@@ -2,7 +2,7 @@
 // Motion::Navigator ctests (135-003). Test-only scaffolding, never part
 // of the navigator library.
 //
-// Self-contained: no dependency on src/motion/planner/tests/test_support.h
+// Self-contained: no dependency on src/firm/motion/planner/tests/test_support.h
 // or on BodyKinematics/PoseTracker/Odometry -- this standalone project
 // (motion_navigator) links Motion::Planner's own sources directly
 // (CMakeLists.txt's motion_planner_lib) but keeps its OWN test harness
@@ -41,7 +41,7 @@
 
 namespace TestNav {
 
-// Perfect-velocity wheel tracking (mirrors src/motion/planner/tests/
+// Perfect-velocity wheel tracking (mirrors src/firm/motion/planner/tests/
 // test_support.h's own PerfectPlant) PLUS an arc-exact world-pose
 // integration (mirrors estimation.h's PoseTracker: "constant-curvature
 // segment per step") -- self-contained, no BodyKinematics dependency.

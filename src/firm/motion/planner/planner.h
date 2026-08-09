@@ -118,7 +118,7 @@ class Planner {
 
   // No Config::Robot-consuming configure() on THIS class (132-007, the-
   // configuration-object.md, sprint 132 "configuration discipline"):
-  // src/motion's own dependency rule (src/motion/DESIGN.md §3) forbids
+  // src/firm/motion's own dependency rule (src/firm/motion/DESIGN.md §3) forbids
   // ANY Config::*/App::*/Devices::* dependency in this tree, no
   // exception -- stricter than the (already strict) devices isolation
   // invariant this project also has. App::configurePlanner(Motion::

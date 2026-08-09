@@ -6,7 +6,7 @@
 // path-following.md, "Finding 1"), plus a duplicate-id sanity smoke check.
 //
 // CHARACTERIZATION, NOT A FIX: this file writes tests against existing
-// firmware behavior. It does not modify src/motion/planner/planner.cpp,
+// firmware behavior. It does not modify src/firm/motion/planner/planner.cpp,
 // src/firm/app/robot_loop.cpp, any wire message, or any .proto definition
 // -- planner.cpp's axis-carry logic (handleMove()'s activateNext() call
 // path, ~planner.cpp:723-729), axisOf() (~:835-843), and the
@@ -18,9 +18,9 @@
 //
 //   Cases 1, 2, 5 (scenarioSameCurvature.../scenarioHighRateReplacement)
 //   drive a bare Motion::Planner directly (TestPlanner::benchLimits() +
-//   TestPlanner::PerfectPlant/NoisyPlant, src/motion/planner/tests/
+//   TestPlanner::PerfectPlant/NoisyPlant, src/firm/motion/planner/tests/
 //   test_support.h -- the SAME zero-Python, no-RobotLoop scaffolding
-//   src/motion/planner/tests/planner_scenarios_test.cpp's own
+//   src/firm/motion/planner/tests/planner_scenarios_test.cpp's own
 //   testReplacePreempts() already uses for the "does it preempt at all"
 //   smoke case). This is deliberate, not a shortcut: Finding 1's
 //   profileVelocity_ axis-unit carry is internal to Planner::move()/tick(),

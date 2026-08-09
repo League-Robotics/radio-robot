@@ -15,7 +15,7 @@ assert it exits 0.
 harness — ``Devices::NezhaMotor``'s embedded velocity PID was deleted
 outright (relocated to a motion-local wheel-velocity PID class, itself
 deleted outright by 128-015 -- App::Drive holds no controller of its own;
-see ``src/motion/DESIGN.md``'s "wheel control generations" note).
+see ``src/firm/motion/DESIGN.md``'s "wheel control generations" note).
 
 Migrated by sprint 108 ticket 009 off the deleted ``src/firm/devices/
 i2c_bus_host.cpp`` scripted-FIFO Devices::I2CBus fake — see
@@ -45,7 +45,7 @@ _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "devices_motor_harness.
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
-_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "motion" / "body_kinematics.cpp"
 _NEZHA_MOTOR_SRC = _HARDWARE_DIR / "nezha" / "nezha_motor.cpp"
 
 # messages/common.h documents its own target as "CODAL C++11" — build the

@@ -7,7 +7,7 @@ and replace-throttling loop -- read telemetry, update ``WorldPose``, solve
 a tangent arc (``pathplan.solver.solveArcToPoint()``), send
 ``move_twist(..., replace=True)`` when the solution moved materially,
 repeat until arrival or give-up. Sprint 135 moved that whole policy
-firmware-side (``Motion::Navigator``, `src/motion/navigator/`, tickets
+firmware-side (``Motion::Navigator``, `src/firm/motion/navigator/`, tickets
 002-004): one ``GO_TO`` wire command now drives a world- or robot-frame
 target to completion on its own, re-solving against live OTOS pose every
 internal cycle with no further host involvement. Proven end-to-end in sim
@@ -56,11 +56,11 @@ returning nothing outside version control): ``pathplan.solver.
 solveArcToPoint()``/``ArcSolution``/``SolverLimits``/``MAX_WHEEL_STEP``/
 ``_clampOmegaStep()`` (the single-arc solver and its curvature slew clamp
 -- ported to ``Motion::ArcSolver``, C++-ctest-covered by
-`src/motion/navigator/tests/arc_solver_test.cpp`); this module's own
+`src/firm/motion/navigator/tests/arc_solver_test.cpp`); this module's own
 ``ReplaceThreshold`` (the material-change replace throttle -- the
 firmware's `Motion::Navigator` runs an equivalent throttle internally,
 `kNavOmegaReplaceThreshold`/`kNavArcLengthReplaceThreshold`/
-`kNavRefreshFraction` in `src/motion/navigator/navigator.cpp`, ported from
+`kNavRefreshFraction` in `src/firm/motion/navigator/navigator.cpp`, ported from
 this exact class); ``ProgressCheck`` (the liveness backstop that used to
 force a resend when the robot sat still despite a clean ack -- no longer
 needed: a ``GO_TO``'s own ``timeout`` field is the firmware's bounded

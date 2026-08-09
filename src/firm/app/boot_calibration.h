@@ -94,8 +94,8 @@ Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainC
 // object.md's "subsystems take the whole object" pattern) for the THREE
 // subsystems that cannot take a Config::Robot& as a member method
 // themselves --
-//   - Motion::Planner (src/motion/planner/): that tree's own, narrower
-//     dependency rule (src/motion/DESIGN.md §3) forbids ANY
+//   - Motion::Planner (src/firm/motion/planner/): that tree's own, narrower
+//     dependency rule (src/firm/motion/DESIGN.md §3) forbids ANY
 //     App::/Devices::/Config:: dependency, no exception -- "No Devices::*,
 //     App::*, or bus/timing collaborator anywhere in this tree."
 //   - Hal::Motor / Hal::Otos (src/firm/devices/): the devices

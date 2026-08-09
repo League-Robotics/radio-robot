@@ -76,7 +76,7 @@ before:
    `app/drive.cpp`. `Motion::WheelVelocityPid`, which CLAUDE.md's
    architecture note still names as the owner, **does not exist**: sprint
    128 ticket 015 deleted `wheel_velocity_pid.{h,cpp}` as a
-   zero-instantiation class (see `src/motion/CMakeLists.txt`'s own note).
+   zero-instantiation class (see `src/firm/motion/CMakeLists.txt`'s own note).
    The proposal flagged "conflicting signals on which is authoritative" —
    this is the resolution, and CLAUDE.md is the stale one.
 

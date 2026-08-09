@@ -1,6 +1,6 @@
 // config_parity_capi.h -- generated-parity guard capi export (sprint 132
 // ticket 003, "the-configuration-object.md"). Mirrors
-// src/motion/planner/capi.cpp's plannerStructSizes()/plannerLimitsOffsets()
+// src/firm/motion/planner/capi.cpp's plannerStructSizes()/plannerLimitsOffsets()
 // pattern: a flat, extern "C", ctypes-loadable surface a Python harness
 // (src/tests/unit/test_config_parity_capi.py) walks to prove the generated
 // Config::Robot group structs (src/firm/messages/robot_config.h, emitted by

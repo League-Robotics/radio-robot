@@ -15,7 +15,7 @@ ramp/reversal behavior, purity, final-heading-ignored, and the structural
 (135-007 moved single-arc solving into the firmware, ``Motion::ArcSolver``)
 and their tests are deleted alongside them -- NOT a coverage loss: they
 were ported test-for-test into
-`src/motion/navigator/tests/arc_solver_test.cpp` (17 checks, confirmed by
+`src/firm/motion/navigator/tests/arc_solver_test.cpp` (17 checks, confirmed by
 direct comparison against this file's pre-135-007 history: identical
 representative poses/targets/tolerances for every one of the ten groups
 above, `kTrackWidth`/`kSpeed` matching this file's own `_TRACK_WIDTH`/
@@ -109,7 +109,7 @@ def test_overshooting_a_dense_waypoint_still_yields_a_forward_target():
     ``solveArcToPoint()`` is deleted (single-arc solving moved firmware-
     side, ``Motion::ArcSolver``), so that half of the check is gone too;
     the equivalent guard is exercised directly against real bearings by
-    `src/motion/navigator/tests/arc_solver_test.cpp`
+    `src/firm/motion/navigator/tests/arc_solver_test.cpp`
     (`testTargetJustInsideBehindThresholdDoesNotStop` et al.), not by this
     file any more. What remains here -- the geometric guarantee that
     `pursuitTarget()` itself always returns a point AHEAD of an

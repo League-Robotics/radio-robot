@@ -25,10 +25,10 @@ get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../../../.." ABSOLUTE)
 set(SOURCE_DIR "${REPO_ROOT}/src/firm")
 set(SUPPORT_DIR "${REPO_ROOT}/src/tests/sim/support")
 set(PLANT_DIR "${REPO_ROOT}/src/tests/sim/plant")
-# 122-001 (motion-library extraction): src/motion is a SIBLING of src/firm,
+# 122-001 (motion-library extraction): src/firm/motion is a SIBLING of src/firm,
 # not a child (sprint 122 architecture, Design Rationale Decision 3) --
 # MOTION_DIR is therefore its own path, not SOURCE_DIR-relative.
-set(MOTION_DIR "${REPO_ROOT}/src/motion")
+set(MOTION_DIR "${REPO_ROOT}/src/firm/motion")
 
 # ---------------------------------------------------------------------------
 # Explicit source list -- no glob-then-filter. Mirrors
@@ -58,11 +58,11 @@ set(MOTION_DIR "${REPO_ROOT}/src/motion")
 #   messages/wire.cpp, messages/wire_runtime.cpp
 #                              -- the generated + hand-written codec
 #                                 primitives
-#   src/motion/body_kinematics.cpp
+#   src/firm/motion/body_kinematics.cpp
 #                              -- pure math, no CODAL deps. Moved out of
 #                                 SOURCE_DIR/kinematics/ (122-001: that
 #                                 directory is retired, folded flat into
-#                                 src/motion) -- under MOTION_DIR now.
+#                                 src/firm/motion) -- under MOTION_DIR now.
 #   sim_ctypes.cpp             -- this ticket's C ABI (108-005)
 #   sim_plant.cpp               -- ticket 108-002's SimPlant (tests/_infra/sim/)
 #   sim_clock.cpp                -- ticket 108-010's TestSim::SimClock/
@@ -120,7 +120,7 @@ set(APP_SOURCES
     "${SOURCE_DIR}/app/boot_calibration.cpp"
 )
 # odometry.cpp (122-002, motion-library extraction ticket 2): lives under
-# MOTION_DIR (122-001: src/motion, a sibling of src/firm), not
+# MOTION_DIR (122-001: src/firm/motion, a sibling of src/firm), not
 # SOURCE_DIR. The OTOS-perception half odometry.cpp used to also define
 # (applyOtosSample()) is now a private RobotLoop method (robot_loop.cpp,
 # APP_SOURCES) -- Motion::Odometry may not depend on Devices::Otos/App::
@@ -179,7 +179,7 @@ set(MESSAGE_SOURCES
 )
 # body_kinematics.cpp also moved under MOTION_DIR (122-001) -- it lived at
 # SOURCE_DIR/kinematics/ (a child of src/firm) before this ticket; the
-# kinematics/ directory itself is retired (folded flat into src/motion).
+# kinematics/ directory itself is retired (folded flat into src/firm/motion).
 # KINEMATICS_SOURCES keeps its own variable name (nothing downstream needs
 # renaming to know it's now motion-owned).
 set(KINEMATICS_SOURCES
@@ -213,7 +213,7 @@ add_library(firmware_host SHARED
 # {wheel,otos}_plant.h, sim_plant.h/sim_harness.h) the way
 # test_straight_twist.py's three additional -I flags do.
 #
-# "${REPO_ROOT}/src" (122-001): src/motion is now a SIBLING of src/firm, not
+# "${REPO_ROOT}/src" (122-001): src/firm/motion is now a SIBLING of src/firm, not
 # a child -- a qualified `#include "motion/odometry.h"` (the SAME text
 # these headers used when they lived under src/firm/motion/) resolves via
 # THIS root, since "motion" is a top-level dir under src/ now instead of a
@@ -231,7 +231,7 @@ target_include_directories(firmware_host PRIVATE
     # here for free via the compiler's implicit current-file-directory
     # search -- planner.h does NOT get that for free from navigator.h,
     # since the two files live in different directories) needs this
-    # directory ON the include path explicitly. Mirrors src/motion/
+    # directory ON the include path explicitly. Mirrors src/firm/motion/
     # navigator/CMakeLists.txt's own motion_planner_lib target, which
     # already adds this same directory for the identical reason.
     "${MOTION_DIR}/planner"

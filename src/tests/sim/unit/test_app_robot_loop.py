@@ -47,9 +47,9 @@ _COMMS_SRC = _SOURCE_DIR / "app" / "comms.cpp"
 _TELEMETRY_SRC = _SOURCE_DIR / "app" / "telemetry.cpp"
 _DRIVE_SRC = _SOURCE_DIR / "app" / "drive.cpp"
 # 122-002: App::applyOtosSample() split out of odometry.cpp (now
-# Motion::Odometry, src/motion/) into this new base-side file --
+# Motion::Odometry, src/firm/motion/) into this new base-side file --
 # robot_loop.cpp's own applyOtosSample() call needs it linked in.
-_ODOMETRY_SRC = _REPO_ROOT / "src" / "motion" / "odometry.cpp"
+_ODOMETRY_SRC = _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp"
 # 115-005 (gut S1): heading_source.cpp/pilot.cpp/motion/executor.cpp/
 # motion/jerk_trajectory.cpp/vendor/ruckig are all DELETED along with the
 # rest of the motion stack -- robot_loop.h no longer includes app/pilot.h
@@ -66,7 +66,7 @@ _CLOCK_HOST_FAKE_SRC = _INFRA_SIM_DIR / "sim_clock.cpp"
 # its pure serializeSnapshot()/Config::TuningStore seam directly.
 _PERSISTED_TUNING_SRC = _SOURCE_DIR / "config" / "persisted_tuning.cpp"
 
-_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "motion" / "body_kinematics.cpp"
 
 _WIRE_SRC = _SOURCE_DIR / "messages" / "wire.cpp"
 _WIRE_RUNTIME_SRC = _SOURCE_DIR / "messages" / "wire_runtime.cpp"

@@ -25,7 +25,7 @@ former `test_goto_world_converges_under_otos_drift()`/
 injecting a sim-side `WorldPose` fault into a code path that no longer
 reads `WorldPose` for navigation would prove nothing; OTOS staleness/
 disconnect robustness is now a FIRMWARE property, ctest-covered by
-`src/motion/navigator/tests/navigator_test.cpp` (tickets 002/003 of
+`src/firm/motion/navigator/tests/navigator_test.cpp` (tickets 002/003 of
 sprint 135) instead. What replaces the deleted tests: smoke coverage that
 the reshaped Python senders themselves work end-to-end against a real
 `Motion::Navigator`, for both frames (`gotoWorld()`/`gotoRobot()`) and for

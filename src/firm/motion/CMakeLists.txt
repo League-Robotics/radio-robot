@@ -1,4 +1,4 @@
-# src/motion/CMakeLists.txt -- the standalone motion_tests build (sprint
+# src/firm/motion/CMakeLists.txt -- the standalone motion_tests build (sprint
 # 122 ticket 001, Design Rationale Decision 4). Plain CMake, no
 # libfirmware_host, no ctypes, no Python anywhere in the build/run path --
 # this is the whole point of the split (SUC-001): a fast, hardware- and
@@ -7,18 +7,18 @@
 #
 # This is a SEPARATE CMake project from the repo root's own CMakeLists.txt
 # (the ARM firmware build), src/firm/platform/host/CMakeLists.txt (the libfirmware_host
-# HOST_BUILD sim library), and src/motion/planner/CMakeLists.txt (the
+# HOST_BUILD sim library), and src/firm/motion/planner/CMakeLists.txt (the
 # Motion::Planner standalone build, its own project entirely --
 # self-contained, no dependency on this directory's `motion` library) --
 # configure/build it on its own:
 #
-#   cmake -S src/motion -B src/motion/build
-#   cmake --build src/motion/build
-#   cmake --build src/motion/build --target motion_tests   # build + run
+#   cmake -S src/firm/motion -B src/firm/motion/build
+#   cmake --build src/firm/motion/build
+#   cmake --build src/firm/motion/build --target motion_tests   # build + run
 #
 # or, equivalently, once configured/built once:
 #
-#   (cd src/motion/build && ctest --output-on-failure)
+#   (cd src/firm/motion/build && ctest --output-on-failure)
 #
 # No Python process anywhere in that sequence.
 cmake_minimum_required(VERSION 3.16)
@@ -35,11 +35,11 @@ add_definitions(-DHOST_BUILD=1)
 
 # ---------------------------------------------------------------------------
 # Repo root: grandparent of this CMakeLists.txt's directory
-# (src/motion/CMakeLists.txt -> src/motion -> src -> repo root is TWO
+# (src/firm/motion/CMakeLists.txt -> src/firm/motion -> src -> repo root is TWO
 # levels up from CMAKE_SOURCE_DIR, which IS this directory) -- same
 # convention as src/firm/platform/host/CMakeLists.txt's own REPO_ROOT.
 # ---------------------------------------------------------------------------
-get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../.." ABSOLUTE)
+get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../../.." ABSOLUTE)
 set(MOTION_DIR "${CMAKE_SOURCE_DIR}")
 
 # ---------------------------------------------------------------------------
@@ -52,7 +52,7 @@ set(MOTION_DIR "${CMAKE_SOURCE_DIR}")
 # three modules existed to drive was never actually used) and ticket 015
 # deleted the zero-instantiation wheel_velocity_pid.{h,cpp} (125-003's
 # relocated closed-loop velocity control law -- superseded before it ever
-# had a caller; see src/motion/DESIGN.md's "wheel control generations"
+# had a caller; see src/firm/motion/DESIGN.md's "wheel control generations"
 # note). Ticket 016 deleted state_estimator.{h,cpp} outright (Motion::
 # StateEstimator retired from the loop, robot-state-pose-needs-exactly-
 # one-writer.md -- a per-cycle computation with no consumer). What's

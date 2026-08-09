@@ -16,7 +16,7 @@
 //   - App::configurePlanner()/configureMotor()/configureOtos()
 //     (boot_calibration.h) -- the three Config::Robot-consuming adapters
 //     for the subsystems that cannot take Config::Robot& as a member
-//     method themselves (src/motion/planner/'s own narrower dependency
+//     method themselves (src/firm/motion/planner/'s own narrower dependency
 //     rule; the devices isolation invariant) -- see boot_calibration.h's
 //     own doc comment for the full rationale, and 132-007's own ticket
 //     file for why RobotLoop's own configure() (the sixth entry point)

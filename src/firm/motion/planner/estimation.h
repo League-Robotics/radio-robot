@@ -8,7 +8,7 @@
 //
 // 131-004 (position-rebaseline-destroys-the-pose.md): PoseTracker::
 // integrate() now also takes each wheel's positionEpoch, mirroring
-// Motion::Odometry::integrate() (src/motion/odometry.h) -- the identical
+// Motion::Odometry::integrate() (src/firm/motion/odometry.h) -- the identical
 // re-anchor-on-epoch-change contract, applied to the planner's own
 // x_/y_/heading_ ledger (which otherwise fed the SAME raw, rebaseline-
 // discontinuous wheel positions into an identical bare-delta computation).

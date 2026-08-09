@@ -154,7 +154,7 @@ struct BootOverrides {
   // JSON has no counterpart to correct in a plant that cannot represent
   // the quirk at all.
   //
-  // Motion::NavigatorLimits::yawSign (src/motion/navigator/arc_solver.h)
+  // Motion::NavigatorLimits::yawSign (src/firm/motion/navigator/arc_solver.h)
   // relates commanded Move::omega to true-world CCW -- a REAL drivetrain
   // fact (measured, e.g. src/tests/bench/goto_otos.py's own YAW_SIGN),
   // baked per-robot (data/robots/tovez.json bakes -1.0 for tovez). Every

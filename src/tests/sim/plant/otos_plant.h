@@ -37,7 +37,7 @@
 // identical midpoint-arc math App::Odometry uses -- see this file's own
 // header above). The REAL OTOS chip's heading does NOT: it is measurably
 // mounted with its sign INVERTED relative to encoder heading, which
-// src/motion/planner/planner.cpp:513 reconciles with exactly one negation
+// src/firm/motion/planner/planner.cpp:513 reconciles with exactly one negation
 // (`pose_.applyOtosHeading(-state.otos.heading, ...)`). For that single
 // firmware-side negation to reconcile sim and hardware IDENTICALLY, the
 // SIMULATED chip must report the hardware's inverted sign too -- so

@@ -7,18 +7,18 @@ scenario tests use, and asserts the exactness gates from Python. Run:
 
 Build the library first:
 
-    cmake -S src/motion/planner -B src/motion/planner/build
-    cmake --build src/motion/planner/build --target motionplanner
+    cmake -S src/firm/motion/planner -B src/firm/motion/planner/build
+    cmake --build src/firm/motion/planner/build --target motionplanner
 
 stdlib only -- no numpy, no uv needed.
 
-Relocated (128-010) from src/motion/planner/py/ to src/tests/bench/,
+Relocated (128-010) from src/firm/motion/planner/py/ to src/tests/bench/,
 joining the bench scripts (hil_drive.py, square_tour_sim.py, etc.) that
 import it -- they used to reach across a sibling `py/` directory via a
 sys.path hack; now co-located, no path bootstrap needed for the import
 itself. ``loadLibrary()`` below still resolves the C++ build directory by
 walking up to the repo root, since the CMake build itself still lives at
-src/motion/planner/build (unmoved -- it's real C++ source, not a bench
+src/firm/motion/planner/build (unmoved -- it's real C++ source, not a bench
 artifact).
 """
 
@@ -170,7 +170,7 @@ class Move(ctypes.Structure):
 
 # PlannerLimits -- 130-009 reshaped this from 34 flat fields to 18 fields
 # under four sub-structs (ceilings/plant/landing/tracking), grouped
-# field-for-field the same way src/motion/planner/planner_types.h groups
+# field-for-field the same way src/firm/motion/planner/planner_types.h groups
 # the real C++ struct. The 16 fields cut by that ticket (requireSettle/
 # settleWindow, the M4 duty-stage gains velKff/velKp/velKi/velIMax/
 # velKaff/velIAccelGate/dutyFloor, and the dead planner-side trim gains
@@ -262,9 +262,9 @@ class TickResult(ctypes.Structure):
 def loadLibrary() -> ctypes.CDLL:
     # 128-010: this file now lives at src/tests/bench/planner_harness.py,
     # four levels below the repo root -- the CMake build directory itself
-    # is unmoved (src/motion/planner/build).
+    # is unmoved (src/firm/motion/planner/build).
     repoRoot = Path(__file__).resolve().parents[3]
-    build = repoRoot / "src" / "motion" / "planner" / "build"
+    build = repoRoot / "src" / "firm" / "motion" / "planner" / "build"
     for name in ("libmotionplanner.dylib", "libmotionplanner.so"):
         candidate = build / name
         if candidate.exists():

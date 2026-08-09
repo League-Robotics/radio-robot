@@ -41,14 +41,14 @@ _APP_SOURCES = [
     _SOURCE_DIR / "app" / "debug.cpp",
     _SOURCE_DIR / "app" / "configurator.cpp",
     _SOURCE_DIR / "app" / "telemetry.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "profile.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "estimation.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "shape.cpp",
-    _REPO_ROOT / "src" / "motion" / "planner" / "planner.cpp",
-    _REPO_ROOT / "src" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
-    _REPO_ROOT / "src" / "motion" / "navigator" / "navigator.cpp",  # 135-004
+    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "profile.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "estimation.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "shape.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "planner.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
+    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
     _SOURCE_DIR / "app" / "drive.cpp",
-    _REPO_ROOT / "src" / "motion" / "odometry.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
     # 130-002 -- the shared composition root (App::composeRobot()/
     # RobotGraph) sim_harness.h boots through, plus its Config::boot_config-
@@ -79,7 +79,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _KINEMATICS_SOURCES = [
-    _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "body_kinematics.cpp",
 ]
 
 _CXX_STANDARD = "c++20"
@@ -134,7 +134,7 @@ def test_composition_root_parity(tmp_path):
             "-I",
             str(_REPO_ROOT / "src"),
             "-I",
-            str(_REPO_ROOT / "src" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
+            str(_REPO_ROOT / "src" / "firm" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
             "-I",
             str(_SUPPORT_DIR),
             "-I",

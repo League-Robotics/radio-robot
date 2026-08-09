@@ -9,7 +9,7 @@ Compiles ``goto_protocol_harness.cpp`` together with ``sim_plant.cpp``
 (``src/firm/platform/host/``), ``wire_test_codec.cpp``, the plant sources, and the same full
 HOST_BUILD Devices/App/messages/kinematics/motion dependency graph every
 sibling ``test_*.py`` in this directory already compiles (now including
-``src/motion/navigator/{arc_solver,navigator}.cpp``, landed by ticket 004),
+``src/firm/motion/navigator/{arc_solver,navigator}.cpp``, landed by ticket 004),
 runs the resulting binary, and asserts it exits 0 -- printing its own
 human-readable per-scenario trace.
 
@@ -32,7 +32,7 @@ _SYSTEM_DIR = pathlib.Path(__file__).resolve().parent
 _SUPPORT_DIR = _SYSTEM_DIR.parent / "support"
 _PLANT_DIR = _SYSTEM_DIR.parent / "plant"
 _INFRA_SIM_DIR = _REPO_ROOT / "src" / "firm" / "platform" / "host"
-_MOTION_PLANNER_DIR = _REPO_ROOT / "src" / "motion" / "planner"  # resolves navigator.h's own "planner.h"
+_MOTION_PLANNER_DIR = _REPO_ROOT / "src" / "firm" / "motion" / "planner"  # resolves navigator.h's own "planner.h"
 
 _HARNESS_SRC = _SYSTEM_DIR / "goto_protocol_harness.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
@@ -55,10 +55,10 @@ _APP_SOURCES = [
     _MOTION_PLANNER_DIR / "estimation.cpp",
     _MOTION_PLANNER_DIR / "shape.cpp",
     _MOTION_PLANNER_DIR / "planner.cpp",
-    _REPO_ROOT / "src" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
-    _REPO_ROOT / "src" / "motion" / "navigator" / "navigator.cpp",  # 135-004
+    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
+    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
     _SOURCE_DIR / "app" / "drive.cpp",
-    _REPO_ROOT / "src" / "motion" / "odometry.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "app" / "preamble.cpp",
     _SOURCE_DIR / "app" / "boot_wiring.cpp",
     _SOURCE_DIR / "app" / "boot_calibration.cpp",
@@ -80,7 +80,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _KINEMATICS_SOURCES = [
-    _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp",
+    _REPO_ROOT / "src" / "firm" / "motion" / "body_kinematics.cpp",
 ]
 
 _CXX_STANDARD = "c++20"

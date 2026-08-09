@@ -2,490 +2,366 @@
 root: ../../../docs/design/design.md
 ---
 
-# Motion (`src/firm/motion`, namespace `Motion`)
+# Motion (`src/firm/motion`) — Motion-Control Library
 
-**Owner:** Eric Busboom · **Last reviewed:** 2026-07-21 · **Status:** stable
+**Owner:** Eric Busboom · **Last reviewed:** 2026-08-09 · **Status:** stable
 
 ---
 
-> **RETIRED — code relocated (sprint 122 ticket 001, 2026-07-24, finalized
-> ticket 122-004).** Both classes this file documents (`Motion::
-> StopCondition`, `Motion::VelocityShaper`) have been MOVED to
-> `src/motion/` — a new SIBLING tree of `src/firm` (sprint 122's
-> two-layer base/motion split; see that sprint's `sprint.md`), not a
-> child of it. This directory (`src/firm/motion/`) permanently holds only
-> this DESIGN.md, no source — it remains a required, one-level-down
-> child of the validated root `src/firm` (`.clasi/config.yaml`'s
-> `sources:`) purely so `close_sprint`'s design validator has a
-> `DESIGN.md` to find here; it is kept, not deleted, because the
-> math/rationale below is unchanged and still authoritative, and several
-> other current docs
-> (`docs/design/design.md`, `src/firm/app/DESIGN.md`, `docs/protocol-v5.md`)
-> link to it by this path. **For current orientation, the module list,
-> the boundary contract, and the `motion_tests` build, see
-> [`src/motion/DESIGN.md`](../../motion/DESIGN.md)** — this file is the
-> historical derivation record only; treat every "Orientation"/
-> "Interfaces" section below as accurate MATH at a location this
-> subsystem no longer occupies.
-
 ## 1. Purpose
 
-`Motion::StopCondition` answers exactly one question, every cycle, for
-exactly one active bounded `Move`: **has this motion ended?** It captures
-the three baselines a `Move`'s stop condition is measured against
-(activation time, path length, heading) once, at activation, and compares
-the caller's current readings against them on every subsequent `tick()`
-call. It is the safety-critical bound math sprint 116's MOVE protocol
-depends on: every `Move` the host sends is required to be self-bounding
-(a kind-specific stop condition, or the `timeout` backstop when the
-condition can't be reached), and this is the one place that decision gets
-made. It is split out of `App::MoveQueue` (which owns and drives it) for
-the same reason `BodyKinematics` is split out of `App::Drive`/`App::
-Odometry`: it is pure comparison logic with no bus, no timing side
-effects, and no state beyond what's passed in — the one place in the
-firmware that can be trusted to compile, link, and be exercised
-identically on ARM and in a host unit test with zero scaffolding, and
-independently testable without standing up `MoveQueue`'s own enqueue/
-replace/`ERR_FULL` machinery.
+`src/firm/motion/` is the motion-control half of the base/motion split
+(sprint 122): the twist decomposition, shaping, estimation, and odometry
+logic that is still under active development (goal-exact tours, same-axis
+carry, heading hold) — separated from the hardware-facing base (buses,
+devices, the wire, the loop schedule), which the stakeholder intends to
+eventually freeze and move to its own repository via `git subtree split`.
+The split lets each layer evolve at its own rate, with a fast,
+Python-free, sim-free unit-test loop (`motion_tests`, and `planner/`'s and
+`navigator/`'s own separate `planner_tests`/`navigator_tests`) to iterate
+against instead of the full `libfirmware_host` sim harness.
+
+**This tree is a CHILD of `src/firm` again.** Sprint 122 made it a sibling
+(`src/motion`) explicitly "so agents didn't get confused" while the split
+was new; the platform/hardware/hal reorganization moved it back. The
+subtree-split argument now runs the other way: `src/firm` is the tree that
+travels on a `git subtree split`, so `motion/` has to be inside it to
+travel too. The dependency-isolation rule (§3) is what makes this library
+portable, and that rule is unchanged by the move — **the discipline was
+never the directory.**
+
+Because it is a child of `src/firm` again, it is inside
+`.clasi/config.yaml`'s validated `sources:` list (`[src/firm, src/host]`,
+unchanged) and this `DESIGN.md` is now mechanically validated like every
+other `src/firm` subsystem doc.
+
+**128 (complexity reduction): the dead generation half is gone.**
+Through sprint 127, this tree held two halves: a small set of already-live
+leaves (`body_kinematics`, `odometry`, `state_estimator` — the last of
+these deleted outright by ticket 016, see "Estimator roster" below, plus a
+zero-instantiation closed-loop wheel-velocity-PID class deleted outright by
+ticket 015 — see "Wheel control generations" below) and a larger
+`MoveQueue`/`WheelSink`/`StopCondition`/`VelocityShaper` stack that was the
+ORIGINAL plan for how
+Motion would drive wheel actuation. That stack was superseded in practice
+by `Motion::Planner` (`planner/`, added 125–127) without ever being
+deleted — `Motion::Planner::update()` wrote `Types::RobotState::Wheel::
+cmdVelocity` directly from the start, `App::RobotLoop::cycle()` consumed
+it directly, and `MoveQueue` was never wired into either. Sprint 128
+ticket 014 confirmed zero callers and deleted `wheel_sink.h`,
+`move_queue.{h,cpp}`, `stop_condition.{h,cpp}`, `velocity_shaper.{h,cpp}`
+outright (~1,500 lines) along with their `motion_tests` ctest targets.
+**`planner/` is now the larger, live half of this tree** — see §2/§4
+below. The land-at-zero completion predicate's own empirical derivation
+(118/119/121) is preserved as dated history, not lost:
+[`docs/design/history/land-at-zero-margin-derivation.md`](../../docs/design/history/land-at-zero-margin-derivation.md).
+
+**Wheel control generations (128 ticket 015; superseded 130-005; generation
+2 deleted outright by 130-007).** Four generations of the wheel
+velocity-control law have existed in this codebase; this section tracks
+which of them an engineer debugging misbehaving wheels should suspect:
+1. The closed-loop wheel-velocity PID relocated here from
+   `src/firm/devices/velocity_pid.{h,cpp}` (125-003) — a full,
+   never-instantiated class (`App::Drive` never actually held an instance
+   by the time 122-002/125-002 finished reshaping `Drive` into a bare duty
+   sink). **DELETED outright** — `wheel_velocity_pid.{h,cpp}`, zero callers.
+2. `Motion::WheelPid`/`Planner::stageDuty()` (formerly
+   `planner/wheel_pid.{h,cpp}`, `Planner::stageDuty()` in
+   `planner/planner.cpp`) — a full per-wheel PID that ran every cycle (~21
+   evaluations/s) whose output `main.cpp` used to note was "computed every
+   tick and DISCARDED." Ticket 015 first **PARKED** it (removed
+   `stageDuty()`'s live-tick call site, keeping the class and its own ctest
+   tiers warm for a possible future duty-sink cutover). **DELETED outright
+   (130-007)**, reversing that PARK: generation 4 below is now the proven,
+   shipped law, so the parked stage has no future — `wheel_pid.{h,cpp}`,
+   `stageDuty()`, `dutyLeft_`/`dutyRight_` and their accessors,
+   `applyVelGains()`, and the stage's own ctest tiers (`wheel_pid_test.cpp`,
+   `planner_duty_scenarios_test.cpp`, `tests/duty_plant.h`) are all gone;
+   git preserves the history for any future duty-sink revisit. The `pid.*`
+   CONFIG wire keys these used to (silently) target were already repointed
+   onto generation 4 by ticket 005 — this deletion just removes the dead
+   destination they no longer reach.
+3. `Motion::WheelTrim` (`planner/wheel_trim.{h,cpp}`) — the velocity-domain
+   trim loop `Planner::update()` used to run every cycle, summed into
+   `Types::RobotState::Wheel::cmdVelocity` on top of the profiled command.
+   **DELETED outright (130-005, wheel-speed-controller-moves-into-
+   drive.md Phase 3)** — no redirect stub, no future caller; git preserves
+   the history. `Motion::Planner` sheds ALL wheel-actuation code as of this
+   ticket: `Planner::update()` now publishes `cmdVelocity` bit-for-bit as
+   the profiled command, always. This is a responsibility RELOCATION, not
+   a base-depends-on-motion violation — the code moved to generation 4,
+   below, which is `App::`-owned; `src/firm` still imports nothing from
+   `src/firm/motion` for this feature (sprint 130 Architecture Design Rationale
+   Decision 2).
+4. `App::Drive`'s unified wheel-speed controller (`src/firm/app/drive.{h,cpp}`,
+   130-004/130-005) — the CURRENT live law, and the only one actuating any
+   wheel today. Three-timescale: a calibrated conversion map (offline,
+   per-wheel/per-direction affine, unchanged from Drive's own prior
+   open-loop feedforward), a bounded slow-timescale bias trim (Stage C,
+   generation 3's velocity-domain closed-loop idea, relocated and
+   redesigned as bounded intercept adaptation rather than an unbounded
+   PI integral), and a small-authority fast PID (Stage B). Reached by
+   EVERY `cmdVelocity` writer alike — a WHEELS teleop command and a
+   planner Move both go through the exact same `Drive::tick()`, no
+   privileged or degraded path (drive.h's own header has the full
+   per-stage algorithm and parameter table).
+
+**Estimator roster (128 ticket 016,
+robot-state-pose-needs-exactly-one-writer.md).** Three names an engineer
+debugging "which pose is the robot's pose" might reach for; only two
+still exist:
+- **`Motion::Odometry`** (`odometry.{h,cpp}`) — the telemetry trip
+  odometer: encoder-only dead reckoning, and `Types::RobotState::pose`'s
+  ONE writer (`App::RobotLoop::publishPose()`, robot_loop.cpp). This is
+  the pose a host reading telemetry sees.
+- **`Motion::Planner`'s internal `PoseTracker`** (`planner/planner.cpp`,
+  the `pose_` member) — the planner's OWN working estimate, separately
+  dead-reckoned from Odometry's and optionally OTOS-heading-blended
+  (`limits_.headingOtosWeight`, fail-closed default 0.0) — the estimate
+  that actually drives the robot's own motion decisions. Never wired to
+  `RobotState::pose` (it used to write there too, ordering-dependent on
+  which of Odometry/Planner ran last a given cycle — that second write
+  was the exact bug ticket 016 closed); it does feed
+  `RobotState::estimate.body`/`estimate.wheelLeft`/`estimate.wheelRight`
+  every cycle (the ZOH-basis section below).
+- **`Motion::StateEstimator`** — DELETED (ticket 016), no replacement in
+  this tree. It lived at `state_estimator.{h,cpp}`: predict-to-now
+  wheel/body PEER estimates via ZOH extrapolation plus its own separate
+  v1 complementary OTOS blend, constructor-injected weights, wired into
+  `App::RobotLoop::cycle()`'s trailing kPace block every cycle
+  (`stateEstimator_.update(state_, now)`) since sprint 117 — but its
+  `update()` took `RobotState` by CONST reference and held its own
+  private peer basis, so it never actually wrote back into
+  `RobotState::estimate` (Planner did, and still does — see above); its
+  `wheelAt()`/`bodyAt()`/`whereAmI()` query surface had zero production
+  callers the whole time it existed (only its own test harnesses called
+  them). A per-cycle computation with no consumer, closed as dead work.
+  A future estimator rebuild is separate, tracked work — see
+  `clasi/issues/later/estimator-v2-otos-fusion-sim-first.md` — and starts
+  fresh from `PoseTracker`'s own math rather than reviving this class.
+
+**Historical/derivation record for the surviving leaves.** This file
+documents the CURRENT orientation of the whole tree (what's here, the
+boundary, the build). The original multi-sprint design derivation for
+`BodyKinematics` (moved from `src/firm/kinematics/`, ticket 122-001) is
+NOT re-derived here; it is kept, unchanged and still authoritative, in
+[`src/firm/kinematics/DESIGN.md`](../firm/kinematics/DESIGN.md), which
+redirects here for current orientation but retains the original
+math/rationale/tuning-history prose. The now-deleted `StopCondition`/
+`VelocityShaper`/`MoveQueue` stack's own pre-128 design history remains
+in [`src/firm/motion/DESIGN.md`](../firm/motion/DESIGN.md) (marked
+RETIRED there since 122, kept solely as a historical derivation record —
+math at a location the code no longer occupies) and
+[`src/firm/app/DESIGN.md`](../firm/app/DESIGN.md) (`MoveQueue`/pre-122
+history sections) — neither file is rewritten to remove that history;
+see each file's own header for the "why this stays" rationale.
 
 ## 2. Orientation
 
-One class, two methods:
-
-- **Constructor** — `StopCondition(kind, threshold, timeout, now,
-  pathLength, theta)`. Captures every baseline the comparison will need
-  at construction time; there is no separate `arm()`/`activate()` step. A
-  `Move`'s activation *is* this object's construction — the owning
-  `MoveQueue` constructs a fresh `StopCondition` each time a `Move`
-  activates and discards it when that `Move` ends.
-- **`tick(now, pathLength, theta)`** — the per-cycle comparison. Returns
-  one of three distinguishable `Outcome`s (`Continue`, `StopConditionMet`,
-  `TimedOut`) rather than a collapsed bool, because the caller needs to
-  tell the two "ended" cases apart to set `kFlagFaultMoveTimeout`
-  correctly on the wire.
-
-Three kinds, matching the wire's own `Move.stop` oneof in spirit (not in
-type — see §3): `Kind::Time`, `Kind::Distance`, `Kind::Angle`.
+| File / directory | Role |
+|---|---|
+| `body_kinematics.{h,cpp}` | `BodyKinematics` — stateless differential-drive twist/wheel-speed maps (`inverse`/`forward`) and curvature-preserving `saturate`. Moved verbatim from `src/firm/kinematics/` (122-001; that directory is retired, folded flat here rather than nested as `src/firm/motion/kinematics/`). The one permitted `src/firm` dependency: `#include "messages/common.h"` for the array-form overloads' `msg::BodyTwist3` parameter. Full derivation: [`src/firm/kinematics/DESIGN.md`](../firm/kinematics/DESIGN.md) and [`docs/kinematics-model.md`](../../docs/kinematics-model.md). |
+| `odometry.{h,cpp}` | `Motion::Odometry` — encoder-only dead-reckoning: integrates both wheels' position deltas through `BodyKinematics::forward()` into a world pose (`x`/`y`/`theta`) plus cumulative `pathLength()`. `integrate()` takes the caller's current wheel positions as plain float parameters — no `Devices::Motor&` held. `Types::RobotState::pose`'s ONE writer (128 ticket 016 — see "Estimator roster" in §1). OTOS sampling (`applyOtosSample()`) stays base-side (`src/firm/app/otos_sample.{h,cpp}`) since it needs `Devices::Otos&`/telemetry types, neither of which this tree may depend on. |
+| `state_estimator.{h,cpp}` | **Deleted (128 ticket 016).** Was: `Motion::StateEstimator`, predict-to-now wheel/body PEER state estimates via ZOH extrapolation plus a v1 complementary OTOS blend — a per-cycle computation with no consumer. See "Estimator roster" in §1 for the full accounting and what remains (`Odometry`, `Planner`'s own internal `PoseTracker`). |
+| `planner/` | **`Motion::Planner`** — the on-robot motion decider (125–128, superseding the deleted `Motion::MoveQueue`): its own STANDALONE CMake project (`planner/CMakeLists.txt`), not built by this directory's own `CMakeLists.txt`. Profile generation (`profile.{h,cpp}`), jerk-limited shaping (`shape.{h,cpp}`), wheel-command estimation (`estimation.{h,cpp}`), and the top-level `Planner` (`planner.{h,cpp}`) that ties them together and writes `Types::RobotState::Wheel::cmdVelocity` directly every cycle — no boundary interface, the blackboard field IS the boundary (128). The duty-stage closed loop (`wheel_pid.{h,cpp}`, PARKED from the live tick as of 128-015) is **DELETED outright (130-007)** — see "Wheel control generations" in §1. `wheel_trim.{h,cpp}` (the velocity-domain trim loop that used to be summed into `cmdVelocity` here) is **DELETED outright (130-005)** — `Motion::Planner` publishes the bare profiled command now; the wheel-speed controller lives entirely in `App::Drive` (`src/firm/app/drive.{h,cpp}`) — see "Wheel control generations" in §1. `capi.cpp` builds the `motionplanner` shared library, the ctypes surface `src/tests/bench/planner_harness.py` drives. Its own `tests/` directory holds seven ctest executables (`profile_test`, `shape_test`, `estimation_test`, `planner_scenarios_test`, `planner_noise_test`, `ratio_lock_test`, `pose_ownership_test` — 128-016's own regression guard for `Odometry` being `state.pose`'s sole writer; 130-007 removed `wheel_pid_test`/`planner_duty_scenarios_test` with the deleted duty stage), run via the `planner_tests` custom target. See §4 below. |
+| `CMakeLists.txt` | The standalone `motion_tests` build (Design Rationale Decision 4) for THIS directory's own remaining leaves (`body_kinematics`/`odometry`) — plain CMake, no `libfirmware_host`, no ctypes, no Python. Builds a static `motion` library from those two `.cpp` files (128-015 deleted a third, `wheel_velocity_pid.cpp` — zero instantiations; 128-016 deleted a fourth, `state_estimator.cpp` — see "Wheel control generations"/"Estimator roster" in §1). As of 128-014 there is no standalone (non-pytest) ctest coverage for either of them attached to this target yet — see the file's own comment and §4 below. Separate from, and does not depend on, `planner/`'s own CMake project. |
 
 ## 3. Constraints and Invariants
 
-- **Stateless comparison, no I2C, no globals, no heap, no owned
-  collaborators.** `tick()` is `const` — it mutates nothing. Every
-  reading it compares against (`now`, `pathLength`, `theta`) is a
-  parameter, never read from a held `Devices::Clock&`/`App::Odometry&`
-  reference. This is the whole reason the module is split out: it must
-  compile and behave identically under `HOST_BUILD` and on ARM with no
-  fakes or seams, and it must be constructible and testable with
-  hand-fed numbers alone.
-- **Zero dependency on `App::MoveQueue`, `App::Drive`, or any `msg::*`
-  wire type.** `Kind`/`Outcome` are this module's own enums, not aliases
-  of `msg::Move::StopKind` or any other generated type — `#include
-  "motion/stop_condition.h"` pulls in nothing from `messages/` or
-  `app/`. What happens once `tick()` reports the motion has ended
-  (advance the queue, ack `Move.id`, set the timeout fault flag) is
-  entirely `MoveQueue`'s job (ticket 005) — outside this module's
-  boundary.
-- **`theta()` is unwrapped; no modulo here.** `App::Odometry::theta()` is
-  verified unwrapped (`theta_ += headingDelta`, no modulo anywhere in
-  `odometry.cpp`) — the `Angle` kind diffs the caller's `theta` reading
-  against its own activation baseline directly (`std::fabs(theta -
-  activationTheta_)`). Adding wrap handling here would be solving a
-  problem `Odometry` doesn't have.
-- **Kind-specific outcome always takes precedence over timeout on a tied
-  cycle.** `tick()` checks the kind-specific comparison first; `TimedOut`
-  is only ever returned on a cycle where the kind-specific comparison did
-  NOT also fire. This is a deliberate, tested tie-break (§4), not an
-  incidental consequence of check ordering.
-- **Zero/negative threshold clamps to 0, uniformly across every kind and
-  timeout (sprint.md Architecture Open Question 1 — pinned here, not left
-  implicit).** See §4 for the mechanism and §6 for why a uniform rule was
-  chosen over a `Time`-specific carve-out.
+- **`src/firm/motion` imports NOTHING from `src/firm` except `messages/`
+  headers and `firm/types/`.** Grep-verifiable: `grep -rn '#include "'
+  src/firm/motion | grep -v 'messages/' | grep -v 'firm/types/'` shows no
+  other `src/firm` path (excluding `planner/`, which has its own,
+  narrower rule below). `body_kinematics.h`'s `#include
+  "messages/common.h"` is the one explicit, permitted exception in this
+  directory's own two remaining leaves (the array-form `BodyKinematics`
+  overloads take `msg::BodyTwist3`); `odometry.{h,cpp}` imports neither
+  `messages/` nor `firm/types/` at all (its API is plain floats).
+  `state_estimator.h`'s own former `#include "firm/types/robot_state.h"`
+  (sprint 124 architecture) died with the file (128 ticket 016).
+- **`planner/` has its OWN, narrower dependency rule**: exactly one
+  `src/firm` header, `types/robot_state.h` (`planner/CMakeLists.txt`'s
+  own include-root comment) — the planner's own former `types/` mirror
+  was deleted at the 2026-07-26 joint checkpoint in favor of depending on
+  the real `firm/types/robot_state.h` directly, the same dependency-free
+  floor `state_estimator.h` used to use (128 ticket 016: `planner/` is
+  now this file's only consumer).
+- **`Types::RobotState::Wheel::cmdVelocity` is THE base<->motion
+  actuation boundary** (128, superseding the deleted `Motion::WheelSink`
+  velocity-sink interface). No abstract interface, no concrete
+  implementation to hold — `Motion::Planner::update()` (or `App::Drive::
+  update()` for WHEELS teleop) writes the field directly;
+  `RobotLoop::cycle()` reads it directly. See `robot_state.h`'s own
+  `cmdVelocity` field comment for the full writer/consumer contract.
+- **No `Hal::*`, `Hardware::*`, `Platform::*`, `App::*`, or bus/timing
+  collaborator anywhere in this tree.** Every module takes plain data (floats, explicit `now`
+  timestamps, plain structs) as parameters — never a held
+  `Platform::Clock&`, `Hal::Motor&`, or telemetry-frame reference.
+  This is what makes every module here constructible and testable with
+  hand-fed numbers alone, identically under `HOST_BUILD`, on ARM, and in
+  the standalone `motion_tests`/`planner_tests` builds.
+- **Qualified `#include "motion/...h"` paths resolve unchanged** in every
+  `src/firm` caller (e.g. `src/firm/app/robot_loop.h`'s `#include
+  "motion/odometry.h"`/`#include "motion/planner/planner.h"`). Both the
+  ARM build (root
+  `CMakeLists.txt`) and the sim build (`src/firm/platform/host/CMakeLists.txt`) add
+  `src/` itself (the parent of both `src/firm` and `src/firm/motion`) as an
+  include root, so the directory literally being named `motion` at its
+  top-level location keeps every qualified include text valid with zero
+  call-site churn.
 
 ## 4. Design
 
-**Baseline capture.** The constructor precomputes two `[us]` deadlines
-rather than storing `now` and a separate `[ms]` threshold/timeout to
-convert on every `tick()` call — mirrors the deleted `App::Deadman::
-arm()`'s own shape exactly (`deadline_ = clock_.nowMicros() + delta`,
-`clock_.nowMicros() >= deadline_`):
+**Module relationship inside this tree.** `Odometry` calls
+`BodyKinematics::forward()` to fold encoder deltas into a world pose, and
+is `Types::RobotState::pose`'s ONE writer (`App::RobotLoop::
+publishPose()` reads `x()`/`y()`/`theta()` off it every cycle — 128
+ticket 016, "Estimator roster" in §1). `Motion::StateEstimator`, formerly
+a peer of `Odometry` here, is deleted (same ticket) — see §1 for the full
+accounting.
+`planner/` is entirely self-contained: it does not link against or
+depend on any of this directory's own three leaves (it has its own
+kinematics/shaping/estimation code, see `planner/CMakeLists.txt`) — the
+only thing tying `planner/` to the rest of this tree is that both halves
+write into the SAME `Types::RobotState` blackboard, from the base's own
+composition root -- `App::composeRobot()`/`App::RobotGraph`
+(`src/firm/app/boot_wiring.h`), the ONE function both `main.cpp` and
+`src/firm/platform/host/sim_harness.h` call (130-002, unify-sim-and-robot-composition-
+roots.md) -- never from one motion-library module calling into another
+across the `planner/` boundary.
 
-- `timeDeadlineUs_ = now + millisToMicros(clampPositive(threshold))` —
-  meaningful only when `kind == Kind::Time`.
-- `timeoutDeadlineUs_ = now + millisToMicros(clampPositive(timeout))` —
-  always meaningful, independent of kind.
+**The actuation boundary (`Types::RobotState::Wheel::cmdVelocity`).**
+Whichever subsystem currently owns motion — `Motion::Planner` for a Move,
+`App::Drive` for WHEELS teleop — writes this cycle's commanded wheel
+speed directly onto the shared blackboard; `RobotLoop::cycle()` reads it
+back and hands it to `App::Drive::tick()` for actuation. Exclusivity is
+enforced by ORDERING (exactly one of the two `update()` calls actually
+writes, per cycle — see `robot_loop.h`'s own doc comment), not by a
+locked/shared resource or an abstract interface. This SUPERSEDES the
+122-era `Motion::WheelSink` boundary interface (`setWheels()`/`stop()`),
+which was deleted in sprint 128 ticket 014 after being confirmed to have
+zero callers — `Motion::Planner::update()` wrote `cmdVelocity` directly
+from the moment it was integrated (125–127), never through `WheelSink`,
+and `RobotLoop::cycle()` never routed through it either.
 
-`Kind::Distance`/`Kind::Angle` instead store the clamped `threshold_` as
-a plain `[mm]`/`[rad]` float alongside the activation `pathLength`/`theta`
-readings (`activationPathLength_`/`activationTheta_`) — no unit
-conversion needed, since the caller's current readings arrive in the same
-units.
+**The `motion_tests` build (Design Rationale Decision 4), THIS
+directory's three leaves only.** A real CMake project at
+`src/firm/motion/CMakeLists.txt` — configure/build it standalone with `cmake
+-S src/firm/motion -B src/firm/motion/build && cmake --build src/firm/motion/build
+--target motion_tests`, or `ctest --output-on-failure` from an
+already-configured build directory. No Python process anywhere in that
+sequence — this is the whole point of the split (SUC-001): a fast,
+hardware- and Python-free iteration loop for motion-control logic.
+Sprint 128 ticket 014 deleted this target's three ctest executables
+(`motion_stop_condition_tests`/`motion_velocity_shaper_tests`/
+`motion_move_queue_chained_tests`) along with the `MoveQueue`-generation
+code they exercised; ticket 015 deleted a fourth leaf outright
+(`wheel_velocity_pid.{h,cpp}`, zero instantiations — see "Wheel control
+generations" in §1); ticket 016 deleted a fifth leaf outright
+(`state_estimator.{h,cpp}`, a per-cycle computation with no consumer —
+see "Estimator roster" in §1). `body_kinematics`/`odometry` are
+exercised today through the pytest ctypes harness under
+`src/tests/sim/unit/` (`app_odometry_harness.cpp`), not through this
+CMake project; `Odometry`'s pose-single-writer contract additionally has
+a dedicated regression guard, `pose_ownership_test`, in `planner/`'s own
+`planner_tests` suite (§2 above), since exercising it needs both
+`Odometry` and `Motion::Planner` in the same process.
+`motion_tests` currently runs `ctest` over zero registered tests (a
+valid, if trivial, green result) — SUC-001's own fast-iteration-loop
+contract for this tree remains live even though nothing in ticket 014's
+scope attaches new coverage to it; a future ticket adding standalone
+coverage for either remaining leaf has this target ready to attach to.
 
-**`tick()`'s comparison, in order:**
-
-1. Compute `stopConditionMet` via a `switch` on `kind_`: `now >=
-   timeDeadlineUs_` (`Time`), `std::fabs(pathLength -
-   activationPathLength_) >= threshold_` (`Distance`), or
-   `std::fabs(theta - activationTheta_) >= threshold_` (`Angle`).
-2. If `stopConditionMet`, return `Outcome::StopConditionMet` —
-   unconditionally, without even evaluating the timeout comparison's
-   result. This is the tie-break: kind-specific always wins.
-3. Otherwise, if `now >= timeoutDeadlineUs_`, return `Outcome::TimedOut`.
-4. Otherwise, return `Outcome::Continue`.
-
-**Zero/negative threshold mechanism.** `clampPositive(value)` is `(value
-> 0.0f) ? value : 0.0f` — the same `>0` rule for threshold and timeout
-both, with no per-kind special case. `NaN` comparisons are always false in
-IEEE 754, so `clampPositive(NaN)` also yields `0` (defense in depth,
-matching `Deadman::arm()`'s own NaN-safety posture for its `duration`
-parameter). Consequence, worked through the comparison above: a clamped-
-to-0 `Distance`/`Angle` threshold makes `std::fabs(delta) >= 0.0f`
-trivially true from the very first `tick()` call (a magnitude can never
-be negative); a clamped-to-0 `Time` threshold makes `timeDeadlineUs_ ==`
-the activation `now`, so `now >= timeDeadlineUs_` is already true at or
-after activation. All three kinds therefore fire `StopConditionMet` on
-the very first `tick()` call when given a non-positive threshold — the
-"deliberate one-cycle no-op" idiom sprint.md's Open Question 1 names,
-achieved uniformly rather than by treating `Time` differently from
-`Distance`/`Angle`. A clamped-to-0 `timeout` behaves the same way for
-`TimedOut`, subject to the same tie-break (§3) if the kind-specific
-condition is ALSO clamped to 0 that same construction.
+**The `planner/` build (its own standalone project).** `cmake -S
+src/firm/motion/planner -B src/firm/motion/planner/build && cmake --build
+src/firm/motion/planner/build --target planner_tests` builds every planner
+test executable and runs them via `ctest`, exiting nonzero on any
+failure. `motionplanner` (a `SHARED` library wrapping `capi.cpp`) is the
+ctypes surface `src/tests/bench/planner_harness.py` drives for
+bench-side planner exercising outside the full sim harness. See
+`planner/CMakeLists.txt`'s own header comment for the exact commands.
 
 ## 5. Interfaces
 
 ### Exposes
 
-- **`StopCondition(kind, threshold, timeout, now, pathLength, theta)`** —
-  constructor; captures every baseline. `kind`: `Motion::StopCondition::
-  Kind` (`Time`/`Distance`/`Angle`). `threshold`: `[ms]`/`[mm]`/`[rad]`
-  depending on `kind` — Move.stop's own wire units. `timeout`: `[ms]`,
-  the required safety backstop, independent of `kind`. `now`: `[us]`,
-  `Devices::Clock::nowMicros()`'s own unit. `pathLength`/`theta`:
-  `[mm]`/`[rad]`, the caller's `App::Odometry::pathLength()`/`theta()`
-  readings AT ACTIVATION.
-- **`tick(now, pathLength, theta)`** — the per-cycle comparison, `const`.
-  Same units as the constructor's baseline arguments; returns
-  `Motion::StopCondition::Outcome` (`Continue`/`StopConditionMet`/
-  `TimedOut`).
+- **`BodyKinematics::inverse()`/`forward()`/`saturate()`** (scalar and
+  `msg::BodyTwist3`/`wheels[2]` array-form overloads) — see
+  [`src/firm/kinematics/DESIGN.md`](../firm/kinematics/DESIGN.md) §5.
+- **`Motion::Odometry(trackWidth, initialLeftPosition,
+  initialRightPosition)` / `integrate(leftPosition, rightPosition)` /
+  `pathLength()` / `reset(x, y, heading)`** — see `odometry.h`'s own doc
+  comment for the current, exact contract. `Types::RobotState::pose`'s
+  ONE writer (128 ticket 016 — see "Estimator roster" in §1); `Motion::
+  StateEstimator`'s former `update()`/`wheelAt()`/`bodyAt()`/`whereAmI()`/
+  `wheelNow()`/`innovations()`/`setWeights()` surface is deleted, same
+  ticket, no replacement in this tree.
+- **`Motion::Planner::move(move, replace)` / `plannedStop(id)` /
+  `estop()` / `tick(state)` / `update(state)` / `active()` /
+  `shaperConfigured()` / `applyShaperLimits(...)`** — the live motion
+  decider; see `planner/planner.h`'s own doc comment for the current,
+  exact contract (this file does not re-derive it — `planner/` owns its
+  own interface documentation inline, no separate `planner/DESIGN.md`
+  exists as of this writing).
+- **`Types::RobotState::Wheel::cmdVelocity`** — the actuation boundary
+  itself; see §4 above and `robot_state.h`'s own field comment.
 
 ### Consumes
 
-Nothing — `stop_condition.h` includes only `<cstdint>`. Every reading it
-needs is a plain parameter the caller (eventually `App::MoveQueue`,
-ticket 005) supplies by reading its own `const Devices::Clock&` and
-`App::Odometry&` collaborators and passing the results in. `Motion::`
-has no `#include` of `app/`, `devices/`, or `messages/` anywhere in this
-directory.
+- **`messages/common.h`** (`msg::BodyTwist3`) — used only by
+  `body_kinematics.h`'s array-form overloads.
+- **`firm/types/robot_state.h`** — used by every `planner/` module that
+  touches `Types::RobotState` (`planner.cpp`'s own `update()`); no longer
+  used by anything directly in this directory (`state_estimator.h`, its
+  former consumer here, is deleted — 128 ticket 016).
+- **`src/tests/sim/plant/wheel_plant.{h,cpp}`** — reused, deterministic
+  physics scaffolding; not linked into this tree's own `motion` library,
+  only into pytest/ctypes harnesses that exercise it externally.
+- Nothing else. No `Devices::*`, `App::*`, `Config::*`, or wire-codec
+  dependency anywhere in this tree — see §3's invariants above.
 
 ## 6. Open Questions / Known Limitations
 
-- **Uniform clamp-to-zero vs. a `Time`-specific carve-out.** sprint.md's
-  Architecture Open Question 1 left room for `time` to need `>= 0` rather
-  than `> 0` "to allow a deliberate one-cycle no-op," distinct from
-  `distance`/`angle`'s recommended `> 0` rule. This module resolves that
-  by applying the SAME `>0, else clamp to 0` rule to every kind and to
-  `timeout`, rather than special-casing `Time` — the clamp-to-0 behavior
-  already produces exactly the "fires on the first `tick()` call" one-
-  cycle-no-op result the carve-out was trying to preserve, without a
-  second code path to keep in sync. If a future kind is added whose
-  "immediate" semantics don't fall out of a bare magnitude/deadline
-  comparison this cleanly, revisit whether the uniform rule still holds.
-- **No clock-monotonicity guard.** `tick()`/the constructor assume `now`
-  never decreases between calls (the same assumption every other
-  `Devices::Clock`-driven module in this tree makes — `Clock::
-  nowMicros()`'s own doc comment). A `now` that goes backward (not
-  possible with the real ARM clock or `TestSim::SimClock`, which never
-  self-rewinds) is out of scope here, same as it is for the deleted
-  `App::Deadman`.
-- **`MoveQueue`'s own construction cadence is out of this module's
-  boundary.** Whether `MoveQueue` constructs a `StopCondition` on the
-  stack, by value, or via some other storage strategy each time a `Move`
-  activates is ticket 005's decision entirely — this module only
-  documents that ITS OWN lifecycle is "one instance per activated Move,"
-  not how the owner stores that instance.
+- **`motion_tests` currently has zero attached ctest coverage** (see §4)
+  — a real gap for a future ticket, not a silent regression: the three
+  leaves it could cover are exercised via pytest/ctypes instead today.
+- **RESOLVED (130-004/130-005, stakeholder 2026-08-01): the wheels' one
+  true control law is `App::Drive`'s unified three-timescale controller**
+  (generation 4, "Wheel control generations" in §1) — not the duty stage,
+  not `WheelTrim`. `WheelTrim` is deleted outright (130-005); the duty
+  stage (`Motion::WheelPid`/`Planner::stageDuty()`, PARKED since 128-015)
+  is now ALSO deleted outright (130-007, sprint 130's own planner-honesty
+  pass), reversing the PARK now that generation 4 is the proven, shipped
+  law (sprint 130 Design Rationale).
+- **No `planner/DESIGN.md` exists yet.** `planner/` is documented inline
+  here (§2/§4/§5) rather than in its own co-located file; a future pass
+  consolidating this tree's documentation may choose to split it out,
+  matching the co-located-`DESIGN.md` convention every other directory in
+  this repo follows — not attempted by ticket 128-014, which is scoped to
+  reconciling this file with the current tree, not restructuring the doc
+  set further.
+- **Historical derivation for the retired generation stack lives in two
+  separate pre-128 documents**, not consolidated here (deliberate — see
+  §1's own note): [`src/firm/motion/DESIGN.md`](../firm/motion/DESIGN.md)
+  (StopCondition/VelocityShaper, RETIRED since 122) and
+  [`src/firm/app/DESIGN.md`](../firm/app/DESIGN.md) (MoveQueue, marked
+  there as pre-128 history), plus
+  [`docs/design/history/land-at-zero-margin-derivation.md`](../../docs/design/history/land-at-zero-margin-derivation.md)
+  for the land-at-zero completion predicate specifically. A future
+  `consolidate-architecture` pass may choose to fold all of it into this
+  file; not attempted by ticket 128-014, which is scoped to
+  reconciliation, not consolidation.
+
 
 ---
 
-# `Motion::VelocityShaper` (decel-into-the-goal campaign)
+## Appendix — where the retired derivation went
 
-## 1. Purpose
-
-`Motion::VelocityShaper` answers one question, every tick, for whichever
-axis (linear or angular) `App::MoveQueue` asks it about: **given where I
-am relative to the goal, how fast I'm going, and how hard I'm already
-accelerating, what speed should I command NEXT?** It is the direct
-follow-on to `StopCondition` above — `StopCondition` decides *when* a
-`Move` has ended; this decides how the commanded speed *approaches* that
-ending, so the actuation/momentum tail `StopCondition` firing exactly at
-threshold-crossing still incurs is smaller by the time it fires.
-Stakeholder directive #1: "a target velocity passed into some function
-that gives you the next maximum speed you can assign to the wheels,"
-speed dropping as the target is approached. Stakeholder directive #2
-(same day): "your velocity shaper is not jerk-limited" — the commanded
-acceleration itself needs its own rate limit, not just the commanded
-speed. Stakeholder directive #3 (same day, scope correction): "I
-literally just wanted acceleration slew rate limiting and velocity slew
-rate limiting" — not a Ruckig-style profile solver. This module is the
-result of all three: velocity slew-rate-limited, THEN accel slew-rate-
-limited on top, nothing more elaborate.
-
-## 2. Orientation
-
-One class, `VelocityShaper::next(cruiseSpeed, remaining, dt, aMax, aDecel,
-jMax)`, carrying two state fields across calls (`commandedSpeed_`,
-`commandedAccel_`). Two chained rate clamps and an integrator, in order:
-
-1. **Velocity clamp** (unchanged from this module's own very first pass):
-   approach `cruiseSpeed` by at most `aMax*dt`, then cap the result's
-   magnitude to the decel-taper ceiling `sqrt(2*aDecel*remaining)` — the
-   textbook "decelerate to land exactly at `remaining==0`" curve.
-2. **Accel clamp** (new): the velocity clamp's own result implies an
-   acceleration this tick; slew `commandedAccel_` toward that implied
-   accel by at most `jMax*dt`.
-3. **Integrate** `commandedSpeed_` from the just-slewed `commandedAccel_`.
-
-Both clamp inputs use `commandedSpeed_`/`remaining` adjusted by ONE
-algebraic margin term each (not a branch, not a phase — see
-`velocity_shaper.cpp`'s own comment for the exact one-line formulas):
-a "predicted speed" (`commandedSpeed_` plus the velocity-domain distance
-`commandedAccel_` will still cover if it decays to 0 under the jerk limit
-starting now) feeds the velocity-approach clamp instead of raw
-`commandedSpeed_`, and an "effective remaining" (`remaining` less the
-distance the jerk-limited decel-of-decel itself consumes) feeds the
-decel-taper ceiling instead of raw `remaining`. Both margins are the SAME
-`x^2/(2*rate)`-shaped one-line closed form, applied in a different domain
-each time — no lookahead solve, no separate phase/state machine. Without
-them, a naive two-clamp implementation measurably overshoots (a bare
-`test`-only build without either margin term drove `commandedSpeed_` from
-0 to 350 while chasing a `cruiseSpeed=300` target during this module's own
-in-tree unit tests, and reversed sign near a goal's own zero-crossing) —
-the margins are required for physical correctness, not optional polish.
-
-## 3. Constraints and Invariants
-
-- **Stateful, host-clean — the same "no I2C, no globals, no heap" shape
-  `StopCondition` established, minus statelessness.** Zero dependency on
-  `App::MoveQueue`, `Motion::StopCondition`, or any `msg::*` wire type.
-  State lives in the INSTANCE, not a static/global — `App::MoveQueue` owns
-  one `VelocityShaper` per axis (`shaperVX_`/`shaperOmega_`/
-  `shaperVLeft_`/`shaperVRight_`) so a chained/replaced Move's own ramp
-  continues smoothly (SUC-051 seamless hand-off).
-- **Unit-agnostic by construction.** The same class shapes a linear axis
-  (`mm/s`, `mm/s^2`, `mm/s^3`) and an angular axis (`rad/s`, `rad/s^2`,
-  `rad/s^3`) — the caller supplies matching units across every argument.
-- **`remaining = +infinity` disables the decel taper, not a special code
-  path.** `App::MoveQueue` passes `+infinity` for a `Kind::Time` Move —
-  the decel-taper ceiling never binds, so the velocity-approach clamp
-  alone governs the ramp-up. One code path; "no taper" is a parameter
-  outcome, not a branch.
-- **`reset()`/`syncTo(speed)`** — explicit state-management entry points
-  `App::MoveQueue` calls at the moments raw floats used to just get
-  reassigned: `reset()` zeroes BOTH fields (a genuine stop); `syncTo(speed)`
-  sets `commandedSpeed_` and zeroes `commandedAccel_` (shaping disabled on
-  this axis).
-- **Never the terminal authority.** `VelocityShaper` never decides a
-  `Move` has ended — that stays `StopCondition`'s job exclusively.
-
-## 4. Design
-
-See `velocity_shaper.h`'s own doc comment for the full per-parameter
-contract and `velocity_shaper.cpp`'s own comment for the two-clamp
-derivation and the two one-line margin terms. `App::MoveQueue`'s own
-`shapeAndStage()` (`move_queue.cpp`) is the ONE caller — see that file's
-own doc comment for the per-`Move`-kind axis-selection policy.
-
-**Chain-advance leg hand-off contract (119-002, VERIFIED against shipped
-`move_queue.cpp` — the planning-time draft's every claim below was
-re-checked line-by-line against the current tree, post-118/post-119-001,
-and holds).** Moved out of §6 Open Questions: what the carried shaper
-state SHOULD do at a `Move`-completion boundary is a specified contract,
-not a tuned-around limitation.
-
-- **The axis matching the ending `Move`'s own stop-condition kind is
-  ALWAYS hard-reset to `(commandedSpeed=0, commandedAccel=0)` at the
-  completion boundary — chain-advance or drain, unconditionally.**
-  `Kind::Angle` resets `shaperOmega_`; `Kind::Distance` resets
-  `shaperVX_` (`move_queue.cpp`, the unconditional reset ahead of the
-  chain-advance/drain branch). This is NOT the "shaped decay from
-  carry-over" this section's own Open Questions entry used to describe —
-  118 ticket 003's resolution explicitly tested a conditional variant
-  (skip the reset on chain-advance, let the next Move's own accel-ramp
-  decay the residual naturally) against the 40ms closure gate and found
-  no improvement (best worst-case 2.932°, itself just as fragile) —
-  reverted, kept unconditional. **Correction to this issue's own
-  proposed-fix text**, which speculated "current: shaped decay from
-  carry-over" — that was accurate pre-118; the shipped, tested, and kept
-  behavior is unconditional reset. Rationale: a `Move` can end with a
-  nonzero residual `commandedSpeed_` (both the threshold backstop and the
-  land-at-zero predicate tolerate an imperfect-zero taper); without the
-  reset, that residual leaks into whichever LATER `Move` next uses the
-  SAME axis and corrupts ITS land-at-zero `remaining` computation with a
-  value describing the wrong `Move`. **Verification note (119-002): this
-  unconditional reset has a real cost the original issue/draft did not
-  name — it fires even when the INCOMING chained `Move` commands the
-  SAME axis (e.g. two consecutive `Distance` legs at the same `v_max`),
-  defeating SUC-051 continuity for exactly that compatible-boundary case
-  instead of only the alternating-axis case this paragraph otherwise
-  discusses.** Reproduced against
-  `test_two_compatible_distance_legs_carry_velocity_through_the_boundary_at_tour_level`
-  (`src/tests/testgui/test_tour_closure_gate.py`): a genuine ~149→24mm/s
-  dip-and-reramp at a same-axis `Distance`→`Distance` boundary, latent
-  since 118 ticket 003 (whose own re-sweep only exercised TOUR_1/TOUR_2,
-  which always alternate axes) and only now visible because 119 ticket
-  001 made the shaper-limits push default-on for this test's own
-  `SimLoop` session (previously silently off, so no taper/reset ever
-  ran). Fixing the reset condition is a real, separate change — out of
-  this ticket's own scope (it would need its own re-sweep of
-  `kStoppingMarginFactorChain`/`kDiscretizationCyclesChain` against the
-  already-narrow chain-margin pocket) — filed as
-  `chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md`;
-  the boundary test's own `xfail` is re-pointed at it (§ below).
-- **The axis NOT matching the ending `Move`'s stop-condition kind is
-  UNTOUCHED at a chain-advance boundary — SUC-051's own continuity
-  property, unchanged.** If the next `Move` commands that axis, it ramps
-  from wherever `commandedSpeed()` already was — genuine continuity, not
-  a from-rest restart. Only a full drain (`pendingCount() == 0`) resets
-  ALL FOUR shapers (`shaperVX_`/`shaperOmega_`/`shaperVLeft_`/
-  `shaperVRight_`) to `(0, 0)`, since the robot has genuinely stopped and
-  the NEXT unrelated `Move` (whenever it activates) must not inherit a
-  stale nonzero pair from a taper that never finished (e.g. a
-  timeout-backstop ending mid-taper).
-- **Sign reversal does not survive a boundary, by construction — not a
-  separate case to specify.** Because the completing axis's shaper is
-  unconditionally reset to `(0, 0)` (above), there is no carried nonzero
-  speed for a reversal to "survive" in the first place; the shaper-level
-  question the original issue posed is subsumed by the unconditional-
-  reset rule. The remaining, genuinely separate question was the
-  HARDWARE-level asymmetry: `NezhaMotor`'s 100ms `reversal_dwell_ms`
-  arms on the reversing wheel only at a D→RT boundary (asymmetric by
-  construction, `nezha_motor.cpp`) — 118 did not touch this.
-  **Decision (119-002): ACCEPT the asymmetric per-wheel dwell — do not
-  symmetrize.** Measured on the current tree (`data/robots/
-  tovez_nocal.json`, ideal chip — no injected sensor error, isolating
-  the mechanism itself — 90° turns, `test_tour_closure_gate.py`'s own
-  `_run_tour_capture()`/sim-ground-truth reading, deterministic
-  stepping): a genuine `D(300mm@150mm/s)`→`RT(90°)` chain-advance turn
-  (crossing the reversal dwell on one wheel, the exact boundary this
-  bullet is about) measured **-1.18° error** — no worse than an isolated
-  (from-rest) chain-advance 90° turn measured under the SAME margin
-  regime (`+2.90°` first turn / `+1.60°` once warmed up, two consecutive
-  turns with no preceding `Distance` leg) — the dwell asymmetry itself
-  does not measurably cost extra heading accuracy in a controlled,
-  same-regime comparison (this supersedes the pre-execution turn-
-  execution review's own "0.3° vs 1.4-1.7°" isolated/tour figures,
-  `docs/code_review/2026-07-22-turn-execution-review.md` D5, which mixed
-  the drain/ack-instant-vs-settle read convention across its two
-  numbers rather than holding the completion regime fixed — this
-  ticket's own comparison holds pendingCount()>0 (chain margin) fixed on
-  both sides instead). Both figures also stay comfortably inside the
-  project's own already-shipped, stakeholder-approved acceptance bands
-  that already cover exactly this isolated-vs-tour-embedded distinction:
-  `MANAGED_ANGLE_90_ABS_MARGIN_DEG=3.0°` (isolated single-preset turn,
-  `test_gui_button_acceptance.py`, real GUI-driven) vs
-  `TOUR_TURN_ERROR_MAX_DEG=5.0°` (chain-advance/tour-embedded turn,
-  worst of 13 real-GUI-driven runs measured 3.86°, that file's own
-  2026-07-22 sweep) — that file's own comment attributes the width of
-  THAT gap primarily to real background-tick-thread scheduling jitter at
-  the ack-instant read, not to the dwell mechanism itself. Symmetric
-  dwell (holding BOTH wheels at commanded-zero through the reversal
-  window, not just the reversing one) would cost real per-cycle margin
-  on the axis that does not need to reverse, for no demonstrated
-  accuracy benefit — rejected.
-- **vExit design reference
-  (`simple-velocity-control-acceleration-limited-shaper.md`) — adopted,
-  in the sense the shipped mechanism already matches its "0 on reversal
-  or empty queue" half exactly** (the unconditional completing-axis reset
-  above IS vExit=0, applied unconditionally rather than only on reversal/
-  empty-queue, which is a strictly more conservative special case of the
-  same rule). Its "ramp from next move's cruise" half describes the
-  SURVIVING axis's SUC-051 continuity, not the completing axis. No
-  separate vExit mechanism needs implementing — the existing reset +
-  continuity split already realizes it.
-- **Axis-drop coast at chain boundaries — the mechanism
-  `chain-advance-completion-margin-narrow-pocket.md` (filed 2026-07-23
-  from 118 ticket 003's resolution) traces the chain-advance completion
-  margin's narrow accuracy pocket to.** Tours alternate Distance/Angle
-  legs, so a chain-advance turn's own axis (`omega`, say) is exactly the
-  axis the NEXT `Move` does not command — it is the completing-and-reset
-  axis above, not a surviving one. Completion is scored at the ack
-  instant (the cycle `landAtZero()`/the threshold fires), but the plant's
-  own physical coast on that now-reset-to-zero-command axis is only
-  PARTIALLY visible by that instant — the reset zeroes the COMMAND, not
-  the plant's own residual angular/linear velocity, which continues to
-  decay physically for a few more cycles the ack-instant score never
-  observes. This is the concrete "axis-drop coast" this contract names:
-  the gap between "commanded axis reset to zero" (this cycle) and
-  "plant physically at rest on that axis" (a few cycles later, unscored
-  by the chain-advance ack-instant metric). `kStoppingMarginFactorChain`/
-  `kDiscretizationCyclesChain` (`move_queue.cpp`) are the swept
-  compensations for exactly this gap — this paragraph specifies WHY they
-  differ from the final-move case (which scores against a
-  settle-consistent, not ack-instant, completion), not a new mechanism to
-  implement. Closing the narrow pocket itself (rather than just naming
-  its mechanism) is out of this ticket's own scope — see the pool issue's
-  own "not urgent... future sprint" disposition.
-
-## 5. Interfaces
-
-### Exposes
-
-- **`VelocityShaper::next(cruiseSpeed, remaining, dt, aMax, aDecel,
-  jMax)`** — instance method, mutates `commandedSpeed_`/`commandedAccel_`
-  and returns the new `commandedSpeed_`. All arguments and the return
-  value are plain `float`s in the caller's own chosen unit pair.
-- **`VelocityShaper::reset()`**, **`VelocityShaper::syncTo(speed)`** —
-  explicit state transitions, see §3 above.
-- **`VelocityShaper::commandedSpeed()`**, **`VelocityShaper::
-  commandedAccel()`** — const accessors `App::MoveQueue::activate()` reads
-  when staging a chained Move's continuation point.
-
-### Consumes
-
-Nothing — `velocity_shaper.h` includes no project header beyond what
-correctness needs (none). `App::MoveQueue` is the sole caller, owning one
-instance per axis and supplying `aMax`/`aDecel`/`jMax` (or their angular
-siblings `alphaMax`/`alphaDecel`/`yawJerkMax`) from its own live-tunable
-`ShaperLimits` (`move_queue.h`, sourced fail-closed from
-`Config::ShaperBootConfig` at boot, `config/boot_config.h`) and
-`remaining`/`dt` computed from the SAME this-cycle `pathLength`/`theta`
-`MoveQueue`'s own stop-condition comparison already reads — never a
-second, independent computation (118 ticket 004: the former predicted-
-pose anticipation this comment used to describe is deleted; see
-`move_queue.h`'s own tick() doc comment for the land-at-zero completion
-predicate that replaced it).
-
-## 6. Open Questions / Known Limitations
-
-- **Not a full time-optimal trajectory planner, deliberately.** Two
-  chained rate clamps and an integrator, not a Ruckig-style seven-segment
-  profile planned ahead of time with a known arrival time — no lookahead
-  across a multi-leg path, no simultaneous multi-axis co-limiting (linear
-  and angular shape independently). This is a stakeholder-set boundary,
-  not an oversight — see `docs/protocol-v4.md` §5.2's own "what it is
-  not" paragraph.
-- ~~Tour-embedded turns don't reach the isolated-turn sweep's own
-  optimum~~ — **RESOLVED, moved to §4 Design (119-002, "Chain-advance leg
-  hand-off contract")**: what the carried/reset shaper state does at a
-  completion boundary is now a specified, verified contract (unconditional
-  completing-axis reset, untouched surviving axis, vExit-equivalent
-  reversal handling, named axis-drop-coast mechanism for the
-  chain-advance margin's own narrow pocket). The D→RT `reversal_dwell_ms`
-  hardware asymmetry's accept-vs-symmetrize decision is ALSO resolved
-  there — accepted, measured (-1.18° for a genuine D→RT chain-advance
-  turn, no worse than an isolated chain-advance turn under the same
-  margin regime) and within the project's already-shipped tour-turn
-  acceptance bands. Nothing left open in this section for the hand-off
-  contract; 119-002's own verification pass DID surface one adjacent,
-  genuinely open item the original draft did not name — the same
-  unconditional reset also defeats carried-velocity continuity for a
-  same-axis COMPATIBLE chain boundary (e.g. two consecutive `Distance`
-  legs), not just the alternating-axis case this contract otherwise
-  covers — filed as
-  `chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md`,
-  out of this ticket's own scope (see §4's own note on it).
-- **Hardware residual.** A 2026-07-22 hardware bench session (tovez on the
-  stand) measured a turn residual in roughly the same `0-8deg` band the
-  earlier accel-only stage measured — the real plant's own coast-down
-  dynamics, motor response, and I2C bus timing are not fully captured by
-  the sim's idealized model. See
-  `clasi/issues/angle-stop-overshoot-61-73-percent-on-hardware.md`'s own
-  "Follow-on fix" sections for the full numbers.
+`src/firm/motion/DESIGN.md` previously held a 491-line historical
+derivation for `Motion::StopCondition` and `Motion::VelocityShaper`, kept
+after sprint 122 relocated the code and after sprint 128 ticket 014
+deleted both classes outright as dead (zero callers). It is still worth
+keeping — the math is correct and was hard-won — but it documents code
+that no longer exists, so it is no longer this subsystem's live design
+doc. It now lives at
+[`docs/design/history/motion-stop-condition-velocity-shaper.md`](../../../docs/design/history/motion-stop-condition-velocity-shaper.md).

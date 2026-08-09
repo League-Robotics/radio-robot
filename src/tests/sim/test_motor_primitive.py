@@ -216,7 +216,7 @@ def test_heading_encoder_and_otos_match_truth():
     assert abs(h["pose_h"] - h["true_h"]) < 1.0, h
     # OTOS heading is hardware-mounted with its sign INVERTED relative to
     # ground truth/encoder heading (135-008; see otos_plant.h's header
-    # comment and src/motion/planner/planner.cpp:513's own negation).
+    # comment and src/firm/motion/planner/planner.cpp:513's own negation).
     assert abs(h["otos_h"] - (-h["true_h"])) < 1.0, h
 
 

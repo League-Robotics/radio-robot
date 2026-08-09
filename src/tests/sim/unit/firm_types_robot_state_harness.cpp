@@ -5,7 +5,7 @@
 // This harness's OWN include list is the compile-level dependency-free
 // assertion: robot_state.h, plus only host-standard-library headers needed
 // to exercise it (<cstdint>/<cstdio>/<cstring>/<type_traits>) -- no
-// messages/, no app/, no config/, nothing else from src/firm or src/motion.
+// messages/, no app/, no config/, nothing else from src/firm or src/firm/motion.
 // test_firm_types_robot_state.py compiles this file with `-I <repo>/src`
 // ONLY (matching robot_state.h's own `#include "firm/types/robot_state.h"`-
 // style qualified include convention) -- if robot_state.h ever grew a

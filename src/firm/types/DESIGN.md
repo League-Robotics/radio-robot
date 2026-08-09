@@ -24,7 +24,7 @@ is the sole cross-subsystem AND cross-tree data contract (sprint 124
 architecture Step 3; `clasi/issues/robot-state-blackboard-one-struct-for-
 all-shared-state-and-telemetry.md`). It gives `types/` a second, deliberate
 purpose alongside version plumbing: a shared floor `src/firm` and
-`src/motion` both stand on — its own `Wheel::cmdVelocity` field is THE
+`src/firm/motion` both stand on — its own `Wheel::cmdVelocity` field is THE
 actuation boundary in its own right (sprint 128, superseding the deleted
 `Motion::WheelSink` interface). Three roles, one struct:
 the blackboard every subsystem publishes its own per-cycle section to and
@@ -45,10 +45,10 @@ velocity + `basisTime` + `valid`, so "predict to time t" is a pure function
 over the struct alone), `Command`, `Health`. See the header's own file
 comment and each section's own doc comment for the field-by-field
 writer/rationale — not duplicated here, to avoid the two drifting.
-`Motion::StateEstimator` (`src/motion/state_estimator.h`) is the first real
+`Motion::StateEstimator` (`src/firm/motion/state_estimator.h`) is the first real
 cross-tree consumer: its own `Input` type is now a type alias onto
 `Types::RobotState` rather than a private near-duplicate struct (124-007;
-see `src/motion/DESIGN.md` §3 for the crossing's own rationale).
+see `src/firm/motion/DESIGN.md` §3 for the crossing's own rationale).
 
 `protocol.h` is a single header, included by nothing in the live tree (see
 §6). It declares, in order: six `PROTO_TAG_*` reply-tag string constants,
@@ -71,8 +71,8 @@ key=value token struct. `version_generated.h` is emitted by
   that literal grep and by compiling the header's own harness
   (`firm_types_robot_state_harness.cpp`) against a narrow `-I <repo>/src`
   path with no other `src/firm` subtree on it. This is what lets
-  `src/motion` (a sibling tree that must build independently of `src/firm`,
-  per §3's own rule in `src/motion/DESIGN.md`) include this one header.
+  `src/firm/motion` (a sibling tree that must build independently of `src/firm`,
+  per §3's own rule in `src/firm/motion/DESIGN.md`) include this one header.
 - **`Types::RobotState` is trivially copyable.** Plain scalar/bool/nested-
   plain-struct fields only — no pointers, no heap, no virtuals, no
   user-defined constructors/destructors. Asserted directly:
@@ -199,7 +199,7 @@ it likewise has no control flow of its own to describe here — its
 - **`Types::RobotState` (`robot_state.h`):** the blackboard struct itself
   — see §2/§3 above for its section list and constraints. One current
   consumer: `Motion::StateEstimator::update(const Input&, uint32_t now)`
-  (`src/motion/state_estimator.h`), where `Input` is a type alias onto
+  (`src/firm/motion/state_estimator.h`), where `Input` is a type alias onto
   this struct. `App::RobotLoop` builds a cycle-local instance
   field-by-field today (ticket 008/009 wire a persistent, `RobotLoop`-
   owned instance through the rest of the cycle).

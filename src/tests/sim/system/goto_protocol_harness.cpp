@@ -54,7 +54,7 @@
 // sim_plant.cpp, wire_test_codec.cpp, the plant sources, and the same full
 // HOST_BUILD Devices/App/messages/kinematics/motion dependency graph every
 // sibling test_*.py in this directory already compiles (now including
-// src/motion/navigator/{arc_solver,navigator}.cpp, landed by ticket 004).
+// src/firm/motion/navigator/{arc_solver,navigator}.cpp, landed by ticket 004).
 #include <cmath>
 #include <cstdint>
 #include <cstdio>

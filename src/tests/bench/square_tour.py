@@ -1192,7 +1192,7 @@ def reportSegmentFixes(tour: "Tour", log: dict) -> None:
 #   steady-state value, omega = CRUISE / r, without the arc solver's own
 #   curvature slew limit itself rounding the fillet's entry off the
 #   intended tangent-circle shape. Single-arc solving moved firmware-side
-#   135-007 (`Motion::ArcSolver`, `src/motion/navigator/arc_solver.h`) --
+#   135-007 (`Motion::ArcSolver`, `src/firm/motion/navigator/arc_solver.h`) --
 #   this floor now mirrors THAT solver's own default budget
 #   (`kArcSolverMaxWheelStepDefault = 125.0 mm/s per 50 ms internal solve`,
 #   ctest-locked by `arc_solver_test.cpp`'s `testMaxWheelStepDerivation()`)
@@ -1240,7 +1240,7 @@ def reportSegmentFixes(tour: "Tour", log: dict) -> None:
 TARGET_CORNER_RADIUS = 90.0  # [mm] preferred corner radius; see derivation above
 
 # Manually-synced mirror of Motion::kArcSolverMaxWheelStepDefault
-# (src/motion/navigator/arc_solver.h, sprint 135 ticket 002) -- the arc
+# (src/firm/motion/navigator/arc_solver.h, sprint 135 ticket 002) -- the arc
 # solver's own curvature-slew-clamp budget, ctest-locked at 125.0 by
 # arc_solver_test.cpp's testMaxWheelStepDerivation(). No shared header
 # exists to import this from a Python bench script; if arc_solver.h's own

@@ -10,10 +10,10 @@ root: ../../../docs/design/design.md
 
 > **RETIRED — code relocated (sprint 122 ticket 001, 2026-07-24, finalized
 > ticket 122-004).** `BodyKinematics` has been MOVED to
-> `src/motion/body_kinematics.{h,cpp}` — a new SIBLING tree of `src/firm`
+> `src/firm/motion/body_kinematics.{h,cpp}` — a new SIBLING tree of `src/firm`
 > (sprint 122's two-layer base/motion split; see that sprint's
 > `sprint.md`), flat (no nested `kinematics/` subdirectory under
-> `src/motion`). This directory (`src/firm/kinematics/`) permanently
+> `src/firm/motion`). This directory (`src/firm/kinematics/`) permanently
 > holds only this DESIGN.md, no source — it remains a required,
 > one-level-down child of the validated root `src/firm`
 > (`.clasi/config.yaml`'s `sources:`) purely so `close_sprint`'s design
@@ -23,7 +23,7 @@ root: ../../../docs/design/design.md
 > `src/firm/app/DESIGN.md`) link to it by this path. **For current
 > orientation, the module list, the boundary contract, and the
 > `motion_tests` build, see
-> [`src/motion/DESIGN.md`](../../motion/DESIGN.md)** — this file is the
+> [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md)** — this file is the
 > historical derivation record only; treat every "Orientation"/
 > "Interfaces" section below as accurate MATH at a location this
 > subsystem no longer occupies.

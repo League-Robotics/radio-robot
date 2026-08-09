@@ -9,7 +9,7 @@ already consumes it directly; see SUC-002 / sprint 128's Decision 1).
 This document exists solely to preserve the empirical/analytical work
 behind the three `kStoppingMarginFactor*` constants and
 `kDiscretizationCyclesChain` — the "land-at-zero completion predicate" —
-that lived in `src/motion/move_queue.cpp`'s anonymous namespace before
+that lived in `src/firm/motion/move_queue.cpp`'s anonymous namespace before
 deletion. **None of this code is live.** It is not consumed by
 `Motion::Planner` or any other current component; it is kept here purely
 as a record of the tuning methodology and the sweep data, in case a

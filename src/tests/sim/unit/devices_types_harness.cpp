@@ -49,7 +49,7 @@ CHECK_TRIVIAL(Neutral);
 // --- Config types (device_config.h) ---
 // 125-003: Opt<T>/Gains are DELETED (the velocity PID they fed for
 // Motor::applyGains() relocated to a motion-local wheel-velocity PID class
-// -- since deleted outright by 128-015, see src/motion/DESIGN.md's "wheel
+// -- since deleted outright by 128-015, see src/firm/motion/DESIGN.md's "wheel
 // control generations" note -- which declared its own motion-local Gains;
 // see device_config.h's own header).
 CHECK_TRIVIAL(MotorConfig);

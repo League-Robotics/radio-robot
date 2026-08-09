@@ -112,8 +112,8 @@ reproduces (below).
 through ctypes against a simulated plant, logs commanded AND measured per
 tick, and closes at 19.70 mm against hardware's 18.6 mm. Its shared library
 was stale (missing `plannerEstop`); rebuild with
-`cmake -S src/motion/planner -B src/motion/planner/build && cmake --build
-src/motion/planner/build`.
+`cmake -S src/firm/motion/planner -B src/firm/motion/planner/build && cmake --build
+src/firm/motion/planner/build`.
 
 Sweeping `decelPlanFraction` there (deterministic, one run each):
 

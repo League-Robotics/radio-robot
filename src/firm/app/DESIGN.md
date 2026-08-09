@@ -36,7 +36,7 @@ self-bounding by construction, so there is no separate staleness gate),
 `Motion::Odometry` (dead reckoning, plus cumulative path length), and
 `Motion::StateEstimator` (117 — predict-to-now wheel/body peer estimates,
 zero-order-hold extrapolation, v1 complementary blend against OTOS).
-These live in `src/motion/` (a sibling tree, not a child of `app/`) —
+These live in `src/firm/motion/` (a sibling tree, not a child of `app/`) —
 `RobotLoop` holds them by reference exactly like its own base-side
 modules (constructed at the composition root, `main.cpp`/`SimHarness`)
 and calls into them at specific points in its own schedule, but they are
@@ -47,7 +47,7 @@ boundary interface; see §5's Drive bullet and
 `RobotLoop`'s own call ordering. See this file's own "122
 (motion-library extraction)"/"125–128" notes at the end of this section
 for the full before/after, and
-[`src/motion/DESIGN.md`](../../motion/DESIGN.md) for their current
+[`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) for their current
 orientation and standalone test builds.
 
 This is the seam that owns the robot's *timing* — every I2C
@@ -391,23 +391,23 @@ first draft hit and fixed) are recorded in ticket 002's own file.
 **122 (motion-library extraction — landed, 2026-07-24, reconciled ticket
 004).** `App::MoveQueue`/`App::Odometry`/`App::StateEstimator` — all
 three described above and throughout this file's history as `app/`'s own
-modules through sprint 121 — MOVE to `src/motion/` (a new sibling tree of
+modules through sprint 121 — MOVE to `src/firm/motion/` (a new sibling tree of
 `src/firm`, not a child of it) and are renamed `Motion::MoveQueue`/
 `Motion::Odometry`/`Motion::StateEstimator`. `App::Drive` narrows to the
 wheel-target sink only (`setWheels()`/`stop()`/`tick()`), losing
 `setTwist()`/its `BodyKinematics` dependency to `Motion::MoveQueue`,
 which now calls `BodyKinematics::inverse()` itself and hands already-
 decomposed wheel targets down through a new boundary interface,
-`Motion::WheelSink` (`src/motion/wheel_sink.h`) — `Drive` implements it;
+`Motion::WheelSink` (`src/firm/motion/wheel_sink.h`) — `Drive` implements it;
 nothing else in `app/` does. `BodyKinematics` itself moves out of
-`src/firm/kinematics/` to `src/motion/body_kinematics.{h,cpp}` (flat, no
-nested `kinematics/` under `src/motion`) for the same reason. Every
+`src/firm/kinematics/` to `src/firm/motion/body_kinematics.{h,cpp}` (flat, no
+nested `kinematics/` under `src/firm/motion`) for the same reason. Every
 mention of `App::MoveQueue`/`App::Odometry`/`App::StateEstimator`,
 `app/move_queue.*`/`app/odometry.*`/`app/state_estimator.*`, or
 `src/firm/motion/`/`src/firm/kinematics/` earlier in this file's own
 history (115-121) is an accurate PRE-122 record of where that code lived
 and what it was called AT THE TIME — not restated or renamed throughout
-this document — see [`src/motion/DESIGN.md`](../../motion/DESIGN.md) for
+this document — see [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) for
 the current orientation, module list, and boundary contract, and
 `docs/design/design.md` §2/§5 for the two-layer split at the system
 level. Zero behavior change (this was a pure mechanical move, sprint
@@ -530,14 +530,14 @@ size, `kMaxCommandPrefixBytes` itself derived at compile time from
 
 **125–127 (velocity-PID relocation + `Motion::Planner` integration) —
 landed.** 125-003 relocates the closed-loop velocity control law out of
-`Devices::NezhaMotor` into `src/motion` as a standalone class — `App::Drive`
+`Devices::NezhaMotor` into `src/firm/motion` as a standalone class — `App::Drive`
 held interim instances for its own WHEELS-teleop path for one sprint, until
 122-002/125-002 reshaped `Drive` into a bare duty sink with no controller of
 its own; the relocated class was left with zero instantiations and 128-015
-deleted it outright (see `src/motion/DESIGN.md`'s "wheel control
+deleted it outright (see `src/firm/motion/DESIGN.md`'s "wheel control
 generations" note). `velocity_pid.{h,cpp}` (`src/firm/devices/`) is
 deleted. Separately,
-`Motion::Planner` (`src/motion/planner/`) becomes the on-robot motion
+`Motion::Planner` (`src/firm/motion/planner/`) becomes the on-robot motion
 decider for `Move` dispatch, replacing `Motion::MoveQueue`:
 `RobotLoop` holds a `Motion::Planner&` in place of the `Motion::
 MoveQueue&` slot described throughout this file's own pre-125 history
@@ -567,7 +567,7 @@ file's own "Both `MoveQueue::landAtZero()`..."/"118 ticket 004"/
 "119-005"/"121-003" paragraphs above, is additionally preserved verbatim
 as dated design history:
 [`docs/design/history/land-at-zero-margin-derivation.md`](../../../docs/design/history/land-at-zero-margin-derivation.md).
-See [`src/motion/DESIGN.md`](../../motion/DESIGN.md) for the motion
+See [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) for the motion
 library's own current orientation and `robot_state.h`'s own `cmdVelocity`
 field comment for the boundary's current, exact writer/consumer
 contract.
@@ -1283,8 +1283,8 @@ called with real elapsed time between calls).
   `Devices::Motor` and `Types::RobotState`. See `drive.h`'s own file
   header for the exact current contract.
 - **`Motion::Odometry::integrate(leftPosition, rightPosition)`/
-  `pathLength()`:** (122-002, MOVED to `src/motion/` — see
-  [`src/motion/DESIGN.md`](../../motion/DESIGN.md) for the current,
+  `pathLength()`:** (122-002, MOVED to `src/firm/motion/` — see
+  [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) for the current,
   exact contract; no longer holds a `Devices::Motor&`, takes the
   caller's current wheel positions as plain float parameters instead.)
   `integrate()` — call once per cycle, after both motors' own `tick()`
@@ -1310,7 +1310,7 @@ called with real elapsed time between calls).
   `tick(state)`/`update(state)`/`active()`/`shaperConfigured()`:** (125–128
   — the live motion decider, superseding `Motion::MoveQueue`, deleted as
   dead code in sprint 128 ticket 014 after being confirmed to have zero
-  callers; see [`src/motion/DESIGN.md`](../../motion/DESIGN.md) §2/§4/§5
+  callers; see [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) §2/§4/§5
   and `planner/planner.h`'s own doc comment for the current, exact
   contract — this file does not re-derive it.) `move()` applies
   `replace`/enqueue semantics; `tick(state)` profiles/shapes the active
@@ -1327,8 +1327,8 @@ called with real elapsed time between calls).
   state (present-and-ready or confirmed-absent).
 - **`Motion::StateEstimator::update(input, now)`/`wheelAt(wheel, t)`/
   `bodyAt(t)`/`whereAmI(now)`/`wheelNow(wheel)`/`reset(x, y, heading)`/
-  `innovations()`/`setWeights(weights)`** (117, MOVED to `src/motion/` at
-  122-002 — see [`src/motion/DESIGN.md`](../../motion/DESIGN.md) and
+  `innovations()`/`setWeights(weights)`** (117, MOVED to `src/firm/motion/` at
+  122-002 — see [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) and
   `state_estimator.h`'s own doc comment for the current, exact contract;
   `update()` now takes a plain `Motion::StateEstimator::Input` struct
   instead of `App::Telemetry::Frame`, since this tree may not depend on
@@ -1397,14 +1397,14 @@ called with real elapsed time between calls).
   `Devices::Sleeper`:** the device leaves and time/bus seams `app/` drives
   — see [devices/DESIGN.md](../devices/DESIGN.md).
 - **`BodyKinematics::inverse()`/`forward()`:** stateless twist↔wheel math
-  — moved to `src/motion/body_kinematics.{h,cpp}` at 122-001 (from
+  — moved to `src/firm/motion/body_kinematics.{h,cpp}` at 122-001 (from
   `src/firm/kinematics/`); `Motion::Planner` calls `inverse()`-equivalent
   twist decomposition internally as part of its own profile/shape stages
   (`planner/`, 125–128), while `RobotLoop::cycle()` still calls
   `forward()` directly here in `app/` to fuse the two leaves' measured
   velocities into `state_.pose.v_x/v_y/omega` (124-009 — formerly
   `frame_.twist`/`updateTlm()`; `Drive::trackWidth()`'s own doc comment).
-  See [`src/motion/DESIGN.md`](../../motion/DESIGN.md) and
+  See [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) and
   [`src/firm/kinematics/DESIGN.md`](../kinematics/DESIGN.md) (retired,
   redirects to the current doc) for the full derivation.
 - **`msg::CommandEnvelope`/`ReplyEnvelope`/`Telemetry`,
@@ -1418,15 +1418,15 @@ called with real elapsed time between calls).
 - **`SerialPort`, `Radio` (ARM builds only):** the two real transports
   `SerialTransport`/`RadioTransport` adapt into `app::Transport` — see
   [com/DESIGN.md](../com/DESIGN.md).
-- **`Motion::Planner`** (`src/motion/planner/`, 125–128): the bounded-Move
+- **`Motion::Planner`** (`src/firm/motion/planner/`, 125–128): the bounded-Move
   stop/timeout/completion decision, profiling, and shaping — superseding
   the deleted `Motion::StopCondition`/`Motion::MoveQueue` (116/122,
-  deleted 128 as dead code; see [`src/motion/DESIGN.md`](../../motion/DESIGN.md)
+  deleted 128 as dead code; see [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md)
   §1's own "128" note for the deletion and
   [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md), retired since 122,
-  for that stack's own historical derivation). `src/motion/` contains
+  for that stack's own historical derivation). `src/firm/motion/` contains
   only the modules listed in
-  [`src/motion/DESIGN.md`](../../motion/DESIGN.md) §2.
+  [`src/firm/motion/DESIGN.md`](../../motion/DESIGN.md) §2.
 - **`Types::RobotState`** (124-007/009, `src/firm/types/robot_state.h`,
   superseding this entry's former `Telemetry::Frame`/hand-copied
   `Motion::StateEstimator::Input` description): the dependency-free
@@ -1438,7 +1438,7 @@ called with real elapsed time between calls).
   "StateEstimator may not depend on `app/`'s `Telemetry::Frame` type"
   constraint is satisfied differently now: `RobotState` lives in
   `src/firm/types/`, a dependency-free header both `src/firm/app` and
-  `src/motion` may include, not an `app/`-owned type). `StateEstimator`
+  `src/firm/motion` may include, not an `app/`-owned type). `StateEstimator`
   still does not hold its own leaf/bus references and does not read
   `Devices::Motor`/`Devices::Otos` directly either way. The wire-plane
   curated Estimator live-tuning message (HISTORICAL/SUPERSEDED as of

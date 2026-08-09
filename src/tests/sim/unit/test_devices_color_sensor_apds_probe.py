@@ -35,7 +35,7 @@ _COLOR_SENSOR_SRC = _HARDWARE_DIR / "planetx" / "color_sensor.cpp"
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
-_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "motion" / "body_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "motion" / "body_kinematics.cpp"
 
 # Matches every other src/tests/sim/{unit,plant,system} harness's own compiled
 # standard.

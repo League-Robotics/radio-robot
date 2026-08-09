@@ -12,7 +12,7 @@
 // past 122-002/125-002's own reshaping of Drive into a bare duty sink, and
 // that PID class itself (a fully separate, zero-instantiation class from
 // Motion::WheelPid/Planner::stageDuty()) is deleted outright this ticket --
-// see src/motion/DESIGN.md's "wheel control generations" note. This
+// see src/firm/motion/DESIGN.md's "wheel control generations" note. This
 // harness's scenarios still isolate "did Drive's staged target reach
 // appliedDuty() through a KNOWN deterministic computation," now simply
 // Drive's own open-loop calibration (setDutyPerSpeed()) rather than a PID.

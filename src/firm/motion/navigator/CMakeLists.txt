@@ -1,22 +1,22 @@
 # Standalone Motion::ArcSolver / Motion::Navigator build (135-002/135-003),
-# mirroring src/motion/planner/CMakeLists.txt's own standalone-project
+# mirroring src/firm/motion/planner/CMakeLists.txt's own standalone-project
 # pattern: host-only, no firmware, no Python in the build/test path.
 # Configure/build/test:
 #
-#   cmake -S src/motion/navigator -B src/motion/navigator/build
-#   cmake --build src/motion/navigator/build --target navigator_tests
+#   cmake -S src/firm/motion/navigator -B src/firm/motion/navigator/build
+#   cmake --build src/firm/motion/navigator/build --target navigator_tests
 #
 # `navigator_tests` builds every test executable and runs them via ctest,
 # exiting nonzero on any failure.
 #
-# A SEPARATE CMake project from src/motion/CMakeLists.txt's own
+# A SEPARATE CMake project from src/firm/motion/CMakeLists.txt's own
 # `motion_tests` (body_kinematics/odometry only -- explicitly does not
-# depend on planner/) and from src/motion/planner/CMakeLists.txt's own
+# depend on planner/) and from src/firm/motion/planner/CMakeLists.txt's own
 # `motion_planner` project. Chosen (135-002 ticket's own build-list
 # decision, see that ticket's Completion Notes) over folding arc_solver.cpp
 # into `motion_tests` because Motion::Navigator (135-003, this ticket's own
 # addition below) depends on Motion::Planner's move()/TickResult -- a
-# dependency `motion_tests` deliberately does not carry (src/motion/
+# dependency `motion_tests` deliberately does not carry (src/firm/motion/
 # DESIGN.md §4: "Separate from, and does not depend on, planner/'s own
 # CMake project").
 #
@@ -54,7 +54,8 @@ target_include_directories(motion_planner_lib PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/../planner
   # types/robot_state.h -- the one sanctioned src/firm include, same as
   # planner/CMakeLists.txt's own `planner` library.
-  ${CMAKE_CURRENT_SOURCE_DIR}/../../firm)
+  ${CMAKE_CURRENT_SOURCE_DIR}/../..
+  ${CMAKE_CURRENT_SOURCE_DIR}/../../..)
 
 add_library(navigator STATIC
   arc_solver.cpp
