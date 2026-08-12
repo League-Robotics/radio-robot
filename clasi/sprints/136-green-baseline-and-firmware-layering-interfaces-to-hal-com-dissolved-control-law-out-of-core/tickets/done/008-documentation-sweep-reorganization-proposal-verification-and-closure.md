@@ -1,7 +1,7 @@
 ---
 id: 008
 title: Documentation sweep + reorganization-proposal verification and closure
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 - SUC-004

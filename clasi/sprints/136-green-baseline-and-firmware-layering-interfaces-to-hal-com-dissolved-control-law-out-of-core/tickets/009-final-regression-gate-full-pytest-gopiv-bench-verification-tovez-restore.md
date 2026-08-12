@@ -1,9 +1,11 @@
 ---
 id: 009
 title: Final regression gate -- full pytest, gopiv bench verification, tovez restore
-status: open
-use-cases: ["SUC-005"]
-depends-on: ["008"]
+status: in-progress
+use-cases:
+- SUC-005
+depends-on:
+- 008
 github-issue: ''
 issue:
 - firmware-layering-cleanup-interfaces-to-hal-impls-to-platform-microbit.md
