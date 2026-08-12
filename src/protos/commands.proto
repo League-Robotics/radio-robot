@@ -120,8 +120,8 @@ enum Verb {
   // formats a printf-style line and App::Comms::sendDebug() sends it on
   // both transports via the same one-off sendReliable() path READY/DEVICE
   // use, never the high-cadence async TLM path. Compiled in ONLY when
-  // ROBOT_DEBUG is defined (a bench-only opt-in CMake option, mirroring
-  // FAKE_OTOS) or HOST_BUILD is defined (Sim/host tests always have it) --
+  // ROBOT_DEBUG is defined (a bench-only opt-in CMake option) or
+  // HOST_BUILD is defined (Sim/host tests always have it) --
   // the shipped ARM release build has neither, so debugf()/App::Comms::
   // sendDebug() compile to nothing there: zero flash cost, zero wire
   // traffic. Registered here regardless (the closed verb set must name

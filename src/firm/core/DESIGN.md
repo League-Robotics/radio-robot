@@ -352,20 +352,25 @@ real OTOS burst read. **This mechanism was later reshaped by the
 otos-fake-seam refactor** (see §2's "Otos call site" and
 [`devices/DESIGN.md`](../hardware/DESIGN.md)): what shipped in 120-002 as a
 `Devices::Otos::feedSyntheticSample()` method + a per-cycle `#ifdef
-FAKE_OTOS` branch in `RobotLoop::cycle()` is now `Devices::Otos` as an
+FAKE_OTOS` branch in `RobotLoop::cycle()` became `Devices::Otos` as an
 abstract interface with two implementations — `Devices::RealOtos` (the
 chip) and `Core::FakeOtos` (the synthesizer) — selected once at the
-`main.cpp` composition root. The bench property it established is
-unchanged: this is the first FIRMWARE PRODUCTION CONSUMER of the "OTOS is
-present and reads a meaningful pose on a stand" property the previous
-paragraph's quarantine note anticipated — NOT yet a consumer of
-`StateEstimator::bodyAt()` itself (that stays quarantined; the fake feeds
-`frame.otos` one layer below the estimator, and `StateEstimator`'s own
-OTOS-fusion weights stay 0.0/0.0 in `defaultEstimatorConfig()`).
-`odom_.integrate()`/`frame_.pose` staging runs immediately BEFORE the Otos
-call site so a `FakeOtos` reports THIS cycle's genuinely fresh pose — see
-§2's own "Otos call site" paragraph for why this reorder is
-side-effect-free for the real build.
+`main.cpp` composition root. **136-003 removed `FakeOtos` and the
+`FAKE_OTOS` build variant entirely as dead code** (zero robot JSON, CI
+script, or justfile recipe ever enabled it); the interface seam itself
+stays, now with `Devices::RealOtos` as its one implementation — see §2's
+"Otos call site" for the current shape. The bench property this ticket
+established is unchanged in kind: it was the first FIRMWARE PRODUCTION
+CONSUMER of the "OTOS is present and reads a meaningful pose on a stand"
+property the previous paragraph's quarantine note anticipated — NOT yet a
+consumer of `StateEstimator::bodyAt()` itself (that stays quarantined; the
+fake fed `frame.otos` one layer below the estimator, and `StateEstimator`'s
+own OTOS-fusion weights stay 0.0/0.0 in `defaultEstimatorConfig()`).
+`odom_.integrate()`/`frame_.pose` staging still runs immediately BEFORE the
+Otos call site — no longer needed for a `FakeOtos` to report THIS cycle's
+fresh pose (that consumer is gone), but harmless and left as-is since
+`Odometry::integrate()` reads neither `otos_` nor any `state_.otos*` field
+and vice versa.
 
 **Hardware verification (2026-07-23, robot "tovez",
 `/dev/cu.usbmodem2121102`).** Flashed via `mbdeploy deploy <uid> --hex
@@ -594,8 +599,9 @@ settle(borrow: command-ring drain/`routeCommand()`)/collect/PID for the
 right motor (immediately followed by the wheel section's own `state_`
 publish — 124-009, see below), then a trailing pace block that integrates
 odometry (`Odometry::integrate`), samples OTOS inline (uniform across
-builds; the sensor behind it is a real chip or an `Core::FakeOtos`, chosen
-at construction), polls line/color at a rate-limited, alternating cadence,
+builds; the sensor behind it is always `Devices::RealOtos`, the chip —
+the `FAKE_OTOS` bench alternative was removed as dead code, 136-003),
+polls line/color at a rate-limited, alternating cadence,
 refreshes `Motion::StateEstimator`'s predict-to-now estimates from that
 same cycle's published `state_` (117), and ONLY THEN calls
 `tlm_.update(state_)`/`tlm_.emit(now)` (124-009 — the one assembly point,
@@ -709,29 +715,29 @@ touched), matching the wire spec's "line/color word fresh" (fresh THIS
 frame, not merely "known at
 some point") semantics.
 
-**Otos call site (uniform across builds; `FAKE_OTOS` chosen at
-construction).** Runs once per cycle from the trailing `kPace` block,
-immediately after `odom_.integrate()`/`state_.pose` staging (this pair is
-hoisted to run BEFORE the Otos call so an `Core::FakeOtos` reports THIS
-cycle's fresh pose — a side-effect-free reorder for the real leaf, since
-`Odometry::integrate()` reads neither `otos_` nor any `state_.otos*`
-field and vice versa). There is **no `#ifdef` here** anymore: the loop
-holds a plain `Devices::Otos&` and calls `otos_.tick(nowUs)` directly,
-publishing `state_.otos.present`/`connected`/`x`/`y`/`heading`/`v_x`/
-`v_y`/`omega`/`sampleTime` inline in `RobotLoop::cycle()` itself (124-009
-— the former `applyOtosSample()` free function, `app/odometry.*`,
-predates the RobotState blackboard and no longer exists; this call site
-is now the single place that translates `otos_`'s own
-`connected()`/`present()`/`poseFresh()`/`pose()`/`sampleTime()` into the
-blackboard). Which implementation backs `otos_` — the real SparkFun leaf
-(`Devices::RealOtos`, a rate-limited I2C burst read) or the bench
-synthesizer (`Core::FakeOtos`, which reports the dead-reckoned `Odometry`
-pose + `BodyKinematics`-fused wheel twist) — is chosen ONCE at the
-`main.cpp` composition root under `#ifdef FAKE_OTOS`, the only place that
-macro appears (otos-fake-seam refactor, superseding 120-002's per-cycle
-branch + the deleted `Devices::Otos::feedSyntheticSample()`). See
+**Otos call site (uniform across builds; `Devices::RealOtos` bound
+unconditionally).** Runs once per cycle from the trailing `kPace` block,
+immediately after `odom_.integrate()`/`state_.pose` staging (this pair's
+order is a leftover from when a `Core::FakeOtos` needed to read THIS
+cycle's fresh pose — that consumer is gone (136-003), but the order stays
+since `Odometry::integrate()` reads neither `otos_` nor any `state_.otos*`
+field and vice versa, so reordering back would be a no-op change). There is
+**no `#ifdef` here**: the loop holds a plain `Devices::Otos&` and calls
+`otos_.tick(nowUs)` directly, publishing `state_.otos.present`/`connected`/
+`x`/`y`/`heading`/`v_x`/`v_y`/`omega`/`sampleTime` inline in
+`RobotLoop::cycle()` itself (124-009 — the former `applyOtosSample()` free
+function, `app/odometry.*`, predates the RobotState blackboard and no
+longer exists; this call site is now the single place that translates
+`otos_`'s own `connected()`/`present()`/`poseFresh()`/`pose()`/
+`sampleTime()` into the blackboard). `otos_` binds `Devices::RealOtos`
+unconditionally — the `#ifdef FAKE_OTOS` build-time alternative
+(`Core::FakeOtos`, a synthesizer reporting the dead-reckoned `Odometry`
+pose + `BodyKinematics`-fused wheel twist) was removed as dead code
+(136-003; zero robot JSON, CI script, or justfile recipe ever enabled the
+`FAKE_OTOS` build variant). The interface seam itself is kept
+(`boot_wiring.h`'s `Hal::Otos& otos_`) for a future real alternative. See
 [`devices/DESIGN.md`](../hardware/DESIGN.md) for the `Otos` interface /
-`RealOtos` split and [`app/fake_otos.h`](fake_otos.h) for the fake.
+`RealOtos` split.
 
 **Predict-to-now estimation (`RobotLoop`'s `StateEstimator::update()`
 call, 117; 124-009 threads `state_` directly) — DELETED, 128 ticket 016
@@ -1362,9 +1368,9 @@ called with real elapsed time between calls).
   needs to get compiled in when you're on the bench or in SIM."): a
   firmware→host debug message channel, compile-gated to bench/Sim builds
   only. **Compiled in ONLY when `ROBOT_DEBUG` is defined** (a bench-only,
-  opt-in CMake option — `CMakeLists.txt`'s `option(ROBOT_DEBUG ...)`,
-  mirroring the existing `FAKE_OTOS` pattern; select via `cmake
-  -DROBOT_DEBUG=ON` or `build.py --robot-debug`) **or `HOST_BUILD`**
+  opt-in CMake option — `CMakeLists.txt`'s `option(ROBOT_DEBUG ...)`;
+  select via `cmake -DROBOT_DEBUG=ON` or `build.py --robot-debug`) **or
+  `HOST_BUILD`**
   (`src/firm/platform/host/CMakeLists.txt` always defines it, so Sim/host tests always
   have the channel). Neither is defined in the plain, shipped
   `cmake .. -DROBOT_DEBUG=OFF` (the default) ARM build, so there
@@ -1575,16 +1581,20 @@ reorganization delivers toward that is `Kinematics::Model` — the seam
 that project needs — and a name on this class that no longer hides the
 constraint.
 
-**`Core::FakeOtos` stays here** rather than moving to
-`hardware/generic/`, where the proposal expected it. It is a synthetic
-`Hal::Otos` composed from `Motion::Odometry` and two `Hal::Motor&`s —
-motion is two layers ABOVE hardware, so filing it under `hardware/` would
-invert the layering. Rebasing it onto `Types::RobotState::pose` would fix
-the layering and change behavior: `RobotLoop::cycle()` calls
+**`Core::FakeOtos` stayed here** (kept for history; the class itself is
+now gone, 136-003) rather than moving to `hardware/generic/`, where the
+proposal expected it. It was a synthetic `Hal::Otos` composed from
+`Motion::Odometry` and two `Hal::Motor&`s — motion is two layers ABOVE
+hardware, so filing it under `hardware/` would have inverted the
+layering. Rebasing it onto `Types::RobotState::pose` would have fixed the
+layering and changed behavior: `RobotLoop::cycle()` calls
 `odom_.integrate()` and then `otos_.tick()`, while `state_.pose` is not
-written until later in the cycle, so it would start reporting the
-previous cycle's pose. Full reasoning in
-[`../hal/DESIGN.md`](../hal/DESIGN.md) §4.
+written until later in the cycle, so it would have started reporting the
+previous cycle's pose. 136-003 removed `FakeOtos` outright as dead code
+(zero robot JSON, CI script, or justfile recipe ever enabled the
+`FAKE_OTOS` build variant), which mooted the placement question — see
+[`../hal/DESIGN.md`](../hal/DESIGN.md) §4 for the (now historical)
+reasoning.
 
 
 ---

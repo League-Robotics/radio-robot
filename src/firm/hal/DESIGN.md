@@ -35,7 +35,7 @@ hal/
 
 Implementations all live in `hardware/` (or, for a part physically welded
 to one compute board, in `platform/<target>/hardware/`). The one deliberate
-exception is `Core::FakeOtos` — see §4.
+exception used to be `Core::FakeOtos`, removed as dead code — see §4.
 
 `device_types.h`/`device_config.h` are the vocabulary this whole layer
 speaks in: plain aggregates, HAL-local counterparts of the equivalent
@@ -87,16 +87,18 @@ would create a second, competing home for wheel control while the real one
 keeps running in `app/` — the exact ambiguity this reorganization exists to
 remove.
 
-**`Core::FakeOtos` implements `Hal::Otos` from `app/`, not `hardware/`.**
-The proposal expected it to land in `hardware/generic/` on the grounds that
-it has "zero bus or board dependency (pure math over `Odometry` +
-trackWidth)". That is true about the *bus* and wrong about the
-*dependencies*: `FakeOtos` reads `Motion::Odometry`, which is two layers
-ABOVE hardware, so filing it under `hardware/` would invert the layering
-this reorganization just established. Rebasing it onto
-`Types::RobotState::pose` instead would fix the layering but change
-behavior — `RobotLoop::cycle()` calls `odom_.integrate()` and then
+**`Core::FakeOtos` implemented `Hal::Otos` from `app/`, not `hardware/`**
+(kept for history; the class itself is gone, 136-003 — zero robot JSON, CI
+script, or justfile recipe ever enabled the `FAKE_OTOS` build variant it
+backed). The proposal expected it to land in `hardware/generic/` on the
+grounds that it had "zero bus or board dependency (pure math over
+`Odometry` + trackWidth)". That was true about the *bus* and wrong about
+the *dependencies*: `FakeOtos` read `Motion::Odometry`, which is two
+layers ABOVE hardware, so filing it under `hardware/` would have inverted
+the layering this reorganization established. Rebasing it onto
+`Types::RobotState::pose` instead would have fixed the layering but
+changed behavior — `RobotLoop::cycle()` calls `odom_.integrate()` and then
 `otos_.tick()`, while `state_.pose` is not written until later in the
-cycle, so `FakeOtos` would start reporting last cycle's pose. It stays
-where it is, in the composition layer, as a synthetic device rather than a
-driver.
+cycle, so `FakeOtos` would have started reporting last cycle's pose. It
+stayed in the composition layer, as a synthetic device rather than a
+driver, until its removal.

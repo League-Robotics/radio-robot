@@ -54,8 +54,7 @@
 // `const Drive&` parameter needs two of these to construct a Drive; this
 // harness never ticks it, so every method beyond the interface minimum is
 // a no-op). Duplicated here per this codebase's established
-// per-harness-file fixture convention (see e.g. app_fake_otos_harness.cpp's
-// own StubMotor).
+// per-harness-file fixture convention.
 class StubMotor : public Hal::Motor {
  public:
   void begin() override {}

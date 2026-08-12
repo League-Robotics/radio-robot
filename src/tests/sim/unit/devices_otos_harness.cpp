@@ -660,10 +660,12 @@ void scenarioSampleTimeReflectsLastRealReadAttemptNotCurrentNow() {
 }
 
 // (The former scenario 9 exercised Hal::Otos::feedSyntheticSample() --
-// the 120-002 FAKE_OTOS build seam. That method is deleted: synthesis now
-// lives in Core::FakeOtos (app/fake_otos.h), covered by its own harness
-// app_fake_otos_harness.cpp / test_app_fake_otos.py. The real leaf below no
-// longer has any synthetic-sample surface.)
+// the 120-002 FAKE_OTOS build seam. That method was deleted when
+// synthesis moved into Core::FakeOtos, and 136-003 removed FakeOtos
+// itself as dead code (zero robot JSON, CI script, or justfile recipe
+// ever enabled the FAKE_OTOS build variant) -- its own harness,
+// app_fake_otos_harness.cpp / test_app_fake_otos.py, is gone too. The
+// real leaf below no longer has any synthetic-sample surface.)
 
 // 10. scaleToRegister() (132-010, trap 3, the-configuration-object.md):
 //     pure math, no bus traffic -- exercised directly now that it is a

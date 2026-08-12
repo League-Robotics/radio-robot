@@ -783,7 +783,7 @@ void RobotLoop::cycle() {
     uint64_t nowUs = clock_.nowMicros();
 
     odom_.integrate(motorL_.position(), motorR_.position(), state_.wheelLeft.positionEpoch,
-                    state_.wheelRight.positionEpoch);  // before OTOS: FakeOtos reads it
+                    state_.wheelRight.positionEpoch);  // before OTOS (historical: FakeOtos read it)
     otos_.tick(nowUs);
     publishOtos();
     publishLineColor(tickLineColor(nowUs));

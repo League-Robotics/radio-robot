@@ -59,7 +59,6 @@
 #include "core/comms.h"
 #include "core/configurator.h"
 #include "core/differential_drive.h"
-#include "core/fake_otos.h"
 #include "core/preamble.h"
 #include "core/robot_loop.h"
 #include "core/telemetry.h"
@@ -322,15 +321,12 @@ class RobotGraph {
   DifferentialDrive drive_;
   Motion::Odometry odom_;
 
-  // otos_ binds to whichever OTOS implementation this build selects.
-  // fakeOtos_ (FAKE_OTOS builds only -- never true for HOST_BUILD/sim,
-  // src/firm/platform/host/CMakeLists.txt never defines it) needs odom_/armorL_/armorR_,
-  // so both must be declared AFTER odom_ above -- matching main.cpp's own
-  // pre-130-002 order, where the FAKE_OTOS ifdef block came after odom's
-  // construction for the same reason.
-#ifdef FAKE_OTOS
-  Core::FakeOtos fakeOtos_;
-#endif
+  // otos_ binds unconditionally to realOtos_ -- the FAKE_OTOS bench
+  // variant (a Core::FakeOtos alternative behind this same Hal::Otos&
+  // seam) was removed as dead code (136-003; zero robot JSON, CI script,
+  // or justfile recipe ever enabled it). The seam itself stays: otos_ is
+  // still a reference, not realOtos_ directly, so a future real
+  // alternative implementation has somewhere to bind.
   Hal::Otos& otos_;
 
   Motion::Planner planner_;
