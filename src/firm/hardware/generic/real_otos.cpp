@@ -22,7 +22,7 @@ int8_t scaleToRegister(float scale)
     return static_cast<int8_t>(raw);
 }
 
-RealOtos::RealOtos(Platform::I2CBus& bus, const Hal::OtosConfig& config)
+RealOtos::RealOtos(Hal::I2CBus& bus, const Hal::OtosConfig& config)
     : bus_(bus), config_(config)
 {
 }

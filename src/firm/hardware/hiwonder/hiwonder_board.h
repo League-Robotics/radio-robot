@@ -25,7 +25,7 @@
 
 #include <cstdint>
 
-#include "platform/i2c_bus.h"
+#include "hal/i2c_bus.h"
 #include "hal/motor_board.h"
 
 namespace Hardware {
@@ -53,7 +53,7 @@ class HiwonderBoard : public Hal::MotorBoard {
   // bench temperature; error scales velocity estimates proportionally.
   static constexpr float kEncoderTick = 0.00956f;  // [s]
 
-  explicit HiwonderBoard(Platform::I2CBus& bus) : bus_(bus) {}
+  explicit HiwonderBoard(Hal::I2CBus& bus) : bus_(bus) {}
 
   // Hal::Motor type + polarity + all-stop. Returns false when the board
   // never acks (wiring/power) -- callers treat that as "board absent".
@@ -92,7 +92,7 @@ class HiwonderBoard : public Hal::MotorBoard {
 
   void readTotals();
 
-  Platform::I2CBus& bus_;
+  Hal::I2CBus& bus_;
   bool pwmMode_ = false;
   int8_t staged_[kMaxChannels] = {0, 0, 0, 0};
   int8_t written_[kMaxChannels] = {0, 0, 0, 0};

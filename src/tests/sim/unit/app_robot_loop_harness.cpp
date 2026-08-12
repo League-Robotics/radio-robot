@@ -2546,7 +2546,7 @@ void scenarioClampToPositionWireBoundClampsAndFlagsOutOfRangeValues() {
 // applies, just spread across the cycle at the real sub-cycle points a
 // genuine wall clock would advance it, which is exactly the skew this
 // scenario needs to observe.
-class TickingSleeper : public Platform::Sleeper {
+class TickingSleeper : public Hal::Sleeper {
  public:
   explicit TickingSleeper(TestSim::SimClock& clock) : clock_(clock) {}
   void sleepMillis(uint32_t duration) override {

@@ -8,7 +8,7 @@ namespace {
 constexpr int kOk = 0;
 }  // namespace
 
-ColorSensorLeaf::ColorSensorLeaf(Platform::I2CBus& bus, const Hal::ColorConfig& config)
+ColorSensorLeaf::ColorSensorLeaf(Hal::I2CBus& bus, const Hal::ColorConfig& config)
     : bus_(bus), config_(config) {
   // Hal::ColorConfig's fields all zero-default (device_config.h) — the
   // "unconfigured" sentinel this leaf resolves to its ship default (same

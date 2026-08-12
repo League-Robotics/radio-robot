@@ -28,7 +28,7 @@ namespace Hal {
 
 class Otos {
  public:
-  // Inline `= default`, matching Hal::Motor / Platform::I2CBus / Platform::
+  // Inline `= default`, matching Hal::Motor / Hal::I2CBus / Hal::
   // Clock. It was an out-of-line vtable anchor in otos.cpp while the
   // interface and RealOtos shared one file; keeping that would have made
   // the HAL layer's own symbol live in a hardware translation unit, and

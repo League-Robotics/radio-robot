@@ -7,7 +7,7 @@
 // robot-composition-roots.md): the whole Core::/Motion:: graph is now built
 // by the SAME Core::composeRobot() (src/firm/app/boot_wiring.h) src/firm/
 // main.cpp calls -- this class constructs the ONE leaf that differs
-// (TestSim::SimPlant, in the Platform::I2CBus& slot main.cpp fills with a
+// (TestSim::SimPlant, in the Hal::I2CBus& slot main.cpp fills with a
 // real Platform::MicroBitI2CBus) and hands everything else to that shared
 // function. Before this ticket, this file hand-wired its own independent
 // copy of the graph (simPlannerLimits()'s own hand-picked literals), which
@@ -418,7 +418,7 @@ class SimHarness {
   // itself (private).
   Core::Configurator& configurator() { return graph_.configurator(); }
 
-  // Concrete TestSim::SimClock&, not Platform::Clock& -- callers need the
+  // Concrete TestSim::SimClock&, not Hal::Clock& -- callers need the
   // setMicros()/advanceMicros() stepping surface only the concrete fake
   // exposes.
   TestSim::SimClock& clock() { return clock_; }

@@ -28,7 +28,7 @@
 #include "hal/device_config.h"
 #include "hal/device_types.h"
 #include "hal/line_sensor.h"
-#include "platform/i2c_bus.h"
+#include "hal/i2c_bus.h"
 
 namespace Hardware {
 
@@ -36,7 +36,7 @@ constexpr uint8_t kLineDeviceAddr = 0x1A;
 
 class LineSensorLeaf : public Hal::LineSensor {
  public:
-  LineSensorLeaf(Platform::I2CBus& bus, const Hal::LineConfig& config);
+  LineSensorLeaf(Hal::I2CBus& bus, const Hal::LineConfig& config);
 
   // Non-blocking single detection step. Call once per fiber cycle until
   // detectDone() is true; a no-op once it is.
@@ -74,7 +74,7 @@ class LineSensorLeaf : public Hal::LineSensor {
  private:
   enum class DetectPhase : uint8_t { Probing, Done };
 
-  Platform::I2CBus& bus_;
+  Hal::I2CBus& bus_;
   Hal::LineConfig config_;
 
   DetectPhase phase_ = DetectPhase::Probing;

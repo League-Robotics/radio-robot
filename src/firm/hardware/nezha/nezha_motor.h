@@ -52,7 +52,7 @@
 //   - No POSITION mode (the onboard 0x5D absolute-angle move) — this leaf
 //     only covers raw-duty mode (see DESIGN.md §3, historical).
 //   - Time seam: tick() takes a single `uint64_t nowUs` [us] parameter
-//     rather than reading a clock internally — Platform::Clock (clock.h) is
+//     rather than reading a clock internally — Hal::Clock (clock.h) is
 //     the fiber-level time seam, scoped to "the fiber's OWN cycle-level
 //     time reads ... not the bus's clearance windows" (a DIFFERENT seam
 //     from I2CBus's own internal clearance-timer bookkeeping — see
@@ -67,7 +67,7 @@
 
 #include "hal/device_config.h"
 #include "hal/device_types.h"
-#include "platform/i2c_bus.h"
+#include "hal/i2c_bus.h"
 #include "hal/motor.h"
 
 namespace Hardware {
@@ -78,7 +78,7 @@ constexpr uint8_t kNezhaDeviceAddr = 0x10;
 
 class NezhaMotor : public Hal::Motor {
  public:
-  NezhaMotor(Platform::I2CBus& bus, const Hal::MotorConfig& config);
+  NezhaMotor(Hal::I2CBus& bus, const Hal::MotorConfig& config);
 
   // Primes the encoder: the Nezha 0x46 register sits frozen at 0 until the
   // chip receives its first atomic read transaction (calls hardReset()).
@@ -167,7 +167,7 @@ class NezhaMotor : public Hal::Motor {
   enum class Mode : uint8_t { None, Active, Neutral };
 
   // ---- Wiring ----
-  Platform::I2CBus& bus_;
+  Hal::I2CBus& bus_;
   Hal::MotorConfig config_;
 
   // ---- Staged command (set by the primitive setters; executed by tick()) ----

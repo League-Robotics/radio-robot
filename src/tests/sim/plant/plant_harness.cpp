@@ -12,7 +12,7 @@
 //      directly), is sane -- the sprint's own "B3 doesn't reappear" check.
 //
 // Drives the REAL Hardware::NezhaMotor x2 + Hal::Otos + Core::Odometry
-// against a real Platform::I2CBus implementation, exactly as
+// against a real Hal::I2CBus implementation, exactly as
 // devices_motor_harness.cpp scenario 6 and app_odometry_harness.cpp already
 // do for their own narrower scopes -- this harness generalizes that same
 // proven idiom across the whole loop (both motors + OTOS), per
@@ -22,7 +22,7 @@
 // cycles, never inside a runAndWait block").
 //
 // Bus: TestSim::SimPlant (tests/_infra/sim/sim_plant.{h,cpp}, ticket
-// 108-002) -- sprint 108 ticket 001 reduced Platform::I2CBus to a pure
+// 108-002) -- sprint 108 ticket 001 reduced Hal::I2CBus to a pure
 // interface and deleted its old scripted-FIFO HOST_BUILD fake
 // (queueWrite()/queueRead()/errCount(), and WheelPlant/OtosPlant's own
 // scriptEncoderResponse()/scriptPoseResponse() helpers that targeted it --
@@ -49,7 +49,7 @@
 
 #include "hal/device_config.h"
 #include "hal/device_types.h"
-#include "platform/i2c_bus.h"
+#include "hal/i2c_bus.h"
 #include "hardware/nezha/nezha_motor.h"
 #include "hardware/generic/real_otos.h"
 #include "motion/odometry.h"

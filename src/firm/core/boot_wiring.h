@@ -9,7 +9,7 @@
 // disabling the trim in every sim session. composeRobot() makes that
 // drift structurally impossible: both roots call the SAME function, and
 // the only thing that differs between an ARM build and a sim build is
-// which Platform::I2CBus implementation (Platform::MicroBitI2CBus vs.
+// which Hal::I2CBus implementation (Platform::MicroBitI2CBus vs.
 // TestSim::SimPlant) the caller constructs and passes in -- everything
 // downstream of the bus is the identical call.
 //
@@ -64,10 +64,10 @@
 #include "core/telemetry.h"
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
-#include "platform/clock.h"
+#include "hal/clock.h"
 #include "hardware/planetx/color_sensor.h"
 #include "hal/device_config.h"
-#include "platform/i2c_bus.h"
+#include "hal/i2c_bus.h"
 #include "hardware/planetx/line_sensor.h"
 #include "hardware/generic/motor_armor.h"
 #include "hardware/nezha/nezha_motor.h"
@@ -202,7 +202,7 @@ class RobotGraph {
   // calibration -- genuinely root-specific, not a drift risk.
   // tuningStore may be null (sim/test roots): persistence disabled,
   // everything else unchanged (mirrors Configurator's own contract).
-  RobotGraph(Platform::I2CBus& bus, const Platform::Clock& clock, Platform::Sleeper& sleeper,
+  RobotGraph(Hal::I2CBus& bus, const Hal::Clock& clock, Hal::Sleeper& sleeper,
              Transport& serialTransport, Transport& radioTransport,
              Config::TuningStore* tuningStore, const char* banner, const char* idLine,
              const BootOverrides& overrides = {});
@@ -355,7 +355,7 @@ class RobotGraph {
 // wrapper so both call sites read the same way; RobotGraph's own
 // constructor does the real work. See RobotGraph's own doc comment above
 // for the parameter contract.
-RobotGraph composeRobot(Platform::I2CBus& bus, const Platform::Clock& clock, Platform::Sleeper& sleeper,
+RobotGraph composeRobot(Hal::I2CBus& bus, const Hal::Clock& clock, Hal::Sleeper& sleeper,
                         Transport& serialTransport, Transport& radioTransport,
                         Config::TuningStore* tuningStore, const char* banner, const char* idLine,
                         const BootOverrides& overrides = {});
