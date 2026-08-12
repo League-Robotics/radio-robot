@@ -498,7 +498,7 @@ _INVENTORY_MAP: dict = {
     # -----------------------------------------------------------------------
 
     # CommunicatorConfig: comms configuration
-    ("CommunicatorConfig", "radio_channel"): "platform/microbit/microbit_radio_link.h Platform::MicroBitRadioLink::_channel (begin()/setChannel(); radiochan::clamp bounds)",
+    ("CommunicatorConfig", "radio_channel"): "platform/microbit/microbit_radio_link.h Platform::MicroBitRadioLink::_channel (begin()/setChannel(); 0..35 display range)",
 
     # CommunicatorState: read-only comms snapshot
     ("CommunicatorState", "radio_channel"): "platform/microbit/microbit_radio_link.h Platform::MicroBitRadioLink::channel()",

@@ -94,8 +94,9 @@ in-memory `Hal::Transport` double) where `main.cpp` passes the two real
 ## Rules
 
 1. **Platform knows nothing about Hardware.** No `#include` of a device
-   leaf, no knowledge of what is on the bus. `Platform::I2CBus` deals in
-   addresses and byte buffers.
+   leaf, no knowledge of what is on the bus. `Hal::I2CBus` (implemented
+   here by `Platform::MicroBitI2CBus`) deals in addresses and byte
+   buffers.
 2. **A platform-intrinsic *device*** — hardware physically part of one
    compute board and unable to exist anywhere else, such as the micro:bit's
    onboard compass — belongs in `platform/<target>/hardware/`, not here and

@@ -19,9 +19,9 @@
 //
 // 122-002 (motion-library extraction, ticket 2): Control::DifferentialDrive shrank to a bare
 // wheel-target sink -- setDuty()/stop()/tick() only, implementing
-// Motion::WheelSink. setTwist()/the Kinematics::DifferentialKinematics::inverse() staging this
+// Motion::WheelSink. setTwist()/the Kinematics::Differential::inverse() staging this
 // harness used to test moved to Motion::MoveQueue (which now calls
-// Kinematics::DifferentialKinematics::inverse() itself and hands the result down through the
+// Kinematics::Differential::inverse() itself and hands the result down through the
 // sink) -- that coverage lives in app_move_queue_harness.cpp's own
 // TWIST-Move scenarios.
 //

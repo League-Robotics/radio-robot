@@ -47,9 +47,9 @@ COMMAND to every robot that hears it, so robots answer each other forever
 and the DBG action ring saturates. Commands sent to a shared channel also
 reach every robot on it.
 
-- firmware: `Config::kRadioChannel` (`src/firm/config/boot_config.h`),
+- firmware: `Config::kRadioChannel` (`src/firm/config/boot_config.h:27`),
   baked from the robot JSON's `connection.radio_channel` and applied at
-  `main.cpp`'s `radio.begin(Config::kRadioChannel)`.
+  `main.cpp:52`'s `radio.begin(Config::kRadioChannel)`.
 - relay: `!C 3` on its control plane, persisted in its flash (`?` reports
   `channel: 3 group: 10`). A relay that has been `!DEFAULTS`-ed drops back
   to 0 and must be set again.

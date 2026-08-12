@@ -197,7 +197,7 @@ see each file's own header for the "why this stays" rationale.
 - **No `Hal::*`, `Hardware::*`, `Platform::*`, `Core::*`, or bus/timing
   collaborator anywhere in this tree.** Every module takes plain data (floats, explicit `now`
   timestamps, plain structs) as parameters — never a held
-  `Platform::Clock&`, `Hal::Motor&`, or telemetry-frame reference.
+  `Hal::Clock&`, `Hal::Motor&`, or telemetry-frame reference.
   This is what makes every module here constructible and testable with
   hand-fed numbers alone, identically under `HOST_BUILD`, on ARM, and in
   the standalone `motion_tests`/`planner_tests` builds.

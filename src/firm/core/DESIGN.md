@@ -460,7 +460,10 @@ being called with `delimiter=0x0A` on the live wire (`Core::
 kCobsDelimiter`, `comms.h`) — a COBS-encoded binary body can never
 contain a literal `0x0A` by construction, so `\n` is a genuine,
 unconditional line terminator for BOTH transports (see
-[com/DESIGN.md](../com/DESIGN.md) §2), and `Transport::readLine()`
+`com/DESIGN.md` §2 — that file no longer exists, 136-005 dissolved `com/`;
+the same content now lives in
+[`platform/DESIGN.md`](../platform/DESIGN.md)'s "Transport invariants"
+section), and `Transport::readLine()`
 collapses from returning `FrameKind` to a plain `bool`. `Comms::
 dispatchLine()` parses the `<COMMAND>` prefix off the already-`\n`-
 delimited line the transport hands it, looks it up in the generated
@@ -1251,8 +1254,14 @@ called with real elapsed time between calls).
   `sendStatus()` formats from, in one call — replaces the loop's own
   former field-by-field `Comms::Status` assembly. See the same §4
   paragraph.
-- **`Core::DifferentialDrive` — two responsibilities, two independent lifecycles**
-  (current contract; supersedes every `setDuty()`/`Motion::WheelSink`
+- **`Control::DifferentialDrive` (HISTORICAL as of 136-006 — this class
+  relocated out of `core/` into its own `control/` layer and was renamed
+  from `Core::DifferentialDrive`; see
+  [`control/DESIGN.md`](../control/DESIGN.md) for the current contract.
+  `RobotLoop` still owns and drives the one instance, which is why the
+  two responsibilities below stay documented from `core/`'s own point of
+  view) — two responsibilities, two independent lifecycles**
+  (supersedes every `setDuty()`/`Motion::WheelSink`
   description below, which described a 122–127-era interim shape now
   deleted — sprint 128 ticket 014):
   1. **The bounded WHEELS command lifecycle** — `command(vLeft, vRight,
@@ -1424,9 +1433,13 @@ called with real elapsed time between calls).
   [messages/DESIGN.md](../messages/DESIGN.md). `msg::TelemetrySecondary`
   is DELETED outright (124-009, robot-state-blackboard-...md) — there is
   no second top-level wire message any more.
-- **`SerialPort`, `Radio` (ARM builds only):** the two real transports
-  `SerialTransport`/`RadioTransport` adapt into `app::Transport` — see
-  [com/DESIGN.md](../com/DESIGN.md).
+- **`SerialPort`, `Radio` (ARM builds only) — HISTORICAL, 136-005.** These
+  two classes, and the `SerialTransport`/`RadioTransport` adapters that
+  wrapped them into `Core::Transport`, are gone outright, not relocated.
+  `Platform::MicroBitSerialPort`/`MicroBitRadioLink`
+  (`platform/microbit/`) implement `Hal::Transport` directly now — see
+  [`platform/DESIGN.md`](../platform/DESIGN.md) and
+  [`hal/DESIGN.md`](../hal/DESIGN.md).
 - **`Motion::Planner`** (`src/firm/motion/planner/`, 125–128): the bounded-Move
   stop/timeout/completion decision, profiling, and shaping — superseding
   the deleted `Motion::StopCondition`/`Motion::MoveQueue` (116/122,

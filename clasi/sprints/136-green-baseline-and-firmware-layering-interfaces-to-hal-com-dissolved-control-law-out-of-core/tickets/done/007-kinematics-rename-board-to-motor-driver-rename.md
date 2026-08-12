@@ -1,9 +1,11 @@
 ---
 id: '007'
 title: Kinematics rename + board-to-motor-driver rename
-status: open
-use-cases: ["SUC-002"]
-depends-on: ["006"]
+status: done
+use-cases:
+- SUC-002
+depends-on:
+- '006'
 github-issue: ''
 issue: firmware-layering-cleanup-interfaces-to-hal-impls-to-platform-microbit.md
 completes_issue: true

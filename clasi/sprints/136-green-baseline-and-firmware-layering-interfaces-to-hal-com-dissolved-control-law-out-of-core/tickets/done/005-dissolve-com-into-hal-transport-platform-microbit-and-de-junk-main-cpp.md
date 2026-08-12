@@ -1,7 +1,7 @@
 ---
 id: '005'
 title: Dissolve com/ into Hal::Transport + platform/microbit/, and de-junk main.cpp
-status: in-progress
+status: done
 use-cases:
 - SUC-002
 - SUC-003

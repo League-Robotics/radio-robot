@@ -1,5 +1,5 @@
 ---
-status: in-progress
+status: pending
 sprint: '136'
 tickets:
 - 136-008
@@ -310,6 +310,74 @@ concrete:
    from a base struct + per-robot derived struct to a plain composition slot
    (a generic base plus an opaque robot-specific "extra" member) — deserves
    its own design pass rather than a call made here.
+
+### Verification (136-008, independently re-checked against the tree)
+
+Steps 1-6 below are CONFIRMED landed, each checked directly against the
+current tree/git history rather than re-asserted (see full evidence in
+sprint 136 ticket 008's commit message):
+
+- **Step 1 (Platform split):** commit `8a86f5bd` ("split Platform out of
+  devices/ (reorg step 1)"). `src/firm/platform/{host,microbit}/` exist;
+  `src/firm/devices/` does not (`ls src/firm/devices` -> no such file).
+- **Step 2 (Hardware split) / Step 3 (HAL rename):** commit `13b3116d`
+  ("split devices/ into hal/ (interfaces) and hardware/ (drivers)"),
+  between `8a86f5bd` and `1c7b70d3` in `git log`. `grep -rn "namespace
+  Devices" src/firm/{hal,hardware,platform,core,control,kinematics}`
+  returns zero hits; `hal/`/`hardware/` exist with `Hal::`/`Hardware::`
+  namespaces throughout.
+- **Step 4 (Motion move):** commit `812d6708`. `git ls-files src/motion
+  src/sim` returns empty (both trees are stale, untracked build residue
+  only, confirmed deleted outright by this sprint's ticket 003); `src/firm/
+  motion/` is populated and tracked.
+- **Step 5 (Kinematics extraction):** commit `09892f60`. `src/firm/
+  kinematics/kinematics.h` declares `Kinematics::Model`; `Differential`/
+  `Mecanum` implementations exist (further renamed from
+  `DifferentialKinematics`/`MecanumKinematics` by this sprint's ticket
+  007, since those names stuttered against their own namespace).
+- **Step 6 (app/ -> core/, Drive -> DifferentialDrive, FakeOtos):** commit
+  `1c7b70d3`. `src/firm/app/` does not exist; `src/firm/core/` does, with
+  no `App::`-namespaced code. That same commit's own message records that
+  `FakeOtos` deliberately did NOT move to `hardware/generic/` as this
+  proposal originally expected — it stayed in `core/` because it reads
+  `Motion::Odometry`, two layers above `hardware/` (inverting the
+  layering would have been the actual bug). **Step 6's `FakeOtos`
+  placement question is resolved, not by relocation but by deletion**:
+  this sprint's ticket 003 (commit `43843ff3`) removed `Core::FakeOtos`
+  and the `FAKE_OTOS` build variant entirely as dead code (zero robot
+  JSON/CI script/justfile recipe ever enabled it) — confirmed by `find
+  src/firm -iname "fake_otos*"` returning nothing and
+  `option(FAKE_OTOS ...)` no longer present in the root `CMakeLists.txt`.
+
+Steps 7 and 8 are the only work this proposal describes that has not
+landed:
+
+- **Step 7 (transport generalization + `WifiTransport`)** is owned by
+  [`clasi/issues/wifi-alternative-command-path.md`](../../../../clasi/issues/wifi-alternative-command-path.md)
+  (status: pending) — its Scope item 1 is exactly this proposal's
+  `WifiTransport` leaf, generalizing `Core::Comms`'s two hardcoded
+  transport slots to N in the process.
+- **Step 8a (Robot/RobotState formalization)** is owned by
+  [`clasi/issues/robot-base-class-and-robots-subsystem.md`](../../../../clasi/issues/robot-base-class-and-robots-subsystem.md)
+  (status: pending) — a stakeholder-directed (2026-08-11) plain
+  Robot base class + per-robot subclass, including the bus-arbitration
+  decision this proposal's own "Robot" section left open.
+- **Step 8b (`Hal::Wheel`)** is owned by
+  [`clasi/issues/hal-wheel-migration-needs-its-own-issue.md`](../../../../clasi/issues/hal-wheel-migration-needs-its-own-issue.md)
+  (status: pending, filed by this ticket — it previously had no
+  standalone issue, only the design rationale in
+  [`src/firm/hal/DESIGN.md`](../../../../src/firm/hal/DESIGN.md) §4 and
+  [`src/firm/control/DESIGN.md`](../../../../src/firm/control/DESIGN.md)
+  §4, which the new issue points back to rather than duplicating).
+
+This proposal is therefore **re-scoped to steps 7-8 only** and left open
+— not moved to done — because steps 7-8 are real, undone, in-scope work
+this document itself specifies (WifiTransport's design questions, the
+Robot bus-arbitration and RobotState-extension open decisions) and no
+other document owns that design content; the three linked issues above
+own scheduling and delivery, not the design questions this proposal's own
+"Proposed fix" sections (HAL, Robot) still answer better than a fresh
+issue would from scratch.
 
 ### Sequencing (dependency order, not a ticket breakdown)
 

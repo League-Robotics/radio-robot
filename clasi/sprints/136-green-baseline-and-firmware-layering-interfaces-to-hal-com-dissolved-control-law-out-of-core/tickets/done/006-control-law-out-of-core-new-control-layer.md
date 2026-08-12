@@ -1,9 +1,11 @@
 ---
 id: '006'
 title: Control law out of core/ -- new control/ layer
-status: open
-use-cases: ["SUC-002"]
-depends-on: ["005"]
+status: done
+use-cases:
+- SUC-002
+depends-on:
+- '005'
 github-issue: ''
 issue: firmware-layering-cleanup-interfaces-to-hal-impls-to-platform-microbit.md
 completes_issue: true

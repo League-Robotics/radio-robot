@@ -47,19 +47,22 @@ The firmware is one tree, `src/firm`, layered bottom to top. Dependencies
 run strictly downward:
 
 ```
-platform/    Platform::I2CBus / Clock / Sleeper + per-target impls
-             (microbit/ = CODAL, host/ = the sim, was src/sim)
+platform/    implements Hal::I2CBus / Clock / Sleeper / Transport per
+             target (microbit/ = CODAL, host/ = the sim, was src/sim)
 hardware/    concrete drivers, filed by who could reuse them:
              generic/ nezha/ hiwonder/ planetx/
-hal/         Hal::Motor / MotorBoard / Otos / ColorSensor / LineSensor
-             -- interfaces only, no chip knowledge
+hal/         Hal::Motor / MotorDriver / Otos / ColorSensor / LineSensor /
+             Clock / Sleeper / I2CBus / Transport -- interfaces only, no
+             chip knowledge
 kinematics/  Kinematics::Model + Differential / Mecanum -- the ONLY home
              for chassis geometry (track width, wheelbase)
+control/     Control::DifferentialDrive -- the wheel-speed control law
+             (fastPid() + Stage A/B/C correction, adaptation, stall)
 motion/      Motion::Planner / Navigator / Odometry -- still under active
              development, own Python-free CMake builds
 core/        Core::RobotLoop, Core::composeRobot(), Comms, Telemetry,
-             DifferentialDrive, Configurator, Preamble  (was app/)
-com/ config/ messages/ types/   cross-cutting floors
+             Configurator, Preamble  (was app/)
+config/ messages/ types/   cross-cutting floors
 ```
 
 `src/tests/sim/unit/test_layer_isolation.py` enforces the platform/hal/
@@ -76,20 +79,23 @@ tree and the old `src/sim` were folded back in for exactly this reason
 The base/motion actuation boundary is unchanged:
 `Types::RobotState::Wheel::cmdVelocity` (`src/firm/types/robot_state.h`).
 Whichever subsystem currently owns motion — `Motion::Planner` for a queued
-Move, `Core::DifferentialDrive` for WHEELS teleop — writes this cycle's
+Move, `Control::DifferentialDrive` for WHEELS teleop — writes this cycle's
 commanded wheel speed directly onto that shared blackboard field, and
 `Core::RobotLoop::cycle()` reads it back for actuation. There is no
 interface: sprint 128 ticket 014 deleted the 122-era `Motion::WheelSink`
 along with `Motion::MoveQueue`, `Motion::StopCondition` and
 `Motion::VelocityShaper` as dead code with zero callers.
 
-**The wheel-speed control law lives in `Core::DifferentialDrive`**
+**The wheel-speed control law lives in `Control::DifferentialDrive`**
 (`fastPid()` plus the Stage A/B/C correction, adaptation and stall
-machinery in `core/differential_drive.cpp`) — NOT in
+machinery in `control/differential_drive.cpp`) — NOT in
 `Motion::WheelVelocityPid`, which this section used to name and which no
 longer exists: sprint 128 ticket 015 deleted `wheel_velocity_pid.{h,cpp}`
-as a zero-instantiation class. Moving that law down to a `Hal::Wheel` is
-real, wanted work that has not happened; see
+as a zero-instantiation class. Relocated out of `core/` and renamed from
+`Core::DifferentialDrive` by sprint 136 ticket 006 ("control law out of
+`core/` — new `control/` layer"); pure relocation, the control law itself
+unchanged. Moving that law down further, onto a `Hal::Wheel`, is real,
+wanted work that has not happened; see
 [`src/firm/hal/DESIGN.md`](src/firm/hal/DESIGN.md) §4.
 
 See [`docs/design/design.md`](docs/design/design.md) §2 for the full

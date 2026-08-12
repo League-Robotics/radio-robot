@@ -1,21 +1,18 @@
 ---
 id: 008
 title: Documentation sweep + reorganization-proposal verification and closure
-status: open
-use-cases: ["SUC-002", "SUC-004"]
-depends-on: ["007"]
+status: in-progress
+use-cases:
+- SUC-002
+- SUC-004
+depends-on:
+- '007'
 github-issue: ''
 issue:
 - firmware-layering-cleanup-interfaces-to-hal-impls-to-platform-microbit.md
 - proposal-platform-hardware-hal-core-reorganization.md
 completes_issue:
   proposal-platform-hardware-hal-core-reorganization.md: false
-# Left off default (true) deliberately for the proposal issue only: this
-# ticket's own Acceptance Criteria allow the outcome "leave the issue
-# open/re-scoped to steps 7-8" as a valid judgment call, not just "move to
-# done" -- auto-archival on ticket completion would pre-empt that call.
-# The layering-cleanup issue (this ticket's other linked issue) keeps the
-# default: it archives once every ticket referencing it (003-009) is done.
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 

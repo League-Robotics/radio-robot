@@ -14,7 +14,7 @@ root: ../../../docs/design/design.md
 physical part, each holding that part's register map, timing quirks, and
 hardware workarounds and **nothing else**. It sits between `platform/`
 (bus and clock primitives, below) and `hal/` (the interfaces these drivers
-implement, above): a driver here reaches DOWN to a `Platform::I2CBus&` and
+implement, above): a driver here reaches DOWN to a `Hal::I2CBus&` and
 UP only as far as the `Hal::` interface it satisfies. Nothing here depends
 on the wire schema, on generated boot configuration, or on the loop that
 drives it.
@@ -26,7 +26,7 @@ code against either real silicon or `Platform::host`'s `SimPlant`.
 ## 2. Orientation — the three-way filing test
 
 A driver's directory says **who else could reuse it**, not what it does.
-`Platform::I2CBus&`-only is *not* sufficient to call something generic: a
+`Hal::I2CBus&`-only is *not* sufficient to call something generic: a
 bespoke board speaking its own wire protocol over a standard bus is still
 nobody else's device.
 
@@ -73,7 +73,7 @@ blocking retry loop); `present()` latches permanently once detection
 succeeds; `connected()` is the live, per-tick bus-health result; `tick
 (nowUs)` does the one real, rate-limited or split-phase, unit of bus work
 per call. No leaf sleeps, blocks, or retries internally — the caller (the
-loop, `app/robot_loop.cpp`) supplies "now" and decides the cadence.
+loop, `core/robot_loop.cpp`) supplies "now" and decides the cadence.
 
 For the full system-level flow (comms in → dispatch → motor service →
 state out → pace) and the schedule these leaves are ticked from, see root
@@ -87,16 +87,16 @@ state out → pace) and the schedule these leaves are ticked from, see root
   (`hal/device_config.h`/`hal/device_types.h`), never a `msg::*` or
   `Config::*` type. Breaking this couples a driver to the wire schema or
   to generated boot config and kills its reuse under `-DHOST_BUILD`/sim —
-  the composition root (`app/boot_wiring.*`, and `main.cpp` above it) is
+  the composition root (`core/boot_wiring.*`, and `main.cpp` above it) is
   the one place both a wire type and its HAL-local counterpart are
   reachable, and conversion happens only there.
 - **Dependencies point one way.** A driver may reach DOWN to `platform/`
   and name the `hal/` interface it implements. It may not reach UP into
-  `kinematics/`, `motion/`, or `app/`, and it may not include a driver
-  from another family directory. If two drivers need to share something,
-  that something belongs in `generic/` or in `hal/`.
+  `kinematics/`, `control/`, `motion/`, or `core/`, and it may not include
+  a driver from another family directory. If two drivers need to share
+  something, that something belongs in `generic/` or in `hal/`.
 - **No `#ifdef HOST_BUILD` forks inside a shared header:** the platform
-  seams (`Platform::Clock`, `Platform::Sleeper`, `Platform::I2CBus`) are
+  seams (`Hal::Clock`, `Hal::Sleeper`, `Hal::I2CBus`) are
   plain virtual bases with zero preprocessor conditionals. The real ARM
   implementation lives in its own `platform/microbit/microbit_*` file
   (which includes `MicroBit.h` and is therefore ARM-only); the host

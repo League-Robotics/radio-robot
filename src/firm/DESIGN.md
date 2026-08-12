@@ -26,13 +26,16 @@ this file's wire-framing content (§4) is kept current — updated again
 for sprint 124 ticket 014's protocol v5 doc pass.
 
 **Also not updated for the August 2026 platform/hardware/hal
-reorganization**, which is the larger of the two gaps now: `src/firm` is
-layered `platform/` → `hardware/` → `hal/` → `kinematics/` → `motion/` →
-`core/`, and the flat `app/` + `devices/` split this file's diagrams show
-no longer exists. The `Core::`-prefixed names appearing in the historical
-prose below were mechanically renamed from `App::` along with the code —
-read them as "the class that is called this NOW", not as evidence that any
-of the surrounding module layout is current. See
+reorganization, except §2's table and §3's dependency diagram (136-008
+reconciled those two to the current tree).** `src/firm` is layered
+`platform/` → `hardware/` → `hal/` → `kinematics/` → `control/` →
+`motion/` → `core/`, and the flat `app/` + `devices/` split this file's
+prose elsewhere still describes no longer exists. The `Core::`-prefixed
+names appearing in the historical prose below were mechanically renamed
+from `App::` along with the code — read them as "the class that is called
+this NOW", not as evidence that any of the surrounding module layout is
+current (the "Flow of one cycle" narrative in §3, in particular, predates
+sprint 128's `MoveQueue` deletion and is not reconciled here). See
 [`docs/design/design.md`](../../docs/design/design.md) §2 for the real
 map and each subsystem's own co-located `DESIGN.md` for its contract.
 
@@ -73,14 +76,21 @@ One row per one-level-down directory, each linking to its own co-located
 
 | Subsystem | Role |
 |---|---|
-| [`app/`](core/DESIGN.md) | The single cooperatively-timed control loop (`Core::RobotLoop`) and its passive modules: Comms, Telemetry, Drive, Odometry, MoveQueue, StateEstimator, Preamble. |
-| [`com/`](com/DESIGN.md) | ARM-only raw transports: USB CDC serial, the micro:bit radio, persisted radio-channel storage. |
+| [`platform/`](platform/DESIGN.md) | Board/runtime primitives: implements `Hal::I2CBus`/`Clock`/`Sleeper`/`Transport` per target — `microbit/` (CODAL) and `host/` (the sim, was `src/sim`). |
+| [`hardware/`](hardware/DESIGN.md) | Concrete device drivers (Nezha motors, OTOS, color/line sensors, HiWonder), filed by who else could reuse them: `generic/`, `nezha/`, `hiwonder/`, `planetx/`. |
+| [`hal/`](hal/DESIGN.md) | Interfaces for composable devices — `Hal::Motor`/`MotorDriver`/`Otos`/`ColorSensor`/`LineSensor`/`Clock`/`Sleeper`/`I2CBus`/`Transport`. Interfaces only, no chip knowledge. |
+| [`kinematics/`](kinematics/DESIGN.md) | `Kinematics::Model` + `Differential`/`Mecanum` — stateless twist↔wheel-speed maps, the only home for chassis geometry (track width, wheelbase). |
+| [`control/`](control/DESIGN.md) | `Control::DifferentialDrive` — the wheel-speed control law (`fastPid()` plus Stage A/B/C correction, adaptation, and stall/deficit-latch machinery). Relocated out of `core/`, 136-006. |
+| [`motion/`](motion/DESIGN.md) | The motion-control library (`Motion::Planner`, `Motion::Navigator`, `Motion::Odometry`) — moved back into `src/firm` from the sibling `src/motion` tree by the August 2026 reorganization. |
+| [`core/`](core/DESIGN.md) | The single cooperatively-timed control loop (`Core::RobotLoop`) and its passive modules: Comms, Telemetry, Configurator, Preamble, the Robot composition root. (Was `app/`.) |
 | [`config/`](config/DESIGN.md) | Generated boot configuration — per-robot calibration baked at build time from `data/robots/active_robot.json`. |
-| [`devices/`](hardware/DESIGN.md) | I2C-attached device leaves (Nezha motors, OTOS, color/line sensors), the shared `MotorArmor` policy, the velocity PID, and the pure `I2CBus`/`Clock`/`Sleeper` hardware seams. |
-| [`kinematics/`](kinematics/DESIGN.md) | Stateless differential-drive math: inverse/forward twist↔wheel maps, curvature-preserving saturation. |
 | [`messages/`](messages/DESIGN.md) | The wire schema: generated message structs, the generated envelope codec, the hand-written byte-level wire runtime. |
-| [`motion/`](motion/DESIGN.md) | Pure, bounded-motion stop/timeout comparison logic (`Motion::StopCondition`) — a fresh, tiny directory (116), not a revival of the larger `motion/` tree sprint 115 deleted. |
-| [`types/`](types/DESIGN.md) | `Types::RobotState` (sprint 124) — the dependency-free per-cycle blackboard struct `src/firm` and `src/firm/motion` both stand on, alongside `Motion::WheelSink`. Also holds vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
+| [`types/`](types/DESIGN.md) | `Types::RobotState` (sprint 124) — the dependency-free per-cycle blackboard struct `src/firm` and `src/firm/motion` both stand on. Also holds vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
+
+(`com/` used to be a further row here — 136-005 dissolved it into
+`Hal::Transport` + `platform/microbit/`; `devices/` used to be a further
+row — the pre-August-2026 reorganization split it into `hal/` and
+`hardware/` above.)
 
 (`src/firm` has no README stub — this file *is* the tree overview. The
 former `src/firm/README-DESIGN.md` pointer, which existed only while a
@@ -136,20 +146,25 @@ Boot is a separate loop: `Core::Preamble` steps per-device detection (one
 bounded probe per pass) while telemetry frames report detection status;
 command consumption starts only when `preamble.done()`.
 
-**Dependency direction** (arrows = "includes/uses"):
+**Dependency direction** (arrows = "includes/uses"; reconciled to the
+current tree, 136-008):
 
 ```
-main.cpp ──► app ──► devices ──► (nothing project-local except itself)
-   │          │  └─► messages, kinematics
-   │          └────► com (via ARM-only Transport adapters)
+main.cpp ──► core ──► control ──► kinematics ──► hal ──► platform
+   │          │           │            │           └──► (nothing project-local)
+   │          │           └────────────┴─────────► hardware ──► hal, platform
+   │          └──────────────────────────────────► messages
    ├────────► config ──► messages
-   └────────► com, devices, config
+   └────────► platform, hardware, hal, control, kinematics, config
 ```
 
-`devices/` is the bottom of the stack and deliberately includes nothing
-from `messages/` or `config/`. `kinematics/` and `messages/` are leaf
-libraries with no project dependencies of their own. The per-subsystem
-docs in §2 carry the module-level detail; this section is only the shape.
+`platform/` is the bottom of the stack and deliberately includes nothing
+project-local except `hal/` (the interfaces it implements). `hal/` and
+`messages/` are leaf libraries with no project dependencies of their own.
+`motion/` imports nothing from the rest of `src/firm` except `messages/`
+and `firm/types/` (its own, narrower rule — see `motion/DESIGN.md`). The
+per-subsystem docs in §2 carry the module-level detail; this section is
+only the shape.
 
 ## 4. Two Build Targets and the Wire Boundary
 

@@ -166,10 +166,12 @@ firmware runtime; the device itself never sees protobuf. It also emits
   bullet originally made (`0x00`-free, `0x0A` reserved as the two-terminator
   demux's OWN split byte). `Core::FrameKind` (`src/firm/core/comms.h`,
   cited by the pre-124-005 wording here) no longer exists — see
-  [`../app/DESIGN.md`](../core/DESIGN.md) §1 and
-  [`../com/DESIGN.md`](../com/DESIGN.md) §2 for the uniform-grammar
-  replacement. See `docs/protocol-v5.md` §2 for the full frame layout and
-  byte-budget derivation.
+  [`../core/DESIGN.md`](../core/DESIGN.md) §1 for the uniform-grammar
+  replacement (`com/DESIGN.md` no longer exists either, 136-005 dissolved
+  `com/`; the transport-invariant content it covered now lives in
+  [`../platform/DESIGN.md`](../platform/DESIGN.md)'s "Transport
+  invariants" section). See `docs/protocol-v5.md` §2 for the full frame
+  layout and byte-budget derivation.
   **124-003 (delimiter parameterization):** `cobsEncode()`/`cobsDecode()`
   gained a trailing `delimiter` byte parameter (default `0x00`, every
   pre-124 call site unaffected). The mechanism is an XOR of every output
@@ -186,8 +188,9 @@ firmware runtime; the device itself never sees protobuf. It also emits
   `decode_frame()`, hard-coded `delimiter=0x0A`) passes it explicitly —
   the live wire delimiter and the `\n` grammar terminator (issue §1/§2)
   are now the SAME byte, which is what makes `\n` a genuine,
-  unconditional line terminator for `com/`'s transports (see
-  [`../com/DESIGN.md`](../com/DESIGN.md) §2): a COBS-encoded frame body
+  unconditional line terminator for the transports (`com/` no longer
+  exists, 136-005; see [`../platform/DESIGN.md`](../platform/DESIGN.md)'s
+  "Transport invariants" section): a COBS-encoded frame body
   can never contain a literal `0x0A` by construction, so it can never be
   mistaken for a line boundary. `wire_runtime.h`'s own primitive-level
   default parameter stays `0x00` (unchanged — some non-live callers, e.g.

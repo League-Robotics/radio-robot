@@ -18,7 +18,7 @@ new class in `hardware/` plus one line in the composition root, and nothing
 else in the firmware changes.
 
 `hal/` sits above `platform/` and `hardware/` and below `kinematics/`,
-`motion/`, and `app/`.
+`control/`, `motion/`, and `core/`.
 
 ## 2. Orientation
 
