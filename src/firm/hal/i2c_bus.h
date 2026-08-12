@@ -1,6 +1,6 @@
-// i2c_bus.h — Platform::I2CBus: pure abstract I2C bus interface. Plain
-// virtual base (no preprocessor forks); the real ARM implementation lives
-// in microbit_i2c_bus.h/.cpp (Platform::MicroBitI2CBus).
+// i2c_bus.h — Hal::I2CBus: pure abstract I2C bus interface. Plain virtual
+// base (no preprocessor forks); the real ARM implementation lives in
+// platform/microbit/microbit_i2c_bus.h/.cpp (Platform::MicroBitI2CBus).
 //
 // Surface: exactly the 3 methods any command handler or device leaf calls
 // — write(), read(), and clearanceSafetyNetCount(). The diagnostic/stats
@@ -14,7 +14,7 @@
 #pragma once
 #include <cstdint>
 
-namespace Platform {
+namespace Hal {
 
 class I2CBus {
  public:
@@ -51,4 +51,4 @@ class I2CBus {
   virtual uint32_t clearanceSafetyNetCount() const = 0;
 };
 
-}  // namespace Platform
+}  // namespace Hal
