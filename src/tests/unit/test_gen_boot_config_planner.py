@@ -24,6 +24,39 @@ equivalent to proving Config::defaultPlannerLimits() itself.
 Collected under src/tests/unit/ (a generator/tooling-level check, not
 sim/bench/playfield-scoped -- see tests/CLAUDE.md); pyproject.toml's
 testpaths includes tests/unit.
+
+UPDATE (136-001, 2026-08-11): ``test_planner_config_for_config_reads_
+tovez_json`` used to assert against ``_EXPECTED_RAW``, a hardcoded literal
+snapshot of the values ``main.cpp``'s pre-129-009 block assigned. That
+snapshot went stale the moment ``tovez.json`` was legitimately
+re-measured/re-tuned after the migration -- ``control_period``/
+``actuation_delay`` moved 50.0 -> 32.0 (2026-08-07, ``kCycle`` re-pace)
+and ``heading_hold_gain`` was zeroed (130-011, a limit-cycle fix) -- the
+exact failure mode ``clasi/issues/later/B-gen-boot-config-parity-tests-
+encode-superseded-literals.md`` names for this file. The test now reads
+``tovez.json`` at test time and asserts the generator faithfully carries
+THOSE values through, so a legitimate re-measurement passes and a
+generator defect (wrong key, dropped field) still fails.
+
+``test_generate_emits_default_planner_limits_byte_identical_to_pre_
+ticket_literals`` is RENAMED and TRIMMED to ``test_generate_emits_
+default_planner_limits_with_130_009_removed_fields_absent``, not
+re-pinned -- its own old name said what it was: a one-time refactor guard
+proving 129-009's JSON migration moved main.cpp's literal block without
+changing any value. That moment has long passed, and pinning the literal
+values a second time would just reinstate the same failure at the next
+legitimate re-measurement -- exactly what B-gen-boot-config-parity-tests-
+encode-superseded-literals.md warns against. Every per-field literal
+assertion is DROPPED (redundant with the rewritten dict-level test's own
+exact-key-set check, which already fails if a removed field resurfaces
+in ``planner_config_for_config()``'s return value); the one thing that
+check alone could not catch -- a codegen TEMPLATE bug reintroducing a
+removed field's literal into the generated C++ text without it ever
+passing back through the dict -- is kept as this trimmed test's sole
+remaining job. This resolves the first two of B-gen-boot-config-parity-
+tests-encode-superseded-literals.md's three named tests (the third,
+test_default_drive_group_matches_tovez_json, lives in test_gen_boot_
+config_robot_groups.py and is fixed there the same way).
 """
 
 import json
@@ -43,57 +76,53 @@ if str(_SCRIPTS_DIR) not in sys.path:
 import gen_boot_config as gbc  # noqa: E402  (path must be set up before this import)
 
 
-# The exact values main.cpp's deleted literal block assigned (see the
-# ticket's own issue text and the pre-ticket git history of
-# src/firm/main.cpp) -- tovez.json's new `planner` block carries these
-# forward verbatim (value-preserving migration, no behavior change).
-_EXPECTED_RAW = {
-    "vMax": 400.0,
-    "aMax": 300.0,
-    "aDecel": 250.0,
-    "omegaMax": 3.0,
-    "alphaMax": 6.0,
-    "alphaDecel": 5.0,
-    "jerkMax": 1500.0,
-    "yawJerkMax": 30.0,
-    "controlPeriod": 50.0,   # 130-007: one 50ms control period everywhere (was 47.0)
-    "actuationDelay": 50.0,  # 130-007: one 50ms control period everywhere (was 47.0)
-    "settleRestVelocity": 10.0,
-    "settleRestOmega": 0.16,
-    "settleEpsilonLinear": 4.0,
-    "settleEpsilonAngular": 0.035,
-    "headingHoldGain": 2.0,
-    "decelPlanFraction": 0.4,
-    # 134-003 terminal fine-align -- NOT part of the pre-ticket main.cpp
-    # literal block this dict otherwise mirrors; a genuinely new pair of
-    # planner keys. alignTol is [rad]: 0.017453 rad IS the report's 1.0 deg
-    # operating point, converted once in tovez.json. If this assertion ever
-    # reads ~1.0 instead, someone has stored degrees in a radian field --
-    # a 57x error that nothing downstream would catch.
-    "alignTol": 0.017453,
-    "alignMaxNudges": 6,
-}
-# 130-009: requireSettle/settleWindow, the M4 duty-stage gains (velKp/
-# velKi/velIMax/velIAccelGate/dutyFloor, plus the derived velKff/velKaff),
-# and the dead planner-side trim gains (trimKp/trimKi/trimIMax/trimMax,
-# plus the derived trimKaff) are all removed from
-# planner_config_for_config()'s own output -- see that function's own
-# docstring. plant_gain/plant_tau are still present in tovez.json (kept as
-# recorded measured data) but no longer read by this generator at all.
-
-
 def test_planner_config_for_config_reads_tovez_json():
     """planner_config_for_config() reads tovez.json's real planner block --
-    every field byte-identical to the pre-ticket main.cpp literals."""
+    every field matches the JSON's OWN current value, read at test time
+    (not a historical snapshot -- see this module's own dated note
+    above)."""
     cfg = json.loads(_TOVEZ_JSON.read_text())
 
     result = gbc.planner_config_for_config(cfg)
 
-    for field, expected in _EXPECTED_RAW.items():
-        assert result[field] == expected, f"{field}: {result[field]!r} != {expected!r}"
-    assert set(result.keys()) == set(_EXPECTED_RAW.keys()), (
+    expected = {
+        "vMax": float(cfg["planner"]["v_max"]),
+        "aMax": float(cfg["planner_shaper"]["a_max"]),
+        "aDecel": float(cfg["planner_shaper"]["a_decel"]),
+        "omegaMax": float(cfg["planner"]["omega_max"]),
+        "alphaMax": float(cfg["planner_shaper"]["alpha_max"]),
+        "alphaDecel": float(cfg["planner_shaper"]["alpha_decel"]),
+        "jerkMax": float(cfg["planner_shaper"]["jerk_max"]),
+        "yawJerkMax": float(cfg["planner_shaper"]["yaw_jerk_max"]),
+        # 130-007/2026-08-07: control_period/actuation_delay are
+        # "= Core::RobotLoop::kCycle" by construction and move every time
+        # the loop period does (they were 50.0, now 32.0) -- a hardcoded
+        # literal here turns each legitimate re-pace into a spurious
+        # failure, exactly what this module's dated note above describes.
+        "controlPeriod": float(cfg["planner"]["control_period"]),
+        "actuationDelay": float(cfg["planner"]["actuation_delay"]),
+        "settleRestVelocity": float(cfg["planner"]["settle_rest_velocity"]),
+        "settleRestOmega": float(cfg["planner"]["settle_rest_omega"]),
+        "settleEpsilonLinear": float(cfg["planner"]["settle_epsilon_linear"]),
+        "settleEpsilonAngular": float(cfg["planner"]["settle_epsilon_angular"]),
+        # 130-011 zeroed this (limit-cycle fix) -- was 2.0 in the pre-ticket
+        # main.cpp literal block this test used to pin against.
+        "headingHoldGain": float(cfg["planner"]["heading_hold_gain"]),
+        "decelPlanFraction": float(cfg["planner"]["decel_plan_fraction"]),
+        # 134-003 terminal fine-align. alignTol is [rad]: 0.017453 rad IS
+        # the report's 1.0 deg operating point, converted once in
+        # tovez.json. If this assertion ever reads ~1.0 instead, someone
+        # has stored degrees in a radian field -- a 57x error that nothing
+        # downstream would catch.
+        "alignTol": float(cfg["planner"]["align_tol"]),
+        "alignMaxNudges": int(cfg["planner"]["align_max_nudges"]),
+    }
+
+    for field, exp in expected.items():
+        assert result[field] == exp, f"{field}: {result[field]!r} != {exp!r}"
+    assert set(result.keys()) == set(expected.keys()), (
         f"planner_config_for_config() field set changed: {sorted(result.keys())} != "
-        f"{sorted(_EXPECTED_RAW.keys())}"
+        f"{sorted(expected.keys())}"
     )
 
 
@@ -131,13 +160,23 @@ def test_missing_whole_planner_block_fails_generator():
     assert exc_info.value.key_path.startswith("planner.")
 
 
-def test_generate_emits_default_planner_limits_byte_identical_to_pre_ticket_literals():
+def test_generate_emits_default_planner_limits_with_130_009_removed_fields_absent():
     """generate()'s output gains defaultPlannerLimits(), carrying tovez.json's
     planner block through into the emitted C++ literals -- additive (the
-    existing generated functions are still emitted, unchanged), and
-    byte-identical to the values main.cpp's deleted literal block used to
-    assign directly (this ticket's own 'same values, new home' acceptance
-    criterion)."""
+    existing generated functions are still emitted, unchanged).
+
+    RENAMED and TRIMMED, 136-001 (see this module's own dated note above):
+    this used to be test_generate_emits_default_planner_limits_byte_
+    identical_to_pre_ticket_literals, a one-time refactor guard pinning
+    every emitted literal to 129-009's own pre-migration values. That
+    guard's job ended the moment tovez.json was legitimately re-measured
+    (see the dated note); what remains genuinely worth guarding at the
+    STRING-output layer -- as opposed to the dict-output layer, already
+    covered by test_planner_config_for_config_reads_tovez_json's own
+    exact-key-set assertion -- is that 130-009's removed fields never
+    resurface in the generated C++ text specifically (a template bug could
+    reintroduce one without changing planner_config_for_config()'s own
+    returned dict)."""
     cfg = json.loads(_TOVEZ_JSON.read_text())
     content = gbc.generate(cfg, "data/robots/tovez.json")
 
@@ -149,31 +188,8 @@ def test_generate_emits_default_planner_limits_byte_identical_to_pre_ticket_lite
     # (superseded by Config::defaultDriveGroup(), msg::Drive) and is no
     # longer emitted at all -- see config/boot_config.h's own note at that
     # struct's former declaration site.
-
-    # New (129-009): the planner boot-config generator function, carrying
-    # tovez.json's real (pre-ticket-identical) values through as C++
-    # literals -- see PlannerBootConfig's own doc comment
-    # (src/firm/config/boot_config.h) for the field list.
     assert "PlannerBootConfig defaultPlannerLimits()" in content
-    assert "cfg.vMax = 400.0f;" in content
-    assert "cfg.aMax = 300.0f;" in content
-    assert "cfg.aDecel = 250.0f;" in content
-    assert "cfg.omegaMax = 3.0f;" in content
-    assert "cfg.alphaMax = 6.0f;" in content
-    assert "cfg.alphaDecel = 5.0f;" in content
-    assert "cfg.jerkMax = 1500.0f;" in content
-    assert "cfg.yawJerkMax = 30.0f;" in content
-    assert "cfg.controlPeriod = 50.0f;" in content    # 130-007: was 47.0f
-    assert "cfg.actuationDelay = 50.0f;" in content    # 130-007: was 47.0f
-    assert "cfg.settleRestVelocity = 10.0f;" in content
-    assert "cfg.settleRestOmega = 0.16f;" in content
-    assert "cfg.settleEpsilonLinear = 4.0f;" in content
-    assert "cfg.settleEpsilonAngular = 0.035f;" in content
-    assert "cfg.headingHoldGain = 2.0f;" in content
-    assert "cfg.decelPlanFraction = 0.4f;" in content
-    # 134-003: [rad], not degrees -- see _EXPECTED_RAW's own note.
-    assert "cfg.alignTol = 0.017453f;" in content
-    assert "cfg.alignMaxNudges = 6;" in content
+
     # 130-009: requireSettle/settleWindow, the M4 duty-stage gains (velKff/
     # velKp/velKi/velIMax/velKaff/velIAccelGate/dutyFloor), and the dead
     # planner-side trim gains (trimKp/trimKi/trimIMax/trimKaff/trimMax) no

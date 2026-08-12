@@ -29,6 +29,24 @@ Covers:
      ``wheel_diameter_mm``). This is expected, accepted mid-sprint state
      (sprint.md Design Rationale Decision 2), not a test bug -- ticket 017
      re-differentiates these two snapshots.
+
+UPDATE (136-001, 2026-08-11): ``test_calibration_commands_tovez_json_
+snapshot`` used to hardcode its expected command list as a literal
+snapshot (e.g. ``"OL 1.0275"``), which broke the moment tovez.json's OTOS
+linear_scale was legitimately re-measured to 1.0188 (2026-08-05,
+tape-measured) -- the failure mode clasi/issues/later/B-gen-boot-config-
+parity-tests-encode-superseded-literals.md names. It now builds its
+expected list from the loaded config's OWN fields at test time, keeping
+the STRUCTURE (line order, which keys appear, the per-key format/timeout)
+hand-written so a structural regression in calibration_commands() itself
+still fails this test, while the VALUES track whatever tovez.json
+currently says. ``test_calibration_commands_tovez_nocal_json_snapshot``
+is UNCHANGED -- confirmed the 136-001 stall-key JSON addition (tovez_
+nocal.json gained wheel_control.stall_speed/stall_demand/stall_window)
+does not touch this test's output: ``calibration_kwargs()`` reads only
+``pid_kp``/``pid_ki``/``pid_kaff``/``pid_i_max``/``pid_max`` from
+``wheel_control``, none of which are the new stall_* keys, and
+``stall_*`` is not part of the OI/OL/OA OTOS surface either.
 """
 from __future__ import annotations
 
@@ -142,29 +160,15 @@ def test_calibration_kwargs_never_includes_otos_keys() -> None:
 # ---------------------------------------------------------------------------
 
 
-# The pid.* values here track data/robots/tovez.json's wheel_control group and
-# are NOT free-standing expectations. They were all 0 while Stage B shipped
-# inert (130-004 through 133-003); 133-004 bench-tuned Stage B on `tovez` and
-# promoted the measured set, so this snapshot moved with it. Note the two
-# non-obvious wire spellings, which are the reason this snapshot is worth
-# keeping: `pid.kff` is the ACCEL feedforward `pid_kaff` (still 0 -- the
-# cmdAccel path is unvalidated), and `pid.kaw` is `pid_max`, the total
-# fast-loop authority cap, not an anti-windup gain. `pid.kp` is 0 as a
-# MEASURED result, not because Stage B is still inert -- 133-004 found the
-# velocity-domain P term bought no distance fidelity and cost straight-line
-# heading, so the position-domain I term (`pid.ki`) does the work alone.
-_EXPECTED_COMMANDS_TOVEZ = [
-    ("SET ml=0.716500", 200),
-    ("SET mr=0.707700", 200),
-    ("SET pid.kp=0", 200),
-    ("SET pid.ki=6", 200),
-    ("SET pid.kff=0", 200),
-    ("SET pid.iMax=60", 200),
-    ("SET pid.kaw=100", 200),
-    ("OI", 500),
-    ("OL 1.0275", 200),
-    ("OA 0.987", 200),
-]
+# NOTE the two non-obvious wire spellings, which are why this snapshot's
+# STRUCTURE (below, in test_calibration_commands_tovez_json_snapshot) is
+# worth pinning even though the VALUES are no longer hardcoded here:
+# `pid.kff` is the ACCEL feedforward `pid_kaff` (still 0 -- the cmdAccel
+# path is unvalidated), and `pid.kaw` is `pid_max`, the total fast-loop
+# authority cap, not an anti-windup gain. `pid.kp` is 0 as a MEASURED
+# result, not because Stage B is inert -- 133-004 found the velocity-domain
+# P term bought no distance fidelity and cost straight-line heading, so the
+# position-domain I term (`pid.ki`) does the work alone.
 
 _EXPECTED_COMMANDS_TOVEZ_NOCAL = [
     ("SET ml=0.704851", 200),
@@ -181,11 +185,26 @@ _EXPECTED_COMMANDS_TOVEZ_NOCAL = [
 
 
 def test_calibration_commands_tovez_json_snapshot() -> None:
+    """STRUCTURE is pinned (line order, which keys appear, the per-key
+    format/timeout); VALUES are read from tovez.json at test time via the
+    loaded config, not re-hardcoded -- see this module's own dated note
+    above for why (linear_scale alone has already moved twice)."""
     cfg = load_robot_config(_ROBOTS_DIR / "tovez.json")
 
     cmds = calibration_commands(cfg)
 
-    assert cmds == _EXPECTED_COMMANDS_TOVEZ
+    assert cmds == [
+        (f"SET ml={cfg.motors.travel_calib_left:.6f}", 200),
+        (f"SET mr={cfg.motors.travel_calib_right:.6f}", 200),
+        (f"SET pid.kp={cfg.wheel_control.pid_kp:g}", 200),
+        (f"SET pid.ki={cfg.wheel_control.pid_ki:g}", 200),
+        (f"SET pid.kff={cfg.wheel_control.pid_kaff:g}", 200),
+        (f"SET pid.iMax={cfg.wheel_control.pid_i_max:g}", 200),
+        (f"SET pid.kaw={cfg.wheel_control.pid_max:g}", 200),
+        ("OI", 500),
+        (f"OL {cfg.otos.linear_scale:g}", 200),
+        (f"OA {cfg.otos.angular_scale:g}", 200),
+    ]
 
 
 def test_calibration_commands_tovez_nocal_json_snapshot() -> None:

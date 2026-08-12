@@ -1,6 +1,8 @@
 ---
-status: pending
+status: done
 priority: medium
+tickets:
+- '001'
 ---
 
 # Three `gen_boot_config` parity tests encode superseded literals

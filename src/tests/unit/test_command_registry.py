@@ -26,6 +26,12 @@ when someone remembers to regenerate and commit. Two things are checked:
    `_verb_rows()` walk in gen_messages.py, so they could agree with each
    other while still drifting from the actual protocol spec; this second
    check pins the registry's actual content against that spec.
+
+UPDATE (136-001, 2026-08-11): `_EXPECTED_BINARY` gained `CALIBRATE` --
+commit 3a05bab9 added the verb to commands.proto (2026-08-08) but never
+back-filled it here or into docs/protocol-v5.md's own verb table
+(section 2.4, "Command registry and the cleartext reply plane"), which is
+also updated by this same change.
 """
 
 import re
@@ -95,7 +101,14 @@ _EXPECTED_CLEARTEXT = {"HELLO", "PING", "ID", "VER", "DEVICE", "PONG",
                        "SEED", "POSE"}
 _EXPECTED_BINARY = {"MOVE", "CONFIG", "STOP", "WHEELS", "ESTOP", "TLM", "OK", "ERR",
                     "GET_CONFIG", "CFG", "SET_FIELD",
-                    "GO_TO"}  # 135-004: new binary verb, Verb.GO_TO = 24
+                    "GO_TO",  # 135-004: new binary verb, Verb.GO_TO = 24
+                    # 136-001: back-filling commit 3a05bab9 ("feat: CALIBRATE
+                    # -- recalibrate the OTOS gyro on demand, robot parked",
+                    # 2026-08-08), which added the verb to commands.proto
+                    # (Verb.CALIBRATE = 25, binary = true) but never updated
+                    # this test's own expected set or docs/protocol-v5.md's
+                    # verb table -- see this file's own header docstring.
+                    "CALIBRATE"}
 
 
 def _parse_cpp_verb_table(commands_h: str) -> list[tuple[str, bool]]:

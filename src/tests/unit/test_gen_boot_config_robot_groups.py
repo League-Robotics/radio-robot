@@ -32,6 +32,35 @@ the regenerated boot_config.cpp is verified separately (`just build-sim`).
 Collected under src/tests/unit/ (a generator/tooling-level check, not
 sim/bench/playfield-scoped -- see tests/CLAUDE.md); pyproject.toml's
 testpaths includes tests/unit.
+
+UPDATE (136-001, 2026-08-11): four tests below used to assert against
+hardcoded literal snapshots of tovez.json's values, pinned when each test
+was written. All four went stale the same way -- the robot was
+legitimately re-measured/re-tuned after the snapshot was taken, exactly
+the failure mode clasi/issues/later/B-gen-boot-config-parity-tests-
+encode-superseded-literals.md names:
+
+  * test_default_geometry_group_matches_tovez_json -- rotational_slip
+    moved 0.9117 -> 0.9371 (5cf125f0, re-measured against the v5 MOVE
+    angle-stop path). NOT one of the issue's three originally-named
+    tests (that measurement landed in the same commit the sprint's own
+    baseline was taken from), but the identical pattern -- fixed here
+    rather than left for a later ticket to re-discover.
+  * test_default_drive_group_matches_tovez_json -- wheel_gain_left_accel/
+    wheel_gain_right_decel moved off IDENTITY (1.0) to 132-019's
+    bench-fitted 0.9075/0.800. One of the issue's three named tests.
+  * test_default_wheel_control_group_matches_tovez_json -- pid_ki/pid_
+    i_max/pos_err_max/pid_max moved off Stage-B-inert zeros to 133-004's
+    tuned values; this test already tracked that once (see its own
+    docstring) but the fix re-pinned a NEW snapshot rather than reading
+    the file, so it broke again.
+  * test_default_otos_group_matches_tovez_json -- linear_scale moved
+    1.0275 -> 1.0188 (2026-08-05, tape-measured).
+
+All four now read tovez.json at test time and assert the generator
+faithfully carries THOSE values through, so a legitimate re-measurement
+passes and a genuine generator defect (wrong key, dropped field, a
+formatting bug) still fails.
 """
 
 import json
@@ -105,15 +134,19 @@ def test_default_geometry_group_matches_tovez_json():
     """Geometry: geometry.trackwidth, calibration.rotational_slip/
     rotation_gain_pos/rotation_offset_deg -- a representative sample of
     trackwidth_for_config()/rotational_slip_for_config()/
-    rotation_calibration_for_config()'s own real tovez.json values."""
-    content = gbc.generate(_tovez_cfg(), "data/robots/tovez.json")
+    rotation_calibration_for_config()'s own real tovez.json values, read
+    at test time (not a historical snapshot -- see this module's own
+    dated note above)."""
+    cfg = _tovez_cfg()
+    content = gbc.generate(cfg, "data/robots/tovez.json")
+    geom = cfg["geometry"]
 
-    assert "cfg.trackwidth = 128.0f;" in content
-    assert "cfg.rotational_slip = 0.9117f;" in content
-    assert "cfg.rotation_gain_pos = 1.061f;" in content
-    assert "cfg.rotation_offset = -5.54f;" in content
-    assert "cfg.rotation_gain_neg = 1.071f;" in content
-    assert "cfg.rotation_offset_neg = -7.04f;" in content
+    assert f"cfg.trackwidth = {gbc._f(geom['trackwidth'])};" in content
+    assert f"cfg.rotational_slip = {gbc._f(geom['rotational_slip'])};" in content
+    assert f"cfg.rotation_gain_pos = {gbc._f(geom['rotation_gain_pos'])};" in content
+    assert f"cfg.rotation_offset = {gbc._f(geom['rotation_offset'])};" in content
+    assert f"cfg.rotation_gain_neg = {gbc._f(geom['rotation_gain_neg'])};" in content
+    assert f"cfg.rotation_offset_neg = {gbc._f(geom['rotation_offset_neg'])};" in content
 
 
 def test_default_motors_group_matches_tovez_json_drive_pair_only():
@@ -135,9 +168,11 @@ def test_default_motors_group_matches_tovez_json_drive_pair_only():
 
 def test_default_drive_group_matches_tovez_json():
     """Drive: control.duty_per_speed_left/right/crawl_pulse plus the
-    Stage-A per-wheel commanded->actual correction (identity on tovez.json
-    as of 2026-07-31, see that file's own _wheel_correction_note) -- the
-    sprint's headline per-wheel drive-calibration surface (SUC-006).
+    Stage-A per-wheel commanded->actual correction -- the sprint's
+    headline per-wheel drive-calibration surface (SUC-006), read at test
+    time (not a historical snapshot -- see this module's own dated note
+    above: wheel_gain_left_accel/wheel_gain_right_decel moved off
+    IDENTITY to 132-019's bench-fitted values, 0.9075/0.800).
 
     duty_per_speed_left/right corrected 0.00187325 -> 0.001182 (132-009,
     the-configuration-object.md): the JSON field now matches
@@ -146,50 +181,63 @@ def test_default_drive_group_matches_tovez_json():
     stale figure the-configuration-object.md's Cause section cites as the
     ~1.6x host-vs-firmware disagreement. See tovez.json's own
     _duty_per_speed_correction_note for the full writeup."""
-    content = gbc.generate(_tovez_cfg(), "data/robots/tovez.json")
+    cfg = _tovez_cfg()
+    content = gbc.generate(cfg, "data/robots/tovez.json")
+    drive = cfg["drive"]
 
-    assert "cfg.duty_per_speed_left = 0.001182f;" in content
-    assert "cfg.duty_per_speed_right = 0.001182f;" in content
-    assert "cfg.crawl_pulse = 0.0f;" in content
-    assert "cfg.wheel_gain_left_accel = 1.0f;" in content
-    assert "cfg.wheel_intercept_left_accel = 0.0f;" in content
-    assert "cfg.wheel_gain_right_decel = 1.0f;" in content
-    assert "cfg.wheel_intercept_right_decel = 0.0f;" in content
+    assert f"cfg.duty_per_speed_left = {gbc._f(drive['duty_per_speed_left'])};" in content
+    assert f"cfg.duty_per_speed_right = {gbc._f(drive['duty_per_speed_right'])};" in content
+    assert f"cfg.crawl_pulse = {gbc._f(drive['crawl_pulse'])};" in content
+    assert f"cfg.wheel_gain_left_accel = {gbc._f(drive['wheel_gain_left_accel'])};" in content
+    assert f"cfg.wheel_intercept_left_accel = {gbc._f(drive['wheel_intercept_left_accel'])};" in content
+    assert f"cfg.wheel_gain_right_decel = {gbc._f(drive['wheel_gain_right_decel'])};" in content
+    assert f"cfg.wheel_intercept_right_decel = {gbc._f(drive['wheel_intercept_right_decel'])};" in content
 
 
 def test_default_wheel_control_group_matches_tovez_json():
     """WheelControl: Stage C's live population-measured figures (vMin/
-    biasMax) plus Stage B, which is LIVE as of 133-004.
+    biasMax) plus Stage B, which is LIVE as of 133-004, plus the
+    2026-08-08 stall-detection triple -- all read from tovez.json at test
+    time (not a historical snapshot -- see this module's own dated note
+    above).
 
     Stage B was inert (every ``pid_*`` at 0) from 130-004 until 133-004,
-    and this test asserted those zeros. 133-004 is the bench session that
-    tuned it on `tovez` and promoted the measured values, so the zeros are
-    no longer the expectation -- see `data/robots/tovez.json`'s own
-    `_stage_b_tuning_note` for the run behind each figure.
-
-    TWO fields are still zero, and BOTH are asserted rather than dropped,
-    because in this group a zero is a real setting and not an absence:
+    and this test used to assert those zeros as a hardcoded snapshot;
+    133-004 is the bench session that tuned it on `tovez` and promoted
+    the measured values, and the RE-pinned snapshot broke the same way the
+    first one did -- see `data/robots/tovez.json`'s own
+    `_stage_b_tuning_note` for the run behind each figure. Two fields are
+    genuinely, deliberately zero (not merely untuned) and are still worth
+    calling out even though the assertion below no longer hardcodes them:
 
       * ``pid_kp`` is zero as a MEASURED RESULT (133-004 answered 130-004's
         Open Question 4 with a no -- the velocity-domain P term bought no
         distance fidelity and cost straight-line heading; the position I
-        term does the work). Asserting it guards against someone "fixing"
-        an apparently-untuned gain.
+        term does the work).
       * ``pid_kaff`` is zero because the ``cmdAccel`` path is still
         unvalidated.
     """
-    content = gbc.generate(_tovez_cfg(), "data/robots/tovez.json")
+    cfg = _tovez_cfg()
+    content = gbc.generate(cfg, "data/robots/tovez.json")
+    wc = cfg["wheel_control"]
 
-    assert "cfg.v_min = 99.7f;" in content
-    assert "cfg.bias_max = 23.8f;" in content
-    assert "cfg.tau_adapt = 30.0f;" in content
-    assert "cfg.a_steady = 30.0f;" in content
-    assert "cfg.pid_kp = 0.0f;" in content
-    assert "cfg.pid_ki = 6.0f;" in content
-    assert "cfg.pid_i_max = 60.0f;" in content
-    assert "cfg.pos_err_max = 10.0f;" in content
-    assert "cfg.pid_max = 100.0f;" in content
-    assert "cfg.pid_kaff = 0.0f;" in content
+    assert f"cfg.v_min = {gbc._f(wc['v_min'])};" in content
+    assert f"cfg.bias_max = {gbc._f(wc['bias_max'])};" in content
+    assert f"cfg.tau_adapt = {gbc._f(wc['tau_adapt'])};" in content
+    assert f"cfg.a_steady = {gbc._f(wc['a_steady'])};" in content
+    assert f"cfg.pid_kp = {gbc._f(wc['pid_kp'])};" in content
+    assert f"cfg.pid_ki = {gbc._f(wc['pid_ki'])};" in content
+    assert f"cfg.pid_i_max = {gbc._f(wc['pid_i_max'])};" in content
+    assert f"cfg.pos_err_max = {gbc._f(wc['pos_err_max'])};" in content
+    assert f"cfg.pid_max = {gbc._f(wc['pid_max'])};" in content
+    assert f"cfg.pid_kaff = {gbc._f(wc['pid_kaff'])};" in content
+    # 2026-08-08 stall-detection directive (this ticket's own Cluster 1) --
+    # tovez.json has carried real, nonzero values for these since that
+    # date; asserted here alongside the rest of the group for the same
+    # "generator faithfully emits what the JSON says" property.
+    assert f"cfg.stall_speed = {gbc._f(wc['stall_speed'])};" in content
+    assert f"cfg.stall_demand = {gbc._f(wc['stall_demand'])};" in content
+    assert f"cfg.stall_window = {gbc._f(wc['stall_window'])};" in content
 
 
 def test_default_planner_group_matches_tovez_json():
@@ -268,14 +316,18 @@ def test_default_otos_group_matches_tovez_json():
     """Otos: geometry.odometry_offset_mm.{x,y,yaw_rad} + calibration.
     otos_linear_scale/otos_angular_scale -- the config MULTIPLIER domain
     (trap 3, sprint.md), unconverted here (ticket 010's job on the live
-    wire path, not this baking function)."""
-    content = gbc.generate(_tovez_cfg(), "data/robots/tovez.json")
+    wire path, not this baking function), read at test time (not a
+    historical snapshot -- see this module's own dated note above:
+    linear_scale moved 1.0275 -> 1.0188, 2026-08-05 tape measurement)."""
+    cfg = _tovez_cfg()
+    content = gbc.generate(cfg, "data/robots/tovez.json")
+    otos = cfg["otos"]
 
-    assert "cfg.offset_x = -47.7f;" in content
-    assert "cfg.offset_y = 3.5f;" in content
-    assert "cfg.offset_yaw = 0.0f;" in content
-    assert "cfg.linear_scale = 1.0275f;" in content
-    assert "cfg.angular_scale = 0.987f;" in content
+    assert f"cfg.offset_x = {gbc._f(otos['offset_x'])};" in content
+    assert f"cfg.offset_y = {gbc._f(otos['offset_y'])};" in content
+    assert f"cfg.offset_yaw = {gbc._f(otos['offset_yaw'])};" in content
+    assert f"cfg.linear_scale = {gbc._f(otos['linear_scale'])};" in content
+    assert f"cfg.angular_scale = {gbc._f(otos['angular_scale'])};" in content
 
 
 def test_default_estimator_group_matches_tovez_json():

@@ -35,6 +35,18 @@ assert nothing about the mechanism.
 
 Collected under ``src/tests/unit/`` -- ``pyproject.toml``'s ``testpaths``
 includes ``tests/unit``.
+
+UPDATE (136-001, 2026-08-11): ``test_no_wheel_control_field_was_renumbered_
+or_reused`` gained ``stall_speed``/``stall_demand``/``stall_window`` (wire
+field numbers 13/14/15, the 2026-08-08 stall-detection directive) to its
+expected dict -- a legitimate addition, not a renumbering defect; the
+existing 12 entries are unchanged. Separately, ``togov.json``/
+``tovez_nocal.json`` gained the same three ``wheel_control`` keys (held at
+the documented inert ``0.0``, matching ``gopiv.json``'s 2026-08-09
+precedent), which is what made ``test_bake_path_emits_the_files_own_pos_
+err_max``/``test_read_back_equals_file_for_the_whole_wheel_control_group``
+pass again for those two profiles -- no test code change was needed for
+either.
 """
 
 import json
@@ -92,10 +104,16 @@ def test_pos_err_max_is_wheel_control_field_12():
 
 
 def test_no_wheel_control_field_was_renumbered_or_reused():
-    """The eleven pre-133-002 fields keep their exact wire numbers, and no
-    two fields share one. A renumber is a silent wire-format break: a host
-    and a firmware built either side of it would write different fields
-    with no error anywhere."""
+    """The eleven pre-133-002 fields plus 133-002's own pos_err_max keep
+    their exact wire numbers, and no two fields share one. A renumber is a
+    silent wire-format break: a host and a firmware built either side of
+    it would write different fields with no error anywhere.
+
+    UPDATED 136-001: stall_speed/stall_demand/stall_window (13/14/15) join
+    this dict -- a legitimate ADDITION (the 2026-08-08 stall-detection
+    directive), not a renumbering defect. The existing 12 entries are
+    unchanged; this test was failing only because it did not yet know
+    about the three new field numbers."""
     numbers = _wheel_control_field_numbers()
     assert numbers == {
         "v_min": 1,
@@ -110,6 +128,9 @@ def test_no_wheel_control_field_was_renumbered_or_reused():
         "pid_kaff": 10,
         "pid_max": 11,
         "pos_err_max": 12,
+        "stall_speed": 13,
+        "stall_demand": 14,
+        "stall_window": 15,
     }
     assert len(set(numbers.values())) == len(numbers), "duplicate field number"
 
