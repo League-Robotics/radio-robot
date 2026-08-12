@@ -1,9 +1,11 @@
 ---
 id: '002'
 title: Full-suite baseline sweep -- triage, formally accept, and record
-status: open
-use-cases: ["SUC-001"]
-depends-on: ["001"]
+status: in-progress
+use-cases:
+- SUC-001
+depends-on:
+- '001'
 github-issue: ''
 issue: sprint-135-pre-existing-test-failures-need-triage.md
 completes_issue: true
