@@ -1,7 +1,7 @@
 ---
 id: 009
 title: Final regression gate -- full pytest, gopiv bench verification, tovez restore
-status: in-progress
+status: done
 use-cases:
 - SUC-005
 depends-on:
