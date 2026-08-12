@@ -16,10 +16,11 @@ actually passes):
 
 **Zero non-`xfail` failures.** Every `xfail` in all three suites is now
 `strict=True` (a future accidental fix shows up as a loud XPASS failure,
-not a silent no-op) and every reason string names a tracked issue. For the
-exact commit this table was measured at, check this file's own `git log`/
-`git blame` on this section — pinning a literal hash here would rot the
-moment this file is next edited for an unrelated reason.
+not a silent no-op) and every reason string names a tracked issue. Measured
+at commit `1e200e1a` (sprint 136 ticket 002's own commit, 2026-08-11) — for
+later drift, prefer this file's own `git log`/`git blame` on this section
+over trusting the pinned hash forever, since the table itself will go
+stale the moment the tree changes even though the hash stays correct.
 
 Measured on clean HEAD before this ticket (`5cf125f0`, sprint-planning
 time): `src/tests/unit` 14 failed / 961 passed; `src/tests/sim` 39 failed /
