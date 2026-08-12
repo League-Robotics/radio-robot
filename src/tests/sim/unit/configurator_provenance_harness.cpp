@@ -49,7 +49,7 @@
 
 #include "core/boot_calibration.h"
 #include "core/configurator.h"
-#include "core/differential_drive.h"
+#include "control/differential_drive.h"
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
 #include "config/robot.h"
@@ -227,7 +227,7 @@ int main() {
 
   RecordingMotor motorL, motorR;
   RecordingOtos otos;
-  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/128.0f);
+  Control::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/128.0f);
   Motion::PlannerLimits limits;
   Motion::Planner planner(limits);
   Motion::NavigatorLimits navigatorLimits;

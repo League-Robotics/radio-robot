@@ -63,7 +63,7 @@ msg::ConfigSource Configurator::configSource(msg::ConfigGroupTarget target) cons
   return groupSource_[slot];
 }
 
-Configurator::Configurator(DifferentialDrive& drive, Hal::Motor& motorL,
+Configurator::Configurator(Control::DifferentialDrive& drive, Hal::Motor& motorL,
                            Hal::Motor& motorR, Hal::Otos& otos,
                            Motion::Planner& planner,
                            Motion::NavigatorLimits& navigatorLimits,

@@ -45,7 +45,7 @@ _ROBOT_LOOP_SRC = _SOURCE_DIR / "core" / "robot_loop.cpp"
 _PREAMBLE_SRC = _SOURCE_DIR / "core" / "preamble.cpp"
 _COMMS_SRC = _SOURCE_DIR / "core" / "comms.cpp"
 _TELEMETRY_SRC = _SOURCE_DIR / "core" / "telemetry.cpp"
-_DRIVE_SRC = _SOURCE_DIR / "core" / "differential_drive.cpp"
+_DRIVE_SRC = _SOURCE_DIR / "control" / "differential_drive.cpp"
 # 122-002: Core::applyOtosSample() split out of odometry.cpp (now
 # Motion::Odometry, src/firm/motion/) into this new base-side file --
 # robot_loop.cpp's own applyOtosSample() call needs it linked in.

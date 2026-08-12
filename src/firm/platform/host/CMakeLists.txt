@@ -113,7 +113,11 @@ set(APP_SOURCES
     # library, above), so SimHarness::Core::setDebugSink(&comms_) needs a
     # real definition, not the ARM-release inline no-op stub.
     "${SOURCE_DIR}/core/debug.cpp"
-    "${SOURCE_DIR}/core/differential_drive.cpp"
+    # control/differential_drive.cpp (136-006, "control law out of core/ --
+    # new control/ layer"): Control::DifferentialDrive, relocated verbatim
+    # out of core/ -- the control law itself unchanged, only its namespace
+    # and directory.
+    "${SOURCE_DIR}/control/differential_drive.cpp"
     "${SOURCE_DIR}/core/preamble.cpp"
     "${SOURCE_DIR}/core/robot_loop.cpp"
     "${SOURCE_DIR}/core/telemetry.cpp"

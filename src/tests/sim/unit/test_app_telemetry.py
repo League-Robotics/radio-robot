@@ -29,7 +29,7 @@ _TELEMETRY_SRC = _SOURCE_DIR / "core" / "telemetry.cpp"
 _COMMS_SRC = _SOURCE_DIR / "core" / "comms.cpp"
 # 130-005: Telemetry::update() takes a const Core::DifferentialDrive& now (its own
 # observability accessors) -- drive.cpp must link too.
-_DRIVE_SRC = _SOURCE_DIR / "core" / "differential_drive.cpp"
+_DRIVE_SRC = _SOURCE_DIR / "control" / "differential_drive.cpp"
 _WIRE_SRC = _SOURCE_DIR / "messages" / "wire.cpp"
 _WIRE_RUNTIME_SRC = _SOURCE_DIR / "messages" / "wire_runtime.cpp"
 

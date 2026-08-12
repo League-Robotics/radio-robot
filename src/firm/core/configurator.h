@@ -110,7 +110,7 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "core/differential_drive.h"
+#include "control/differential_drive.h"
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
 #include "config/robot.h"
@@ -144,7 +144,7 @@ class Configurator {
   // Motion::Navigator was constructed with a reference to (boot_wiring.h's
   // RobotGraph) -- install(NAVIGATOR) writes straight into it, per this
   // class's own re-appliability table NAVIGATOR row above.
-  Configurator(DifferentialDrive& drive, Hal::Motor& motorL, Hal::Motor& motorR,
+  Configurator(Control::DifferentialDrive& drive, Hal::Motor& motorL, Hal::Motor& motorR,
                Hal::Otos& otos, Motion::Planner& planner,
                Motion::NavigatorLimits& navigatorLimits,
                Config::TuningStore* tuningStore = nullptr);
@@ -357,7 +357,7 @@ class Configurator {
   // Flash write policy: save only when the serialized snapshot changed.
   void persistTuningIfChanged();
 
-  DifferentialDrive& drive_;
+  Control::DifferentialDrive& drive_;
   Hal::Motor& motorL_;
   Hal::Motor& motorR_;
   Hal::Otos& otos_;

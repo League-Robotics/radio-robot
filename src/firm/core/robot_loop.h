@@ -26,7 +26,7 @@
 
 #include "core/comms.h"
 #include "core/configurator.h"
-#include "core/differential_drive.h"
+#include "control/differential_drive.h"
 #include "core/preamble.h"
 #include "core/telemetry.h"
 #include "hal/clock.h"
@@ -124,7 +124,7 @@ class RobotLoop {
   RobotLoop(Hal::I2CBus& bus, Hal::Motor& motorL,
             Hal::Motor& motorR, Hal::Otos& otos,
             Hal::ColorSensor& color, Hal::LineSensor& line,
-            Comms& comms, Telemetry& tlm, DifferentialDrive& drive,
+            Comms& comms, Telemetry& tlm, Control::DifferentialDrive& drive,
             Configurator& configurator, Motion::Odometry& odom,
             Motion::Planner& planner, Motion::Navigator& navigator,
             Preamble& preamble, const Hal::Clock& clock,
@@ -354,7 +354,7 @@ class RobotLoop {
   // the other three fields are meaningless and DBG:clear has nothing to
   // restore.
   bool dbgTuningBaselined_ = false;
-  DifferentialDrive::AdaptationBounds dbgBoundsBaseline_{};
+  Control::DifferentialDrive::AdaptationBounds dbgBoundsBaseline_{};
   float dbgDutyPerSpeedBaseLeft_ = 0.0f;   // [duty/(mm/s)]
   float dbgDutyPerSpeedBaseRight_ = 0.0f;  // [duty/(mm/s)]
 #endif
@@ -367,7 +367,7 @@ class RobotLoop {
   Hal::LineSensor& line_;
   Comms& comms_;
   Telemetry& tlm_;
-  DifferentialDrive& drive_;
+  Control::DifferentialDrive& drive_;
   Configurator& configurator_;
   Motion::Odometry& odom_;
   Motion::Planner& planner_;

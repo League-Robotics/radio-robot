@@ -33,7 +33,7 @@
 #include <string>
 
 #include "core/boot_calibration.h"
-#include "core/differential_drive.h"
+#include "control/differential_drive.h"
 #include "config/robot.h"
 #include "hal/motor.h"
 #include "hardware/generic/real_otos.h"
@@ -235,22 +235,22 @@ int main() {
     checkFloatEq(lowAlpha.velocityFilterWeight(), 1.0f, "velocityFilterWeight() below floor (0.0)");
   }
 
-  // --- Core::DifferentialDrive::configure() -------------------------------------------
+  // --- Control::DifferentialDrive::configure() -------------------------------------------
 
   beginScenario("Drive::configure() installs Stage B/C via setControlGains()/setAdaptationBounds()");
   {
     RecordingMotor left, right;
-    Core::DifferentialDrive drive(left, right, /*trackWidth=*/128.0f);
+    Control::DifferentialDrive drive(left, right, /*trackWidth=*/128.0f);
     drive.configure(config);
 
-    const Core::DifferentialDrive::ControlGains& gains = drive.controlGains();
+    const Control::DifferentialDrive::ControlGains& gains = drive.controlGains();
     checkFloatEq(gains.kp, config.wheelControl.pid_kp, "controlGains().kp");
     checkFloatEq(gains.ki, config.wheelControl.pid_ki, "controlGains().ki");
     checkFloatEq(gains.iMax, config.wheelControl.pid_i_max, "controlGains().iMax");
     checkFloatEq(gains.kaff, config.wheelControl.pid_kaff, "controlGains().kaff");
     checkFloatEq(gains.pidMax, config.wheelControl.pid_max, "controlGains().pidMax");
 
-    const Core::DifferentialDrive::AdaptationBounds& bounds = drive.adaptationBounds();
+    const Control::DifferentialDrive::AdaptationBounds& bounds = drive.adaptationBounds();
     checkFloatEq(bounds.vMin, config.wheelControl.v_min, "adaptationBounds().vMin");
     checkFloatEq(bounds.biasMax, config.wheelControl.bias_max, "adaptationBounds().biasMax");
     checkFloatEq(bounds.tauAdapt, config.wheelControl.tau_adapt, "adaptationBounds().tauAdapt");
@@ -285,7 +285,7 @@ int main() {
     state.time.cyclePeriod = 50000;         // [us]
 
     RecordingMotor leftA, rightA;
-    Core::DifferentialDrive driveA(leftA, rightA, /*trackWidth=*/128.0f);
+    Control::DifferentialDrive driveA(leftA, rightA, /*trackWidth=*/128.0f);
     Config::Robot configGain1 = isolatedConfig;
     configGain1.drive.wheel_gain_left_accel = 1.0f;
     driveA.configure(configGain1);
@@ -294,7 +294,7 @@ int main() {
     checkFloatEq(leftA.lastDuty, 200.0f, "tick() duty with wheel_gain_left_accel == 1.0");
 
     RecordingMotor leftB, rightB;
-    Core::DifferentialDrive driveB(leftB, rightB, /*trackWidth=*/128.0f);
+    Control::DifferentialDrive driveB(leftB, rightB, /*trackWidth=*/128.0f);
     Config::Robot configGain2 = isolatedConfig;
     configGain2.drive.wheel_gain_left_accel = 2.0f;
     driveB.configure(configGain2);

@@ -55,10 +55,10 @@
 // explaining why -- see TestSim::SimHarness's own composeRobot() call.
 #pragma once
 
+#include "control/differential_drive.h"
 #include "core/boot_calibration.h"
 #include "core/comms.h"
 #include "core/configurator.h"
-#include "core/differential_drive.h"
 #include "core/preamble.h"
 #include "core/robot_loop.h"
 #include "core/telemetry.h"
@@ -234,7 +234,7 @@ class RobotGraph {
   Hardware::LineSensorLeaf& line() { return line_; }
   Comms& comms() { return comms_; }
   Telemetry& telemetry() { return tlm_; }
-  DifferentialDrive& drive() { return drive_; }
+  Control::DifferentialDrive& drive() { return drive_; }
   Motion::Odometry& odometry() { return odom_; }
   Motion::Planner& planner() { return planner_; }
   Motion::Navigator& navigator() { return navigator_; }
@@ -319,7 +319,7 @@ class RobotGraph {
 
   Comms comms_;
   Telemetry tlm_;
-  DifferentialDrive drive_;
+  Control::DifferentialDrive drive_;
   Motion::Odometry odom_;
 
   // otos_ binds unconditionally to realOtos_ -- the FAKE_OTOS bench

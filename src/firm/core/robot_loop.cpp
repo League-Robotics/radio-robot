@@ -74,7 +74,7 @@ uint32_t packColor(const Hal::ColorReading& reading, uint32_t fullScale) {  // [
 RobotLoop::RobotLoop(Hal::I2CBus& bus, Hal::Motor& motorL,
                       Hal::Motor& motorR, Hal::Otos& otos,
                       Hal::ColorSensor& color, Hal::LineSensor& line,
-                      Comms& comms, Telemetry& tlm, DifferentialDrive& drive,
+                      Comms& comms, Telemetry& tlm, Control::DifferentialDrive& drive,
                       Configurator& configurator, Motion::Odometry& odom,
                       Motion::Planner& planner, Motion::Navigator& navigator,
                       Preamble& preamble, const Hal::Clock& clock,

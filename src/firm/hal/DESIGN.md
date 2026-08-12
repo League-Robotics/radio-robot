@@ -91,21 +91,25 @@ before:
 1. **`Hal::Motor` is duty-commanded, not angular.** Its one command verb is
    `setDuty()` (open loop, `[-1, 1]`). There is no closed-loop
    angular-velocity entry point to build `Wheel` on top of.
-2. **The wheel-speed control law lives in `Core::DifferentialDrive`** — `fastPid()`
-   plus the Stage A/B/C correction, adaptation and stall machinery in
-   `app/drive.cpp`. `Motion::WheelVelocityPid`, which CLAUDE.md's
-   architecture note still names as the owner, **does not exist**: sprint
-   128 ticket 015 deleted `wheel_velocity_pid.{h,cpp}` as a
-   zero-instantiation class (see `src/firm/motion/CMakeLists.txt`'s own note).
-   The proposal flagged "conflicting signals on which is authoritative" —
-   this is the resolution, and CLAUDE.md is the stale one.
+2. **The wheel-speed control law lives in `Control::DifferentialDrive`** —
+   `fastPid()` plus the Stage A/B/C correction, adaptation and stall
+   machinery in `control/differential_drive.cpp` (relocated out of
+   `core/` and renamed from `Core::DifferentialDrive` by 136-006, "control
+   law out of `core/` — new `control/` layer"; pure relocation, the
+   control law itself unchanged — see `control/DESIGN.md`).
+   `Motion::WheelVelocityPid`, which CLAUDE.md's architecture note still
+   names as the owner, **does not exist**: sprint 128 ticket 015 deleted
+   `wheel_velocity_pid.{h,cpp}` as a zero-instantiation class (see
+   `src/firm/motion/CMakeLists.txt`'s own note). The proposal flagged
+   "conflicting signals on which is authoritative" — this is the
+   resolution, and CLAUDE.md is the stale one.
 
 So `Hal::Wheel` is not a new interface next to these; it is the
-destination of a migration that moves `Core::DifferentialDrive`'s control law down a
+destination of a migration that moves `Control::DifferentialDrive`'s control law down a
 layer and re-scopes it per wheel. Adding an empty `Wheel` interface now
 would create a second, competing home for wheel control while the real one
-keeps running in `app/` — the exact ambiguity this reorganization exists to
-remove.
+keeps running in `control/` — the exact ambiguity this reorganization
+exists to remove.
 
 **`Core::FakeOtos` implemented `Hal::Otos` from `app/`, not `hardware/`**
 (kept for history; the class itself is gone, 136-003 — zero robot JSON, CI

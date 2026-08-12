@@ -41,7 +41,7 @@
 #include <string>
 
 #include "core/comms.h"
-#include "core/differential_drive.h"
+#include "control/differential_drive.h"
 #include "core/telemetry.h"
 #include "hal/motor.h"
 #include "firm/types/robot_state.h"
@@ -73,17 +73,17 @@ class StubMotor : public Hal::Motor {
   void rebaseline() override {}
 };
 
-// A single, never-ticked Core::DifferentialDrive -- every scenario below only needs
+// A single, never-ticked Control::DifferentialDrive -- every scenario below only needs
 // update()'s new Drive& parameter for its OBSERVABILITY accessors
 // (dutyPerSpeedLeft/Right()/biasLeft/Right()/pidLeft/Right()/
 // deficitLeft/Right()), all of which are safe to read on a freshly
 // constructed, uncalibrated Drive (they return their default-initialized
 // 0/0/false). Function-local statics so construction order relative to
 // this TU's other file-scope objects is never in question.
-Core::DifferentialDrive& testDrive() {
+Control::DifferentialDrive& testDrive() {
   static StubMotor left;
   static StubMotor right;
-  static Core::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
+  static Control::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
   return drive;
 }
 

@@ -6,9 +6,11 @@
 #include "firm/types/robot_state.h"
 #include "messages/telemetry.h"
 
-namespace Core {
-
+namespace Control {
 class DifferentialDrive;
+}  // namespace Control
+
+namespace Core {
 
 
 constexpr uint32_t kFlagOtosPresent = 1u << 0;
@@ -136,7 +138,7 @@ class Telemetry {
 
   explicit Telemetry(Comms& comms);
 
-  void update(const Types::RobotState& state, const DifferentialDrive& drive);
+  void update(const Types::RobotState& state, const Control::DifferentialDrive& drive);
 
   void setLiveFlag(uint32_t bit, bool active);
 

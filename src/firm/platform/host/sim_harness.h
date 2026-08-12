@@ -58,7 +58,7 @@ namespace TestSim {
 class SimHarness {
  public:
   // trackWidth: [mm] -- passed to BOTH the SimPlant's own OtosPlant and the
-  // real Core::DifferentialDrive/Core::Odometry instances Core::composeRobot() constructs
+  // real Control::DifferentialDrive/Core::Odometry instances Core::composeRobot() constructs
   // (via a BootOverrides -- see this constructor's own comment below), so
   // the simulated OTOS chip and firmware's own odometry describe the same
   // wheelbase. Defaults to TestSim::kDefaultTrackWidth (SimPlant's own).
@@ -137,12 +137,12 @@ class SimHarness {
                                                     &kSimControlPeriod, &kIdentityOtosConfig,
                                                     &kIdentityWheelCorrection,
                                                     &kIdentityNavigatorYawSign})) {
-    // SIM OVERRIDE: composeRobot() already installed Core::DifferentialDrive's
+    // SIM OVERRIDE: composeRobot() already installed Control::DifferentialDrive's
     // calibration via Configurator::loadBaked()+install() (boot through
     // the SAME path main.cpp uses), baking config_.drive.duty_per_speed_
     // left/right -- the active robot JSON's own measured plant constant
     // (132-009: Configurator::install() now reads this from the JSON
-    // rather than a hardcoded Core::DifferentialDrive::kDutyPerSpeed C++ literal, but
+    // rather than a hardcoded Control::DifferentialDrive::kDutyPerSpeed C++ literal, but
     // it is still a REAL-HARDWARE gearbox measurement). That is wrong for
     // THIS plant:
     // TestSim::WheelPlant is a fixed synthetic plant (velocity
@@ -251,7 +251,7 @@ class SimHarness {
   }
 
   // injectWheels() -- the dumb teleop primitive (§2): straight to
-  // Core::DifferentialDrive, superseding the planner, held for `duration` ms.
+  // Control::DifferentialDrive, superseding the planner, held for `duration` ms.
   void injectWheels(float vLeft, float vRight, float duration,  // [mm/s] [mm/s] [ms]
                     uint32_t id = 0, uint32_t corrId = 0) {
     injectCommand(TestSupport::armorWheelsCommand(vLeft, vRight, duration, id, corrId));
@@ -402,12 +402,12 @@ class SimHarness {
   Hardware::NezhaMotor& motorLeft() { return graph_.motorLeft(); }
   Hardware::NezhaMotor& motorRight() { return graph_.motorRight(); }
 
-  // drive -- Core::DifferentialDrive now holds the unified wheel-speed controller
+  // drive -- Control::DifferentialDrive now holds the unified wheel-speed controller
   // (drive.h's own header): setControlGains()/controlGains() (Stage B),
   // setAdaptationBounds()/adaptationBounds() (Stage C) a test needs to
   // push directly or read back -- the CONFIG-patch routing
   // Configurator::applyMotorConfigPatch() implements (130-005).
-  Core::DifferentialDrive& drive() { return graph_.drive(); }
+  Control::DifferentialDrive& drive() { return graph_.drive(); }
   Motion::Planner& planner() { return graph_.planner(); }
   // navigator -- 135-004: Motion::Navigator's own observability
   // (active()/replaceCount()/tickCount()), exposed the same way planner()

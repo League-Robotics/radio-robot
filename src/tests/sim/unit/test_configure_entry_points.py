@@ -34,7 +34,7 @@ _UNIT_DIR = pathlib.Path(__file__).resolve().parent
 _HARNESS_SRC = _UNIT_DIR / "configure_entry_points_harness.cpp"
 
 _APP_SOURCES = [
-    _SOURCE_DIR / "core" / "differential_drive.cpp",
+    _SOURCE_DIR / "control" / "differential_drive.cpp",
     _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 _MOTION_SOURCES = [
