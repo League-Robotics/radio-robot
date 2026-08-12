@@ -37,13 +37,13 @@ nobody else's device.
   - `motor_armor.h` — `MotorArmor`, a decorator over *any* `Hal::Motor`
     (reversal dwell, deadband, standstill-guarded resets, wedge
     detection). Generic by the same test: it names no chip.
-  - `board_motor.*` — `BoardMotor`, one channel of any `Hal::MotorBoard`
-    presented as a `Hal::Motor`. Board-agnostic by construction.
+  - `motor_driver_channel.*` — `MotorDriverChannel`, one channel of any `Hal::MotorDriver`
+    presented as a `Hal::Motor`. Driver-agnostic by construction.
 - **Named hardware families** — a specific peripheral-board family that is
   not itself a compute target. One directory per family:
   - `nezha/` — `NezhaMotor`, this project's own motor-controller board.
-  - `hiwonder/` — `HiwonderBoard`, the HiWonder 4-channel encoder driver
-    behind `Hal::MotorBoard`. Not wired in yet.
+  - `hiwonder/` — `HiwonderDriver`, the HiWonder 4-channel encoder driver
+    behind `Hal::MotorDriver`. Not wired in yet.
   - `planetx/` — `ColorSensorLeaf`, `LineSensorLeaf` (the PlanetX
     ecosystem parts at 0x43/0x1A). `ColorSensorLeaf` also detects an
     APDS9960 at 0x39 as a fallback, which *is* a generic part — splitting

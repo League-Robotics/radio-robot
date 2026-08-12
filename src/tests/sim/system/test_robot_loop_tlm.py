@@ -97,7 +97,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _KINEMATICS_SOURCES = [
-    _REPO_ROOT / "src" / "firm" / "kinematics" / "differential_kinematics.cpp",
+    _REPO_ROOT / "src" / "firm" / "kinematics" / "differential.cpp",
 ]
 
 _CXX_STANDARD = "c++20"

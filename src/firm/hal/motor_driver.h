@@ -1,7 +1,7 @@
-// motor_board.h -- Hal::MotorBoard: the interface every multi-channel
+// motor_driver.h -- Hal::MotorDriver: the interface every multi-channel
 // smart motor-driver board implements.
 //
-// NOT WIRED IN YET: nothing constructs a MotorBoard today. Wiring
+// NOT WIRED IN YET: nothing constructs a MotorDriver today. Wiring
 // instructions: docs/hiwonder/hiwonder-motor-board.md section 3.
 // Reference documentation for the whole family: that same file.
 //
@@ -11,7 +11,7 @@
 // loop, and report cumulative encoder counts. This interface is exactly
 // that contract, so swapping boards is one new implementation class
 // plus one line in the composition root -- no change to
-// Hardware::BoardMotor, Core::DifferentialDrive, the planner, or anything above.
+// Hardware::MotorDriverChannel, Control::DifferentialDrive, the planner, or anything above.
 //
 // Deliberately NOT in the interface: register maps, I2C addresses,
 // motor-type configuration, unit scaling. Those are each board's own
@@ -24,11 +24,11 @@
 
 namespace Hal {
 
-class MotorBoard {
+class MotorDriver {
  public:
   static constexpr int kMaxChannels = 4;
 
-  virtual ~MotorBoard() = default;
+  virtual ~MotorDriver() = default;
 
   // Configure and zero the board. False means the board never acked --
   // callers treat that as "absent" and must not drive.

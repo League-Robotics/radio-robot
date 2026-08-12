@@ -35,7 +35,7 @@ _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "devices_otos_harness.c
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
-_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "kinematics" / "differential_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "kinematics" / "differential.cpp"
 _OTOS_SRC = _HARDWARE_DIR / "generic" / "real_otos.cpp"
 
 # messages/common.h documents its own target as "CODAL C++11" — build the

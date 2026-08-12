@@ -10,7 +10,7 @@ implementations it needs (``src/firm/control/differential_drive.cpp``,
 ``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's real Platform::I2CBus
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
 physics dependencies, ``src/firm/hardware/nezha/nezha_motor.cpp``,
-``src/firm/kinematics/differential_kinematics.cpp``) with ``-DHOST_BUILD``, against the SAME
+``src/firm/kinematics/differential.cpp``) with ``-DHOST_BUILD``, against the SAME
 headers every ARM build compiles. Control::DifferentialDrive holds no controller of its own
 (open-loop duty from calibrated speed, drive.h's own header) -- 128-015
 deleted the zero-instantiation motion-local wheel-velocity PID class
@@ -46,7 +46,7 @@ _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "hardware" / "nezha" / "nezha_motor.cpp"
-_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "kinematics" / "differential_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "kinematics" / "differential.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard.
 _CXX_STANDARD = "c++20"

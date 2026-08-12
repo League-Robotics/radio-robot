@@ -1,6 +1,6 @@
-// board_motor.cpp -- see board_motor.h; reference documentation at
+// motor_driver_channel.cpp -- see motor_driver_channel.h; reference documentation at
 // docs/hiwonder/hiwonder-motor-board.md (cited as "doc s1.5" etc.).
-#include "hardware/generic/board_motor.h"
+#include "hardware/generic/motor_driver_channel.h"
 
 #include <cmath>
 #include <cstdlib>
@@ -8,48 +8,48 @@
 
 namespace Hardware {
 
-void BoardMotor::begin() {
+void MotorDriverChannel::begin() {
   zeroPending_ = true;  // real zero captured on the first tick with data
-  offset_ = board_.total(channel_);
+  offset_ = driver_.total(channel_);
   position_ = 0.0f;
   velocity_ = 0.0f;
   lastCounts_ = 0;
   deltaRingN_ = 0;
 }
 
-void BoardMotor::setDuty(float duty) {
+void MotorDriverChannel::setDuty(float duty) {
   if (duty > 1.0f) duty = 1.0f;
   if (duty < -1.0f) duty = -1.0f;
   appliedDuty_ = duty;
   commanded_ = commanded_ || duty != 0.0f;
-  // duty IS the normalized fraction the board interface wants; the
-  // board owns the mapping onto its native encoding.
-  board_.stageSpeed(channel_, duty * static_cast<float>(config_.fwdSign));
+  // duty IS the normalized fraction the driver interface wants; the
+  // driver owns the mapping onto its native encoding.
+  driver_.stageSpeed(channel_, duty * static_cast<float>(config_.fwdSign));
 }
 
-void BoardMotor::setNeutral(Hal::Neutral) {
+void MotorDriverChannel::setNeutral(Hal::Neutral) {
   // An explicit zero write, never silence: speed commands LATCH on
   // these boards and there is no watchdog, so a crashed or quiet host
   // leaves the wheel driving forever (doc s1.3). The zero is staged
   // here and flushed by the next exchange (write-on-change fires on
   // the transition; a failed write retries until it lands).
   appliedDuty_ = 0.0f;
-  board_.stageSpeed(channel_, 0.0f);
+  driver_.stageSpeed(channel_, 0.0f);
 }
 
-bool BoardMotor::reconfigure(const Hal::MotorConfig& config) {
+bool MotorDriverChannel::reconfigure(const Hal::MotorConfig& config) {
   // Guard per the interface contract: refuse when genuinely in motion.
   if (commanded_ && std::fabs(velocity_) > 5.0f) return false;  // [mm/s]
   config_ = config;
   return true;
 }
 
-void BoardMotor::tick(uint64_t nowUs) {
+void MotorDriverChannel::tick(uint64_t nowUs) {
   // First channel of the cycle pays the exchange; the rest serve from
-  // the same cached read (guarded inside the Hal::MotorBoard base).
-  board_.exchangeOncePerCycle(nowUs);
-  if (!board_.connected()) return;
-  const int32_t counts = board_.total(channel_);
+  // the same cached read (guarded inside the Hal::MotorDriver base).
+  driver_.exchangeOncePerCycle(nowUs);
+  if (!driver_.connected()) return;
+  const int32_t counts = driver_.total(channel_);
   if (zeroPending_) {
     offset_ = counts;
     zeroPending_ = false;
@@ -76,7 +76,7 @@ void BoardMotor::tick(uint64_t nowUs) {
                           static_cast<float>(mag) >
                               kDoubleRatio * static_cast<float>(median);
     const float ticks = isDouble ? 2.0f : 1.0f;
-    velocity_ = countsToMm(delta) / (ticks * board_.encoderTick());
+    velocity_ = countsToMm(delta) / (ticks * driver_.encoderTick());
     // The ring stores the PER-TICK magnitude, so a split double does
     // not drag the median it will be compared against next time.
     deltaRing_[deltaRingN_ % kDeltaRing] =
@@ -91,12 +91,12 @@ void BoardMotor::tick(uint64_t nowUs) {
   }
 }
 
-void BoardMotor::resetPosition() {
-  offset_ = board_.total(channel_);
+void MotorDriverChannel::resetPosition() {
+  offset_ = driver_.total(channel_);
   position_ = 0.0f;
 }
 
-void BoardMotor::rebaseline() {
+void MotorDriverChannel::rebaseline() {
   // Contract (robot_loop::publishWheel): software-only re-anchor that
   // brings position() back inside the wire bound. The zero on these
   // boards is purely a host-side offset, so the re-anchor IS the

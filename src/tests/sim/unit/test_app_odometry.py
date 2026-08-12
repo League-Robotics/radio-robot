@@ -6,7 +6,7 @@ implementations it needs (``src/firm/core/odometry.cpp``,
 ``src/firm/platform/host/sim_plant.cpp`` -- ticket 108-002's real Platform::I2CBus
 implementation -- plus its own ``src/tests/sim/plant/{wheel,otos}_plant.cpp``
 physics dependencies, ``src/firm/hardware/nezha/nezha_motor.cpp``,
-``src/firm/hardware/generic/real_otos.cpp``, ``src/firm/kinematics/differential_kinematics.cpp``) with
+``src/firm/hardware/generic/real_otos.cpp``, ``src/firm/kinematics/differential.cpp``) with
 ``-DHOST_BUILD``, against the SAME headers every ARM build compiles.
 Mirrors ``test_app_drive.py``'s exact shape: compile with the system C++
 compiler, run the resulting binary, assert it exits 0.
@@ -45,7 +45,7 @@ _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
 _NEZHA_MOTOR_SRC = _SOURCE_DIR / "hardware" / "nezha" / "nezha_motor.cpp"
 _OTOS_SRC = _SOURCE_DIR / "hardware" / "generic" / "real_otos.cpp"
-_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "kinematics" / "differential_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "kinematics" / "differential.cpp"
 
 # Matches every other src/tests/sim/unit harness's own compiled standard.
 _CXX_STANDARD = "c++20"

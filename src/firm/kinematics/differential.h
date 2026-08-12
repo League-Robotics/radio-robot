@@ -1,11 +1,11 @@
-// differential_kinematics.h -- Kinematics::DifferentialKinematics: the
-// two-wheel twist<->wheel-speed map, plus curvature-preserving saturation.
+// differential.h -- Kinematics::Differential: the two-wheel twist<->wheel-
+// speed map, plus curvature-preserving saturation.
 //
 // This is the former `BodyKinematics` free-function namespace
 // (src/motion/body_kinematics.h), unchanged math, behind
 // Kinematics::Model. The static members below ARE those free functions,
 // with the same signatures and the same bodies -- every existing call site
-// swapped `BodyKinematics::` for `DifferentialKinematics::` and nothing
+// swapped `BodyKinematics::` for `Differential::` and nothing
 // else. The virtual overrides call the statics with the instance's own
 // trackWidth_, so there is exactly one copy of each equation.
 //
@@ -21,9 +21,9 @@
 
 namespace Kinematics {
 
-class DifferentialKinematics : public Model {
+class Differential : public Model {
  public:
-  explicit DifferentialKinematics(float trackWidth)  // [mm]
+  explicit Differential(float trackWidth)  // [mm]
       : trackWidth_(trackWidth) {}
 
   int wheelCount() const override { return 2; }

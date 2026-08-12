@@ -36,7 +36,7 @@ _HARNESS_SRC = pathlib.Path(__file__).resolve().parent / "devices_sensors_harnes
 _SIM_PLANT_SRC = _INFRA_SIM_DIR / "sim_plant.cpp"
 _WHEEL_PLANT_SRC = _PLANT_DIR / "wheel_plant.cpp"
 _OTOS_PLANT_SRC = _PLANT_DIR / "otos_plant.cpp"
-_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "kinematics" / "differential_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "kinematics" / "differential.cpp"
 _COLOR_SENSOR_SRC = _HARDWARE_DIR / "planetx" / "color_sensor.cpp"
 _LINE_SENSOR_SRC = _HARDWARE_DIR / "planetx" / "line_sensor.cpp"
 

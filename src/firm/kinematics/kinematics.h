@@ -7,9 +7,9 @@
 // about the chassis.
 //
 // Implementations:
-//   - Kinematics::DifferentialKinematics (differential_kinematics.h) -- two
+//   - Kinematics::Differential (differential.h) -- two
 //     wheels, no lateral velocity. Every robot in this project today.
-//   - Kinematics::MecanumKinematics (mecanum_kinematics.h) -- four wheels,
+//   - Kinematics::Mecanum (mecanum.h) -- four wheels,
 //     holonomic. Togov is a mecanum chassis (data/robots/togov.json), which
 //     is why this is the second implementation and not a hypothetical.
 //

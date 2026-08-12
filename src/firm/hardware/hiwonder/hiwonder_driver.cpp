@@ -1,13 +1,13 @@
-// hiwonder_board.cpp -- see hiwonder_board.h; reference documentation at
+// hiwonder_driver.cpp -- see hiwonder_driver.h; reference documentation at
 // docs/hiwonder/hiwonder-motor-board.md (cited as "doc s1.2" etc.).
-#include "hardware/hiwonder/hiwonder_board.h"
+#include "hardware/hiwonder/hiwonder_driver.h"
 
 #include <cmath>
 #include <cstring>
 
 namespace Hardware {
 
-bool HiwonderBoard::init(uint8_t motorType) {
+bool HiwonderDriver::init(uint8_t motorType) {
   uint8_t typeFrame[2] = {kRegMotorType, motorType};
   int rc = bus_.write(kAddr << 1, typeFrame, sizeof(typeFrame));
   uint8_t polFrame[2] = {kRegPolarity, 0};
@@ -23,7 +23,7 @@ bool HiwonderBoard::init(uint8_t motorType) {
   return connected_;
 }
 
-void HiwonderBoard::stageSpeed(int channel, float fraction) {
+void HiwonderDriver::stageSpeed(int channel, float fraction) {
   if (channel < 0 || channel >= kMaxChannels) return;
   if (fraction > 1.0f) fraction = 1.0f;
   if (fraction < -1.0f) fraction = -1.0f;
@@ -34,7 +34,7 @@ void HiwonderBoard::stageSpeed(int channel, float fraction) {
   pwmMode_ = false;
 }
 
-void HiwonderBoard::stagePwm(int channel, float fraction) {
+void HiwonderDriver::stagePwm(int channel, float fraction) {
   if (channel < 0 || channel >= kMaxChannels) return;
   if (fraction > 1.0f) fraction = 1.0f;
   if (fraction < -1.0f) fraction = -1.0f;
@@ -44,7 +44,7 @@ void HiwonderBoard::stagePwm(int channel, float fraction) {
   pwmMode_ = true;
 }
 
-void HiwonderBoard::readTotals() {
+void HiwonderDriver::readTotals() {
   // One auto-incrementing 16-byte read returns all four totals (this
   // board auto-increments; its Yahboom sibling does not). Motion
   // confirmation for the doc s1.4 write policy falls out of the same
@@ -64,7 +64,7 @@ void HiwonderBoard::readTotals() {
   }
 }
 
-void HiwonderBoard::exchange(int32_t* totalsOut) {
+void HiwonderDriver::exchange(int32_t* totalsOut) {
   // Command write policy (doc s1.4, from the measured latch behavior in
   // doc s1.3):
   //   - speed commands LATCH while the motor is moving, so a steady
@@ -119,7 +119,7 @@ void HiwonderBoard::exchange(int32_t* totalsOut) {
   if (totalsOut != nullptr) std::memcpy(totalsOut, totals_, sizeof(totals_));
 }
 
-void HiwonderBoard::readEncoders(int32_t* totalsOut) {
+void HiwonderDriver::readEncoders(int32_t* totalsOut) {
   readTotals();
   if (totalsOut != nullptr) std::memcpy(totalsOut, totals_, sizeof(totals_));
 }

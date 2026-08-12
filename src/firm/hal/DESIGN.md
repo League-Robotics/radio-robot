@@ -30,7 +30,7 @@ hal/
   i2c_bus.h        Hal::I2CBus       — the bus interface
   transport.h      Hal::Transport    — a line-oriented byte pipe (serial/radio)
   motor.h          Hal::Motor        — one actuator channel
-  motor_board.h    Hal::MotorBoard   — a multi-channel smart driver board
+  motor_driver.h   Hal::MotorDriver  — a multi-channel smart driver board
   otos.h           Hal::Otos         — absolute pose/twist sensor
   color_sensor.h   Hal::ColorSensor  — RGBC
   line_sensor.h    Hal::LineSensor   — N-cell reflectance array

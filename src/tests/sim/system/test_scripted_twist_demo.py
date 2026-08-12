@@ -40,7 +40,7 @@ e.g.:
         src/firm/core/preamble.cpp src/firm/platform/host/sim_clock.cpp \\
         src/firm/hardware/nezha/nezha_motor.cpp src/firm/hardware/generic/real_otos.cpp \\
         src/firm/hardware/planetx/color_sensor.cpp src/firm/hardware/planetx/line_sensor.cpp \\
-        src/firm/messages/wire.cpp src/firm/messages/wire_runtime.cpp src/firm/kinematics/differential_kinematics.cpp \\
+        src/firm/messages/wire.cpp src/firm/messages/wire_runtime.cpp src/firm/kinematics/differential.cpp \\
     && /tmp/scripted_twist_demo
 """
 
@@ -132,7 +132,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _KINEMATICS_SOURCES = [
-    _REPO_ROOT / "src" / "firm" / "kinematics" / "differential_kinematics.cpp",
+    _REPO_ROOT / "src" / "firm" / "kinematics" / "differential.cpp",
 ]
 
 _CXX_STANDARD = "c++20"

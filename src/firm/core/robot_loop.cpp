@@ -5,7 +5,7 @@
 #include <cstdio>
 
 #include "messages/envelope.h"
-#include "kinematics/differential_kinematics.h"
+#include "kinematics/differential.h"
 
 namespace Core {
 
@@ -673,7 +673,7 @@ void RobotLoop::applySeed() {
 void RobotLoop::publishPose() {
   float twistVx = 0.0f;
   float twistOmega = 0.0f;
-  Kinematics::DifferentialKinematics::forward(motorL_.velocity(), motorR_.velocity(),
+  Kinematics::Differential::forward(motorL_.velocity(), motorR_.velocity(),
                           drive_.trackWidth(), twistVx, twistOmega);
 
   state_.pose.x = odom_.x();

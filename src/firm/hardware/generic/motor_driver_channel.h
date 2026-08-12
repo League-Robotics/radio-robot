@@ -1,15 +1,15 @@
-// board_motor.h -- Hardware::BoardMotor: one channel of ANY
-// Hal::MotorBoard, presented as a Hal::Motor. Board-agnostic by
-// construction: everything register-shaped lives in the board class.
+// motor_driver_channel.h -- Hardware::MotorDriverChannel: one channel of ANY
+// Hal::MotorDriver, presented as a Hal::Motor. Driver-agnostic by
+// construction: everything register-shaped lives in the driver class.
 //
 // NOT WIRED IN YET: nothing constructs this class today. Wiring
 // instructions: docs/hiwonder/hiwonder-motor-board.md section 3.
 // Reference documentation (cited below as "doc s1.5" etc.): that same
 // file. Ported from the hiwonder-spike branch, 2026-08-02.
 //
-// Because the board runs its own closed loop, setDuty()'s duty IS the
-// normalized speed fraction the board wants -- Drive's calibrated
-// velocity->duty map stays above this seam unchanged. Note the board's
+// Because the driver runs its own closed loop, setDuty()'s duty IS the
+// normalized speed fraction the driver wants -- Drive's calibrated
+// velocity->duty map stays above this seam unchanged. Note the driver's
 // own loop makes duty<->speed far closer to linear than the Nezha
 // plant; Nezha-tuned trim/PID gains are wrong here (doc s2).
 #pragma once
@@ -19,18 +19,18 @@
 #include "hal/device_config.h"
 #include "hal/device_types.h"
 #include "hal/motor.h"
-#include "hal/motor_board.h"
+#include "hal/motor_driver.h"
 
 namespace Hardware {
 
-class BoardMotor : public Hal::Motor {
+class MotorDriverChannel : public Hal::Motor {
  public:
-  BoardMotor(Hal::MotorBoard& board, int channel, const Hal::MotorConfig& config)
-      : board_(board), channel_(channel), config_(config) {}
+  MotorDriverChannel(Hal::MotorDriver& driver, int channel, const Hal::MotorConfig& config)
+      : driver_(driver), channel_(channel), config_(config) {}
 
   void begin() override;
   void requestSample() override {}  // no split-phase latch on these boards
-  void setDuty(float duty) override;  // [-1, 1] -> board speed command
+  void setDuty(float duty) override;  // [-1, 1] -> driver speed command
   void setNeutral(Hal::Neutral) override;
   void applyTravelCalib(float travelCalib) override {
     config_.wheelTravelCalib = travelCalib;
@@ -41,8 +41,8 @@ class BoardMotor : public Hal::Motor {
   float position() const override { return position_; }   // [mm]
   float velocity() const override { return velocity_; }   // [mm/s] signed
   float appliedDuty() const override { return appliedDuty_; }
-  bool connected() const override { return board_.connected(); }
-  uint64_t sampleTime() const override { return board_.sampleTime(); }
+  bool connected() const override { return driver_.connected(); }
+  uint64_t sampleTime() const override { return driver_.sampleTime(); }
 
   void resetPosition() override;
   void rebaseline() override;
@@ -73,7 +73,7 @@ class BoardMotor : public Hal::Motor {
            static_cast<float>(config_.fwdSign);
   }
 
-  Hal::MotorBoard& board_;
+  Hal::MotorDriver& driver_;
   int channel_;
   Hal::MotorConfig config_;
   int32_t offset_ = 0;      // [counts] software zero (resetPosition)
@@ -81,9 +81,9 @@ class BoardMotor : public Hal::Motor {
   float velocity_ = 0.0f;   // [mm/s]
   float appliedDuty_ = 0.0f;
   bool commanded_ = false;  // reconfigure() guard: never-commanded is safe
-  // begin() runs BEFORE the first bus exchange, so board_.total() is
+  // begin() runs BEFORE the first bus exchange, so driver_.total() is
   // still the constructor's 0 -- capturing the offset there leaves the
-  // board's large cumulative total in the reported position (measured:
+  // driver's large cumulative total in the reported position (measured:
   // it pinned at the +-32000 mm wire bound within one session -- doc
   // s2). Defer the zero to the first tick that has real data.
   bool zeroPending_ = false;

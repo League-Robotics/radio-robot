@@ -1,5 +1,5 @@
-// hiwonder_board.h -- Hardware::HiwonderBoard: the HiWonder 4-channel
-// encoder motor driver (I2C 0x34) behind the Hal::MotorBoard
+// hiwonder_driver.h -- Hardware::HiwonderDriver: the HiWonder 4-channel
+// encoder motor driver (I2C 0x34) behind the Hal::MotorDriver
 // interface.
 //
 // NOT WIRED IN YET: nothing constructs this class today (the firmware
@@ -26,11 +26,11 @@
 #include <cstdint>
 
 #include "hal/i2c_bus.h"
-#include "hal/motor_board.h"
+#include "hal/motor_driver.h"
 
 namespace Hardware {
 
-class HiwonderBoard : public Hal::MotorBoard {
+class HiwonderDriver : public Hal::MotorDriver {
  public:
   static constexpr uint8_t kAddr = 0x34;
   static constexpr uint8_t kRegBattery = 0x00;
@@ -48,12 +48,13 @@ class HiwonderBoard : public Hal::MotorBoard {
   static constexpr int kPwmFullScale = 100;   // vendor-documented range
 
   // The board's OWN encoder-update period -- measured 9.56 ms, not the
-  // 10 ms its speed unit implies (doc s1.5). Consumed by BoardMotor's
-  // velocity estimator as the tick timebase. Measured on one board at
-  // bench temperature; error scales velocity estimates proportionally.
+  // 10 ms its speed unit implies (doc s1.5). Consumed by
+  // MotorDriverChannel's velocity estimator as the tick timebase.
+  // Measured on one board at bench temperature; error scales velocity
+  // estimates proportionally.
   static constexpr float kEncoderTick = 0.00956f;  // [s]
 
-  explicit HiwonderBoard(Hal::I2CBus& bus) : bus_(bus) {}
+  explicit HiwonderDriver(Hal::I2CBus& bus) : bus_(bus) {}
 
   // Hal::Motor type + polarity + all-stop. Returns false when the board
   // never acks (wiring/power) -- callers treat that as "board absent".

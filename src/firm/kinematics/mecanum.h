@@ -1,4 +1,4 @@
-// mecanum_kinematics.h -- Kinematics::MecanumKinematics: the four-wheel
+// mecanum.h -- Kinematics::Mecanum: the four-wheel
 // holonomic twist<->wheel-speed map for a 45-degree-roller mecanum chassis.
 //
 // Wheel order for the array forms is FL, FR, BL, BR:
@@ -8,7 +8,7 @@
 // `fwd_sign` (data/robots/*.json) still corrects mirror-mounted wheels
 // below this layer -- do not fold a mounting sign into these equations.
 //
-// NOT WIRED IN YET: nothing constructs this class. `Core::DifferentialDrive` is still
+// NOT WIRED IN YET: nothing constructs this class. `Control::DifferentialDrive` is still
 // differential-specific end to end (its constructor takes exactly two
 // Hal::Motor& and a scalar track width), so there is no four-wheel
 // drivetrain for a composition root to hand this to. It exists because an
@@ -27,11 +27,11 @@
 
 namespace Kinematics {
 
-class MecanumKinematics : public Model {
+class Mecanum : public Model {
  public:
   // trackWidth  -- [mm] left-to-right wheel centre distance.
   // wheelBase   -- [mm] front-to-back wheel centre distance.
-  MecanumKinematics(float trackWidth, float wheelBase)
+  Mecanum(float trackWidth, float wheelBase)
       : trackWidth_(trackWidth), wheelBase_(wheelBase) {}
 
   int wheelCount() const override { return 4; }
@@ -44,7 +44,7 @@ class MecanumKinematics : public Model {
 
   // ---------------------------------------------------------------------
   // The math, as statics taking the geometry explicitly -- mirroring
-  // DifferentialKinematics' own static/instance split.
+  // Differential's own static/instance split.
   //
   // With lx = wheelBase/2, ly = trackWidth/2, and k = lx + ly:
   //   inverse:  vFL = v_x - v_y - k*omega    vFR = v_x + v_y + k*omega
