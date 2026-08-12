@@ -2,6 +2,10 @@
 status: pending
 ---
 
+
+NOTE: THIS ISSUE MUST BE ENTIRELY REPLANNED TO ACCOUNT FOR
+THE CURENT FILE LAYOUT. 
+
 # Kernel Packaging, Host/Sim Rigor, and Hardware Abstraction — Program Plan
 
 ## Description
