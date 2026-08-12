@@ -1,10 +1,11 @@
 #pragma once
 #include "MicroBit.h"
+#include "hal/transport.h"
 #include <stdarg.h>
 
 /**
- * SerialPort — binary-clean 115200-baud serial over USB.
- * Design/rationale: DESIGN.md.
+ * Platform::MicroBitSerialPort — binary-clean 115200-baud serial over USB,
+ * implementing Hal::Transport directly. Design/rationale: DESIGN.md.
  *
  * readLine() reads to an UNCONDITIONAL '\n' terminator -- no heuristic, no
  * recognizer, no text/binary distinction at this layer at all (Core::Comms
@@ -22,7 +23,9 @@
  * and returns false until a complete line is ready.
  * Never calls uBit.sleep() or any blocking CODAL primitive.
  */
-class SerialPort {
+namespace Platform {
+
+class MicroBitSerialPort : public Hal::Transport {
 public:
     // Usable TX ring-buffer capacity assumed by both backpressure checks in
     // this class: send()'s whole-frame-fits gate and sendReliable()'s
@@ -34,7 +37,7 @@ public:
     // sendReliable()'s spin-wait can never assume two different capacities.
     static constexpr uint16_t kTxBufferCapacity = 250;  // [bytes]
 
-    explicit SerialPort(NRF52Serial& serial);
+    explicit MicroBitSerialPort(NRF52Serial& serial);
 
     // Configure buffers (256 bytes each) and set baud rate to 115200.
     // Must be called once before readLine() / send() / sendReliable().
@@ -49,11 +52,11 @@ public:
     // content). Returns false (buf/*outLen untouched) when nothing
     // complete is ready yet. `cap` bounds buf's capacity, including that
     // trailing NUL.
-    bool readLine(char* buf, uint16_t cap, uint16_t* outLen);
+    bool readLine(char* buf, uint16_t cap, uint16_t* outLen) override;
 
     // ASYNC, WHOLE-FRAME drop-on-full — for telemetry. `data`/`len` is a
     // COBS+CRC frame body (0x00-free by construction, per
-    // Core::Transport::send()'s own contract); this appends the trailing
+    // Hal::Transport::send()'s own contract); this appends the trailing
     // 0x00 delimiter itself and sends the raw buffer (never a
     // ManagedString/strlen-based path -- the content is not necessarily
     // printable ASCII). Checks free TX-buffer space FIRST -- if the
@@ -63,9 +66,9 @@ public:
     // this frame (fails the host's CRC) and, when the dropped tail includes
     // the trailing delimiter, merges into and corrupts the NEXT frame too.
     // Still fully non-blocking -- no spin-wait, unlike sendReliable().
-    void send(const uint8_t* data, uint16_t len);
+    void send(const uint8_t* data, uint16_t len) override;
 
-    void sendReliable(const char* msg);  // bounded-wait for room — for replies/EVT (text-plane only, "\r\n"-terminated, unchanged)
+    void sendReliable(const char* msg) override;  // bounded-wait for room — for replies/EVT (text-plane only, "\r\n"-terminated, unchanged)
     void sendf(const char* fmt, ...);  // snprintf into 256-byte stack buffer, then sendReliable() (text-plane only)
 
     // Retune the UART baud at runtime. Drains TX first so an already-queued
@@ -79,3 +82,5 @@ private:
     char     _rxBuf[256];   // holds up to a 250-byte line (RAW250 message size)
     uint16_t _rxLen;
 };
+
+}  // namespace Platform

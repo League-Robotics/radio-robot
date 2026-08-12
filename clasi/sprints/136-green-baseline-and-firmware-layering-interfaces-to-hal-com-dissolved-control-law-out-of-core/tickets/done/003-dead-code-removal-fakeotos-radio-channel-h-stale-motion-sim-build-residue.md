@@ -1,9 +1,11 @@
 ---
 id: '003'
 title: Dead code removal -- FakeOtos, radio_channel.h, stale motion/sim build residue
-status: open
-use-cases: ["SUC-002"]
-depends-on: ["002"]
+status: done
+use-cases:
+- SUC-002
+depends-on:
+- '002'
 github-issue: ''
 issue: firmware-layering-cleanup-interfaces-to-hal-impls-to-platform-microbit.md
 completes_issue: true

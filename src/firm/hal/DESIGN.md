@@ -26,6 +26,9 @@ else in the firmware changes.
 hal/
   device_types.h   MotorReading, ColorReading, LineReading, PoseReading, Neutral
   device_config.h  MotorConfig, OtosConfig, ColorConfig, LineConfig
+  clock.h          Hal::Clock / Hal::Sleeper — time/yield seam
+  i2c_bus.h        Hal::I2CBus       — the bus interface
+  transport.h      Hal::Transport    — a line-oriented byte pipe (serial/radio)
   motor.h          Hal::Motor        — one actuator channel
   motor_board.h    Hal::MotorBoard   — a multi-channel smart driver board
   otos.h           Hal::Otos         — absolute pose/twist sensor
@@ -34,8 +37,25 @@ hal/
 ```
 
 Implementations all live in `hardware/` (or, for a part physically welded
-to one compute board, in `platform/<target>/hardware/`). The one deliberate
-exception used to be `Core::FakeOtos`, removed as dead code — see §4.
+to one compute board, in `platform/<target>/hardware/`) — except
+`Hal::Transport`, whose two implementations (`Platform::MicroBitSerialPort`,
+`Platform::MicroBitRadioLink`) are themselves platform primitives, not
+devices, and so live in `platform/microbit/` alongside `MicroBitI2CBus`/
+`MicroBitClock` (see `platform/DESIGN.md`) — `TestSupport::FakeTransport`
+(`src/tests/sim/support/fake_transport.h`) is the host-test double. The one
+deliberate exception among the *device* interfaces used to be
+`Core::FakeOtos`, removed as dead code — see §4.
+
+`Hal::Transport` (`readLine()`/`send()`/`sendReliable()`) is the one
+interface here consumed by `Core::Comms`, not by `Motion::`/`kinematics::` —
+it moved into `hal/` from `core/comms.h`'s own former `#ifndef HOST_BUILD`
+block (136-005, "dissolve `com/` into `Hal::Transport` +
+`platform/microbit/`"), where it had lived unnamed as `Core::Transport`
+since the file's own drafting. Its two ARM-only adapter classes
+(`Core::SerialTransport`/`RadioTransport`, thin forwarders onto the
+now-deleted `com/SerialPort`/`Radio`) are gone outright, not relocated:
+`Platform::MicroBitSerialPort`/`MicroBitRadioLink` implement `Hal::Transport`
+directly, the same shape every other `Platform::` leaf already had.
 
 `device_types.h`/`device_config.h` are the vocabulary this whole layer
 speaks in: plain aggregates, HAL-local counterparts of the equivalent

@@ -8,14 +8,40 @@ before any of the rest of `src/firm` can run on it.
 
 ```
 platform/
-  i2c_bus.h     Platform::I2CBus     — pure interface
-  clock.h       Platform::Clock / Platform::Sleeper — pure interfaces
   microbit/     the micro:bit (nRF52833/CODAL) implementations
   host/         the HOST platform: the sim (was src/sim/)
 ```
 
 `microbit/` holds `MicroBitI2CBus`, `MicroBitClock`, `MicroBitSleeper` —
-the only files in this tree that include `MicroBit.h`.
+the ARM implementations of `Hal::I2CBus`/`Hal::Clock`/`Hal::Sleeper` — plus
+(136-005, "dissolve `com/` into `Hal::Transport` + `platform/microbit/`")
+the two `Hal::Transport` implementations and the boot-identity/banner
+helpers:
+
+```
+microbit/
+  microbit_i2c_bus.{h,cpp}      Platform::MicroBitI2CBus     — Hal::I2CBus
+  microbit_clock.{h,cpp}        Platform::MicroBitClock/MicroBitSleeper
+  microbit_serial_port.{h,cpp}  Platform::MicroBitSerialPort — Hal::Transport,
+                                 USB CDC serial (115200 baud)
+  microbit_radio_link.{h,cpp}   Platform::MicroBitRadioLink  — Hal::Transport,
+                                 the micro:bit radio (RadioRelay RAW250 framing)
+  microbit_banner.{h,cpp}       Platform::formatBanner()/formatIdLine() —
+                                 the two frozen wire-identity strings
+  microbit_boot_identity.{h,cpp} Platform::showBootIdentity() — LED-matrix
+                                 boot display (relocated out of main.cpp)
+```
+
+This is the only subtree in `src/firm` (besides `main.cpp` itself) that
+includes `MicroBit.h` — isolating every CODAL-touching file here is what
+keeps the rest of the tree `HOST_BUILD`-clean (`docs/design/design.md` §5,
+"HOST_BUILD purity"). `com/` used to hold the two transports separately
+(a directory of its own, ARM-only, with no `Hal::` interface underneath
+it); dissolving it here means `Platform::MicroBitSerialPort`/
+`MicroBitRadioLink` implement `Hal::Transport` directly instead of routing
+through a `Core::SerialTransport`/`RadioTransport` adapter pair, the same
+shape every other `Platform::` leaf already had for `Hal::I2CBus`/
+`Hal::Clock`/`Hal::Sleeper`.
 
 `host/` holds `TestSim::SimPlant` (an `I2CBus` that answers wire
 transactions out of a physics model), `TestSim::SimClock`/`SimSleeper`, the
@@ -23,8 +49,47 @@ transactions out of a physics model), `TestSim::SimClock`/`SimSleeper`, the
 the sense this directory means: **real firmware, substituted primitives.**
 `Core::composeRobot()` is called identically by `src/firm/main.cpp` and by
 `TestSim::SimHarness`; the only difference between them is which
-`Platform::I2CBus`/`Platform::Clock`/`Platform::Sleeper` the caller
-constructs and passes in.
+`Hal::I2CBus`/`Hal::Clock`/`Hal::Sleeper` the caller constructs and passes
+in — `TestSim::SimHarness` passes `TestSupport::FakeTransport` (an
+in-memory `Hal::Transport` double) where `main.cpp` passes the two real
+`Platform::MicroBit*` transports above.
+
+## Transport invariants (folded in from the retired `com/DESIGN.md`)
+
+- **Both transports are binary-clean, uniformly `\n`-terminated.**
+  `readLine()`/`send()`/`sendReliable()` never distinguish text from binary
+  at this layer — `Core::Comms` decides that one layer up, from the parsed
+  `<COMMAND>` prefix. This is safe because COBS is keyed on 0x0A
+  (`wire_runtime.h` item 8): a binary line's own bytes never contain a
+  literal 0x0A, so `\n` is a genuine, unconditional terminator in both
+  directions.
+- **`send()` vs `sendReliable()` is a drop-policy split by call-site
+  cadence, not by content kind.** `send()` is ASYNC/drop-on-full (the
+  telemetry flood, every binary reply) — a lost frame is harmless, a
+  stalled loop is not. `sendReliable()` bounded-waits (5 ms cap on serial)
+  — used only for the rare HELLO/PING/ID/VER cleartext replies, where
+  silently dropping would defeat the safety rump's purpose.
+  `MicroBitRadioLink::sendReliable()` simply forwards to `send()` — RAW250
+  fragmentation has no separate bounded-wait path to offer.
+  Neither transport ever blocks unboundedly or sleeps.
+- **Radio group is fixed at 10; only the channel (frequency band, 0–35) is
+  configurable**, baked from the robot JSON's `connection.radio_channel`
+  (`Config::kRadioChannel`, `config/boot_config.h`) — no wire verb retunes
+  it live. Group must match the RadioRelay's fixed group or the link never
+  forms regardless of channel.
+- **Re-tuning the radio channel drops the link immediately** — send any
+  reply BEFORE calling `MicroBitRadioLink::setChannel()`.
+- **Only one `MicroBitRadioLink` instance may call `begin()`** — `_instance`
+  is a static singleton pointer the static ISR callback (`onData`)
+  dereferences.
+- **Radio buffers exactly one completed message** between the ISR and
+  `readLine()` — a second message finishing reassembly before `readLine()`
+  drains the first is dropped, not queued.
+- **`MicroBitSerialPort`'s CODAL TX buffer size is a `uint8_t`** — 255 is
+  the actual max (a requested 1024 silently wraps to 0, i.e. no buffer at
+  all). Do not "simplify" `begin()` by requesting a larger buffer size.
+- **`MICROBIT_RADIO_MAX_PACKET_SIZE` must be built as 250** (`codal.json`)
+  to match the RadioRelay's on-air MAXLEN.
 
 ## Rules
 

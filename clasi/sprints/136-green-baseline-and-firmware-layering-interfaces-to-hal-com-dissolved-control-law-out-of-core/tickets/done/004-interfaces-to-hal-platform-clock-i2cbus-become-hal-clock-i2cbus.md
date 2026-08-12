@@ -1,9 +1,11 @@
 ---
 id: '004'
 title: Interfaces to hal/ -- Platform::Clock/I2CBus become Hal::Clock/I2CBus
-status: open
-use-cases: ["SUC-002"]
-depends-on: ["003"]
+status: done
+use-cases:
+- SUC-002
+depends-on:
+- '003'
 github-issue: ''
 issue: firmware-layering-cleanup-interfaces-to-hal-impls-to-platform-microbit.md
 completes_issue: true

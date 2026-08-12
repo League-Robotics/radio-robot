@@ -1,14 +1,16 @@
-#include "serial_port.h"
+#include "platform/microbit/microbit_serial_port.h"
 #include <string.h>
 #include <stdio.h>
 
-SerialPort::SerialPort(NRF52Serial& serial)
+namespace Platform {
+
+MicroBitSerialPort::MicroBitSerialPort(NRF52Serial& serial)
     : _serial(serial), _rxLen(0)
 {
     memset(_rxBuf, 0, sizeof(_rxBuf));
 }
 
-void SerialPort::begin() {
+void MicroBitSerialPort::begin() {
     _serial.setRxBufferSize(255);
     // TX buffer size is a uint8_t in CODAL — 255 is the max (1024 wraps to 0!).
     // Keep replies to a single line; don't fire many sends back-to-back.
@@ -16,7 +18,7 @@ void SerialPort::begin() {
     _serial.setBaud(115200);
 }
 
-bool SerialPort::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
+bool MicroBitSerialPort::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
     int c;
     while ((c = _serial.read(ASYNC)) != MICROBIT_NO_DATA) {
         if (c == '\n') {
@@ -41,7 +43,7 @@ bool SerialPort::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
     return false;
 }
 
-void SerialPort::send(const uint8_t* data, uint16_t len) {
+void MicroBitSerialPort::send(const uint8_t* data, uint16_t len) {
     // ASYNC: queue the WHOLE line and return IMMEDIATELY, never blocking
     // the loop. Drop-on-full means drop the ENTIRE line, not whatever
     // prefix happens to fit -- CODAL's ASYNC send() (setTxInterrupt())
@@ -73,7 +75,7 @@ void SerialPort::send(const uint8_t* data, uint16_t len) {
     _serial.send(framed, frameLen, ASYNC);
 }
 
-void SerialPort::sendReliable(const char* msg) {
+void MicroBitSerialPort::sendReliable(const char* msg) {
     // Like send(), but bounded-waits for TX-buffer room so the WHOLE line
     // fits before handing off to ASYNC. 5 ms cap: a dead/absent reader can't
     // hang the loop — falls through and sends anyway, dropping the overflow
@@ -89,7 +91,7 @@ void SerialPort::sendReliable(const char* msg) {
     _serial.send(s, ASYNC);
 }
 
-void SerialPort::setBaud(uint32_t baud) {
+void MicroBitSerialPort::setBaud(uint32_t baud) {
     // Drain the TX buffer (bounded) so the just-sent reply, at the OLD baud,
     // clocks out fully before retuning — otherwise its trailing bytes garble.
     const uint64_t drainDeadline = system_timer_current_time_us() + 20000;   // [us] 20 ms cap
@@ -102,7 +104,7 @@ void SerialPort::setBaud(uint32_t baud) {
     _serial.setBaud((int)baud);
 }
 
-void SerialPort::sendf(const char* fmt, ...) {
+void MicroBitSerialPort::sendf(const char* fmt, ...) {
     char tmp[256];
     va_list args;
     va_start(args, fmt);
@@ -110,3 +112,5 @@ void SerialPort::sendf(const char* fmt, ...) {
     va_end(args);
     sendReliable(tmp);
 }
+
+}  // namespace Platform

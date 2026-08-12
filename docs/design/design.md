@@ -62,20 +62,23 @@ docs living outside those two roots.
 
 | Subsystem | Role |
 |---|---|
-| [`platform/`](../../src/firm/platform/DESIGN.md) | Board/runtime primitives ONLY: `Platform::I2CBus`, `Platform::Clock`/`Sleeper`, and their per-target implementations — `microbit/` (CODAL) and `host/` (the sim, was `src/sim`). Knows nothing about what is on the bus. |
+| [`platform/`](../../src/firm/platform/DESIGN.md) | Board/runtime primitives ONLY: `Hal::I2CBus`/`Hal::Clock`/`Hal::Sleeper`/`Hal::Transport` implementations, per target — `microbit/` (CODAL: `MicroBitI2CBus`, `MicroBitClock`/`Sleeper`, and, since 136-005 dissolved `com/` here, `MicroBitSerialPort`/`MicroBitRadioLink`) and `host/` (the sim, was `src/sim`). Knows nothing about what is on the bus. |
 | [`hardware/`](../../src/firm/hardware/DESIGN.md) | Concrete device drivers, one class per physical part, filed by who else could reuse them: `generic/` (RealOtos, MotorArmor, BoardMotor), `nezha/`, `hiwonder/`, `planetx/`. Register maps, timing quirks, and hardware workarounds live here and nowhere else. |
 | [`hal/`](../../src/firm/hal/DESIGN.md) | Interfaces for composable devices — `Hal::Motor`, `Hal::MotorBoard`, `Hal::Otos`, `Hal::ColorSensor`, `Hal::LineSensor` — plus the plain-aggregate reading/config vocabulary they speak in. Interfaces only: no chip knowledge. |
 | [`kinematics/`](../../src/firm/kinematics/DESIGN.md) | `Kinematics::Model`, the swappable twist↔wheel-speed map, with `DifferentialKinematics` (the former `BodyKinematics` math) and `MecanumKinematics` behind it. The one sanctioned home for chassis geometry (track width, wheelbase). |
 | [`motion/`](../../src/firm/motion/DESIGN.md) | The motion-control library: `Motion::Planner`, `Motion::Navigator`, `Motion::Odometry`. Under active development, with its own standalone Python-free CMake builds (`motion_tests`, `planner_tests`, `navigator_tests`). Imports nothing from the rest of `src/firm` except `messages/` and `firm/types/`. |
 | [`core/`](../../src/firm/core/DESIGN.md) | Orchestration (was `app/`): the single cooperatively-timed control loop (`Core::RobotLoop`), the Robot composition root (`Core::composeRobot()`/`RobotGraph`), and the passive modules the loop owns — Comms, Telemetry, `DifferentialDrive`, Configurator, Preamble. `RobotLoop` drives the motion library, which writes `Types::RobotState::Wheel::cmdVelocity` directly (128 — the plain blackboard field IS the boundary, no interface). |
-| [`com/`](../../src/firm/com/DESIGN.md) | ARM-only raw transports: USB CDC serial, the micro:bit radio, persisted radio-channel storage. |
 | [`config/`](../../src/firm/config/DESIGN.md) | Generated boot configuration — per-robot calibration baked at build time from `data/robots/active_robot.json`. |
 | [`messages/`](../../src/firm/messages/DESIGN.md) | The wire schema: generated message structs, the generated envelope codec, the hand-written byte-level wire runtime. |
 | [`types/`](../../src/firm/types/DESIGN.md) | `Types::RobotState` (sprint 124) — the dependency-free, per-cycle blackboard struct that is a shared floor the whole tree stands on; its own `Wheel::cmdVelocity` field is THE core/motion actuation boundary (128, see §5's "Wire boundary" note and the dependency graph below). Also holds vestigial protocol-v2 text-tag constants and the firmware-version generation seam (mostly dead code — see its own §6). |
 
 The rows above are listed in **dependency order, bottom to top**: platform →
-hardware → hal → kinematics → motion → core, with `com/`, `config/`,
+hardware → hal → kinematics → motion → core, with `config/`,
 `messages/` and `types/` as cross-cutting floors any layer may stand on.
+(`com/` used to be a fourth cross-cutting floor; 136-005 dissolved it —
+its two transports now implement `Hal::Transport` directly from
+`platform/microbit/`, and its DESIGN.md content folded into `platform/`'s
+and `hal/`'s own.)
 Dependencies run strictly downward — `hal/` names no bus, `hardware/`
 reaches down to `platform/` and up only as far as the `hal/` interface it
 implements, and `motion/` imports nothing from the rest of `src/firm`

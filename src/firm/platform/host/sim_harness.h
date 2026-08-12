@@ -77,7 +77,10 @@ class SimHarness {
         // src/firm/main.cpp calls -- the only leaf substituted here is the
         // bus (plant_, a TestSim::SimPlant, in main.cpp's
         // Platform::MicroBitI2CBus slot) and the transports (FakeTransport
-        // in main.cpp's real SerialTransport/RadioTransport slots).
+        // in main.cpp's real Platform::MicroBitSerialPort/MicroBitRadioLink
+        // slots -- both, like FakeTransport, implement Hal::Transport
+        // directly; 136-005 deleted the Core::SerialTransport/RadioTransport
+        // adapter pair that used to sit between them).
         //
         // THREE deliberate, explicit overrides (BootOverrides -- see its
         // own doc comment, app/boot_wiring.h, for the full rationale each):

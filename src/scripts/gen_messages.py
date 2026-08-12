@@ -498,16 +498,16 @@ _INVENTORY_MAP: dict = {
     # -----------------------------------------------------------------------
 
     # CommunicatorConfig: comms configuration
-    ("CommunicatorConfig", "radio_channel"): "com/radio.h Radio::_channel (begin()/setChannel(); radiochan::clamp bounds)",
+    ("CommunicatorConfig", "radio_channel"): "platform/microbit/microbit_radio_link.h Platform::MicroBitRadioLink::_channel (begin()/setChannel(); radiochan::clamp bounds)",
 
     # CommunicatorState: read-only comms snapshot
-    ("CommunicatorState", "radio_channel"): "com/radio.h Radio::channel()",
+    ("CommunicatorState", "radio_channel"): "platform/microbit/microbit_radio_link.h Platform::MicroBitRadioLink::channel()",
     ("CommunicatorState", "serial_lines"):  "(new field — received-line counter, subsystems/communicator.cpp tick())",
     ("CommunicatorState", "radio_lines"):   "(new field — received-line counter, subsystems/communicator.cpp tick())",
 
     # CommunicatorCapabilities: declared comms channels
-    ("CommunicatorCapabilities", "serial"): "com/serial_port.h SerialPort (owned by value)",
-    ("CommunicatorCapabilities", "radio"):  "com/radio.h Radio (owned by value)",
+    ("CommunicatorCapabilities", "serial"): "platform/microbit/microbit_serial_port.h Platform::MicroBitSerialPort (owned by value)",
+    ("CommunicatorCapabilities", "radio"):  "platform/microbit/microbit_radio_link.h Platform::MicroBitRadioLink (owned by value)",
 }
 
 # ---------------------------------------------------------------------------

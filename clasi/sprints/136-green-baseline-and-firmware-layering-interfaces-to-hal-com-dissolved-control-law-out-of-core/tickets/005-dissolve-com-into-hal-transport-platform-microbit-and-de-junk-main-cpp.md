@@ -1,9 +1,12 @@
 ---
 id: '005'
 title: Dissolve com/ into Hal::Transport + platform/microbit/, and de-junk main.cpp
-status: open
-use-cases: ["SUC-002", "SUC-003"]
-depends-on: ["004"]
+status: in-progress
+use-cases:
+- SUC-002
+- SUC-003
+depends-on:
+- '004'
 github-issue: ''
 issue:
 - firmware-layering-cleanup-interfaces-to-hal-impls-to-platform-microbit.md

@@ -1,7 +1,7 @@
 ---
 id: '002'
 title: Full-suite baseline sweep -- triage, formally accept, and record
-status: in-progress
+status: done
 use-cases:
 - SUC-001
 depends-on:

@@ -68,6 +68,7 @@
 #include "hardware/planetx/color_sensor.h"
 #include "hal/device_config.h"
 #include "hal/i2c_bus.h"
+#include "hal/transport.h"
 #include "hardware/planetx/line_sensor.h"
 #include "hardware/generic/motor_armor.h"
 #include "hardware/nezha/nezha_motor.h"
@@ -203,7 +204,7 @@ class RobotGraph {
   // tuningStore may be null (sim/test roots): persistence disabled,
   // everything else unchanged (mirrors Configurator's own contract).
   RobotGraph(Hal::I2CBus& bus, const Hal::Clock& clock, Hal::Sleeper& sleeper,
-             Transport& serialTransport, Transport& radioTransport,
+             Hal::Transport& serialTransport, Hal::Transport& radioTransport,
              Config::TuningStore* tuningStore, const char* banner, const char* idLine,
              const BootOverrides& overrides = {});
 
@@ -356,7 +357,7 @@ class RobotGraph {
 // constructor does the real work. See RobotGraph's own doc comment above
 // for the parameter contract.
 RobotGraph composeRobot(Hal::I2CBus& bus, const Hal::Clock& clock, Hal::Sleeper& sleeper,
-                        Transport& serialTransport, Transport& radioTransport,
+                        Hal::Transport& serialTransport, Hal::Transport& radioTransport,
                         Config::TuningStore* tuningStore, const char* banner, const char* idLine,
                         const BootOverrides& overrides = {});
 

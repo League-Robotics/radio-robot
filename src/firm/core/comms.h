@@ -5,57 +5,16 @@
 #include <cstdint>
 
 #include "firm/types/robot_state.h"
+#include "hal/transport.h"
 #include "messages/commands.h"
 #include "messages/envelope.h"
 #include "messages/wire.h"
-
-#ifndef HOST_BUILD
-class SerialPort;
-class Radio;
-#endif
 
 namespace Core {
 
 class Telemetry;
 
 constexpr uint8_t kCobsDelimiter = 0x0A;
-
-class Transport {
- public:
-  virtual ~Transport() = default;
-
-  virtual bool readLine(char* buf, uint16_t cap, uint16_t* outLen) = 0;
-
-  virtual void send(const uint8_t* data, uint16_t len) = 0;
-
-  virtual void sendReliable(const char* msg) = 0;
-};
-
-#ifndef HOST_BUILD
-
-class SerialTransport : public Transport {
- public:
-  explicit SerialTransport(SerialPort& serial);
-  bool readLine(char* buf, uint16_t cap, uint16_t* outLen) override;
-  void send(const uint8_t* data, uint16_t len) override;
-  void sendReliable(const char* msg) override;
-
- private:
-  SerialPort& serial_;
-};
-
-class RadioTransport : public Transport {
- public:
-  explicit RadioTransport(Radio& radio);
-  bool readLine(char* buf, uint16_t cap, uint16_t* outLen) override;
-  void send(const uint8_t* data, uint16_t len) override;
-  void sendReliable(const char* msg) override;
-
- private:
-  Radio& radio_;
-};
-
-#endif  // HOST_BUILD
 
 constexpr uint16_t kMaxEnvelopeBytes =
     (msg::wire::kCommandEnvelopeMaxEncodedSize > msg::wire::kReplyEnvelopeMaxEncodedSize)
@@ -133,7 +92,7 @@ class Comms {
     float x = 0.0f;        // [mm]
     float y = 0.0f;        // [mm]
     float heading = 0.0f;  // [rad]
-    Transport* reply = nullptr;
+    Hal::Transport* reply = nullptr;
   };
 
   SeedRequest takeSeed() {
@@ -183,14 +142,14 @@ class Comms {
   // The two-transport convenience form every current composition root
   // uses. Equivalent to default-constructing and calling addTransport()
   // twice, in this order.
-  Comms(Transport& serialLink, Transport& radioLink, const char* banner, const char* idLine = "ID:unknown");
+  Comms(Hal::Transport& serialLink, Hal::Transport& radioLink, const char* banner, const char* idLine = "ID:unknown");
 
   explicit Comms(const char* banner, const char* idLine = "ID:unknown");
 
   // Register one more transport. Returns false if kMaxTransports are
   // already registered -- a caller that ignores it silently loses a link,
   // so this is [[nodiscard]].
-  [[nodiscard]] bool addTransport(Transport& transport);
+  [[nodiscard]] bool addTransport(Hal::Transport& transport);
 
   uint8_t transportCount() const { return transportCount_; }
 
@@ -236,8 +195,8 @@ class Comms {
 #endif
 
  private:
-  void sendStatus(Transport& t);
-  void sendHelp(Transport& t);
+  void sendStatus(Hal::Transport& t);
+  void sendHelp(Hal::Transport& t);
 
  public:
 
@@ -246,22 +205,22 @@ class Comms {
   uint32_t commandsDroppedCount() const { return commandsDroppedCount_; }
 
  private:
-  bool pumpTransport(Transport& t, uint32_t now);  // [ms]
+  bool pumpTransport(Hal::Transport& t, uint32_t now);  // [ms]
 
   void pushCommand(const Cmd& cmd);
 
-  void dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& out, uint32_t now);  // [ms]
+  void dispatchLine(Hal::Transport& t, const char* line, uint16_t lineLen, Cmd& out, uint32_t now);  // [ms]
 
-  void dispatchCleartext(msg::Verb verb, Transport& t, uint32_t now);  // [ms]
-  void stageSeed(const uint8_t* data, uint16_t len, Transport& t);
-  void sendPose(Transport& t);
+  void dispatchCleartext(msg::Verb verb, Hal::Transport& t, uint32_t now);  // [ms]
+  void stageSeed(const uint8_t* data, uint16_t len, Hal::Transport& t);
+  void sendPose(Hal::Transport& t);
 
   void decodeBinaryFrame(const uint8_t* command, size_t commandLen, const uint8_t* data, uint16_t dataLen, Cmd& out);
 
   // Pointers, not references: a fixed-size array of references is not a
   // thing C++ has. Every entry below transportCount_ is non-null by
   // construction (addTransport() takes a reference).
-  Transport* transports_[kMaxTransports] = {};
+  Hal::Transport* transports_[kMaxTransports] = {};
   uint8_t transportCount_ = 0;
 
   // broadcast helpers -- every registered transport, in registration order.
@@ -283,7 +242,7 @@ class Comms {
     dbgRing_[(dbgHead_ + dbgCount_) % kDbgRingDepth] = action;
     ++dbgCount_;
   }
-  Transport* tlmReplyTransport_ = nullptr;
+  Hal::Transport* tlmReplyTransport_ = nullptr;
   uint32_t malformedCount_ = 0;
   uint32_t commandsDroppedCount_ = 0;
 

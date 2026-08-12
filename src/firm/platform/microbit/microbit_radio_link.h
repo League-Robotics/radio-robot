@@ -1,9 +1,13 @@
 #pragma once
 #include "MicroBit.h"
+#include "hal/transport.h"
 
 /**
- * Radio — micro:bit radio driver speaking the RadioRelay RAW250 framing.
- * Design/rationale: DESIGN.md.
+ * Platform::MicroBitRadioLink — micro:bit radio driver speaking the
+ * RadioRelay RAW250 framing, implementing Hal::Transport directly. NOT
+ * named `MicroBitRadio` -- that's CODAL's own global type (`MicroBitRadio`),
+ * held here by reference; inside `namespace Platform` the bare name would
+ * resolve to the wrong thing. Design/rationale: DESIGN.md.
  *
  * Wire framing (RadioRelay §5): every on-air packet is a fragment
  *     [SEQ:1][FLAGS:1][LEN:1][payload:LEN]
@@ -14,8 +18,8 @@
  * Firmware MUST be built with MICROBIT_RADIO_MAX_PACKET_SIZE=250 (codal.json)
  * so the on-air nRF MAXLEN matches the relay.
  *
- * Only one Radio instance may call begin(). _instance is a static singleton
- * pointer used by the static ISR callback.
+ * Only one MicroBitRadioLink instance may call begin(). _instance is a
+ * static singleton pointer used by the static ISR callback.
  *
  * Fragment reassembly (`onData`) is binary-clean (raw memcpy, no
  * byte-level interpretation). `send()` uses ONE terminator, a trailing
@@ -23,16 +27,16 @@
  * because COBS is keyed on 0x0A (wire_runtime.h item 8): a binary line's
  * own bytes never contain a literal 0x0A, so '\n' is a genuine,
  * unconditional terminator -- there is no text-vs-binary distinction for
- * `poll()` to make at this layer at all (Core::Comms decides that from the
- * parsed `<COMMAND>` prefix once it has a complete line -- see comms.h's
- * own file header). `poll()` simply strips the trailing '\n' off the
- * reassembled message. No dependency on `app/`, per this directory's own
- * "com/ has no dependency on app/, messages/, or any wire-schema type"
- * invariant (com/DESIGN.md).
+ * `readLine()` to make at this layer at all (Core::Comms decides that from
+ * the parsed `<COMMAND>` prefix once it has a complete line -- see comms.h's
+ * own file header). `readLine()` simply strips the trailing '\n' off the
+ * reassembled message.
  */
-class Radio {
+namespace Platform {
+
+class MicroBitRadioLink : public Hal::Transport {
 public:
-    explicit Radio(MicroBitRadio& radio, MessageBus& bus);
+    explicit MicroBitRadioLink(MicroBitRadio& radio, MessageBus& bus);
 
     // enable(), setFrequencyBand(channel), setGroup(10), setTransmitPower(7),
     // register the datagram ISR.  `channel` is the nRF frequency band (0..83);
@@ -53,22 +57,29 @@ public:
     // text or binary, whichever Core::Comms determines from its own parsed
     // `<COMMAND>` prefix -- the trailing '\n' delimiter consumed, not
     // included), NUL-terminated as a convenience. Only one message is
-    // buffered — a second message completing before poll() drains the
+    // buffered — a second message completing before readLine() drains the
     // first is dropped.
-    bool poll(char* buf, uint16_t cap, uint16_t* outLen);
+    bool readLine(char* buf, uint16_t cap, uint16_t* outLen) override;
 
     // Fragment a wire line into RAW250 frames and transmit each one,
     // appending a trailing '\n' (0x0A) delimiter as the FINAL payload byte
     // -- the ONE terminator every outbound line uses, text or binary.
     // Safe for binary content because COBS is keyed on 0x0A
     // (wire_runtime.h item 8): `data`/`len` never contains a literal 0x0A
-    // by construction (Core::Transport::send()'s own contract), so this
+    // by construction (Hal::Transport::send()'s own contract), so this
     // appended '\n' is unambiguous. RadioRelay §5 framing alone delimits a
     // message on the wire, but after `!GO` the link becomes a transparent
     // byte pipe with no per-message boundary of its own; without the
     // embedded terminator, consecutive host-bound replies concatenate and
     // the host's line reader can't split them.
-    void send(const uint8_t* data, uint16_t len);
+    void send(const uint8_t* data, uint16_t len) override;
+
+    // Hal::Transport's third verb -- this link has no separate bounded-wait
+    // send path (RAW250 fragmentation has no backpressure signal to wait
+    // on), so sendReliable() simply forwards to send(), exactly as
+    // Core::RadioTransport (the now-deleted adapter this class replaces)
+    // already did.
+    void sendReliable(const char* msg) override;
 
 private:
     MicroBitRadio& _radio;
@@ -90,12 +101,12 @@ private:
     int  _reasmLen;
     bool _reasmActive;
 
-    // Completed message published to poll(). _msgReady gates the handoff and is
-    // the single synchronization point between the ISR and the main loop.
-    // _msgLen is the EXACT reassembled byte count (set by the ISR alongside
-    // _msgReady) -- poll() trusts this instead of strlen(_msg) so a stray
-    // embedded 0x00 in a corrupt/fault-injected binary frame can never
-    // truncate the length the demux reasons about.
+    // Completed message published to readLine(). _msgReady gates the
+    // handoff and is the single synchronization point between the ISR and
+    // the main loop. _msgLen is the EXACT reassembled byte count (set by
+    // the ISR alongside _msgReady) -- readLine() trusts this instead of
+    // strlen(_msg) so a stray embedded 0x00 in a corrupt/fault-injected
+    // binary frame can never truncate the length the demux reasons about.
     char          _msg[REASM_MAX];
     int           _msgLen;
     volatile bool _msgReady;
@@ -108,5 +119,7 @@ private:
     void sendFragmented(const uint8_t* payload, int payloadLen);
 
     static void onData(MicroBitEvent);
-    static Radio* _instance;
+    static MicroBitRadioLink* _instance;
 };
+
+}  // namespace Platform

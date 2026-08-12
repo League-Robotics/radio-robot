@@ -1,9 +1,11 @@
-#include "radio.h"
+#include "platform/microbit/microbit_radio_link.h"
 #include <string.h>
 
-Radio* Radio::_instance = nullptr;
+namespace Platform {
 
-Radio::Radio(MicroBitRadio& radio, MessageBus& bus)
+MicroBitRadioLink* MicroBitRadioLink::_instance = nullptr;
+
+MicroBitRadioLink::MicroBitRadioLink(MicroBitRadio& radio, MessageBus& bus)
     : _radio(radio), _bus(bus),
       _reasmLen(0), _reasmActive(false), _msgLen(0), _msgReady(false), _txSeq(0)
 {
@@ -11,7 +13,7 @@ Radio::Radio(MicroBitRadio& radio, MessageBus& bus)
     memset(_msg, 0, sizeof(_msg));
 }
 
-void Radio::begin(int channel) {
+void MicroBitRadioLink::begin(int channel) {
     _instance = this;
     _channel = channel;
     _radio.enable();
@@ -23,7 +25,7 @@ void Radio::begin(int channel) {
     _bus.listen(DEVICE_ID_RADIO, MICROBIT_RADIO_EVT_DATAGRAM, onData);
 }
 
-int Radio::setChannel(int channel) {
+int MicroBitRadioLink::setChannel(int channel) {
     int rc = _radio.setFrequencyBand(channel);
     if (rc == MICROBIT_OK) {
         _channel = channel;
@@ -33,8 +35,8 @@ int Radio::setChannel(int channel) {
 
 // Reassemble §5 fragments in place. Runs in the radio datagram ISR context.
 // Binary-clean by construction (raw memcpy, no byte-level interpretation).
-void Radio::onData(MicroBitEvent) {
-    Radio* self = _instance;
+void MicroBitRadioLink::onData(MicroBitEvent) {
+    MicroBitRadioLink* self = _instance;
     if (!self) return;
     PacketBuffer pkt = self->_radio.datagram.recv();
     int n = pkt.length();
@@ -72,7 +74,7 @@ void Radio::onData(MicroBitEvent) {
     }
 }
 
-bool Radio::poll(char* buf, uint16_t cap, uint16_t* outLen) {
+bool MicroBitRadioLink::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
     if (!_msgReady) return false;
 
     // UNCONDITIONAL terminator -- every sender (send(), the sole outbound
@@ -98,7 +100,7 @@ bool Radio::poll(char* buf, uint16_t cap, uint16_t* outLen) {
 // uses, appended by send() itself) as its LAST byte; this function only
 // knows about RAW250 fragment framing, never about what the trailing
 // byte means.
-void Radio::sendFragmented(const uint8_t* payload, int payloadLen) {
+void MicroBitRadioLink::sendFragmented(const uint8_t* payload, int payloadLen) {
     int off = 0;
     bool first = true;
     uint8_t frame[FRAME_HEADER + MTU];
@@ -123,7 +125,7 @@ void Radio::sendFragmented(const uint8_t* payload, int payloadLen) {
     } while (off < payloadLen);
 }
 
-void Radio::send(const uint8_t* data, uint16_t len) {
+void MicroBitRadioLink::send(const uint8_t* data, uint16_t len) {
     // `data`/`len` is the full wire LINE content (a command-prefixed COBS
     // body, or a cleartext reply -- Core::Comms builds either shape the
     // same way before handing it here) + a single trailing '\n' delimiter
@@ -131,10 +133,16 @@ void Radio::send(const uint8_t* data, uint16_t len) {
     // own file header). Payload buffer generously covers
     // Core::kMaxLineBytes (207) + 1 delimiter with headroom;
     // truncates (rather than overflows) on an over-length caller,
-    // mirroring SerialPort::send()'s own defensive truncation.
+    // mirroring MicroBitSerialPort::send()'s own defensive truncation.
     uint8_t payload[256];
     uint16_t n = (len < sizeof(payload) - 1) ? len : (uint16_t)(sizeof(payload) - 1);
     if (n > 0) memcpy(payload, data, n);
     payload[n] = '\n';
     sendFragmented(payload, static_cast<int>(n) + 1);
 }
+
+void MicroBitRadioLink::sendReliable(const char* msg) {
+    send(reinterpret_cast<const uint8_t*>(msg), static_cast<uint16_t>(strlen(msg)));
+}
+
+}  // namespace Platform

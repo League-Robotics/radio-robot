@@ -132,12 +132,12 @@ void checkUintEq(uint32_t actual, uint32_t expected, const std::string& what) {
 // sim_harness.h).
 constexpr uint32_t kCycleDtUs = Core::RobotLoop::kCycle * 1000;  // [us]
 
-// --- Minimal Core::Transport stub -- no real serial/radio, ever. readLine()
+// --- Minimal Hal::Transport stub -- no real serial/radio, ever. readLine()
 // always reports "nothing ready" (this harness does not need to inject
 // commands to prove the extraction runs); send()/sendReliable() just record
 // whether anything was ever sent, proving Telemetry's own emit() path is
 // reachable end-to-end through Comms with no MicroBit.h dependency. -------
-class NullTransport : public Core::Transport {
+class NullTransport : public Hal::Transport {
  public:
   bool readLine(char*, uint16_t, uint16_t*) override { return false; }
   void send(const uint8_t*, uint16_t) override { ++sendCount; }

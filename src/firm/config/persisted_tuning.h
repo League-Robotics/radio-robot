@@ -31,8 +31,8 @@
 //
 // Mirrors com/radio_channel.h's own MicroBitStorage precedent, except that
 // precedent #includes MicroBit.h directly and is not host-testable at
-// all. This module instead follows app/comms.h's Core::Transport pattern
-// -- a plain virtual TuningStore base (never an #ifdef HOST_BUILD fork)
+// all. This module instead follows hal/transport.h's Hal::Transport
+// pattern -- a plain virtual TuningStore base (never an #ifdef HOST_BUILD fork)
 // plus ONE concrete ARM-only adapter, itself guarded -- so
 // persisted_tuning.h/.cpp never drag in MicroBit.h under HOST_BUILD, only
 // the concrete adapter's own declaration/definition do.
@@ -201,8 +201,8 @@ bool shouldWipe(uint32_t storedVersion, uint32_t currentVersion);
 
 // TuningStore -- the persistence seam Core::Configurator::persistIfEligible()
 // saves through and main.cpp's boot sequence loads/wipes through. Plain
-// virtual base (not an #ifdef HOST_BUILD fork) -- mirrors Core::Transport
-// (app/comms.h): this header/its .cpp never drag in MicroBit.h under
+// virtual base (not an #ifdef HOST_BUILD fork) -- mirrors Hal::Transport
+// (hal/transport.h): this header/its .cpp never drag in MicroBit.h under
 // HOST_BUILD; only the concrete ARM adapter below is guarded.
 //
 // No sim/host implementation of this interface exists anywhere in this
