@@ -1,5 +1,8 @@
 ---
-status: pending
+status: in-progress
+sprint: '136'
+tickets:
+- 136-008
 ---
 
 # Platform / Hardware / HAL / Core reorganization

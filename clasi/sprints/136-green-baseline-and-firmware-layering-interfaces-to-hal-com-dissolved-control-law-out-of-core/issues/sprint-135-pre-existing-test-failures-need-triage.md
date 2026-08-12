@@ -1,6 +1,10 @@
 ---
-status: pending
+status: in-progress
 priority: medium
+sprint: '136'
+tickets:
+- 136-001
+- 136-002
 ---
 
 # Sprint 135 bare-`pytest` run surfaced failures beyond ticket 004's own scope — captured, not resolved

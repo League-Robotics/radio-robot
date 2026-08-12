@@ -1,5 +1,14 @@
 ---
-status: pending
+status: in-progress
+sprint: '136'
+tickets:
+- 136-003
+- 136-004
+- 136-005
+- 136-006
+- 136-007
+- 136-008
+- 136-009
 ---
 
 # Firmware layering cleanup — interfaces to `hal/`, impls to `platform/microbit/`
