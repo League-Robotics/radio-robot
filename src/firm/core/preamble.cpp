@@ -6,7 +6,7 @@ namespace Core {
 
 Preamble::Preamble(Hal::Motor& left, Hal::Motor& right,
                     Hal::Otos& otos, Hal::ColorSensor& color,
-                    Hal::LineSensor& line, const Platform::Clock& clock)
+                    Hal::LineSensor& line, const Hal::Clock& clock)
     : left_(left),
       right_(right),
       otos_(otos),

@@ -7,7 +7,7 @@
 // comes from Core::Odometry's existing integration." This class's own
 // accumulator below is the SAME midpoint-arc update Odometry::integrate()
 // (src/firm/app/odometry.cpp) already performs -- literally the same three
-// lines (Kinematics::DifferentialKinematics::forward() + cosf/sinf midpoint-arc accumulation),
+// lines (Kinematics::Differential::forward() + cosf/sinf midpoint-arc accumulation),
 // duplicated here per this codebase's established per-file fixture-
 // duplication convention, NOT a second, independently-derived heading
 // formula. This is the one and only heading integration this file
@@ -55,7 +55,7 @@ namespace TestSim {
 
 class OtosPlant {
  public:
-  // trackWidth: [mm] Kinematics::DifferentialKinematics::forward()'s own `b` parameter. MUST
+  // trackWidth: [mm] Kinematics::Differential::forward()'s own `b` parameter. MUST
   // match the trackWidth passed to the Core::Odometry instance under test in
   // the SAME scenario, so this plant's own OTOS pose and Odometry's
   // independently-integrated pose describe the same physical wheelbase
@@ -64,7 +64,7 @@ class OtosPlant {
   explicit OtosPlant(float trackWidth);
 
   // Advances this plant's own (x, y, heading) accumulator by exactly one
-  // cycle's wheel-position delta, via Kinematics::DifferentialKinematics::forward() -- the SAME
+  // cycle's wheel-position delta, via Kinematics::Differential::forward() -- the SAME
   // function Core::Odometry itself calls, over the SAME two absolute wheel
   // positions the caller's two WheelPlant instances just computed. Call
   // once per cycle, after both WheelPlant::step() calls for that cycle.
@@ -92,7 +92,7 @@ class OtosPlant {
   // Otos::pose()'s v_x/v_y previously always rode the wire as 0 -- see
   // sim_plant.cpp's own handleOtosRead() comment history). v_x is this
   // cycle's own `distance / dt` (the SAME body-forward `distance`
-  // Kinematics::DifferentialKinematics::forward() already computed inside step(), before it was
+  // Kinematics::Differential::forward() already computed inside step(), before it was
   // consumed by the midpoint-arc position update) -- a body-FRAME forward
   // velocity, matching the real chip's own linear-velocity report
   // convention (mounting-yaw-corrected only, not heading-rotated -- see
@@ -100,7 +100,7 @@ class OtosPlant {
   // this plant, like the firmware's own encoder-only Odometry, has no
   // lateral-slip model for a differential-drive robot -- there is no
   // sideways component to report, matching the primary telemetry frame's
-  // own twist.v_y (Kinematics::DifferentialKinematics::forward() never produces one either).
+  // own twist.v_y (Kinematics::Differential::forward() never produces one either).
   // 0.0f before the first step() with a nonzero dt.
   float v_x() const { return v_x_; }  // [mm/s]
   float v_y() const { return v_y_; }  // [mm/s]

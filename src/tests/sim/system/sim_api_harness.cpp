@@ -428,7 +428,7 @@ void scenarioVirtualCycleTimingDiagnostic() {
 //    MOVE sequence (2+ legs, "equivalent to a tour") holds a converged
 //    Stage C bias across EVERY leg boundary -- through the REAL
 //    RobotLoop::handleMove() call site (robot_loop.cpp:227), not a
-//    hand-invoked Core::DifferentialDrive::takeover() call (that unit-level proof
+//    hand-invoked Control::DifferentialDrive::takeover() call (that unit-level proof
 //    already lives in app_drive_harness.cpp's own
 //    scenarioBiasPersistsAcrossChainedTakeoverBoundaries()).
 //    configureSimForBenchTest() installs the EXACT calibration inverse of
@@ -457,7 +457,7 @@ void scenarioBiasPersistsAcrossChainedMoveLegs() {
   const float trueKff = 1.0f / TestSim::kDefaultDutyVelMax;
   sim.drive().setDutyPerSpeed(trueKff * 0.8f, trueKff * 0.8f);
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.vMin = 0.0f;
   bounds.biasMax = 80.0f;   // [mm/s]
   bounds.tauAdapt = 1.0f;   // [s] -- converges within a few seconds of virtual cruise

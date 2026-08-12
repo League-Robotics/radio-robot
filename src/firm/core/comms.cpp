@@ -9,37 +9,7 @@
 #include "messages/wire_runtime.h"
 #include "types/version_generated.h"
 
-#ifndef HOST_BUILD
-#include "com/radio.h"
-#include "com/serial_port.h"
-#endif
-
 namespace Core {
-
-#ifndef HOST_BUILD
-
-SerialTransport::SerialTransport(SerialPort& serial) : serial_(serial) {}
-
-bool SerialTransport::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
-  return serial_.readLine(buf, cap, outLen);
-}
-
-void SerialTransport::send(const uint8_t* data, uint16_t len) { serial_.send(data, len); }
-
-void SerialTransport::sendReliable(const char* msg) { serial_.sendReliable(msg); }
-
-RadioTransport::RadioTransport(Radio& radio) : radio_(radio) {}
-
-bool RadioTransport::readLine(char* buf, uint16_t cap, uint16_t* outLen) {
-  return radio_.poll(buf, cap, outLen);
-}
-
-void RadioTransport::send(const uint8_t* data, uint16_t len) { radio_.send(data, len); }
-
-void RadioTransport::sendReliable(const char* msg) { radio_.send(reinterpret_cast<const uint8_t*>(msg),
-                                                                  static_cast<uint16_t>(std::strlen(msg))); }
-
-#endif  // HOST_BUILD
 
 namespace {
 
@@ -209,7 +179,7 @@ msg::Verb bodyKindToVerb(msg::ReplyEnvelope::BodyKind kind) {
 Comms::Comms(const char* banner, const char* idLine)
     : banner_(banner), idLine_(idLine) {}
 
-Comms::Comms(Transport& serialLink, Transport& radioLink, const char* banner, const char* idLine)
+Comms::Comms(Hal::Transport& serialLink, Hal::Transport& radioLink, const char* banner, const char* idLine)
     : banner_(banner), idLine_(idLine) {
   // Serial first, then radio -- pump() offers transports a line in
   // registration order, so this preserves the precedence the previous
@@ -218,7 +188,7 @@ Comms::Comms(Transport& serialLink, Transport& radioLink, const char* banner, co
   (void)addTransport(radioLink);
 }
 
-bool Comms::addTransport(Transport& transport) {
+bool Comms::addTransport(Hal::Transport& transport) {
   if (transportCount_ >= kMaxTransports) return false;
   transports_[transportCount_++] = &transport;
   return true;
@@ -245,7 +215,7 @@ void Comms::pump(uint32_t now) {
   }
 }
 
-bool Comms::pumpTransport(Transport& t, uint32_t now) {
+bool Comms::pumpTransport(Hal::Transport& t, uint32_t now) {
   char line[kMaxLineBytes];
   uint16_t lineLen = 0;
   if (!t.readLine(line, sizeof(line), &lineLen)) return false;
@@ -274,7 +244,7 @@ bool Comms::takeCommand(Cmd& out) {
   return true;
 }
 
-void Comms::dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& out, uint32_t now) {
+void Comms::dispatchLine(Hal::Transport& t, const char* line, uint16_t lineLen, Cmd& out, uint32_t now) {
   if (isRelayControlPlaneLine(line, lineLen)) return;
 
   uint16_t colonPos = lineLen;  // sentinel: no ':' found
@@ -327,7 +297,7 @@ void Comms::dispatchLine(Transport& t, const char* line, uint16_t lineLen, Cmd& 
   }
 }
 
-void Comms::sendPose(Transport& t) {
+void Comms::sendPose(Hal::Transport& t) {
   char line[96];
   std::snprintf(line, sizeof(line), "POSE:%ld:%ld:%ld:%ld:%ld:%ld:%d",
                 static_cast<long>(status_.otosX), static_cast<long>(status_.otosY),
@@ -338,7 +308,7 @@ void Comms::sendPose(Transport& t) {
   t.sendReliable(line);
 }
 
-void Comms::stageSeed(const uint8_t* data, uint16_t len, Transport& t) {
+void Comms::stageSeed(const uint8_t* data, uint16_t len, Hal::Transport& t) {
   // "<x>,<y>,<heading>" -- commas or spaces, all three required and signed.
   char buf[64];
   if (data == nullptr || len == 0 || len >= sizeof(buf)) {
@@ -369,7 +339,7 @@ void Comms::stageSeed(const uint8_t* data, uint16_t len, Transport& t) {
   seed_.pending = true;
 }
 
-void Comms::dispatchCleartext(msg::Verb verb, Transport& t, uint32_t now) {
+void Comms::dispatchCleartext(msg::Verb verb, Hal::Transport& t, uint32_t now) {
   switch (verb) {
     case msg::Verb::HELLO:
       t.sendReliable(banner_);
@@ -481,7 +451,7 @@ void Comms::sendBanner() {
   broadcastReliable(banner_);
 }
 
-void Comms::sendStatus(Transport& t) {
+void Comms::sendStatus(Hal::Transport& t) {
   const char* tlmStr = "auto";
   switch (status_.tlmMode) {
     case 0: tlmStr = "off"; break;
@@ -502,7 +472,7 @@ void Comms::sendStatus(Transport& t) {
   t.sendReliable(line);
 }
 
-void Comms::sendHelp(Transport& t) {
+void Comms::sendHelp(Hal::Transport& t) {
   char line[192];
   std::size_t n = 0;
   n += static_cast<std::size_t>(std::snprintf(line, sizeof(line), "HELP:"));

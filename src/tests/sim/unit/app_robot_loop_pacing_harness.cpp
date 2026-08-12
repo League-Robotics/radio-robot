@@ -20,7 +20,7 @@
 // robot_loop.h's kCycle doc comment and robot_loop.cpp's runAndWaitUntil()/
 // cycle() call site).
 //
-// JitterySleeper (below) is a small, purpose-built Platform::Sleeper that
+// JitterySleeper (below) is a small, purpose-built Hal::Sleeper that
 // wraps a TestSim::SimClock and advances it by MORE than the requested
 // duration on every sleepMillis() call -- modeling both components
 // 130-011's own on-robot investigation named as the likely cause
@@ -47,7 +47,7 @@
 // consequence: that scenario's fake clock cannot represent intra-cycle
 // elapsed time at all, so it cannot prove this convergence claim --  this
 // harness exists to prove it instead). composeRobot() takes a plain
-// Platform::Sleeper&, the same interface seam main.cpp/SimHarness already
+// Hal::Sleeper&, the same interface seam main.cpp/SimHarness already
 // use, so this harness supplies its own JitterySleeper there.
 //
 // Compiled and run by test_app_robot_loop_pacing.py (subprocess, exit
@@ -58,7 +58,7 @@
 
 #include "core/boot_wiring.h"
 #include "core/robot_loop.h"
-#include "platform/clock.h"
+#include "hal/clock.h"
 #include "fake_transport.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
@@ -81,7 +81,7 @@ void checkTrue(bool condition, const char* what) {
 // sleepMillis() call, and by a small fixed amount on yield() (a real
 // fiber yield still costs some scheduler time on hardware -- kept
 // nonzero so a degenerate all-yield cycle cannot look free).
-class JitterySleeper : public Platform::Sleeper {
+class JitterySleeper : public Hal::Sleeper {
  public:
   explicit JitterySleeper(TestSim::SimClock& clock) : clock_(clock) {}
 

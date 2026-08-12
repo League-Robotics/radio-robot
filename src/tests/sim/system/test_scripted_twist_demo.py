@@ -40,7 +40,7 @@ e.g.:
         src/firm/core/preamble.cpp src/firm/platform/host/sim_clock.cpp \\
         src/firm/hardware/nezha/nezha_motor.cpp src/firm/hardware/generic/real_otos.cpp \\
         src/firm/hardware/planetx/color_sensor.cpp src/firm/hardware/planetx/line_sensor.cpp \\
-        src/firm/messages/wire.cpp src/firm/messages/wire_runtime.cpp src/firm/kinematics/differential_kinematics.cpp \\
+        src/firm/messages/wire.cpp src/firm/messages/wire_runtime.cpp src/firm/kinematics/differential.cpp \\
     && /tmp/scripted_twist_demo
 """
 
@@ -96,7 +96,7 @@ _APP_SOURCES = [
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "planner.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
-    _SOURCE_DIR / "core" / "differential_drive.cpp",
+    _SOURCE_DIR / "control" / "differential_drive.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "core" / "preamble.cpp",
     # 130-002 -- the shared composition root (Core::composeRobot()/
@@ -132,7 +132,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _KINEMATICS_SOURCES = [
-    _REPO_ROOT / "src" / "firm" / "kinematics" / "differential_kinematics.cpp",
+    _REPO_ROOT / "src" / "firm" / "kinematics" / "differential.cpp",
 ]
 
 _CXX_STANDARD = "c++20"

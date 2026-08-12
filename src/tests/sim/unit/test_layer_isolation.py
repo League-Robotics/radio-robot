@@ -7,16 +7,23 @@ isolation invariant over the single ``src/firm/devices/`` tree
 reorganization split that one tree into three layers, so the one rule
 becomes three -- same shape, same grep, one allowed-prefix set per layer:
 
-    platform/  may include: platform/          (+ vendor, + stdlib)
+    platform/  may include: platform/, hal/     (+ vendor, + stdlib)
     hal/       may include: hal/                          (+ stdlib)
     hardware/  may include: hardware/, hal/, platform/  (+ vendor, + stdlib)
 
 Dependencies run strictly downward: `hal/` names no bus and no clock, and
 `hardware/` reaches DOWN to `platform/` and UP only as far as the `hal/`
-interface it implements. None of the three may reach `messages/`,
-`config/`, `com/`, `kinematics/`, `motion/`, or `app/` -- reaching the wire
-schema or generated boot config from a driver is what kills its reuse under
-``-DHOST_BUILD``/sim, and reaching upward inverts the layering outright.
+interface it implements. `platform/` reaches UP only as far as the `hal/`
+interfaces its per-target implementations bind to (136-004 moved
+`Hal::Clock`/`Hal::Sleeper`/`Hal::I2CBus` into `hal/`, so
+`Platform::MicroBitClock`/`MicroBitSleeper`/`MicroBitI2CBus` and
+`TestSim::SimClock`/`SimSleeper`/`SimPlant` now implement HAL interfaces
+from outside `hal/` -- the same "implementor reaches up to the interface
+it implements" shape `hardware/` already had). None of the three may reach
+`messages/`, `config/`, `com/`, `kinematics/`, `motion/`, or `app/` --
+reaching the wire schema or generated boot config from a driver is what
+kills its reuse under ``-DHOST_BUILD``/sim, and reaching upward past `hal/`
+inverts the layering outright.
 
 ``platform/host/`` is excluded: it is the host PLATFORM (the sim), whose
 whole job is to compose the firmware it substitutes primitives for, so it
@@ -46,8 +53,8 @@ _FIRM_DIR = _REPO_ROOT / "src" / "firm"
 
 # One entry per layer: (directory, allowed quoted-include prefixes).
 _LAYERS = (
-    ("platform", ("platform/",)),
     ("hal", ("hal/",)),
+    ("platform", ("platform/", "hal/")),
     ("hardware", ("hardware/", "hal/", "platform/")),
 )
 

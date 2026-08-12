@@ -33,7 +33,7 @@ _HARNESS_SRC = _UNIT_DIR / "configurator_applygroup_harness.cpp"
 
 _APP_SOURCES = [
     _SOURCE_DIR / "core" / "configurator.cpp",
-    _SOURCE_DIR / "core" / "differential_drive.cpp",
+    _SOURCE_DIR / "control" / "differential_drive.cpp",
     _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 _MOTION_SOURCES = [

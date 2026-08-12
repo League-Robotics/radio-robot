@@ -96,7 +96,7 @@
 
 #include "core/boot_calibration.h"
 #include "core/configurator.h"
-#include "core/differential_drive.h"
+#include "control/differential_drive.h"
 #include "config/boot_config.h"
 #include "config/robot.h"
 #include "hal/motor.h"
@@ -261,7 +261,7 @@ int main() {
 
   RecordingMotor motorL, motorR;
   RecordingOtos otos;
-  Core::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/128.0f);
+  Control::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/128.0f);
   Motion::PlannerLimits limits;
   Motion::Planner planner(limits);
   Motion::NavigatorLimits navigatorLimits;
@@ -401,14 +401,14 @@ int main() {
     checkFloatEq(configurator.config().wheelControl.pos_err_max, 12.0f,
                 "config().wheelControl.pos_err_max reflects the push");
 
-    const Core::DifferentialDrive::ControlGains& gains = drive.controlGains();
+    const Control::DifferentialDrive::ControlGains& gains = drive.controlGains();
     checkFloatEq(gains.kp, 0.11f, "controlGains().kp");
     checkFloatEq(gains.ki, 0.22f, "controlGains().ki");
     checkFloatEq(gains.iMax, 0.33f, "controlGains().iMax");
     checkFloatEq(gains.kaff, 0.44f, "controlGains().kaff");
     checkFloatEq(gains.pidMax, 0.55f, "controlGains().pidMax");
 
-    const Core::DifferentialDrive::AdaptationBounds& bounds = drive.adaptationBounds();
+    const Control::DifferentialDrive::AdaptationBounds& bounds = drive.adaptationBounds();
     checkFloatEq(bounds.vMin, 66.0f, "adaptationBounds().vMin");
     checkFloatEq(bounds.biasMax, 77.0f, "adaptationBounds().biasMax");
     // The two clamps arrive over the wire INDEPENDENTLY and land in
@@ -663,7 +663,7 @@ int main() {
     checkFloatEq(configurator.config().drive.wheel_gain_left_accel,
                 hwDrive.wheel_gain_left_accel,
                 "config().drive.wheel_gain_left_accel reflects loadBaked()");
-    const Core::DifferentialDrive::ControlGains& bootGains = drive.controlGains();
+    const Control::DifferentialDrive::ControlGains& bootGains = drive.controlGains();
     const msg::WheelControl hwWheelControl = Config::defaultWheelControlGroup();
     checkFloatEq(bootGains.kp, hwWheelControl.pid_kp,
                 "controlGains().kp reflects the boot install() fan-out");

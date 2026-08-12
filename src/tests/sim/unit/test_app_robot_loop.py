@@ -45,7 +45,7 @@ _ROBOT_LOOP_SRC = _SOURCE_DIR / "core" / "robot_loop.cpp"
 _PREAMBLE_SRC = _SOURCE_DIR / "core" / "preamble.cpp"
 _COMMS_SRC = _SOURCE_DIR / "core" / "comms.cpp"
 _TELEMETRY_SRC = _SOURCE_DIR / "core" / "telemetry.cpp"
-_DRIVE_SRC = _SOURCE_DIR / "core" / "differential_drive.cpp"
+_DRIVE_SRC = _SOURCE_DIR / "control" / "differential_drive.cpp"
 # 122-002: Core::applyOtosSample() split out of odometry.cpp (now
 # Motion::Odometry, src/firm/motion/) into this new base-side file --
 # robot_loop.cpp's own applyOtosSample() call needs it linked in.
@@ -66,7 +66,7 @@ _CLOCK_HOST_FAKE_SRC = _INFRA_SIM_DIR / "sim_clock.cpp"
 # its pure serializeSnapshot()/Config::TuningStore seam directly.
 _PERSISTED_TUNING_SRC = _SOURCE_DIR / "config" / "persisted_tuning.cpp"
 
-_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "kinematics" / "differential_kinematics.cpp"
+_BODY_KINEMATICS_SRC = _REPO_ROOT / "src" / "firm" / "kinematics" / "differential.cpp"
 
 _WIRE_SRC = _SOURCE_DIR / "messages" / "wire.cpp"
 _WIRE_RUNTIME_SRC = _SOURCE_DIR / "messages" / "wire_runtime.cpp"
@@ -108,7 +108,7 @@ def _find_cxx_compiler() -> str:
 
 
 @pytest.mark.xfail(
-    strict=False,
+    strict=True,
     reason=(
         "SUPERSEDED root cause, re-audited by 125-006 (telemetry-emit-"
         "policy-rebuild-spec.md Part 8's own acceptance ticket): the "

@@ -3,13 +3,13 @@
 //
 // Three things to prove, in order of how badly a regression would hurt:
 //
-//   1. DifferentialKinematics is the OLD BodyKinematics, bit for bit. The
+//   1. Differential is the OLD BodyKinematics, bit for bit. The
 //      reorganization that created this directory claims "unchanged math";
 //      every real robot in this fleet drives through these equations, so
 //      that claim gets checked against the round-trip identities and the
 //      closed-form values, not taken on faith.
-//   2. MecanumKinematics is correct. Nothing in the firmware constructs it
-//      yet (Core::DifferentialDrive is still differential-specific end to end), so this
+//   2. Mecanum is correct. Nothing in the firmware constructs it
+//      yet (Control::DifferentialDrive is still differential-specific end to end), so this
 //      harness is its ONLY coverage -- and an interface whose second
 //      implementation is untested is not a proven seam.
 //   3. Model::saturate() -- the one concrete method on the base -- behaves
@@ -20,9 +20,9 @@
 // src/tests/sim/unit harness. These sources have zero platform dependency
 // (pure math, no bus, no clock), so the define changes nothing here.
 
-#include "kinematics/differential_kinematics.h"
+#include "kinematics/differential.h"
 #include "kinematics/kinematics.h"
-#include "kinematics/mecanum_kinematics.h"
+#include "kinematics/mecanum.h"
 
 #include <cmath>
 #include <cstdio>
@@ -57,7 +57,7 @@ constexpr float kWheelBase = 120.0f;   // [mm]
 
 void scenarioDifferentialClosedForm() {
   beginScenario("differential: inverse/forward match the closed forms exactly");
-  using K = Kinematics::DifferentialKinematics;
+  using K = Kinematics::Differential;
 
   // Straight: both wheels at v, no yaw.
   float vL = 0.0f, vR = 0.0f;
@@ -86,7 +86,7 @@ void scenarioDifferentialClosedForm() {
 
 void scenarioDifferentialModel() {
   beginScenario("differential: the Model& overrides agree with the statics");
-  const Kinematics::DifferentialKinematics model(kTrackWidth);
+  const Kinematics::Differential model(kTrackWidth);
   const Kinematics::Model& m = model;
 
   checkInt(m.wheelCount(), 2, "a differential drive has 2 wheels");
@@ -100,7 +100,7 @@ void scenarioDifferentialModel() {
   m.inverse(in, wheels);
 
   float vL = 0.0f, vR = 0.0f;
-  Kinematics::DifferentialKinematics::inverse(in.v_x, in.omega, kTrackWidth, vL, vR);
+  Kinematics::Differential::inverse(in.v_x, in.omega, kTrackWidth, vL, vR);
   checkNear(wheels[0], vL, kTol, "Model::inverse left matches the static");
   checkNear(wheels[1], vR, kTol, "Model::inverse right matches the static");
 
@@ -118,7 +118,7 @@ void scenarioDifferentialModel() {
 
 void scenarioMecanumPureMotions() {
   beginScenario("mecanum: the three pure body motions hit the expected wheels");
-  const Kinematics::MecanumKinematics model(kTrackWidth, kWheelBase);
+  const Kinematics::Mecanum model(kTrackWidth, kWheelBase);
   const Kinematics::Model& m = model;
   const float k = 0.5f * (kWheelBase + kTrackWidth);  // [mm]
 
@@ -156,7 +156,7 @@ void scenarioMecanumPureMotions() {
 
 void scenarioMecanumRoundTrip() {
   beginScenario("mecanum: forward(inverse(twist)) is the identity");
-  const Kinematics::MecanumKinematics model(kTrackWidth, kWheelBase);
+  const Kinematics::Mecanum model(kTrackWidth, kWheelBase);
   const Kinematics::Model& m = model;
 
   Kinematics::Twist in;
@@ -180,7 +180,7 @@ void scenarioMecanumRoundTrip() {
 
 void scenarioSaturate() {
   beginScenario("saturate: uniform scaling preserves the wheel-speed ratio");
-  const Kinematics::DifferentialKinematics diff(kTrackWidth);
+  const Kinematics::Differential diff(kTrackWidth);
   const Kinematics::Model& m2 = diff;
 
   // Below the ceiling: pass-through.
@@ -200,13 +200,13 @@ void scenarioSaturate() {
   // The N=2 result is identical to the old two-wheel static, which is what
   // "no behavior change" has to mean here.
   float staticL = 0.0f, staticR = 0.0f;
-  Kinematics::DifferentialKinematics::saturate(over[0], over[1], 500.0f, 100.0f,
+  Kinematics::Differential::saturate(over[0], over[1], 500.0f, 100.0f,
                                                staticL, staticR);
   checkNear(out2[0], staticL, kTol, "Model::saturate matches the 2-wheel static (L)");
   checkNear(out2[1], staticR, kTol, "Model::saturate matches the 2-wheel static (R)");
 
   // Same rule over 4 wheels, including a negative one.
-  const Kinematics::MecanumKinematics mec(kTrackWidth, kWheelBase);
+  const Kinematics::Mecanum mec(kTrackWidth, kWheelBase);
   const Kinematics::Model& m4 = mec;
   const float over4[4] = {200.0f, -800.0f, 400.0f, 100.0f};
   float out4[Kinematics::kMaxWheels] = {};

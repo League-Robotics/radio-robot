@@ -1,11 +1,11 @@
 // sim_clock.h -- TestSim::SimClock / TestSim::SimSleeper: the steppable
-// host-test fakes for Platform::Clock / Platform::Sleeper.
+// host-test fakes for Hal::Clock / Hal::Sleeper.
 //
 // Sprint 108 ticket 010 (clasi/issues/plan-pure-i2cbus-clock-interfaces-a-
 // real-simplant-simulator.md, Stage 5). Ticket 010 reduced
-// `Platform::Clock`/`Platform::Sleeper` to pure interfaces
-// (source/devices/clock.h); SimClock/SimSleeper are the SECOND concrete
-// implementations, alongside `Platform::MicroBitClock`/`MicroBitSleeper`
+// `Hal::Clock`/`Hal::Sleeper` to pure interfaces (hal/clock.h);
+// SimClock/SimSleeper are the SECOND concrete implementations, alongside
+// `Platform::MicroBitClock`/`MicroBitSleeper`
 // (source/devices/microbit_clock.h) on the ARM side -- mirrors
 // tests/_infra/sim/sim_plant.h's own relationship to
 // Platform::MicroBitI2CBus (ticket 001/002).
@@ -25,12 +25,12 @@
 
 #include <cstdint>
 
-#include "platform/clock.h"
+#include "hal/clock.h"
 
 namespace TestSim {
 
 // SimClock -- per-instance fake, advances ONLY when stepped.
-class SimClock : public Platform::Clock {
+class SimClock : public Hal::Clock {
  public:
   SimClock() = default;
 
@@ -44,7 +44,7 @@ class SimClock : public Platform::Clock {
 };
 
 // SimSleeper -- records requested sleeps/yields; never blocks.
-class SimSleeper : public Platform::Sleeper {
+class SimSleeper : public Hal::Sleeper {
  public:
   SimSleeper() = default;
 

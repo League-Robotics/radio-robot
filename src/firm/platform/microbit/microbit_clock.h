@@ -1,5 +1,5 @@
 // microbit_clock.h — Platform::MicroBitClock / Platform::MicroBitSleeper: the
-// real ARM implementations of Platform::Clock / Platform::Sleeper, wrapping
+// real ARM implementations of Hal::Clock / Hal::Sleeper, wrapping
 // the CODAL vendor primitives.
 //
 // MicroBitClock::nowMicros() wraps system_timer_current_time_us() (both
@@ -8,22 +8,22 @@
 //
 // Usage: one MicroBitClock and one MicroBitSleeper instance, owned by
 // main() and passed to Core::RobotLoop (and the modules it composes:
-// Core::Deadman, Core::Preamble) as `Platform::Clock&`/`Platform::Sleeper&`.
+// Core::Deadman, Core::Preamble) as `Hal::Clock&`/`Hal::Sleeper&`.
 #pragma once
 #include "MicroBit.h"  // system_timer_current_time_us(), fiber_sleep(), schedule()
-#include "platform/clock.h"
+#include "hal/clock.h"
 #include <cstdint>
 
 namespace Platform {
 
-class MicroBitClock : public Clock {
+class MicroBitClock : public Hal::Clock {
  public:
   MicroBitClock() = default;
 
   uint64_t nowMicros() const override;  // [us]
 };
 
-class MicroBitSleeper : public Sleeper {
+class MicroBitSleeper : public Hal::Sleeper {
  public:
   MicroBitSleeper() = default;
 

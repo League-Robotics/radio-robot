@@ -10,12 +10,12 @@
 // 132-006 first built this struct inline inside app/configurator.h.
 // 132-007 (subsystem configure() entry points + derived-value methods)
 // moved it here, into its own header, for two reasons:
-//   1. Derived-value methods (below) are consumed by Core::DifferentialDrive/
+//   1. Derived-value methods (below) are consumed by Control::DifferentialDrive/
 //      RobotLoop/the boot_calibration.h Config::Robot-consuming adapters
-//      -- all of which configurator.h's own #include "core/differential_drive.h" would
+//      -- all of which configurator.h's own #include "control/differential_drive.h" would
 //      put in a circular #include with configurator.h if Config::Robot
 //      stayed there (drive.h would need "core/configurator.h" for the
-//      type, configurator.h already needs "core/differential_drive.h" for Drive&).
+//      type, configurator.h already needs "control/differential_drive.h" for Drive&).
 //      A standalone header with no Core:: dependency of its own breaks
 //      the cycle for every current and future consumer, not just Drive.
 //   2. It is genuinely config/'s own data model (a sibling to

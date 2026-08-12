@@ -4,7 +4,7 @@ wheel plant (duty -> steady-state speed) over the FULL duty range, per motor,
 per direction, plus a simultaneous-both-wheels grid, and derive population
 constants (mean map, adaptation bounds, breakaway band).
 
-`Core::DifferentialDrive` is OPEN LOOP (`src/firm/core/differential_drive.h:14`): it converts a commanded
+`Control::DifferentialDrive` is OPEN LOOP (`src/firm/control/differential_drive.h:15`): it converts a commanded
 wheel speed to duty via `dutyPerSpeed` and writes it, with no feedback. So
 `dutyPerSpeed` IS the plant model, and when it is wrong the robot simply runs at
 the wrong speed -- measured 2026-07-31 at 35% of commanded. This tool measures
@@ -129,7 +129,7 @@ REST = 0.5           # [s] full stop between rungs, so each starts from stuck
 MOTION = 5.0         # [mm/s] below this the wheel is considered not turning
 
 # The measured plant inverse the FIRMWARE ACTUALLY USES -- see point 3 above.
-# MUST track src/firm/core/differential_drive.h's `Drive::kDutyPerSpeed`; there is no
+# MUST track src/firm/control/differential_drive.h's `Drive::kDutyPerSpeed`; there is no
 # firmware->host config read-back path, so this is a hand-kept mirror, not a
 # read. If drive.h's constant ever changes, update this too or the whole duty
 # axis silently goes stale again exactly as it did this session.

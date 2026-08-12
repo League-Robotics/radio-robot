@@ -297,7 +297,7 @@ const char* sim_firmware_version() { return FIRMWARE_VERSION_STR; }
 // per-instance state).
 int sim_cycle_dt_us() { return static_cast<int>(TestSim::SimHarness::kCycleDtUs); }
 
-// Commanded per-wheel velocity (the interim PID SETPOINT Core::DifferentialDrive stages
+// Commanded per-wheel velocity (the interim PID SETPOINT Control::DifferentialDrive stages
 // -- 125-003: read from Drive's own driveTargetVelLeft/Right() accessor now,
 // NOT Hal::Motor::velocityTarget(), which is deleted -- the velocity
 // PID moved off NezhaMotor entirely, see drive.h's own header). cmd_vel is
@@ -316,7 +316,7 @@ float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->driveTargetVelRight(
 // longer exists on the Motor interface at all (Decision 2, sprint.md -- PID
 // is a control decision, not hardware protection, and relocated to a
 // motion-local wheel-velocity PID class -- itself deleted outright by
-// 128-015, zero instantiations; Core::DifferentialDrive holds no controller of its own,
+// 128-015, zero instantiations; Control::DifferentialDrive holds no controller of its own,
 // see src/firm/motion/DESIGN.md's "wheel control generations" note). This C ABI
 // export is kept (not deleted) purely so host/robot_radio/io/sim_loop.py's
 // ctypes symbol lookup at import time does not break -- it has no effect on
@@ -364,7 +364,7 @@ void sim_inject_twist(SimHandle h, float v_x, float omega, float duration, uint3
 void sim_inject_stop(SimHandle h, uint32_t corr) { asHarness(h)->injectEstop(corr); }
 
 // sim_inject_wheels -- the dumb teleop primitive (§2), straight to
-// Core::DifferentialDrive. `corr` doubles as the envelope corr_id and the command's own
+// Control::DifferentialDrive. `corr` doubles as the envelope corr_id and the command's own
 // completion id, matching sim_inject_twist()'s established convention here.
 void sim_inject_wheels(SimHandle h, float vLeft, float vRight, float duration, uint32_t corr) {
   asHarness(h)->injectWheels(vLeft, vRight, duration, /*id=*/corr, corr);
@@ -601,7 +601,7 @@ void sim_configure_drivetrain(SimHandle h, float gainPos, float offsetPos,  // [
   asHarness(h)->robotLoop().setRotationCalibration(gainPos, offsetPos, gainNeg, offsetNeg);
 }
 
-// Core::DifferentialDrive's own boot calibration -- the sim-side counterpart of main.cpp's
+// Control::DifferentialDrive's own boot calibration -- the sim-side counterpart of main.cpp's
 // setDutyPerSpeed()/setCrawlPulse() seam, which reads the same values out of
 // Config::defaultDriveConfig(). That generated config is deliberately absent
 // from the sim CMake target (src/firm/platform/host/CMakeLists.txt bakes the active robot
@@ -616,7 +616,7 @@ void sim_configure_drivetrain(SimHandle h, float gainPos, float offsetPos,  // [
 // public accessor (sim_harness.h) -- no new SimHarness method needed.
 void sim_configure_drive(SimHandle h, float dutyPerSpeedLeft, float dutyPerSpeedRight,
                          float crawlPulse) {
-  Core::DifferentialDrive& drive = asHarness(h)->drive();
+  Control::DifferentialDrive& drive = asHarness(h)->drive();
   drive.setDutyPerSpeed(dutyPerSpeedLeft, dutyPerSpeedRight);
   drive.setCrawlPulse(crawlPulse);
 }

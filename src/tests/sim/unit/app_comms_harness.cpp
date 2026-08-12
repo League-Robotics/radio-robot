@@ -31,7 +31,7 @@
 #include <string>
 
 #include "core/comms.h"
-#include "core/differential_drive.h"
+#include "control/differential_drive.h"
 #include "core/telemetry.h"
 #include "hal/motor.h"
 #include "firm/types/robot_state.h"
@@ -63,10 +63,10 @@ class StubMotor : public Hal::Motor {
   void rebaseline() override {}
 };
 
-Core::DifferentialDrive& testDrive() {
+Control::DifferentialDrive& testDrive() {
   static StubMotor left;
   static StubMotor right;
-  static Core::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
+  static Control::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
   return drive;
 }
 

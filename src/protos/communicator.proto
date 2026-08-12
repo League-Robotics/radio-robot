@@ -16,9 +16,14 @@ package robot;
 
 // Configuration for the Communicator.
 //
-// radio_channel is the nRF frequency band, clamped to radiochan's 0..35
-// display range (single base-36 LED digit). The proto zero default equals
-// radiochan::kDefault (0), which matches the RadioRelay's default channel.
+// radio_channel is the nRF frequency band, clamped to the 0..35 display
+// range (single base-36 LED digit). The proto zero default matches the
+// RadioRelay's own default channel. `com/radio_channel.h`'s
+// `radiochan::kDefault`/`radiochan::clamp` (the symbols this comment used
+// to cite) never had a load()/save() implementation and were deleted
+// outright as dead code by sprint 136 ticket 003 -- the radio channel has
+// come from `Config::kRadioChannel` (baked from the robot JSON's
+// `connection.radio_channel`) since that cutover, not from this field.
 // There is no baud field: nothing drives SerialPort::setBaud today; runtime
 // baud stays a SerialPort primitive until a real consumer exists.
 message CommunicatorConfig {

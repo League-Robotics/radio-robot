@@ -43,7 +43,7 @@
 #include <string>
 
 #include "core/configurator.h"
-#include "core/differential_drive.h"
+#include "control/differential_drive.h"
 #include "config/robot.h"
 #include "hal/motor.h"
 #include "hardware/generic/real_otos.h"
@@ -178,7 +178,7 @@ int main() {
   // loadBaked() and applyGroup() commit identically into config_). ------
   RecordingMotor aMotorL, aMotorR;
   RecordingOtos aOtos;
-  Core::DifferentialDrive aDrive(aMotorL, aMotorR, /*trackWidth=*/128.0f);
+  Control::DifferentialDrive aDrive(aMotorL, aMotorR, /*trackWidth=*/128.0f);
   // dutyPerSpeed is BOOT-ONLY even inside the "live" DRIVE group --
   // Configurator::install()'s own doc comment: "neither Drive::configure()
   // nor install(DRIVE) touch dutyPerSpeed live." The composition root sets
@@ -215,7 +215,7 @@ int main() {
   // tovez's values -- the actual "bake from togov, push tovez" scenario. --
   RecordingMotor bMotorL, bMotorR;
   RecordingOtos bOtos;
-  Core::DifferentialDrive bDrive(bMotorL, bMotorR, /*trackWidth=*/126.0f);
+  Control::DifferentialDrive bDrive(bMotorL, bMotorR, /*trackWidth=*/126.0f);
   bDrive.setDutyPerSpeed(0.00187325f, 0.00187325f);  // togov.json's own value -- boot-baked, see A's own comment above
   Motion::PlannerLimits bLimits;
   Motion::Planner bPlanner(bLimits);

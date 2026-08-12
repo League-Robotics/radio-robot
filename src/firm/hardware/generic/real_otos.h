@@ -10,7 +10,7 @@
 #include "hal/device_config.h"
 #include "hal/device_types.h"
 #include "hal/otos.h"
-#include "platform/i2c_bus.h"
+#include "hal/i2c_bus.h"
 
 namespace Hardware {
 
@@ -20,7 +20,7 @@ int8_t scaleToRegister(float scale);
 
 class RealOtos : public Hal::Otos {
  public:
-  RealOtos(Platform::I2CBus& bus, const Hal::OtosConfig& config);
+  RealOtos(Hal::I2CBus& bus, const Hal::OtosConfig& config);
 
   void begin() override;
 
@@ -60,7 +60,7 @@ class RealOtos : public Hal::Otos {
   void init() override;
 
  private:
-  Platform::I2CBus& bus_;
+  Hal::I2CBus& bus_;
   Hal::OtosConfig config_;
 
   bool initialized_ = false;

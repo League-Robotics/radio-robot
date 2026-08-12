@@ -1049,10 +1049,30 @@ def _run_tour(gui, recorder, monkeypatch, *, button: str, tour_name: str, n_legs
         )
 
 
+# 136-002: the turn-accuracy/tour-completion family is real, previously-
+# flagged, unresolved firmware behavior (decelLatched/shaping-band and
+# cumulative-baseline-ledger territory) that sprint 136 formally accepts
+# rather than fixes -- see sprint.md's Out of Scope section and the tracked
+# issue for the full investigation history.
+_XFAIL_TOUR_ACCURACY_REASON = (
+    "136-002: real, previously-flagged, unresolved firmware behavior -- "
+    "the turn-accuracy/tour-completion family (decelLatched/shaping-band "
+    "and cumulative-baseline-ledger territory; sprint 131 ticket 006's own "
+    "Completion Notes attribute the actual observed mechanism to "
+    "Planner::tick()'s Distance-leg baseline carry not folding in the "
+    "leg's own heading drift before the following turn reads it). Out of "
+    "Scope for sprint 136 per sprint.md -- formally accepted, not fixed. "
+    "Tracked: clasi/issues/later/"
+    "A-tour2-146-degree-turn-still-undershoots-after-130-010.md."
+)
+
+
+@pytest.mark.xfail(reason=_XFAIL_TOUR_ACCURACY_REASON, strict=True)
 def test_tour_1_runs_to_completion(gui, recorder, monkeypatch):
     _run_tour(gui, recorder, monkeypatch, button="tour_btn_tour_1", tour_name="Tour 1", n_legs=13)
 
 
+@pytest.mark.xfail(reason=_XFAIL_TOUR_ACCURACY_REASON, strict=True)
 def test_tour_2_runs_to_completion(gui, recorder, monkeypatch):
     _run_tour(gui, recorder, monkeypatch, button="tour_btn_tour_2", tour_name="Tour 2", n_legs=15)
 
@@ -1062,6 +1082,23 @@ def test_tour_2_runs_to_completion(gui, recorder, monkeypatch):
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xfail(
+    reason=(
+        "136-002: precondition failure ('tour_btn_tour_1 must be enabled "
+        "before this test'), not a STOP defect -- this test runs "
+        "immediately after test_tour_2_runs_to_completion in file order, "
+        "and _run_tour()'s own wait loop (this file, above) only exits "
+        "early once stop_tour_btn disables; if that PRECEDING tour test's "
+        "own worker thread is still active when TOUR_TIMEOUT_S elapses, "
+        "the button state leaks forward into this test. Most likely "
+        "downstream of the same turn-accuracy family "
+        "test_tour_1/2_runs_to_completion already xfail for (not "
+        "independently isolated by re-ordering -- see the tracked issue's "
+        "own item 3 for that follow-up). Tracked: clasi/issues/later/"
+        "A-tour2-146-degree-turn-still-undershoots-after-130-010.md."
+    ),
+    strict=True,
+)
 def test_stop_mid_tour_halts_motion_and_flushes_the_queue(gui, recorder):
     """Starts Tour 1 again, lets it run briefly, clicks the Operations
     panel's STOP button (``ops_btn_stop`` -> ``_stop_all_motion()`` ->

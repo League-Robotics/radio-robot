@@ -62,7 +62,7 @@ Move distanceMove(uint32_t id, float threshold, float v_x) {
 }
 
 // Mirrors Core::RobotLoop::publishPose()'s own write, minus the
-// Kinematics::DifferentialKinematics::forward() twist (not needed for this test's
+// Kinematics::Differential::forward() twist (not needed for this test's
 // pose-ownership assertion, and pulling body_kinematics.h in here would
 // add a messages/ dependency this standalone planner test tree otherwise
 // has none of).

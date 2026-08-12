@@ -338,7 +338,7 @@ def test_goto_explicit_stop_halts_promptly_without_waiting_for_arrival_or_timeou
            "ever exercised. Superseded, not fixable by un-gating alone; "
            "segment-arm completion is `active` (bb.drivetrain.busy), not "
            "`mode` -- see protocol.py's TLMFrame.from_pb2() docstring.",
-    strict=False,
+    strict=True,
 )
 def test_stop_cancels_inflight_g_goal_against_real_sim() -> None:
     """``_safe_stop()``'s bare top-level ``STOP`` genuinely cancels
@@ -574,7 +574,7 @@ def _disconnect_sim(qapp, window) -> None:
            "see testgui/binary_bridge.py's own module docstring for the "
            "full accounting; genuinely deferred to sprint 098's fused "
            "pose for SI specifically).",
-    strict=False,
+    strict=True,
 )
 def test_goto_button_converges_against_real_sim_and_reenables_button(
     qapp, monkeypatch, tmp_path
@@ -642,7 +642,7 @@ def test_goto_button_converges_against_real_sim_and_reenables_button(
            "enabled after connect. See test_goto_button_converges_..."
            "'s identical reasoning above and __main__.py's goto_btn "
            "docstring comment / tooltip.",
-    strict=False,
+    strict=True,
 )
 def test_goto_stop_reenables_button_synchronously_against_real_sim(
     qapp, monkeypatch, tmp_path

@@ -66,8 +66,8 @@ set(MOTION_DIR "${CMAKE_SOURCE_DIR}")
 set(KINEMATICS_DIR "${REPO_ROOT}/src/firm/kinematics")
 add_library(motion STATIC
     "${KINEMATICS_DIR}/kinematics.cpp"
-    "${KINEMATICS_DIR}/differential_kinematics.cpp"
-    "${KINEMATICS_DIR}/mecanum_kinematics.cpp"
+    "${KINEMATICS_DIR}/differential.cpp"
+    "${KINEMATICS_DIR}/mecanum.cpp"
     "${MOTION_DIR}/odometry.cpp"
 )
 

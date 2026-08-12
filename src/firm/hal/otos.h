@@ -5,12 +5,14 @@
 //   - Hardware::RealOtos (hardware/generic/real_otos.h) -- the SparkFun
 //     OTOS chip over I2C. A commercial, publicly-documented part, hence
 //     hardware/generic/ rather than a named-family directory.
-//   - Core::FakeOtos (app/fake_otos.h) -- the FAKE_OTOS build variant, which
-//     reports the dead-reckoned Odometry pose as if it were the chip. It is
-//     NOT a sim-only construct: it is how a real micro:bit robot built
-//     WITHOUT a physical OTOS runs.
 //   - TestSim's OtosPlant path, via SimPlant answering RealOtos's own bus
 //     transactions (the sim substitutes the PLATFORM, not this interface).
+//
+// A prior bench variant, Core::FakeOtos (selected by the FAKE_OTOS build
+// flag), reported the dead-reckoned Odometry pose as if it were the chip
+// -- removed as dead code, 136-003 (zero robot JSON, CI script, or
+// justfile recipe ever enabled it). The interface is kept as the seam
+// even with one implementation, for a future real alternative.
 //
 // Extracted from the former devices/otos.h, which held this interface and
 // RealOtos in one file. Splitting them is what lets a robot with no OTOS
@@ -26,7 +28,7 @@ namespace Hal {
 
 class Otos {
  public:
-  // Inline `= default`, matching Hal::Motor / Platform::I2CBus / Platform::
+  // Inline `= default`, matching Hal::Motor / Hal::I2CBus / Hal::
   // Clock. It was an out-of-line vtable anchor in otos.cpp while the
   // interface and RealOtos shared one file; keeping that would have made
   // the HAL layer's own symbol live in a hardware translation unit, and

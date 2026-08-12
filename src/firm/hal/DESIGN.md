@@ -18,7 +18,7 @@ new class in `hardware/` plus one line in the composition root, and nothing
 else in the firmware changes.
 
 `hal/` sits above `platform/` and `hardware/` and below `kinematics/`,
-`motion/`, and `app/`.
+`control/`, `motion/`, and `core/`.
 
 ## 2. Orientation
 
@@ -26,16 +26,36 @@ else in the firmware changes.
 hal/
   device_types.h   MotorReading, ColorReading, LineReading, PoseReading, Neutral
   device_config.h  MotorConfig, OtosConfig, ColorConfig, LineConfig
+  clock.h          Hal::Clock / Hal::Sleeper — time/yield seam
+  i2c_bus.h        Hal::I2CBus       — the bus interface
+  transport.h      Hal::Transport    — a line-oriented byte pipe (serial/radio)
   motor.h          Hal::Motor        — one actuator channel
-  motor_board.h    Hal::MotorBoard   — a multi-channel smart driver board
+  motor_driver.h   Hal::MotorDriver  — a multi-channel smart driver board
   otos.h           Hal::Otos         — absolute pose/twist sensor
   color_sensor.h   Hal::ColorSensor  — RGBC
   line_sensor.h    Hal::LineSensor   — N-cell reflectance array
 ```
 
 Implementations all live in `hardware/` (or, for a part physically welded
-to one compute board, in `platform/<target>/hardware/`). The one deliberate
-exception is `Core::FakeOtos` — see §4.
+to one compute board, in `platform/<target>/hardware/`) — except
+`Hal::Transport`, whose two implementations (`Platform::MicroBitSerialPort`,
+`Platform::MicroBitRadioLink`) are themselves platform primitives, not
+devices, and so live in `platform/microbit/` alongside `MicroBitI2CBus`/
+`MicroBitClock` (see `platform/DESIGN.md`) — `TestSupport::FakeTransport`
+(`src/tests/sim/support/fake_transport.h`) is the host-test double. The one
+deliberate exception among the *device* interfaces used to be
+`Core::FakeOtos`, removed as dead code — see §4.
+
+`Hal::Transport` (`readLine()`/`send()`/`sendReliable()`) is the one
+interface here consumed by `Core::Comms`, not by `Motion::`/`kinematics::` —
+it moved into `hal/` from `core/comms.h`'s own former `#ifndef HOST_BUILD`
+block (136-005, "dissolve `com/` into `Hal::Transport` +
+`platform/microbit/`"), where it had lived unnamed as `Core::Transport`
+since the file's own drafting. Its two ARM-only adapter classes
+(`Core::SerialTransport`/`RadioTransport`, thin forwarders onto the
+now-deleted `com/SerialPort`/`Radio`) are gone outright, not relocated:
+`Platform::MicroBitSerialPort`/`MicroBitRadioLink` implement `Hal::Transport`
+directly, the same shape every other `Platform::` leaf already had.
 
 `device_types.h`/`device_config.h` are the vocabulary this whole layer
 speaks in: plain aggregates, HAL-local counterparts of the equivalent
@@ -71,32 +91,38 @@ before:
 1. **`Hal::Motor` is duty-commanded, not angular.** Its one command verb is
    `setDuty()` (open loop, `[-1, 1]`). There is no closed-loop
    angular-velocity entry point to build `Wheel` on top of.
-2. **The wheel-speed control law lives in `Core::DifferentialDrive`** — `fastPid()`
-   plus the Stage A/B/C correction, adaptation and stall machinery in
-   `app/drive.cpp`. `Motion::WheelVelocityPid`, which CLAUDE.md's
-   architecture note still names as the owner, **does not exist**: sprint
-   128 ticket 015 deleted `wheel_velocity_pid.{h,cpp}` as a
-   zero-instantiation class (see `src/firm/motion/CMakeLists.txt`'s own note).
-   The proposal flagged "conflicting signals on which is authoritative" —
-   this is the resolution, and CLAUDE.md is the stale one.
+2. **The wheel-speed control law lives in `Control::DifferentialDrive`** —
+   `fastPid()` plus the Stage A/B/C correction, adaptation and stall
+   machinery in `control/differential_drive.cpp` (relocated out of
+   `core/` and renamed from `Core::DifferentialDrive` by 136-006, "control
+   law out of `core/` — new `control/` layer"; pure relocation, the
+   control law itself unchanged — see `control/DESIGN.md`).
+   `Motion::WheelVelocityPid`, which CLAUDE.md's architecture note still
+   names as the owner, **does not exist**: sprint 128 ticket 015 deleted
+   `wheel_velocity_pid.{h,cpp}` as a zero-instantiation class (see
+   `src/firm/motion/CMakeLists.txt`'s own note). The proposal flagged
+   "conflicting signals on which is authoritative" — this is the
+   resolution, and CLAUDE.md is the stale one.
 
 So `Hal::Wheel` is not a new interface next to these; it is the
-destination of a migration that moves `Core::DifferentialDrive`'s control law down a
+destination of a migration that moves `Control::DifferentialDrive`'s control law down a
 layer and re-scopes it per wheel. Adding an empty `Wheel` interface now
 would create a second, competing home for wheel control while the real one
-keeps running in `app/` — the exact ambiguity this reorganization exists to
-remove.
+keeps running in `control/` — the exact ambiguity this reorganization
+exists to remove.
 
-**`Core::FakeOtos` implements `Hal::Otos` from `app/`, not `hardware/`.**
-The proposal expected it to land in `hardware/generic/` on the grounds that
-it has "zero bus or board dependency (pure math over `Odometry` +
-trackWidth)". That is true about the *bus* and wrong about the
-*dependencies*: `FakeOtos` reads `Motion::Odometry`, which is two layers
-ABOVE hardware, so filing it under `hardware/` would invert the layering
-this reorganization just established. Rebasing it onto
-`Types::RobotState::pose` instead would fix the layering but change
-behavior — `RobotLoop::cycle()` calls `odom_.integrate()` and then
+**`Core::FakeOtos` implemented `Hal::Otos` from `app/`, not `hardware/`**
+(kept for history; the class itself is gone, 136-003 — zero robot JSON, CI
+script, or justfile recipe ever enabled the `FAKE_OTOS` build variant it
+backed). The proposal expected it to land in `hardware/generic/` on the
+grounds that it had "zero bus or board dependency (pure math over
+`Odometry` + trackWidth)". That was true about the *bus* and wrong about
+the *dependencies*: `FakeOtos` read `Motion::Odometry`, which is two
+layers ABOVE hardware, so filing it under `hardware/` would have inverted
+the layering this reorganization established. Rebasing it onto
+`Types::RobotState::pose` instead would have fixed the layering but
+changed behavior — `RobotLoop::cycle()` calls `odom_.integrate()` and then
 `otos_.tick()`, while `state_.pose` is not written until later in the
-cycle, so `FakeOtos` would start reporting last cycle's pose. It stays
-where it is, in the composition layer, as a synthetic device rather than a
-driver.
+cycle, so `FakeOtos` would have started reporting last cycle's pose. It
+stayed in the composition layer, as a synthetic device rather than a
+driver, until its removal.

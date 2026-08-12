@@ -76,7 +76,7 @@ _APP_SOURCES = [
     _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "planner.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
     _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
-    _SOURCE_DIR / "core" / "differential_drive.cpp",
+    _SOURCE_DIR / "control" / "differential_drive.cpp",
     _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "core" / "preamble.cpp",
     # 130-002 -- the shared composition root (Core::composeRobot()/
@@ -112,7 +112,7 @@ _MESSAGE_SOURCES = [
     _SOURCE_DIR / "messages" / "wire_runtime.cpp",
 ]
 _KINEMATICS_SOURCES = [
-    _REPO_ROOT / "src" / "firm" / "kinematics" / "differential_kinematics.cpp",
+    _REPO_ROOT / "src" / "firm" / "kinematics" / "differential.cpp",
 ]
 
 _CXX_STANDARD = "c++20"

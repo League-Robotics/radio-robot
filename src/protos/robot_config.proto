@@ -245,8 +245,9 @@ message Connection {
   string serial_last_6             = 2;
 
   // Radio channel (nRF frequency band, 0..83; group is fixed at 10 to match
-  // the RadioRelay -- com/radio.h). BAKE-ONLY by design, not a wire target:
-  // re-tuning a live link drops it (Radio::setChannel()'s own note), and the
+  // the RadioRelay -- platform/microbit/microbit_radio_link.h). BAKE-ONLY
+  // by design, not a wire target: re-tuning a live link drops it
+  // (Platform::MicroBitRadioLink::setChannel()'s own note), and the
   // point of the field is that two robots sharing a bench NEVER share a
   // channel unintentionally (2026-08-05: gopiv on tovez's channel 0 joined a
   // cross-reply storm; the only prior way to move it was an uncommitted
@@ -307,10 +308,10 @@ enum ConfigGroupTarget {
   // below for the full rationale.
   PLANNER_SHAPER = 8;
   // NAVIGATOR -- added 135-004 (sprint 135, "GO_TO navigator in the motion
-  // library"): Motion::NavigatorLimits (src/motion/navigator/arc_solver.h)
-  // sourced through the same runtime push path and bake path every other
-  // group already uses. See the Navigator message's own header comment
-  // below.
+  // library"): Motion::NavigatorLimits (src/firm/motion/navigator/
+  // arc_solver.h) sourced through the same runtime push path and bake
+  // path every other group already uses. See the Navigator message's own
+  // header comment below.
   NAVIGATOR = 9;
 }
 
@@ -602,7 +603,7 @@ message PlannerShaper {
   float yaw_jerk_max = 6 [(min) = 0.0];  // [rad/s^3] angular jerk ceiling
 }
 
-// Navigator -- 135-004: Motion::NavigatorLimits (src/motion/navigator/
+// Navigator -- 135-004: Motion::NavigatorLimits (src/firm/motion/navigator/
 // arc_solver.h)'s own configuration group, following the Planner/
 // PlannerShaper pattern above exactly. Consumed by Motion::Navigator via
 // Configurator::install(NAVIGATOR) -- LIVE, matching PLANNER_SHAPER's own

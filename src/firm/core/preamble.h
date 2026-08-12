@@ -32,7 +32,7 @@
 // counterexample.
 //
 // --- Time seam ---
-// Preamble takes a `const Platform::Clock&` (the same fiber-level time seam
+// Preamble takes a `const Hal::Clock&` (the same fiber-level time seam
 // NezhaMotor/Otos/Deadman already read "now" through) and reads
 // clock_.nowMicros() internally at the top of every step() call, rather
 // than taking a nowUs parameter -- matching the boot loop's own bare
@@ -72,7 +72,7 @@
 
 #include <cstdint>
 
-#include "platform/clock.h"
+#include "hal/clock.h"
 #include "hal/color_sensor.h"
 #include "hal/line_sensor.h"
 #include "hal/motor.h"
@@ -88,7 +88,7 @@ class Preamble {
   // wheel each is, only that begin() is called on each).
   Preamble(Hal::Motor& left, Hal::Motor& right,
            Hal::Otos& otos, Hal::ColorSensor& color,
-           Hal::LineSensor& line, const Platform::Clock& clock);
+           Hal::LineSensor& line, const Hal::Clock& clock);
 
   // Advances AT MOST ONE not-yet-resolved device's own detection entry
   // point by exactly one call. Never sleeps, never blocks -- a no-op call
@@ -152,7 +152,7 @@ class Preamble {
   Hal::Otos& otos_;
   Hal::ColorSensor& color_;
   Hal::LineSensor& line_;
-  const Platform::Clock& clock_;
+  const Hal::Clock& clock_;
 
   bool resolved_[kSlotCount] = {};
   uint8_t cursor_ = 0;

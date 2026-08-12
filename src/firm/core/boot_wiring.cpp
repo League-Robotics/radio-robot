@@ -62,8 +62,8 @@ RobotGraph::BootValues RobotGraph::bakeBootValues(const BootOverrides& overrides
   return r;
 }
 
-RobotGraph::RobotGraph(Platform::I2CBus& bus, const Platform::Clock& clock, Platform::Sleeper& sleeper,
-                       Transport& serialTransport, Transport& radioTransport,
+RobotGraph::RobotGraph(Hal::I2CBus& bus, const Hal::Clock& clock, Hal::Sleeper& sleeper,
+                       Hal::Transport& serialTransport, Hal::Transport& radioTransport,
                        Config::TuningStore* tuningStore, const char* banner, const char* idLine,
                        const BootOverrides& overrides)
     : bootValues_(bakeBootValues(overrides)),
@@ -79,19 +79,7 @@ RobotGraph::RobotGraph(Platform::I2CBus& bus, const Platform::Clock& clock, Plat
       tlm_(comms_),
       drive_(armorL_, armorR_, bootValues_.trackWidth),
       odom_(bootValues_.trackWidth, armorL_.position(), armorR_.position()),
-#ifdef FAKE_OTOS
-      // FAKE_OTOS (120-002, sprint's own "confined, acceptable" exception --
-      // unify-sim-and-robot-composition-roots.md item 5): a bench build
-      // variant that synthesizes the OTOS reading from encoder kinematics
-      // instead of reading the real chip, selected by ONE compile-time
-      // macro at this composition root. Never defined for HOST_BUILD/sim
-      // (src/firm/platform/host/CMakeLists.txt never adds -DFAKE_OTOS), so this branch
-      // only ever compiles into an opt-in ARM bench image.
-      fakeOtos_(odom_, armorL_, armorR_, bootValues_.trackWidth),
-      otos_(fakeOtos_),
-#else
       otos_(realOtos_),
-#endif
       planner_(bootValues_.plannerLimits),
       // navigatorLimits_ default-constructs (arc_solver.h's own struct
       // defaults); the real, baked values land via configurator_.install()
@@ -169,8 +157,8 @@ void RobotGraph::loadPersistedTuning() {
   }
 }
 
-RobotGraph composeRobot(Platform::I2CBus& bus, const Platform::Clock& clock, Platform::Sleeper& sleeper,
-                        Transport& serialTransport, Transport& radioTransport,
+RobotGraph composeRobot(Hal::I2CBus& bus, const Hal::Clock& clock, Hal::Sleeper& sleeper,
+                        Hal::Transport& serialTransport, Hal::Transport& radioTransport,
                         Config::TuningStore* tuningStore, const char* banner, const char* idLine,
                         const BootOverrides& overrides) {
   return RobotGraph(bus, clock, sleeper, serialTransport, radioTransport, tuningStore, banner,

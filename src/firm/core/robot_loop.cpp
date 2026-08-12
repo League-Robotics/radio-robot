@@ -5,7 +5,7 @@
 #include <cstdio>
 
 #include "messages/envelope.h"
-#include "kinematics/differential_kinematics.h"
+#include "kinematics/differential.h"
 
 namespace Core {
 
@@ -13,7 +13,7 @@ namespace {
 
 // The brick's mandatory encoder select->read settle, one window per motor.
 // This wait is NOT optional and NOT avoidable by deleting the window:
-// Platform::I2CBus::waitForClearance() enforces the same clearance from
+// Hal::I2CBus::waitForClearance() enforces the same clearance from
 // requestSample()'s postClear, so zeroing kSettle measures identical
 // wall-clock (verified on tovez 2026-08-07) while losing the comms pump
 // that runs inside the window. Spending the mandatory wait usefully is the
@@ -71,14 +71,14 @@ uint32_t packColor(const Hal::ColorReading& reading, uint32_t fullScale) {  // [
 
 }  // namespace
 
-RobotLoop::RobotLoop(Platform::I2CBus& bus, Hal::Motor& motorL,
+RobotLoop::RobotLoop(Hal::I2CBus& bus, Hal::Motor& motorL,
                       Hal::Motor& motorR, Hal::Otos& otos,
                       Hal::ColorSensor& color, Hal::LineSensor& line,
-                      Comms& comms, Telemetry& tlm, DifferentialDrive& drive,
+                      Comms& comms, Telemetry& tlm, Control::DifferentialDrive& drive,
                       Configurator& configurator, Motion::Odometry& odom,
                       Motion::Planner& planner, Motion::Navigator& navigator,
-                      Preamble& preamble, const Platform::Clock& clock,
-                      Platform::Sleeper& sleeper)
+                      Preamble& preamble, const Hal::Clock& clock,
+                      Hal::Sleeper& sleeper)
     : bus_(bus),
       motorL_(motorL),
       motorR_(motorR),
@@ -673,7 +673,7 @@ void RobotLoop::applySeed() {
 void RobotLoop::publishPose() {
   float twistVx = 0.0f;
   float twistOmega = 0.0f;
-  Kinematics::DifferentialKinematics::forward(motorL_.velocity(), motorR_.velocity(),
+  Kinematics::Differential::forward(motorL_.velocity(), motorR_.velocity(),
                           drive_.trackWidth(), twistVx, twistOmega);
 
   state_.pose.x = odom_.x();
@@ -783,7 +783,7 @@ void RobotLoop::cycle() {
     uint64_t nowUs = clock_.nowMicros();
 
     odom_.integrate(motorL_.position(), motorR_.position(), state_.wheelLeft.positionEpoch,
-                    state_.wheelRight.positionEpoch);  // before OTOS: FakeOtos reads it
+                    state_.wheelRight.positionEpoch);  // before OTOS (historical: FakeOtos read it)
     otos_.tick(nowUs);
     publishOtos();
     publishLineColor(tickLineColor(nowUs));

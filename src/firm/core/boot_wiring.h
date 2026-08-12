@@ -9,7 +9,7 @@
 // disabling the trim in every sim session. composeRobot() makes that
 // drift structurally impossible: both roots call the SAME function, and
 // the only thing that differs between an ARM build and a sim build is
-// which Platform::I2CBus implementation (Platform::MicroBitI2CBus vs.
+// which Hal::I2CBus implementation (Platform::MicroBitI2CBus vs.
 // TestSim::SimPlant) the caller constructs and passes in -- everything
 // downstream of the bus is the identical call.
 //
@@ -55,20 +55,20 @@
 // explaining why -- see TestSim::SimHarness's own composeRobot() call.
 #pragma once
 
+#include "control/differential_drive.h"
 #include "core/boot_calibration.h"
 #include "core/comms.h"
 #include "core/configurator.h"
-#include "core/differential_drive.h"
-#include "core/fake_otos.h"
 #include "core/preamble.h"
 #include "core/robot_loop.h"
 #include "core/telemetry.h"
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
-#include "platform/clock.h"
+#include "hal/clock.h"
 #include "hardware/planetx/color_sensor.h"
 #include "hal/device_config.h"
-#include "platform/i2c_bus.h"
+#include "hal/i2c_bus.h"
+#include "hal/transport.h"
 #include "hardware/planetx/line_sensor.h"
 #include "hardware/generic/motor_armor.h"
 #include "hardware/nezha/nezha_motor.h"
@@ -203,8 +203,8 @@ class RobotGraph {
   // calibration -- genuinely root-specific, not a drift risk.
   // tuningStore may be null (sim/test roots): persistence disabled,
   // everything else unchanged (mirrors Configurator's own contract).
-  RobotGraph(Platform::I2CBus& bus, const Platform::Clock& clock, Platform::Sleeper& sleeper,
-             Transport& serialTransport, Transport& radioTransport,
+  RobotGraph(Hal::I2CBus& bus, const Hal::Clock& clock, Hal::Sleeper& sleeper,
+             Hal::Transport& serialTransport, Hal::Transport& radioTransport,
              Config::TuningStore* tuningStore, const char* banner, const char* idLine,
              const BootOverrides& overrides = {});
 
@@ -234,7 +234,7 @@ class RobotGraph {
   Hardware::LineSensorLeaf& line() { return line_; }
   Comms& comms() { return comms_; }
   Telemetry& telemetry() { return tlm_; }
-  DifferentialDrive& drive() { return drive_; }
+  Control::DifferentialDrive& drive() { return drive_; }
   Motion::Odometry& odometry() { return odom_; }
   Motion::Planner& planner() { return planner_; }
   Motion::Navigator& navigator() { return navigator_; }
@@ -319,18 +319,15 @@ class RobotGraph {
 
   Comms comms_;
   Telemetry tlm_;
-  DifferentialDrive drive_;
+  Control::DifferentialDrive drive_;
   Motion::Odometry odom_;
 
-  // otos_ binds to whichever OTOS implementation this build selects.
-  // fakeOtos_ (FAKE_OTOS builds only -- never true for HOST_BUILD/sim,
-  // src/firm/platform/host/CMakeLists.txt never defines it) needs odom_/armorL_/armorR_,
-  // so both must be declared AFTER odom_ above -- matching main.cpp's own
-  // pre-130-002 order, where the FAKE_OTOS ifdef block came after odom's
-  // construction for the same reason.
-#ifdef FAKE_OTOS
-  Core::FakeOtos fakeOtos_;
-#endif
+  // otos_ binds unconditionally to realOtos_ -- the FAKE_OTOS bench
+  // variant (a Core::FakeOtos alternative behind this same Hal::Otos&
+  // seam) was removed as dead code (136-003; zero robot JSON, CI script,
+  // or justfile recipe ever enabled it). The seam itself stays: otos_ is
+  // still a reference, not realOtos_ directly, so a future real
+  // alternative implementation has somewhere to bind.
   Hal::Otos& otos_;
 
   Motion::Planner planner_;
@@ -359,8 +356,8 @@ class RobotGraph {
 // wrapper so both call sites read the same way; RobotGraph's own
 // constructor does the real work. See RobotGraph's own doc comment above
 // for the parameter contract.
-RobotGraph composeRobot(Platform::I2CBus& bus, const Platform::Clock& clock, Platform::Sleeper& sleeper,
-                        Transport& serialTransport, Transport& radioTransport,
+RobotGraph composeRobot(Hal::I2CBus& bus, const Hal::Clock& clock, Hal::Sleeper& sleeper,
+                        Hal::Transport& serialTransport, Hal::Transport& radioTransport,
                         Config::TuningStore* tuningStore, const char* banner, const char* idLine,
                         const BootOverrides& overrides = {});
 

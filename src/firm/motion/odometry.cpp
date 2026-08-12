@@ -5,7 +5,7 @@
 
 #include <cmath>
 
-#include "kinematics/differential_kinematics.h"
+#include "kinematics/differential.h"
 
 namespace Motion {
 
@@ -36,7 +36,7 @@ void Odometry::integrate(float leftPosition, float rightPosition, uint8_t leftEp
 
   float distance = 0.0f;     // [mm] this cycle's body-frame forward travel
   float headingDelta = 0.0f; // [rad] this cycle's heading change
-  Kinematics::DifferentialKinematics::forward(deltaLeft, deltaRight, trackWidth_, distance, headingDelta);
+  Kinematics::Differential::forward(deltaLeft, deltaRight, trackWidth_, distance, headingDelta);
 
   // Midpoint-arc integration: use the heading halfway through this cycle's
   // turn (not the heading at the START of the cycle) so a simultaneous

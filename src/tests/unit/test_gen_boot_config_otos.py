@@ -15,6 +15,19 @@ data/robots/active_robot.json happens to point at.
 Collected under src/tests/unit/ (a generator/tooling-level check, not
 sim/bench/playfield-scoped -- see tests/CLAUDE.md); pyproject.toml's
 testpaths includes tests/unit.
+
+UPDATE (136-001, 2026-08-11): both tests below used to assert against a
+hardcoded literal snapshot of tovez.json's otos.* values (offset/scale),
+pinned when this file was written. That snapshot went stale the moment
+the robot's OTOS was legitimately re-measured -- linear_scale moved
+1.067 -> 1.0275 (126-003, camera-anchored) -> 1.0188 (2026-08-05,
+tape-measured, tovez.json's own _otos_linear_scale_note explains why the
+camera-anchored figure was itself ~12% high) -- exactly the failure mode
+clasi/issues/later/B-gen-boot-config-parity-tests-encode-superseded-
+literals.md names. Both tests now read tovez.json at test time and assert
+the generator faithfully carries THAT value through, so a legitimate
+re-measurement passes and a genuine generator defect (dropping a field, a
+wrong key path, a formatting bug) still fails.
 """
 
 import json
@@ -35,21 +48,20 @@ import gen_boot_config as gbc  # noqa: E402  (path must be set up before this im
 
 
 def test_otos_boot_config_values_reads_tovez_json():
-    """otos_boot_config_values() reads tovez.json's real geometry/calibration values."""
+    """otos_boot_config_values() reads tovez.json's real geometry/calibration
+    values -- read from the JSON file at test time, not a historical
+    snapshot (see this module's own dated note above)."""
     cfg = json.loads(_TOVEZ_JSON.read_text())
 
     offset_x, offset_y, offset_yaw, linear_scale, angular_scale = (
         gbc.otos_boot_config_values(cfg)
     )
 
-    assert offset_x == -47.7
-    assert offset_y == 3.5
-    assert offset_yaw == 0.0
-    # 1.0275, not the original 1.067: sprint 126-003 corrected otos_linear_scale
-    # against overhead-camera truth (18 runs, fit slope 1.0384, post-reflash
-    # residual +0.37% +/- 0.34%). tovez.json carries the full provenance note.
-    assert linear_scale == 1.0275
-    assert angular_scale == 0.987
+    assert offset_x == cfg["otos"]["offset_x"]
+    assert offset_y == cfg["otos"]["offset_y"]
+    assert offset_yaw == cfg["otos"]["offset_yaw"]
+    assert linear_scale == cfg["otos"]["linear_scale"]
+    assert angular_scale == cfg["otos"]["angular_scale"]
 
 
 def test_otos_boot_config_values_raises_with_no_robot_config():
@@ -66,7 +78,10 @@ def test_otos_boot_config_values_raises_with_no_robot_config():
 
 def test_generate_emits_default_otos_boot_config_additively():
     """generate()'s output gains defaultOtosBootConfig() without disturbing
-    defaultMotorConfigs()/defaultDrivetrainConfig() (the pre-086-005 mappings)."""
+    defaultMotorConfigs()/defaultDrivetrainConfig() (the pre-086-005
+    mappings) -- and carries tovez.json's CURRENT otos.* values through,
+    read at test time rather than a historical snapshot (see this
+    module's own dated note above)."""
     cfg = json.loads(_TOVEZ_JSON.read_text())
     content = gbc.generate(cfg, "data/robots/tovez.json")
 
@@ -79,11 +94,11 @@ def test_generate_emits_default_otos_boot_config_additively():
     # New (086-005): the OTOS boot struct generator function, carrying
     # tovez.json's real values through into the emitted C++ literals.
     assert "OtosBootConfig defaultOtosBootConfig()" in content
-    assert "cfg.offsetX = -47.7f;" in content
-    assert "cfg.offsetY = 3.5f;" in content
-    assert "cfg.offsetYaw = 0.0f;" in content
-    assert "cfg.linearScale = 1.0275f;" in content  # see the note above
-    assert "cfg.angularScale = 0.987f;" in content
+    assert f"cfg.offsetX = {gbc._f(cfg['otos']['offset_x'])};" in content
+    assert f"cfg.offsetY = {gbc._f(cfg['otos']['offset_y'])};" in content
+    assert f"cfg.offsetYaw = {gbc._f(cfg['otos']['offset_yaw'])};" in content
+    assert f"cfg.linearScale = {gbc._f(cfg['otos']['linear_scale'])};" in content
+    assert f"cfg.angularScale = {gbc._f(cfg['otos']['angular_scale'])};" in content
 
 
 if __name__ == "__main__":

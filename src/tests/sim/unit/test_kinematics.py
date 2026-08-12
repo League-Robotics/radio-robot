@@ -1,15 +1,15 @@
 """Off-hardware acceptance proof for ``src/firm/kinematics/``.
 
 Compiles ``kinematics_harness.cpp`` together with the three kinematics
-translation units (``kinematics.cpp``, ``differential_kinematics.cpp``,
-``mecanum_kinematics.cpp``) with ``-DHOST_BUILD``, against the SAME headers
+translation units (``kinematics.cpp``, ``differential.cpp``,
+``mecanum.cpp``) with ``-DHOST_BUILD``, against the SAME headers
 every ARM build compiles. Mirrors ``test_devices_types.py`` /
 ``test_app_drive.py``'s exact shape: compile with the system C++ compiler,
 run the resulting binary, assert it exits 0.
 
-Why this exists: ``Kinematics::DifferentialKinematics`` carries the former
+Why this exists: ``Kinematics::Differential`` carries the former
 ``BodyKinematics`` math, which every robot in this fleet drives through, and
-``Kinematics::MecanumKinematics`` has no other coverage anywhere -- nothing
+``Kinematics::Mecanum`` has no other coverage anywhere -- nothing
 in the firmware constructs it yet.
 """
 
@@ -47,8 +47,8 @@ def test_kinematics_harness_compiles_and_passes(tmp_path):
     sources = [
         _HARNESS_SRC,
         _KINEMATICS_DIR / "kinematics.cpp",
-        _KINEMATICS_DIR / "differential_kinematics.cpp",
-        _KINEMATICS_DIR / "mecanum_kinematics.cpp",
+        _KINEMATICS_DIR / "differential.cpp",
+        _KINEMATICS_DIR / "mecanum.cpp",
     ]
     for src in sources:
         assert src.is_file(), f"required source missing: {src}"

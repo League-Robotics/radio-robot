@@ -8,7 +8,7 @@ namespace {
 constexpr int kOk = 0;
 }  // namespace
 
-LineSensorLeaf::LineSensorLeaf(Platform::I2CBus& bus, const Hal::LineConfig& config)
+LineSensorLeaf::LineSensorLeaf(Hal::I2CBus& bus, const Hal::LineConfig& config)
     : bus_(bus), config_(config) {
   // LineConfig::lagLine zero-defaults (device_config.h) -- the
   // "unconfigured" sentinel this leaf resolves to its ship default (same

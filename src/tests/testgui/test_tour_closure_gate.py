@@ -725,17 +725,24 @@ _XFAIL_REASON_IDEAL = (
     "stakeholder's <0.05deg 'exact' bar -- current per-turn errors run to ~22deg (see "
     "test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band()'s own "
     "printed report for the live numbers; the '~0.2-2.2deg' this string used to quote "
-    "was measured in sprint 109 and had been stale for many sprints) -- see "
-    "clasi/issues/land-at-zero-at-orthogonal-chain-boundaries.md for the live "
-    "investigation into the dominant remaining error source."
+    "was measured in sprint 109 and had been stale for many sprints) -- "
+    "136-002: the land-at-zero-at-orthogonal-chain-boundaries.md issue this "
+    "reason used to cite is DONE/closed (sprint 121), not a live "
+    "investigation -- see clasi/issues/later/"
+    "A-tour2-146-degree-turn-still-undershoots-after-130-010.md instead, "
+    "the current live tracking issue for the dominant remaining error "
+    "source."
 )
 
 _XFAIL_REASON_REALISTIC = (
     "109-009 Impossibility Argument: realistic-profile tour turns still don't "
     "uniformly land within the stakeholder's 1.0deg bar (same dominant error source "
-    "as the ideal-chip xfail, plus sensor-error-injection noise) -- see "
-    "clasi/issues/land-at-zero-at-orthogonal-chain-boundaries.md for the live "
-    "investigation. 133-005: this reason is HONEST AGAIN. Between 132-014 and "
+    "as the ideal-chip xfail, plus sensor-error-injection noise) -- "
+    "136-002: see clasi/issues/later/"
+    "A-tour2-146-degree-turn-still-undershoots-after-130-010.md for the "
+    "current live tracking issue (the land-at-zero-at-orthogonal-chain-"
+    "boundaries.md issue this used to cite is DONE/closed, sprint 121). "
+    "133-005: this reason is HONEST AGAIN. Between 132-014 and "
     "133-005 both realistic-profile tests raised AttributeError in _make_loop() "
     "(NezhaProtocol.otos_config() had been deleted) and never drove a leg at all -- "
     "xfail(strict=False) reports a setup crash and a measured shortfall identically, "
@@ -759,6 +766,20 @@ _XFAIL_REASON_REALISTIC = (
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason=(
+        "136-002: real, previously-flagged, unresolved firmware behavior "
+        "(decelLatched/shaping-band and cumulative-baseline-ledger "
+        "territory -- sprint 131 ticket 006's own Completion Notes "
+        "attribute the actual observed mechanism to Planner::tick()'s "
+        "Distance-leg baseline carry not folding in the leg's own heading "
+        "drift before the following turn reads it). Out of Scope for "
+        "sprint 136 per sprint.md -- formally accepted, not fixed. "
+        "Tracked: clasi/issues/later/"
+        "A-tour2-146-degree-turn-still-undershoots-after-130-010.md."
+    ),
+)
 def test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band():
     from robot_radio.planner.tour import TOUR_1, TOUR_2
 
@@ -777,7 +798,7 @@ def test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band():
                                cruise_heading_tolerance_deg=cruise_tol)
 
 
-@pytest.mark.xfail(reason=_XFAIL_REASON_IDEAL, strict=False)
+@pytest.mark.xfail(reason=_XFAIL_REASON_IDEAL, strict=True)
 def test_tour_1_ideal_chip_turns_are_exact():
     from robot_radio.planner.tour import TOUR_1
 
@@ -790,7 +811,7 @@ def test_tour_1_ideal_chip_turns_are_exact():
                        cruise_heading_tolerance_deg=_CRUISE_HEADING_TOLERANCE_IDEAL_DEG)
 
 
-@pytest.mark.xfail(reason=_XFAIL_REASON_IDEAL, strict=False)
+@pytest.mark.xfail(reason=_XFAIL_REASON_IDEAL, strict=True)
 def test_tour_2_ideal_chip_turns_are_exact():
     from robot_radio.planner.tour import TOUR_2
 
@@ -803,7 +824,7 @@ def test_tour_2_ideal_chip_turns_are_exact():
                        cruise_heading_tolerance_deg=_CRUISE_HEADING_TOLERANCE_IDEAL_DEG)
 
 
-@pytest.mark.xfail(reason=_XFAIL_REASON_REALISTIC, strict=False)
+@pytest.mark.xfail(reason=_XFAIL_REASON_REALISTIC, strict=True)
 def test_tour_1_realistic_errors_turns_within_one_degree():
     from robot_radio.planner.tour import TOUR_1
 
@@ -816,7 +837,7 @@ def test_tour_1_realistic_errors_turns_within_one_degree():
                        cruise_heading_tolerance_deg=_CRUISE_HEADING_TOLERANCE_REALISTIC_DEG)
 
 
-@pytest.mark.xfail(reason=_XFAIL_REASON_REALISTIC, strict=False)
+@pytest.mark.xfail(reason=_XFAIL_REASON_REALISTIC, strict=True)
 def test_tour_2_realistic_errors_turns_within_one_degree():
     from robot_radio.planner.tour import TOUR_2
 
@@ -842,7 +863,7 @@ def test_tour_2_realistic_errors_turns_within_one_degree():
 
 
 @pytest.mark.xfail(
-    strict=False,
+    strict=True,
     reason=(
         "119-002: re-run against the current tree (post-118, post-119 ticket 001) -- "
         "the PRIOR reason above (111-002's reorder-coupled stale/alternating-encoder "
@@ -865,7 +886,7 @@ def test_tour_2_realistic_errors_turns_within_one_degree():
         "Distance/Angle legs, so a same-axis boundary never occurred there either). "
         "See motion/DESIGN.md's own 'Chain-advance leg hand-off contract' (§4, 119-002) "
         "for the verified mechanism and "
-        "clasi/issues/chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md "
+        "clasi/issues/later/chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md "
         "for the fix candidate (make the reset conditional on whether the incoming "
         "chained Move's own axis/kind actually differs) and its own concrete "
         "unblocking condition (implement + re-sweep kStoppingMarginFactorChain/"

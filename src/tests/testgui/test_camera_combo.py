@@ -152,12 +152,28 @@ class TestCameraComboPopulateAndPreference:
         assert combo.currentText() == "Arducam OV9782 USB Camera"
         window.close()
 
-    def test_no_persisted_pref_falls_back_to_index3_heuristic(self, qapp):
-        """No persisted preference -> falls back to the "3"-heuristic camera."""
+    def test_no_persisted_pref_falls_back_to_arducam_heuristic(self, qapp):
+        """No persisted preference -> falls back to the "arducam"-substring
+        heuristic camera (not necessarily the first one in the list).
+
+        136-002: retargeted off the retired "3"-substring heuristic --
+        ``camera_prefs.py``'s own module docstring documents that the "3"
+        rule could never fire (the playfield camera's real daemon name,
+        "arducam-ov9782-usb-camera", contains no "3") and was replaced by an
+        explicit "arducam" substring match,
+        ``camera_prefs.DEFAULT_FALLBACK_CONTAINS``. This test's own fixture
+        cameras (``cam-1``/``cam-3``/``cam-5``) never exercised the live
+        fallback code path at all -- the assertion always fell through to
+        "first available" and only coincidentally matched "cam-3" because it
+        was hand-picked to. Retargeted to a fixture that actually contains
+        the "arducam" substring, at a non-first index, so the assertion
+        exercises the real heuristic instead of the first-available path
+        (already covered separately by
+        ``test_no_fallback_match_falls_back_to_first_camera``)."""
         from robot_radio.testgui.__main__ import _build_main_window
         from PySide6.QtWidgets import QComboBox  # type: ignore[import-untyped]
 
-        cams = ["cam-1", "cam-3", "cam-5"]
+        cams = ["cam-1", "arducam-ov9782-usb-camera", "cam-5"]
         with patch("aprilcam.config.Config") as MockConfig, \
              patch("aprilcam.client.control.DaemonControl") as MockDC, \
              patch(
@@ -172,7 +188,7 @@ class TestCameraComboPopulateAndPreference:
             window, _ = _build_main_window()
 
         combo = window.findChild(QComboBox, "camera_combo")
-        assert combo.currentText() == "cam-3"
+        assert combo.currentText() == "arducam-ov9782-usb-camera"
         window.close()
 
     def test_no_fallback_match_falls_back_to_first_camera(self, qapp):
@@ -206,12 +222,23 @@ class TestCameraComboPopulateAndPreference:
 
 class TestCameraComboSelectionChange:
     def test_change_persists_and_triggers_grab(self, qapp):
-        """Changing camera_combo saves the new preference and triggers a grab."""
+        """Changing camera_combo saves the new preference and triggers a grab.
+
+        136-002: neither fixture camera may contain the "arducam" substring
+        -- ``camera_prefs.select_camera()``'s fallback heuristic now matches
+        "arducam" (retired from the stale "3" substring; see
+        ``camera_prefs.py``'s own module docstring), and the ORIGINAL
+        fixture's second entry, "Arducam OV9782 USB Camera", matched it --
+        so with no persisted pref the initial selection was already that
+        second entry, not the first, defeating this test's own "switch to a
+        DIFFERENT entry so the signal fires" premise. Renamed to a
+        neither-matches pair so the initial selection is deterministically
+        the first entry again."""
         from robot_radio.testgui.__main__ import _build_main_window
         from robot_radio.testgui.operations import OpsController
         from PySide6.QtWidgets import QComboBox  # type: ignore[import-untyped]
 
-        cams = ["Brio 501", "Arducam OV9782 USB Camera"]
+        cams = ["cam-1", "cam-2"]
         saved: list[str] = []
 
         with patch("aprilcam.config.Config") as MockConfig, \
@@ -233,15 +260,15 @@ class TestCameraComboSelectionChange:
             window, _ = _build_main_window()
             combo = window.findChild(QComboBox, "camera_combo")
             assert combo is not None
-            # Initial fallback selection is "Brio 501" (no persisted pref, no
-            # camera name contains "3") -- switch to the Arducam entry so the
+            # Initial fallback selection is "cam-1" (no persisted pref, no
+            # camera name contains "arducam") -- switch to "cam-2" so the
             # signal actually fires (Qt only emits on an actual value change).
-            assert combo.currentText() == "Brio 501"
+            assert combo.currentText() == "cam-1"
 
-            combo.setCurrentText("Arducam OV9782 USB Camera")
+            combo.setCurrentText("cam-2")
 
-        assert saved == ["Arducam OV9782 USB Camera"], (
-            f"Expected save_camera_pref('Arducam OV9782 USB Camera'); got {saved!r}"
+        assert saved == ["cam-2"], (
+            f"Expected save_camera_pref('cam-2'); got {saved!r}"
         )
         mock_trigger.assert_called_once()
         window.close()

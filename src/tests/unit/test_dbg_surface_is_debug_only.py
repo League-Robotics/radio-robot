@@ -6,7 +6,8 @@ proof would be to compile `comms.cpp` with `ROBOT_DEBUG` undefined and
 assert `DBG:vmin 60` falls through to `malformedCount()`. That cannot be
 done on the host: `app/debug.h` DEFINES `ROBOT_DEBUG` whenever `HOST_BUILD`
 is defined (its own file header says so), and without `HOST_BUILD` the
-translation unit pulls in `com/serial_port.h` -> `MicroBit.h`, which does
+translation unit pulls in `platform/microbit/microbit_serial_port.h` ->
+`MicroBit.h`, which does
 not compile off-target. So the shipped-image arm has no host-compilable
 form at all, and `src/tests/sim/unit/test_app_comms.py`'s harness -- which
 DOES exercise every parser arm for real -- necessarily runs with the debug
@@ -37,7 +38,7 @@ _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _COMMS_CPP = _REPO_ROOT / "src" / "firm" / "core" / "comms.cpp"
 _ROBOT_LOOP_CPP = _REPO_ROOT / "src" / "firm" / "core" / "robot_loop.cpp"
 _ROBOT_LOOP_H = _REPO_ROOT / "src" / "firm" / "core" / "robot_loop.h"
-_DRIVE_H = _REPO_ROOT / "src" / "firm" / "core" / "differential_drive.h"
+_DRIVE_H = _REPO_ROOT / "src" / "firm" / "control" / "differential_drive.h"
 
 _IF_OPEN = re.compile(r"^\s*#\s*(if|ifdef|ifndef)\b(.*)$")
 _ELSE = re.compile(r"^\s*#\s*(else|elif)\b")

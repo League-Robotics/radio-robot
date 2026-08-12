@@ -1,14 +1,19 @@
-// fake_transport.h -- HOST_BUILD-only Core::Transport double: an in-memory,
+// fake_transport.h -- HOST_BUILD-only Hal::Transport double: an in-memory,
 // FIFO-based fake a test can push complete inbound LINES into (so
 // Core::Comms::pump() reads them exactly as if from a real serial/radio
 // line) and read captured outbound lines back out of (every
 // Core::Comms::sendReply()/Core::Telemetry emit call). Ticket 105-002
-// (SUC-019); mirrors comms.h's own documentation density/style.
+// (SUC-019); mirrors comms.h's own documentation density/style. 136-005
+// re-based this off Hal::Transport (hal/transport.h) -- the interface
+// moved out of core/comms.h's own former #ifndef HOST_BUILD block into
+// hal/, and its two ARM-only adapter classes (Core::SerialTransport/
+// RadioTransport) are gone outright now that Platform::MicroBitSerialPort/
+// MicroBitRadioLink implement Hal::Transport directly.
 //
-// 124-005 (protocol v5 Part A, "framing grammar cutover"): Core::Transport
+// 124-005 (protocol v5 Part A, "framing grammar cutover"): the interface
 // no longer distinguishes text/binary at all -- Core::FrameKind is gone,
-// and Core::Transport::readLine() now returns a plain bool (comms.h's own
-// file header). This fake's inbound queue follows suit: ONE FIFO of raw
+// and readLine() now returns a plain bool (comms.h's own file header, pre-
+// 136-005). This fake's inbound queue follows suit: ONE FIFO of raw
 // lines (a `<COMMAND>[':' <data>]` string a real transport would deliver,
 // `\n` already stripped), no per-entry kind tag. `enqueueInboundBinary()`
 // is kept as a same-behavior ALIAS of `enqueueInbound()` (both just queue
@@ -55,11 +60,11 @@
 #include <deque>
 #include <string>
 
-#include "core/comms.h"
+#include "hal/transport.h"
 
 namespace TestSupport {
 
-class FakeTransport : public Core::Transport {
+class FakeTransport : public Hal::Transport {
  public:
   // Push one complete wire LINE into the inbound FIFO -- `\n` already
   // stripped, exactly what a real Transport::readLine() delivers. Text or
@@ -86,7 +91,7 @@ class FakeTransport : public Core::Transport {
   // Non-blocking: pops the oldest queued inbound line into buf and returns
   // true, or returns false immediately when the queue is empty --
   // buf/*outLen left untouched in that case. Matches
-  // Core::Transport::readLine()'s own documented contract exactly (buf is
+  // Hal::Transport::readLine()'s own documented contract exactly (buf is
   // always NUL-terminated in addition to *outLen being set -- see that
   // method's own doc comment).
   bool readLine(char* buf, uint16_t cap, uint16_t* outLen) override {

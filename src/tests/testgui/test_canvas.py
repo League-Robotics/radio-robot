@@ -34,13 +34,33 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
 from robot_radio.testgui import canvas
+
+# 136-002: the three tests below all read fixture files under
+# ``src/archive/tests_old/old/playfield_tour/`` that no longer exist on
+# disk -- an unrelated commit (``e4bffd8e``, 2026-08-07) deleted the entire
+# ``src/archive/`` tree (198420 lines, no archive path named in its own
+# commit message) and nobody has yet decided whether that was intentional.
+# See the tracked issue for the full trace (confirmed via git log, not
+# assumed) and what a fix requires (a stakeholder call, not a triage
+# judgment).
+_XFAIL_ARCHIVE_DELETED = (
+    "136-002: fixture missing -- src/archive/tests_old/old/playfield_tour/ "
+    "was deleted by commit e4bffd8e (2026-08-07, an unrelated MicroPython-"
+    "feasibility-docs commit whose own message names none of the ~200K "
+    "deleted lines this test's fixtures were part of) and nobody has yet "
+    "decided whether that deletion was intentional. Tracked: "
+    "clasi/issues/later/test-canvas-playfield-tour-fixtures-deleted-by-e4bffd8e.md."
+)
 
 
 # ---------------------------------------------------------------------------
 # (a) Asset-path constants resolve under tests_old/old/playfield_tour/
 # ---------------------------------------------------------------------------
 
+@pytest.mark.xfail(reason=_XFAIL_ARCHIVE_DELETED, strict=True)
 def test_asset_path_constants_resolve_under_tests_old() -> None:
     """The three asset-path constants point at real files under
     ``tests_old/old/playfield_tour/`` -- not the stale ``tests/old/`` path."""
@@ -60,6 +80,7 @@ def test_asset_path_constants_resolve_under_tests_old() -> None:
 # (b) _load_calibration() reads the real JSON, not the hardcoded defaults
 # ---------------------------------------------------------------------------
 
+@pytest.mark.xfail(reason=_XFAIL_ARCHIVE_DELETED, strict=True)
 def test_load_calibration_reads_real_json_dimensions() -> None:
     """``_load_calibration()`` returns the calibration JSON's actual
     ``width``/``height`` -- verified two ways:
@@ -115,6 +136,7 @@ def test_load_calibration_falls_back_to_defaults_when_file_missing(
 # (c) _build_playfield_calibration() reads the real JSON (deskew path)
 # ---------------------------------------------------------------------------
 
+@pytest.mark.xfail(reason=_XFAIL_ARCHIVE_DELETED, strict=True)
 def test_build_playfield_calibration_reads_real_json_dimensions() -> None:
     """``_build_playfield_calibration()`` (the deskew-path calibration
     builder) also reads the real field dimensions and homography, not

@@ -403,7 +403,7 @@ void scenarioAngleStopCompletesWithinTolerance() {
     sim.step(1);
     std::vector<DecodedLine> cycleFrames = onlyTelemetry(sim.drainTelemetry());
     for (const auto& f : cycleFrames) {
-      // Kinematics::DifferentialKinematics::inverse(v=0, omega>0, b, vL, vR): vL = -omega*b/2
+      // Kinematics::Differential::inverse(v=0, omega>0, b, vL, vR): vL = -omega*b/2
       // (negative), vR = +omega*b/2 (positive) -- confirms the differential
       // TWIST-with-omega path actually drives the two wheels in opposite
       // directions, not just "the Move completed".
@@ -419,7 +419,7 @@ void scenarioAngleStopCompletesWithinTolerance() {
   checkTrue(!frames.empty(), "telemetry decoded across the run");
   checkTrue(anyAckMatches(frames, kCorrId), "the MOVE's enqueue ack was OK");
   checkTrue(sawOppositeWheelSigns, "left/right wheel velocities took opposite signs during the turn "
-                                   "(Kinematics::DifferentialKinematics::inverse()'s own differential split)");
+                                   "(Kinematics::Differential::inverse()'s own differential split)");
 
   uint32_t err = 1, flags = 0;
   checkTrue(findFreshAck(frames, kMoveId, &err, &flags), "the Move's completion ack (ack_corr==id) reached the wire");
@@ -439,7 +439,7 @@ void scenarioAngleStopCompletesWithinTolerance() {
 }
 
 // ===========================================================================
-// Both velocity variants: the WHEELS variant bypasses Kinematics::DifferentialKinematics::
+// Both velocity variants: the WHEELS variant bypasses Kinematics::Differential::
 // inverse() entirely (drive.h's own doc comment: "the wheels path stages
 // v_left/v_right unchanged, with no inverse() call at all") -- this
 // scenario proves that path drives the two wheels with the EXACT commanded

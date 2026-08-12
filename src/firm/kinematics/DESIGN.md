@@ -28,8 +28,8 @@ or X-drive robot with no home."
 kinematics/
   kinematics.h                Kinematics::Twist, Kinematics::Model, saturate()
   kinematics.cpp              Model::saturate() -- the one concrete method
-  differential_kinematics.*   two wheels; the former BodyKinematics math
-  mecanum_kinematics.*        four wheels, holonomic
+  differential.*               two wheels; the former BodyKinematics math
+  mecanum.*                    four wheels, holonomic
 ```
 
 - **`Kinematics::Twist`** is a plain float aggregate. It is deliberately
@@ -62,7 +62,7 @@ preserving the wheel-speed ratio, which is drivetrain-independent. Only
   from `messages/`, which also keeps it usable from `motion/` under that
   subsystem's own dependency rule.
 - **A model that cannot realize a requested component ignores it** rather
-  than failing — `DifferentialKinematics::inverse()` drops `v_y`. Refusing
+  than failing — `Differential::inverse()` drops `v_y`. Refusing
   an impossible motion is the caller's limit checking, not this map's job.
 
 ## 4. Design notes and open items
@@ -100,7 +100,7 @@ reorganization would have meant shipping an unverifiable diff.
 
 What this directory delivers instead is the seam that project needs: a real
 interface, a second implementation to prove it is one, and every existing
-`BodyKinematics` caller already moved onto it. `MecanumKinematics` is
+`BodyKinematics` caller already moved onto it. `Mecanum` is
 unconstructed for exactly this reason — there is no four-wheel drivetrain
 to hand it to yet. Togov is a real mecanum chassis
 (`data/robots/togov.json`), so that is the next drivetrain, not a

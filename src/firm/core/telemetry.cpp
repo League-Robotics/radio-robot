@@ -1,6 +1,6 @@
 #include "core/telemetry.h"
 
-#include "core/differential_drive.h"
+#include "control/differential_drive.h"
 
 namespace Core {
 
@@ -32,7 +32,7 @@ void Telemetry::setLiveFlag(uint32_t bit, bool active) {
   setFlag(bit, active);
 }
 
-void Telemetry::update(const Types::RobotState& state, const DifferentialDrive& drive) {
+void Telemetry::update(const Types::RobotState& state, const Control::DifferentialDrive& drive) {
   const uint32_t now = state.time.cycleStart + (state.time.cycleBusy / 1000u);  // [ms] ([us]->[ms])
 
   frame_.mode = static_cast<msg::DriveMode>(state.command.mode);

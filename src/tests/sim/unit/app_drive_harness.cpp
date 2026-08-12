@@ -1,11 +1,11 @@
 // app_drive_harness.cpp -- off-hardware acceptance harness for ticket
-// 103-006 (SUC-006), Core::DifferentialDrive (src/firm/app/drive.{h,cpp}). Proves:
+// 103-006 (SUC-006), Control::DifferentialDrive (src/firm/app/drive.{h,cpp}). Proves:
 // setDuty() stages the raw left/right values directly and tick() applies
 // the last-staged target onto the two REAL Hardware::NezhaMotor leaves, and
 // stop() zeroes both targets within one cycle of the next
 // NezhaMotor::tick().
 //
-// 128-015: Core::DifferentialDrive has no controller of its own at all -- duty is open
+// 128-015: Control::DifferentialDrive has no controller of its own at all -- duty is open
 // loop from calibrated speed (drive.h's own file header); the interim,
 // per-125-003 closed loop this file's header used to describe (two
 // motion-local wheel-velocity-PID instances inside Drive) never survived
@@ -17,11 +17,11 @@
 // appliedDuty() through a KNOWN deterministic computation," now simply
 // Drive's own open-loop calibration (setDutyPerSpeed()) rather than a PID.
 //
-// 122-002 (motion-library extraction, ticket 2): Core::DifferentialDrive shrank to a bare
+// 122-002 (motion-library extraction, ticket 2): Control::DifferentialDrive shrank to a bare
 // wheel-target sink -- setDuty()/stop()/tick() only, implementing
-// Motion::WheelSink. setTwist()/the Kinematics::DifferentialKinematics::inverse() staging this
+// Motion::WheelSink. setTwist()/the Kinematics::Differential::inverse() staging this
 // harness used to test moved to Motion::MoveQueue (which now calls
-// Kinematics::DifferentialKinematics::inverse() itself and hands the result down through the
+// Kinematics::Differential::inverse() itself and hands the result down through the
 // sink) -- that coverage lives in app_move_queue_harness.cpp's own
 // TWIST-Move scenarios.
 //
@@ -53,7 +53,7 @@
 #include <utility>
 #include <vector>
 
-#include "core/differential_drive.h"
+#include "control/differential_drive.h"
 #include "hal/device_config.h"
 #include "hardware/nezha/nezha_motor.h"
 #include "firm/types/robot_state.h"
@@ -87,7 +87,7 @@ Types::RobotState wheelCmd(float vLeft, float vRight) {  // [mm/s] x2
 // single-tick scenario; the expiry edge has its own coverage in
 // scenarioSpeedFloorIsATeleopAffordanceNotAGlobalOne() below, which also
 // pins the un-owned (planner) side of the gate.
-void armTeleop(Core::DifferentialDrive& drive, float vLeft, float vRight) {  // [mm/s] x2
+void armTeleop(Control::DifferentialDrive& drive, float vLeft, float vRight) {  // [mm/s] x2
   drive.command(vLeft, vRight, /*duration=*/1.0e6f, /*moveId=*/1, /*now=*/0);
 }
 
@@ -233,7 +233,7 @@ void scenarioSetDutyStagesRawValues() {
   primeAtZero(right, bus, wireAddr);
 
   const float trackWidth = 200.0f;  // [mm]
-  Core::DifferentialDrive drive(left, right, trackWidth);
+  Control::DifferentialDrive drive(left, right, trackWidth);
 
   drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
   const float dutyLeft = 0.18f;
@@ -266,8 +266,8 @@ void scenarioSetDutyStagesRawValues() {
 
 // Mirrors tovez.json's shipped stall values so the harness exercises the
 // geometry the real robot runs, not a convenient made-up one.
-Core::DifferentialDrive::AdaptationBounds stallBounds() {
-  Core::DifferentialDrive::AdaptationBounds bounds;
+Control::DifferentialDrive::AdaptationBounds stallBounds() {
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.stallSpeed = 15.0f;    // [mm/s]
   bounds.stallDemand = 40.0f;   // [mm/s]
   bounds.stallWindow = 500.0f;  // [ms]
@@ -304,7 +304,7 @@ Types::RobotState stallState(float cmd, float otosVx, uint32_t now,  // [mm/s] [
 // Drives `cycles` ticks of the same condition, 32ms apart (kCycle), starting
 // at a deliberately nonzero time -- updateStall() uses `since == 0` as its
 // unarmed sentinel, so a scenario starting at t=0 would never arm.
-void tickStall(Core::DifferentialDrive& drive, float cmd, float otosVx, uint32_t cycles,
+void tickStall(Control::DifferentialDrive& drive, float cmd, float otosVx, uint32_t cycles,
                bool otosOk = true, float otosOmega = 0.0f,
                float wheelVel = 0.0f, bool connected = true,
                bool frozen = false) {
@@ -324,7 +324,7 @@ struct StallRig {
   TestSim::ScriptedI2CHook bus{plant};
   Hardware::NezhaMotor left{plant, baseNezhaConfig(1)};
   Hardware::NezhaMotor right{plant, baseNezhaConfig(2)};
-  Core::DifferentialDrive drive{left, right, 200.0f};
+  Control::DifferentialDrive drive{left, right, 200.0f};
 
   StallRig() {
     const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
@@ -385,7 +385,7 @@ void scenarioNoOtosFallsBackToEncoders() {
   tickStall(rig.drive, 150.0f, /*otosVx=*/0.0f, 40, /*otosOk=*/false,
             /*otosOmega=*/0.0f, /*wheelVel=*/0.0f);
   checkTrue(rig.drive.stallLeft(), "encoder fallback still protects the robot");
-  Core::DifferentialDrive::AdaptationBounds b = stallBounds();
+  Control::DifferentialDrive::AdaptationBounds b = stallBounds();
   rig.drive.setAdaptationBounds(b);
 }
 
@@ -408,7 +408,7 @@ void scenarioMovingRobotIsNotAStall() {
 void scenarioZeroWindowDisablesTheDetector() {
   beginScenario("stall: stall_window = 0 disables the detector entirely");
   StallRig rig;
-  Core::DifferentialDrive::AdaptationBounds off = stallBounds();
+  Control::DifferentialDrive::AdaptationBounds off = stallBounds();
   off.stallWindow = 0.0f;
   rig.drive.setAdaptationBounds(off);
   tickStall(rig.drive, 150.0f, 0.0f, 40);
@@ -444,7 +444,7 @@ void scenarioStopZeroesBothTargetsWithinOneCycle() {
   primeAtZero(right, bus, wireAddr);
 
   const float trackWidth = 200.0f;  // [mm]
-  Core::DifferentialDrive drive(left, right, trackWidth);
+  Control::DifferentialDrive drive(left, right, trackWidth);
 
   drive.setDutyPerSpeed(1.0f, 1.0f);
   // Drive a nonzero pair first, so the zero write below is a real
@@ -484,7 +484,7 @@ void scenarioEstopReassertsStopWhileWheelsStillMoving() {
   MockMotor left;
   MockMotor right;
   const float trackWidth = 200.0f;  // [mm]
-  Core::DifferentialDrive drive(left, right, trackWidth);
+  Control::DifferentialDrive drive(left, right, trackWidth);
   drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
 
   // Drive a nonzero pair first -- one real setDuty() call each, landing a
@@ -536,7 +536,7 @@ void scenarioEstopReassertsStopWhileWheelsStillMoving() {
 // 4-6. 130-004 (wheel-speed-controller-moves-into-drive.md Phase 2): Stage
 // C's bias adaptation -- convergence under a known plant-gain error, the
 // biasMax clamp holding against a divergent error, and bumpless (duty-
-// continuous) transfer across a bias update. All three drive Core::DifferentialDrive
+// continuous) transfer across a bias update. All three drive Control::DifferentialDrive
 // directly, one cycle at a time, hand-simulating a plant with a KNOWN
 // multiplicative gain error on top of an identity Stage A calibration
 // (setDutyPerSpeed(1,1), the SAME "identity calibration: target IS duty"
@@ -556,10 +556,10 @@ void scenarioBiasConvergesUnderKnownPlantGainError() {
   MockMotor left;
   MockMotor right;
   const float trackWidth = 200.0f;  // [mm]
-  Core::DifferentialDrive drive(left, right, trackWidth);
+  Control::DifferentialDrive drive(left, right, trackWidth);
   drive.setDutyPerSpeed(1.0f, 1.0f);  // identity: duty == corrected command
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.biasMax = 60.0f;    // [mm/s] comfortably above the 50 needed to close the gap
   bounds.tauAdapt = 0.5f;    // [s] fast enough to converge within this test's tick budget
   bounds.aSteady = 100.0f;   // [mm/s^2] cmdAccel is always 0 below -- always "steady"
@@ -600,10 +600,10 @@ void scenarioBiasClampHoldsAgainstDivergentError() {
   MockMotor left;
   MockMotor right;
   const float trackWidth = 200.0f;  // [mm]
-  Core::DifferentialDrive drive(left, right, trackWidth);
+  Control::DifferentialDrive drive(left, right, trackWidth);
   drive.setDutyPerSpeed(1.0f, 1.0f);
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.biasMax = 60.0f;   // [mm/s]
   bounds.tauAdapt = 0.2f;   // [s] deliberately fast, to reach the clamp quickly
   bounds.aSteady = 100.0f;  // [mm/s^2]
@@ -636,7 +636,7 @@ void scenarioBiasClampHoldsAgainstDivergentError() {
   // NEGATIVE bias to correct, and that clamp must hold too.
   MockMotor left2;
   MockMotor right2;
-  Core::DifferentialDrive drive2(left2, right2, trackWidth);
+  Control::DifferentialDrive drive2(left2, right2, trackWidth);
   drive2.setDutyPerSpeed(1.0f, 1.0f);
   drive2.setAdaptationBounds(bounds);
   const float overDeliverGain = 2.0f;  // needs bias=-100 to fully close -- unreachable
@@ -667,10 +667,10 @@ void scenarioBumplessTransferAcrossBiasUpdate() {
   MockMotor left;
   MockMotor right;
   const float trackWidth = 200.0f;  // [mm]
-  Core::DifferentialDrive drive(left, right, trackWidth);
+  Control::DifferentialDrive drive(left, right, trackWidth);
   drive.setDutyPerSpeed(1.0f, 1.0f);
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.biasMax = 60.0f;
   bounds.tauAdapt = 5.0f;   // [s] slow -- bias moves by a small amount each tick
   bounds.aSteady = 100.0f;  // [mm/s^2]
@@ -726,14 +726,14 @@ void scenarioStageBITermIsAPositionTermWithNoSteadyGate() {
   const float dt = 0.05f;           // [s] one 50000us cycle
   const float perCycle = cmd * dt;  // [mm] commanded travel per cycle == 10mm
 
-  Core::DifferentialDrive::ControlGains gains;
+  Control::DifferentialDrive::ControlGains gains;
   gains.kp = 0.0f;    // P silenced: pidLeft() reads out the I term alone
   gains.ki = 0.5f;    // [1/s] -- 0.5 mm/s of correction per mm of position error
   gains.iMax = 500.0f;
   gains.kaff = 0.0f;
   gains.pidMax = 0.0f;  // no total clamp -- isolate the I path's own two bounds
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.aSteady = 50.0f;  // [mm/s^2]
   // tauAdapt left at 0 (the all-zero default) -- Stage C stays off.
 
@@ -745,10 +745,10 @@ void scenarioStageBITermIsAPositionTermWithNoSteadyGate() {
   auto runStalled = [&](int cycles, float cmdAccel, float posErrMax) -> float {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
+    Control::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
     drive.setControlGains(gains);
-    Core::DifferentialDrive::AdaptationBounds b = bounds;
+    Control::DifferentialDrive::AdaptationBounds b = bounds;
     b.posErrMax = posErrMax;
     drive.setAdaptationBounds(b);
 
@@ -814,12 +814,12 @@ void scenarioStageBITermIsAPositionTermWithNoSteadyGate() {
   {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
+    Control::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
-    Core::DifferentialDrive::ControlGains bothClamped = gains;
+    Control::DifferentialDrive::ControlGains bothClamped = gains;
     bothClamped.iMax = 1.0f;  // [mm/s] -- tighter than ki*posErrMax below
     drive.setControlGains(bothClamped);
-    Core::DifferentialDrive::AdaptationBounds b = bounds;
+    Control::DifferentialDrive::AdaptationBounds b = bounds;
     b.posErrMax = 100.0f;  // [mm] -- deliberately generous, so iMax is what binds
     drive.setAdaptationBounds(b);
 
@@ -845,18 +845,18 @@ void scenarioStageBITermIsAPositionTermWithNoSteadyGate() {
   //     clamps-ki*error form, the remembered distance was iMax/ki, so
   //     raising ki SHRANK the memory and the sweep plateaued.
   {
-    Core::DifferentialDrive::ControlGains lowKi = gains;
-    Core::DifferentialDrive::ControlGains highKi = gains;
+    Control::DifferentialDrive::ControlGains lowKi = gains;
+    Control::DifferentialDrive::ControlGains highKi = gains;
     lowKi.ki = 0.5f;
     highKi.ki = 4.0f;
 
-    auto pidWith = [&](const Core::DifferentialDrive::ControlGains& g) -> float {
+    auto pidWith = [&](const Control::DifferentialDrive::ControlGains& g) -> float {
       MockMotor left;
       MockMotor right;
-      Core::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
+      Control::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
       drive.setDutyPerSpeed(1.0f, 1.0f);
       drive.setControlGains(g);
-      Core::DifferentialDrive::AdaptationBounds b = bounds;
+      Control::DifferentialDrive::AdaptationBounds b = bounds;
       b.posErrMax = kPosClamp;
       drive.setAdaptationBounds(b);
       uint32_t now = 1000;
@@ -886,11 +886,11 @@ void scenarioStageBITermIsAPositionTermWithNoSteadyGate() {
   //     would hand all of them unbounded I authority the first time a
   //     nonzero ki was pushed.
   {
-    Core::DifferentialDrive::ControlGains noIMax = gains;
+    Control::DifferentialDrive::ControlGains noIMax = gains;
     noIMax.iMax = 0.0f;
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
+    Control::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setControlGains(noIMax);
     drive.setAdaptationBounds(bounds);
@@ -926,13 +926,13 @@ void scenarioPositionErrorGuardsReAnchorWithoutCorrecting() {
   const float cmd = 200.0f;  // [mm/s]
   const float perCycle = 10.0f;  // [mm] cmd * 0.05s
 
-  Core::DifferentialDrive::ControlGains gains;
+  Control::DifferentialDrive::ControlGains gains;
   gains.kp = 0.0f;    // P silenced: pidLeft() reads out the I term alone
   gains.ki = 1.0f;    // [1/s] -- pidLeft() is then numerically the position error in mm
   gains.iMax = 5000.0f;
   gains.pidMax = 0.0f;
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.aSteady = 50.0f;
 
   // Drives one tick with fully-specified wheel state; returns Stage B's
@@ -940,9 +940,9 @@ void scenarioPositionErrorGuardsReAnchorWithoutCorrecting() {
   struct Rig {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive;
+    Control::DifferentialDrive drive;
     uint32_t now = 1000;
-    Rig(const Core::DifferentialDrive::ControlGains& g, const Core::DifferentialDrive::AdaptationBounds& b)
+    Rig(const Control::DifferentialDrive::ControlGains& g, const Control::DifferentialDrive::AdaptationBounds& b)
         : drive(left, right, 200.0f) {
       drive.setDutyPerSpeed(1.0f, 1.0f);
       drive.setControlGains(g);
@@ -1053,13 +1053,13 @@ void scenarioDroppedSampleDoesNotDeleteDistanceFromThePositionEstimate() {
   const float perCycle = 10.0f;     // [mm] commanded travel per 50ms cycle
   const float trueRate = 9.0f;      // [mm] the wheel actually travels 90% of commanded
 
-  Core::DifferentialDrive::ControlGains gains;
+  Control::DifferentialDrive::ControlGains gains;
   gains.kp = 0.0f;    // P silenced: pidLeft() reads out the I term alone
   gains.ki = 1.0f;    // [1/s] -- pidLeft() is then numerically the position error in mm
   gains.iMax = 5000.0f;
   gains.pidMax = 0.0f;
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.aSteady = 50.0f;
   // posErrMax left at 0 (unclamped) so the full accumulated deficit is
   // observable -- the clamp is scenario 7's subject, not this one's.
@@ -1072,7 +1072,7 @@ void scenarioDroppedSampleDoesNotDeleteDistanceFromThePositionEstimate() {
   auto finalError = [&](int cycles, int dropFrom, int dropUntil) -> float {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
+    Control::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setControlGains(gains);
     drive.setAdaptationBounds(bounds);
@@ -1148,7 +1148,7 @@ void scenarioUpdatePublishesCmdAccelOnTheWheelsPathInertAtZeroKaff() {
 
   MockMotor left;
   MockMotor right;
-  Core::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
+  Control::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
   drive.setDutyPerSpeed(1.0f, 1.0f);
 
   Types::RobotState state;
@@ -1188,9 +1188,9 @@ void scenarioUpdatePublishesCmdAccelOnTheWheelsPathInertAtZeroKaff() {
   auto pidWithCmdAccel = [](float cmdAccel) -> float {
     MockMotor l;
     MockMotor r;
-    Core::DifferentialDrive d(l, r, /*trackWidth=*/200.0f);
+    Control::DifferentialDrive d(l, r, /*trackWidth=*/200.0f);
     d.setDutyPerSpeed(1.0f, 1.0f);
-    Core::DifferentialDrive::ControlGains gains;
+    Control::DifferentialDrive::ControlGains gains;
     gains.kp = 0.05f;
     gains.ki = 0.5f;
     gains.iMax = 50.0f;
@@ -1245,10 +1245,10 @@ void scenarioCommandedZeroForcesStageBToZeroAndDiscardsTheReference() {
   MockMotor left;
   MockMotor right;
   const float trackWidth = 200.0f;  // [mm]
-  Core::DifferentialDrive drive(left, right, trackWidth);
+  Control::DifferentialDrive drive(left, right, trackWidth);
   drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
 
-  Core::DifferentialDrive::ControlGains gains;
+  Control::DifferentialDrive::ControlGains gains;
   gains.kp = 0.05f;
   gains.ki = 0.5f;
   gains.iMax = 50.0f;
@@ -1256,7 +1256,7 @@ void scenarioCommandedZeroForcesStageBToZeroAndDiscardsTheReference() {
   gains.pidMax = 40.0f;
   drive.setControlGains(gains);
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.aSteady = 50.0f;  // [mm/s^2] -- no longer read by Stage B; Stage C is off (tauAdapt 0)
   drive.setAdaptationBounds(bounds);
 
@@ -1354,14 +1354,14 @@ void scenarioDisconnectedContributesNothingStaleAndFrozenCorrectBounded() {
   beginScenario("Stage B (133-002): a DISCONNECTED wheel contributes exactly nothing, while a "
                 "merely stale or frozen reading corrects -- bounded by posErrMax, not frozen");
 
-  Core::DifferentialDrive::ControlGains gains;
+  Control::DifferentialDrive::ControlGains gains;
   gains.kp = 0.05f;
   gains.ki = 0.5f;
   gains.iMax = 50.0f;
   gains.kaff = 0.0f;
   gains.pidMax = 40.0f;
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.aSteady = 50.0f;   // [mm/s^2]
   bounds.posErrMax = 4.0f;  // [mm] -- the bound under test in (b)/(c)
 
@@ -1373,7 +1373,7 @@ void scenarioDisconnectedContributesNothingStaleAndFrozenCorrectBounded() {
   {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, 200.0f);
+    Control::DifferentialDrive drive(left, right, 200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setControlGains(gains);
     drive.setAdaptationBounds(bounds);
@@ -1402,7 +1402,7 @@ void scenarioDisconnectedContributesNothingStaleAndFrozenCorrectBounded() {
   {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, 200.0f);
+    Control::DifferentialDrive drive(left, right, 200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setControlGains(gains);
     drive.setAdaptationBounds(bounds);
@@ -1433,7 +1433,7 @@ void scenarioDisconnectedContributesNothingStaleAndFrozenCorrectBounded() {
   {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, 200.0f);
+    Control::DifferentialDrive drive(left, right, 200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setControlGains(gains);
     drive.setAdaptationBounds(bounds);
@@ -1486,10 +1486,10 @@ void scenarioWheelsAndMoveReachIdenticalDriveBehavior() {
     MockMotor left;
     MockMotor right;
     const float trackWidth = 200.0f;  // [mm]
-    Core::DifferentialDrive drive(left, right, trackWidth);
+    Control::DifferentialDrive drive(left, right, trackWidth);
     drive.setDutyPerSpeed(1.0f, 1.0f);  // identity: duty == corrected command
 
-    Core::DifferentialDrive::ControlGains gains;
+    Control::DifferentialDrive::ControlGains gains;
     gains.kp = 0.1f;
     gains.ki = 0.3f;
     gains.iMax = 40.0f;
@@ -1497,7 +1497,7 @@ void scenarioWheelsAndMoveReachIdenticalDriveBehavior() {
     gains.pidMax = 30.0f;
     drive.setControlGains(gains);
 
-    Core::DifferentialDrive::AdaptationBounds bounds;
+    Control::DifferentialDrive::AdaptationBounds bounds;
     bounds.biasMax = 40.0f;   // [mm/s]
     bounds.tauAdapt = 2.0f;   // [s]
     bounds.aSteady = 50.0f;   // [mm/s^2]
@@ -1590,17 +1590,17 @@ void scenarioTakeoverPreservesLearnedStateEstopFullyResets() {
   MockMotor left;
   MockMotor right;
   const float trackWidth = 200.0f;  // [mm]
-  Core::DifferentialDrive drive(left, right, trackWidth);
+  Control::DifferentialDrive drive(left, right, trackWidth);
   drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
 
-  Core::DifferentialDrive::ControlGains gains;
+  Control::DifferentialDrive::ControlGains gains;
   gains.kp = 0.5f;
   gains.ki = 2.0f;
   gains.iMax = 40.0f;
   gains.pidMax = 40.0f;
   drive.setControlGains(gains);
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.biasMax = 60.0f;
   bounds.tauAdapt = 0.3f;
   bounds.aSteady = 100.0f;
@@ -1686,7 +1686,7 @@ void scenarioTakeoverPreservesLearnedStateEstopFullyResets() {
   // sum is observable.
   MockMotor freshLeft;
   MockMotor freshRight;
-  Core::DifferentialDrive freshDrive(freshLeft, freshRight, trackWidth);
+  Control::DifferentialDrive freshDrive(freshLeft, freshRight, trackWidth);
   freshDrive.setDutyPerSpeed(1.0f, 1.0f);
   freshDrive.setControlGains(gains);
   freshDrive.setAdaptationBounds(bounds);
@@ -1724,7 +1724,7 @@ void scenarioTakeoverDoesNotTouchStopReassertionCountdown() {
   MockMotor left;
   MockMotor right;
   const float trackWidth = 200.0f;  // [mm]
-  Core::DifferentialDrive drive(left, right, trackWidth);
+  Control::DifferentialDrive drive(left, right, trackWidth);
   drive.setDutyPerSpeed(1.0f, 1.0f);
 
   drive.tick(wheelCmd(0.5f, 0.5f));  // a real nonzero write, so estop() below is a genuine transition
@@ -1786,7 +1786,7 @@ void scenarioCommandedStopArmsReassertionWithEncoderAtRest() {
   MockMotor left;
   MockMotor right;
   const float trackWidth = 200.0f;  // [mm]
-  Core::DifferentialDrive drive(left, right, trackWidth);
+  Control::DifferentialDrive drive(left, right, trackWidth);
   drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
 
   // At rest for the WHOLE scenario -- the encoder half of enforceStop
@@ -1855,10 +1855,10 @@ void scenarioReversalAfterConvergedForwardBiasDoesNotReduceMagnitude() {
   MockMotor left;
   MockMotor right;
   const float trackWidth = 200.0f;  // [mm]
-  Core::DifferentialDrive drive(left, right, trackWidth);
+  Control::DifferentialDrive drive(left, right, trackWidth);
   drive.setDutyPerSpeed(1.0f, 1.0f);  // identity: duty == corrected command
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.biasMax = 60.0f;
   bounds.tauAdapt = 0.3f;
   bounds.aSteady = 100.0f;
@@ -1888,7 +1888,7 @@ void scenarioReversalAfterConvergedForwardBiasDoesNotReduceMagnitude() {
   // Freeze Stage C (tauAdapt=0, the "0 = off" convention) so the reverse
   // command below exercises ONLY correctedCommand()'s bias application,
   // not further adaptation.
-  Core::DifferentialDrive::AdaptationBounds frozen;  // tauAdapt=0 default -- adaptation off, bias held
+  Control::DifferentialDrive::AdaptationBounds frozen;  // tauAdapt=0 default -- adaptation off, bias held
   drive.setAdaptationBounds(frozen);
   checkFloatEq(drive.biasLeft(), convergedBias,
               "setup: freezing adaptationBounds does not itself reset the already-converged bias");
@@ -1897,7 +1897,7 @@ void scenarioReversalAfterConvergedForwardBiasDoesNotReduceMagnitude() {
   // never on) -- the uncorrected baseline this scenario compares against.
   MockMotor left0;
   MockMotor right0;
-  Core::DifferentialDrive driveZeroBias(left0, right0, trackWidth);
+  Control::DifferentialDrive driveZeroBias(left0, right0, trackWidth);
   driveZeroBias.setDutyPerSpeed(1.0f, 1.0f);
   driveZeroBias.setAdaptationBounds(frozen);
 
@@ -1941,10 +1941,10 @@ void scenarioBiasPersistsAcrossChainedTakeoverBoundaries() {
   MockMotor left;
   MockMotor right;
   const float trackWidth = 200.0f;  // [mm]
-  Core::DifferentialDrive drive(left, right, trackWidth);
+  Control::DifferentialDrive drive(left, right, trackWidth);
   drive.setDutyPerSpeed(1.0f, 1.0f);
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.biasMax = 60.0f;
   bounds.tauAdapt = 0.4f;
   bounds.aSteady = 100.0f;
@@ -2044,10 +2044,10 @@ void scenarioDifferentialTrimAtFloorBoundaryStaysProportional() {
   MockMotor left;
   MockMotor right;
   const float trackWidth = 200.0f;  // [mm]
-  Core::DifferentialDrive drive(left, right, trackWidth);
+  Control::DifferentialDrive drive(left, right, trackWidth);
   drive.setDutyPerSpeed(1.0f, 1.0f);  // identity calibration: target IS duty
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.vMin = 100.0f;  // [mm/s] test-local floor -- NOT tovez.json's real 99.7
   drive.setAdaptationBounds(bounds);
 
@@ -2083,7 +2083,7 @@ void scenarioDifferentialTrimAtFloorBoundaryStaysProportional() {
   // case too, not just at the adversarial boundary above.
   MockMotor left2;
   MockMotor right2;
-  Core::DifferentialDrive drive2(left2, right2, trackWidth);
+  Control::DifferentialDrive drive2(left2, right2, trackWidth);
   drive2.setDutyPerSpeed(1.0f, 1.0f);
   drive2.setAdaptationBounds(bounds);
   const float cruiseCommon = 150.0f;  // [mm/s] comfortably above vMin
@@ -2114,10 +2114,10 @@ void scenarioSymmetricPivotBelowFloorBoostsToExactVMin() {
 
   MockMotor left;
   MockMotor right;
-  Core::DifferentialDrive drive(left, right, 200.0f);
+  Control::DifferentialDrive drive(left, right, 200.0f);
   drive.setDutyPerSpeed(1.0f, 1.0f);
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.vMin = 100.0f;  // [mm/s] test-local floor
   drive.setAdaptationBounds(bounds);
 
@@ -2150,10 +2150,10 @@ void scenarioAsymmetricPairBelowFloorPreservesRatio() {
 
   MockMotor left;
   MockMotor right;
-  Core::DifferentialDrive drive(left, right, 200.0f);
+  Control::DifferentialDrive drive(left, right, 200.0f);
   drive.setDutyPerSpeed(1.0f, 1.0f);
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.vMin = 100.0f;  // [mm/s] test-local floor
   drive.setAdaptationBounds(bounds);
 
@@ -2194,7 +2194,7 @@ void scenarioDifferentialWithNearZeroCommonModeNowBoostedTowardVMin() {
                 "mode differential apart from a symmetric pivot (scenario 14) from the raw wheel "
                 "pair alone");
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.vMin = 100.0f;  // [mm/s] test-local floor -- NOT tovez.json's real 99.7
 
   // Sub-case A: common mode EXACTLY zero, small differential trim -- raw
@@ -2204,7 +2204,7 @@ void scenarioDifferentialWithNearZeroCommonModeNowBoostedTowardVMin() {
   {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, 200.0f);
+    Control::DifferentialDrive drive(left, right, 200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setAdaptationBounds(bounds);
 
@@ -2229,7 +2229,7 @@ void scenarioDifferentialWithNearZeroCommonModeNowBoostedTowardVMin() {
   {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, 200.0f);
+    Control::DifferentialDrive drive(left, right, 200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setAdaptationBounds(bounds);
 
@@ -2264,7 +2264,7 @@ void scenarioRawZeroWheelStaysZeroUnderRatioPreservingScale() {
                 "intentionally-driven-nonzero case -- while a GENUINE full stop (both wheels "
                 "raw zero) still recombines to exactly (0.0, 0.0)");
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.vMin = 100.0f;  // [mm/s] test-local floor
 
   // Sub-case A: raw pair (0, 50) -- the left wheel's raw command happens to
@@ -2279,7 +2279,7 @@ void scenarioRawZeroWheelStaysZeroUnderRatioPreservingScale() {
   {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, 200.0f);
+    Control::DifferentialDrive drive(left, right, 200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setAdaptationBounds(bounds);
 
@@ -2307,7 +2307,7 @@ void scenarioRawZeroWheelStaysZeroUnderRatioPreservingScale() {
   {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, 200.0f);
+    Control::DifferentialDrive drive(left, right, 200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setAdaptationBounds(bounds);
 
@@ -2347,7 +2347,7 @@ void scenarioSpeedFloorIsATeleopAffordanceNotAGlobalOne() {
                 "passes through UNMODIFIED while the planner owns motion and is still boosted "
                 "to vMin while a WHEELS command owns it");
 
-  Core::DifferentialDrive::AdaptationBounds bounds;
+  Control::DifferentialDrive::AdaptationBounds bounds;
   bounds.vMin = 100.0f;  // [mm/s] test-local floor -- NOT tovez.json's real 20.0
 
   // A planner-shaped decelerating tail: a symmetric pivot's ramp-out, well
@@ -2363,7 +2363,7 @@ void scenarioSpeedFloorIsATeleopAffordanceNotAGlobalOne() {
   {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, 200.0f);
+    Control::DifferentialDrive drive(left, right, 200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setAdaptationBounds(bounds);
 
@@ -2388,7 +2388,7 @@ void scenarioSpeedFloorIsATeleopAffordanceNotAGlobalOne() {
   {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, 200.0f);
+    Control::DifferentialDrive drive(left, right, 200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setAdaptationBounds(bounds);
 
@@ -2410,7 +2410,7 @@ void scenarioSpeedFloorIsATeleopAffordanceNotAGlobalOne() {
   {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, 200.0f);
+    Control::DifferentialDrive drive(left, right, 200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setAdaptationBounds(bounds);
 
@@ -2430,7 +2430,7 @@ void scenarioSpeedFloorIsATeleopAffordanceNotAGlobalOne() {
   {
     MockMotor leftOwned;
     MockMotor rightOwned;
-    Core::DifferentialDrive driveOwned(leftOwned, rightOwned, 200.0f);
+    Control::DifferentialDrive driveOwned(leftOwned, rightOwned, 200.0f);
     driveOwned.setDutyPerSpeed(1.0f, 1.0f);
     driveOwned.setAdaptationBounds(bounds);
     armTeleop(driveOwned, 0.0f, 0.0f);
@@ -2440,7 +2440,7 @@ void scenarioSpeedFloorIsATeleopAffordanceNotAGlobalOne() {
 
     MockMotor leftPlanner;
     MockMotor rightPlanner;
-    Core::DifferentialDrive drivePlanner(leftPlanner, rightPlanner, 200.0f);
+    Control::DifferentialDrive drivePlanner(leftPlanner, rightPlanner, 200.0f);
     drivePlanner.setDutyPerSpeed(1.0f, 1.0f);
     drivePlanner.setAdaptationBounds(bounds);
     drivePlanner.tick(wheelCmd(0.0f, 0.0f));
@@ -2462,7 +2462,7 @@ void scenarioSpeedFloorIsATeleopAffordanceNotAGlobalOne() {
   {
     MockMotor left;
     MockMotor right;
-    Core::DifferentialDrive drive(left, right, 200.0f);
+    Control::DifferentialDrive drive(left, right, 200.0f);
     drive.setDutyPerSpeed(1.0f, 1.0f);
     drive.setAdaptationBounds(bounds);
 
@@ -2523,9 +2523,9 @@ int main() {
   scenarioEstopClearsTheStallLatch();
 
   if (g_failureCount == 0) {
-    std::printf("OK: all Core::DifferentialDrive scenarios passed\n");
+    std::printf("OK: all Control::DifferentialDrive scenarios passed\n");
     return 0;
   }
-  std::printf("FAILED: %d assertion(s) across the Core::DifferentialDrive scenarios\n", g_failureCount);
+  std::printf("FAILED: %d assertion(s) across the Control::DifferentialDrive scenarios\n", g_failureCount);
   return 1;
 }

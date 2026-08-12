@@ -58,7 +58,7 @@ set(MOTION_DIR "${REPO_ROOT}/src/firm/motion")
 #   messages/wire.cpp, messages/wire_runtime.cpp
 #                              -- the generated + hand-written codec
 #                                 primitives
-#   src/firm/kinematics/differential_kinematics.cpp
+#   src/firm/kinematics/differential.cpp
 #                              -- pure math, no CODAL deps. Moved out of
 #                                 SOURCE_DIR/kinematics/ (122-001: that
 #                                 directory is retired, folded flat into
@@ -76,9 +76,12 @@ set(MOTION_DIR "${REPO_ROOT}/src/firm/motion")
 # Absent (deliberately):
 #   devices/microbit_clock.cpp, devices/microbit_i2c_bus.cpp
 #                              -- the REAL CODAL-only forks (MicroBit.h)
-#   com/*.cpp                 -- real serial/radio transport (CODAL-only);
-#                                 SimHarness uses TestSupport::FakeTransport
-#                                 instead
+#   platform/microbit/microbit_serial_port.cpp, microbit_radio_link.cpp,
+#   microbit_banner.cpp, microbit_boot_identity.cpp
+#                              -- real serial/radio transport + boot-display
+#                                 UI (CODAL-only; 136-005 dissolved the
+#                                 former com/*.cpp here); SimHarness uses
+#                                 TestSupport::FakeTransport instead
 #   main.cpp                  -- the ARM entry point (constructs uBit,
 #                                 the real I2C bus/transports -- none of
 #                                 which link host-side)
@@ -110,7 +113,11 @@ set(APP_SOURCES
     # library, above), so SimHarness::Core::setDebugSink(&comms_) needs a
     # real definition, not the ARM-release inline no-op stub.
     "${SOURCE_DIR}/core/debug.cpp"
-    "${SOURCE_DIR}/core/differential_drive.cpp"
+    # control/differential_drive.cpp (136-006, "control law out of core/ --
+    # new control/ layer"): Control::DifferentialDrive, relocated verbatim
+    # out of core/ -- the control law itself unchanged, only its namespace
+    # and directory.
+    "${SOURCE_DIR}/control/differential_drive.cpp"
     "${SOURCE_DIR}/core/preamble.cpp"
     "${SOURCE_DIR}/core/robot_loop.cpp"
     "${SOURCE_DIR}/core/telemetry.cpp"
@@ -160,8 +167,11 @@ set(DEVICE_SOURCES
 # serializeSnapshot()/Config::TuningStore seam directly, so this TU must
 # link into the host lib too. persisted_tuning.cpp's own #ifndef HOST_BUILD
 # block (the ARM-only MicroBitStorage adapter) compiles out entirely under
-# this file's -DHOST_BUILD=1, mirroring app/comms.cpp's identical
-# SerialTransport/RadioTransport guard.
+# this file's -DHOST_BUILD=1 -- the same shape core/comms.cpp's own
+# #ifndef HOST_BUILD block used to have before 136-005 deleted it outright
+# (Core::SerialTransport/RadioTransport are gone, not guarded, now that
+# Platform::MicroBitSerialPort/MicroBitRadioLink implement Hal::Transport
+# directly).
 #
 # config/boot_config.cpp (130-002, REVERSED from this file's pre-130-002
 # "Absent" note): bakes in the active robot JSON at ARM build time -- now
@@ -179,14 +189,14 @@ set(MESSAGE_SOURCES
 )
 # kinematics/ is a real subsystem again (the platform/hardware/hal
 # reorganization): Kinematics::Model, the swappable twist<->wheel-speed map,
-# with DifferentialKinematics (the former BodyKinematics free functions,
-# unchanged math) and MecanumKinematics behind it. The 122-era arrangement
+# with Differential (the former BodyKinematics free functions,
+# unchanged math) and Mecanum behind it. The 122-era arrangement
 # -- body_kinematics.cpp folded flat into src/motion -- is gone. Chassis
 # geometry (track width, wheelbase) lives HERE and nowhere below it.
 set(KINEMATICS_SOURCES
-    "${SOURCE_DIR}/kinematics/differential_kinematics.cpp"
+    "${SOURCE_DIR}/kinematics/differential.cpp"
     "${SOURCE_DIR}/kinematics/kinematics.cpp"
-    "${SOURCE_DIR}/kinematics/mecanum_kinematics.cpp"
+    "${SOURCE_DIR}/kinematics/mecanum.cpp"
 )
 set(SIM_SOURCES
     "${CMAKE_SOURCE_DIR}/sim_ctypes.cpp"

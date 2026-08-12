@@ -80,6 +80,10 @@
     "pid_kaff": 0.0,
     "pid_max": 0.0,
     "pos_err_max": 0.0,
+    "stall_speed": 0.0,
+    "stall_demand": 0.0,
+    "stall_window": 0.0,
+    "_stall_note": "2026-08-11 (136-001): added so this profile's own _complete_cfg() fixture (src/tests/sim/unit/test_gen_boot_config_required_keys.py) stays independently sufficient -- gen_boot_config.py has required all three since the 2026-08-08 stall-detection directive (config-as-truth, sprint 114 posture) and they had been added to tovez.json/gopiv.json only, which meant this file's own missing wheel_control.stall_speed masked every one of that fixture's parametrized cases behind one shared missing-key failure (37 failures, one root cause). Held at 0.0, the documented INERT state, matching gopiv.json's 2026-08-09 precedent (see that file's own _stall_note) -- this is the NO-CALIBRATION profile (see this file's own _wheel_controller_note below: every wheel_control key held at 0/disabled on purpose), so borrowing tovez.json's measured 15.0/40.0/500.0 would be a fabricated calibration on a profile whose entire point is to ship nothing tuned.",
     "_pos_err_max_note": "133-002: Stage B's position-error clamp [mm] -- the INPUT-side bound on the I term, distinct from pid_i_max's OUTPUT-side [mm/s] bound; both retained. 0 = unclamped, matching every other key in this no-calibration profile: Stage B and Stage C are held inert here on purpose, so there is nothing for this bound to bound.",
     "_wheel_controller_note": "130-004: App::Drive's unified three-timescale controller. This is the NO-CALIBRATION profile (see this file's own _wheel_correction_note above: wheel_gain/intercept held at IDENTITY on purpose) -- both Stage B fast-PID and Stage C bias-trim adaptation held at 0/disabled to match, so this profile stays a pure open-loop-map baseline with no additional correction layered on top."
   },
@@ -119,7 +123,7 @@
     "approach_speed": 0.0,
     "default_arrival_tolerance": 100.0,
     "yaw_sign": 1.0,
-    "_navigator_note": "135-004: seeded from Motion::NavigatorLimits' own compile-time defaults (src/motion/navigator/arc_solver.h) -- same pattern as tovez.json's own navigator block (see that file's note for the full rationale). yaw_sign=1.0 (identity, unmeasured) pending this robot's own bench pass -- tovez.json's -1.0 is a tovez-specific measured fact (src/tests/bench/goto_otos.py's own YAW_SIGN), not assumed to transfer to a different drivetrain without its own measurement."
+    "_navigator_note": "135-004: seeded from Motion::NavigatorLimits' own compile-time defaults (src/firm/motion/navigator/arc_solver.h) -- same pattern as tovez.json's own navigator block (see that file's note for the full rationale). yaw_sign=1.0 (identity, unmeasured) pending this robot's own bench pass -- tovez.json's -1.0 is a tovez-specific measured fact (src/tests/bench/goto_otos.py's own YAW_SIGN), not assumed to transfer to a different drivetrain without its own measurement."
   },
   "otos": {
     "offset_x": -47.7,
