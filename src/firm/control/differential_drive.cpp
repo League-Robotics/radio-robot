@@ -1,9 +1,9 @@
 #include <algorithm>
 #include <cmath>
 
-#include "core/differential_drive.h"
+#include "control/differential_drive.h"
 
-namespace Core {
+namespace Control {
 
 DifferentialDrive::DifferentialDrive(Hal::Motor& left, Hal::Motor& right, float trackWidth)
     : left_(left), right_(right), trackWidth_(trackWidth) {}
@@ -383,4 +383,4 @@ void DifferentialDrive::tick(const Types::RobotState& state) {
   writtenRight_ = dutyRight;
 }
 
-}  // namespace Core
+}  // namespace Control

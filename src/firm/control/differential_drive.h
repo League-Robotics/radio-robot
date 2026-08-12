@@ -6,7 +6,7 @@
 #include "hal/motor.h"
 #include "firm/types/robot_state.h"
 
-namespace Core {
+namespace Control {
 
 class DifferentialDrive {
  public:
@@ -201,4 +201,4 @@ class DifferentialDrive {
   static constexpr float kRestVelocity = 8.0f;  // [mm/s]
 };
 
-}  // namespace Core
+}  // namespace Control
