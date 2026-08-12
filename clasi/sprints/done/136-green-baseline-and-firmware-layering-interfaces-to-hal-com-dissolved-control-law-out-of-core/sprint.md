@@ -2,7 +2,7 @@
 id: '136'
 title: 'Green baseline and firmware layering: interfaces to hal, com dissolved, control
   law out of core'
-status: planning-docs
+status: closed
 branch: sprint/136-green-baseline-and-firmware-layering-interfaces-to-hal-com-dissolved-control-law-out-of-core
 worktree: false
 use-cases: []
