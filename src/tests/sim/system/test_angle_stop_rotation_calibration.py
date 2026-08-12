@@ -117,33 +117,33 @@ def _run_angle_stop_move(loop, stop_deg: float, omega: float) -> float:
     return math.degrees(pose1["h"] - pose0["h"])
 
 
-@pytest.mark.xfail(
-    reason=(
-        "130-002 (unify-sim-and-robot-composition-roots.md): composeRobot() "
-        "now boots Motion::Planner's REAL headingHoldGain (2.0, from the "
-        "robot JSON) live in sim for the first time -- it was always 0 "
-        "(effectively off) under the old sim-only simPlannerLimits() "
-        "literals this ticket replaced. headingHoldGain is a genuine "
-        "CLOSED-LOOP heading corrector running DURING the move; this "
-        "test's own rotation_gain/rotation_offset_deg calibration is an "
-        "OPEN-LOOP host-side command pre-scaling fit against the OLD "
-        "(heading-hold-off) coast-down overshoot. With both live "
-        "simultaneously the move is now double-corrected and UNDERSHOOTS "
-        "(measured -10.86 deg, was landing within the +/-5 deg bound "
-        "before this ticket). Re-deriving whether rotation_gain/offset is "
-        "still needed once heading-hold is genuinely live -- and if so, "
-        "refitting it against the new closed-loop dynamics -- is a "
-        "measurement task, not a composition-root change; tracked in "
-        "clasi/issues/B-rotation-calibration-vs-live-heading-hold-gain.md, "
-        "adjacent to ticket 010's own turn-shaping-undershoot work."
-    ),
-    strict=False,
-)
 def test_angle_stop_lands_close_to_target_with_tovez_nocal_calibration():
     """The regression this ticket exists to prevent: a 90 deg ANGLE-stop
     MOVE against `tovez_nocal.json`'s own (now-calibrated) rotation
     constants must land within `_MAX_OVERSHOOT_DEG` of 90 -- not the ~13 deg
-    the identity/uncalibrated defect produced."""
+    the identity/uncalibrated defect produced.
+
+    136-002: un-xfailed. 130-002 (unify-sim-and-robot-composition-roots.md)
+    made this test XFAIL (measured -10.86 deg undershoot, double-corrected
+    by the newly-live headingHoldGain PLUS this JSON's own open-loop
+    rotation_gain/rotation_offset_deg -- see
+    clasi/issues/later/B-rotation-calibration-vs-live-heading-hold-gain.md
+    for the full mechanism). Sprint 136 baseline triage re-measured this
+    test fresh (2026-08-11) and found it PASSING again, reproducibly (5
+    repeated runs, same result) -- confirmed by direct, repeated pytest
+    run, not assumed. `tovez_nocal.json`'s rotation_gain/rotation_offset_deg
+    values are unchanged since the 125-007 fit (git log on the file shows
+    no edits since), so the likely cause is elsewhere -- commit `e5339c27`
+    ("run the control loop at 32ms (~31Hz), down from 50ms") landed between
+    130-002 and this measurement and plausibly shifted the coast-down/
+    heading-hold interaction enough to pull the double-corrected result
+    back inside the +/-5 deg bound. This is a PLAUSIBLE explanation, not a
+    confirmed root cause -- the B-rotation-calibration issue's own
+    follow-up items 1/2 (whether rotation_gain/offset calibration is still
+    needed at all, and refitting it against current closed-loop dynamics
+    if so) remain open; only item 3 (remove the xfail once it measurably
+    passes) is acted on here, for this test only -- the negative-control
+    sibling below still xfails and is left as-is."""
     from robot_radio.config.robot_config import load_robot_config
 
     config = load_robot_config(_ROBOTS_DIR / "tovez_nocal.json")
@@ -174,10 +174,14 @@ def test_angle_stop_lands_close_to_target_with_tovez_nocal_calibration():
         "overshoot on its own, WITHOUT any rotation_gain/offset calibration "
         "-- this negative control now lands within the +/-5 deg bound "
         "(measured +1.31 deg) instead of the ~13 deg the old, heading-hold-"
-        "off sim produced. Tracked in clasi/issues/B-rotation-calibration-vs-"
-        "live-heading-hold-gain.md."
+        "off sim produced. Tracked in clasi/issues/later/B-rotation-calibration-vs-"
+        "live-heading-hold-gain.md. 136-002: strict=True (issue A's own "
+        "process fix) -- confirmed by direct pytest run this test still "
+        "fails its own body as expected (a future xpass here would mean "
+        "heading-hold alone now covers the full coast-down overshoot even "
+        "MORE completely, worth noticing loudly rather than silently)."
     ),
-    strict=False,
+    strict=True,
 )
 def test_angle_stop_overshoots_without_rotation_calibration():
     """Negative control: WITHOUT any rotation calibration applied (a bare,

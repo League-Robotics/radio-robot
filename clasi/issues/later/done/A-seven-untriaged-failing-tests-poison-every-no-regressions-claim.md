@@ -1,9 +1,59 @@
 ---
-status: pending
+status: done
 priority: high
+tickets:
+- '136-002'
 ---
 
 # Seven tests fail on a clean tree, none are triaged, and they poison every "no regressions" claim
+
+## Resolution (2026-08-11, sprint 136 ticket 002)
+
+Resolved per this issue's own Verification section, though the underlying
+tree has moved on substantially since this issue was filed (2026-08-03,
+commit `22a3c368`) — the original seven are not the same seven that needed
+triaging at resolution time (sprint 132's telemetry-emit rebuild and
+several turn-shaping tickets landed in between), but the issue's own three
+concerns are all closed:
+
+1. **Every failure on the tree is now either fixed or carries a strict,
+   issue-referenced `xfail`.** `uv run python -m pytest src/tests/unit
+   src/tests/sim src/tests/testgui` -- `975 passed / 0 failed`, `493 passed
+   / 0 failed / 4 xfailed`, `592 passed / 0 failed / 3 skipped / 19
+   xfailed`, confirmed by an independent second run after every `xfail`
+   mark landed (this ticket's own acceptance criterion, not assumed from
+   the first pass).
+2. **No non-strict `xfail` remains** anywhere in the three suites --
+   confirmed by repo-wide grep, not sampled.
+3. **The baseline is recorded** in `src/tests/CLAUDE.md` (its own new
+   "Baseline" section), with the counts above, the tracked issues backing
+   every `xfail`, and a pointer to this ticket's own git history for the
+   exact measurement commit.
+
+Item 4 (boundary checks must cover all three suites) is a process
+practice, not something a single ticket can close by itself, but the
+finding is what motivated this very ticket running all three suites, twice
+each, rather than sampling one.
+
+The original "seven" specifically: items 1-3
+(`test_gen_boot_config_planner.py`) and item 4
+(`test_flags_bit16_shaping_disabled_asserts_when_push_stripped`) were
+already resolved by earlier sprints (132's telemetry rebuild and 130-009's
+literal reshape both landed and green well before this ticket started —
+neither appears in this ticket's own fresh measurement). Items 5-7 (the
+turn-accuracy/tour-completion family) are exactly the ones sprint 131
+ticket 006 investigated and did NOT fully close (see its own Completion
+Notes) -- formally accepted here with a strict `xfail` referencing the
+refiled `clasi/issues/later/A-tour2-146-degree-turn-still-undershoots-
+after-130-010.md`, since sprint 136 is a baseline-and-layering sprint, not
+the sprint to fix them. The "2 xpassed" this issue names (sprint-131-era
+measurement) is stale by the time of this resolution -- sprint 136's own
+planning-time measurement found 1 xpassed in `src/tests/sim`, which this
+ticket identified by name (`test_angle_stop_lands_close_to_target_with_
+tovez_nocal_calibration`), confirmed genuinely passing (5/5 repeated
+runs), and un-`xfail`ed rather than marking strict (the correct resolution
+for a capability that now genuinely works, not a silent xpass to paper
+over).
 
 ## Description
 

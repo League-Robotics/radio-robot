@@ -108,7 +108,7 @@ def _find_cxx_compiler() -> str:
 
 
 @pytest.mark.xfail(
-    strict=False,
+    strict=True,
     reason=(
         "SUPERSEDED root cause, re-audited by 125-006 (telemetry-emit-"
         "policy-rebuild-spec.md Part 8's own acceptance ticket): the "

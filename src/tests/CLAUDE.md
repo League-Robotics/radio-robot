@@ -1,3 +1,87 @@
+# Baseline (read this at the start of every sprint)
+
+**Sprint 136 ticket 002** (2026-08-11) established the current trustworthy
+baseline, per `clasi/issues/later/A-seven-untriaged-failing-tests-poison-
+every-no-regressions-claim.md`'s own proposed fix item 3. Measured with
+`uv run python -m pytest src/tests/unit src/tests/sim src/tests/testgui`,
+run twice (once before the `xfail` marks below landed, once after, to
+confirm they match real failures rather than papering over something that
+actually passes):
+
+| tier | passed | failed | xfailed | xpassed | skipped |
+|---|---|---|---|---|---|
+| `src/tests/unit` | 975 | **0** | 0 | 0 | 0 |
+| `src/tests/sim` | 493 | **0** | 4 | 0 | 0 |
+| `src/tests/testgui` | 592 | **0** | 19 | 0 | 3 |
+
+**Zero non-`xfail` failures.** Every `xfail` in all three suites is now
+`strict=True` (a future accidental fix shows up as a loud XPASS failure,
+not a silent no-op) and every reason string names a tracked issue. For the
+exact commit this table was measured at, check this file's own `git log`/
+`git blame` on this section — pinning a literal hash here would rot the
+moment this file is next edited for an unrelated reason.
+
+Measured on clean HEAD before this ticket (`5cf125f0`, sprint-planning
+time): `src/tests/unit` 14 failed / 961 passed; `src/tests/sim` 39 failed /
+455 passed / 2 xfailed / 1 xpassed; `src/tests/testgui` 10 failed / 590
+passed / 3 skipped / 11 xfailed. Ticket 001 (commit `fc2869a2`) root-caused
+and fixed the two dominant clusters (a missing `wheel_control.stall_*` key
+group cascading through `gen_boot_config.py`'s required-key validation, and
+nine tests pinned to literals `tovez.json`'s legitimate re-measurement
+history had superseded), taking `unit`+`sim` to 2 remaining failures.
+Ticket 002 (this record) triaged everything left: two `sim`-tier harness
+scenario failures, and testgui's ten -- two fixed at the root (a stale
+"contains '3'" camera-fallback heuristic test, superseded by the current
+"arducam" substring convention and never back-filled), eight formally
+accepted with strict, issue-referenced `xfail` marks. Every one of the
+pre-existing non-strict `xfail`s already in the tree (including the sim
+tier's one `xpass`, `test_angle_stop_lands_close_to_target_with_tovez_
+nocal_calibration` -- confirmed genuinely passing now, 5/5 repeated runs,
+so the `xfail` was removed rather than made strict) was resolved the same
+way: fixed, or made strict with an accurate reason.
+
+**Full per-failure triage record**: this section, ticket 002's own commit
+message, and the tracked issues below carry the reasoning; ticket
+Completion Notes in `clasi/sprints/136-.../tickets/002-....md` could not be
+written directly due to a known CLASI tooling defect (`clasi/issues/
+clasi-role-guard-sees-every-subagent-as-team-lead.md`) -- the commit
+message is the authoritative record for this ticket.
+
+Tracked issues backing every current `xfail` (check each for status before
+assuming any of these are still open):
+
+- `clasi/issues/later/A-tour2-146-degree-turn-still-undershoots-after-130-010.md`
+  -- turn-accuracy/tour-completion family (`test_tour_closure_gate.py`'s
+  shaped-band gate, `test_gui_button_acceptance.py`'s two tour-completion
+  tests + the downstream stop-mid-tour precondition failure). Real,
+  previously-flagged, unresolved firmware behavior -- out of scope for
+  sprint 136 per its own `sprint.md`.
+- `clasi/issues/later/test-canvas-playfield-tour-fixtures-deleted-by-e4bffd8e.md`
+  -- `test_canvas.py`'s three tests: their fixture files were deleted by an
+  unrelated commit (`e4bffd8e`, ~200K lines, no archive path named in its
+  own commit message) -- needs a stakeholder call (restore vs. rewrite the
+  tests), not a triage fix.
+- `clasi/issues/later/otos-live-config-push-does-not-converge-in-sim.md` --
+  `test_otos_calibration_convergence.py`: a pushed, acked OTOS
+  compensating-scale config does not measurably converge the decoded
+  reading back to truth in sim. Leading (unconfirmed) hypothesis: a
+  sim-fidelity gap in `OtosPlant`'s burst-read packing, not a firmware
+  defect.
+- `clasi/issues/later/app-preamble-and-devices-otos-harness-scenario-failures.md`
+  -- `src/tests/sim`'s two harness tests (`test_app_preamble.py`,
+  `test_devices_otos.py`): both compile clean; both fail at RUNTIME
+  (compiled-binary scenario assertions), long-documented pre-existing,
+  unrelated to sprint 135/136.
+- Everything else already carried a tracked issue before this ticket
+  (`B-rotation-calibration-vs-live-heading-hold-gain.md`,
+  `chain-advance-reset-defeats-same-axis-compatible-leg-continuity.md`,
+  and the two permanently-disabled-`goto_btn`/`origin_btn`/fused-pose
+  `xfail`s dating to sprint 097/098's binary-plane gating) -- only made
+  strict here, reasons otherwise unchanged except where a cross-referenced
+  issue had itself moved (`land-at-zero-at-orthogonal-chain-boundaries.md`
+  closed at sprint 121; `test_tour_closure_gate.py`'s two reason strings
+  that cited it now point at the still-live tracking issue above instead).
+
 # tests/ — three test domains (sprint 077 greenfield rebuild)
 
 This tree was rebuilt from scratch alongside `src/firm/` (sprint 077's

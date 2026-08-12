@@ -165,7 +165,7 @@ def test_encoder_trace_grows_with_forward_drive_via_dead_reckoning(
            "reckoning above), otos/fused have no equivalent host-side "
            "fallback -- there is no raw sensor field to dead-reckon them "
            "from; they genuinely need sprint 098's fused-pose wiring.",
-    strict=False,
+    strict=True,
 )
 def test_otos_fused_traces_still_flat_pending_098(transport: SimTransport) -> None:
     """``otos``/``fused`` traces do NOT grow yet -- still pending sprint 098.
