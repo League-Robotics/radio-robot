@@ -388,7 +388,7 @@ msg::Navigator defaultNavigatorGroup() {
     cfg.turn_first_angle = 0.8726646f;          // [rad]
     cfg.approach_radius = 0.0f;           // [mm]
     cfg.approach_speed = 0.0f;             // [mm/s]
-    cfg.default_arrival_tolerance = 100.0f;  // [mm]
+    cfg.default_arrival_tolerance = 10.0f;  // [mm]
     cfg.yaw_sign = -1.0f;
     return cfg;
 }
