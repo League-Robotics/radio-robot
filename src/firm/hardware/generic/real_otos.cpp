@@ -107,9 +107,9 @@ void RealOtos::tick(uint64_t nowUs)
     float yF = static_cast<float>(ry) * kPosMmPerLsb;    // [mm]
     float hF = static_cast<float>(rh) * kHdgRadPerLsb;   // [rad]
 
-    float vxF = static_cast<float>(rvx) * kPosMmPerLsb;    // [mm/s]
-    float vyF = static_cast<float>(rvy) * kPosMmPerLsb;    // [mm/s]
-    float whF = static_cast<float>(rvh) * kHdgRadPerLsb;   // [rad/s]
+    float vxF = static_cast<float>(rvx) * kVelocityPerLsb;  // [mm/s]
+    float vyF = static_cast<float>(rvy) * kVelocityPerLsb;  // [mm/s]
+    float whF = static_cast<float>(rvh) * kOmegaPerLsb;     // [rad/s]
 
     float ang = -config_.offsetYaw;
     float c = cosf(ang);

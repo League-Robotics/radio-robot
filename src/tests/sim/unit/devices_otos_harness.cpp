@@ -96,6 +96,17 @@ constexpr uint16_t kWireAddr = static_cast<uint16_t>(kAddr7 << 1);        // 0x2
 constexpr float kPosMmPerLsb = 0.305f;
 constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);
 
+// The velocity registers carry their OWN full-scale ranges (5 m/s linear,
+// 34.9 rad/s angular) rather than the position ones (10 m, pi rad) -- see
+// real_otos.h. Restated here per the same duplication convention as above.
+// These MUST stay distinct from the position constants: this harness used to
+// derive its velocity expectations from kPosMmPerLsb, which made the check
+// tautological (it asserted the driver did whatever the driver did) and let a
+// 2x linear / 11.1x angular decode error live in the driver unnoticed until
+// it was measured on hardware 2026-08-13.
+constexpr float kVelocityPerLsb = 5000.0f / 32768.0f;   // [mm/s/LSB]
+constexpr float kOmegaPerLsb = 34.9f / 32768.0f;        // [rad/s/LSB]
+
 // kReadPeriod duplicated from otos.h's private constant -- this file's own
 // established convention for restating a private leaf constant (matches
 // otos_odometer_harness.cpp's identical kReadPeriodMs precedent).
@@ -330,9 +341,9 @@ void scenarioTickLeverArmOnlyTransform() {
   checkNear(pose.y, expectedCentreY, 1e-2f, "pose().y matches testSensorToCentre()");
   checkNear(pose.heading, hF, 1e-5f, "pose().heading passes the raw heading through unmodified");
 
-  float vxF = static_cast<float>(kRvx) * kPosMmPerLsb;
-  float vyF = static_cast<float>(kRvy) * kPosMmPerLsb;
-  float whF = static_cast<float>(kRvh) * kHdgRadPerLsb;
+  float vxF = static_cast<float>(kRvx) * kVelocityPerLsb;
+  float vyF = static_cast<float>(kRvy) * kVelocityPerLsb;
+  float whF = static_cast<float>(kRvh) * kOmegaPerLsb;
   checkNear(pose.v_x, vxF, 1e-3f, "twist.v_x is the scaled velocity-register X (no mount rotation)");
   checkNear(pose.v_y, vyF, 1e-3f, "twist.v_y is the scaled velocity-register Y (no mount rotation)");
   checkNear(pose.omega, whF, 1e-6f, "twist.omega passes through unmodified");

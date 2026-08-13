@@ -270,10 +270,14 @@ def test_default_planner_group_matches_tovez_json():
     # actually defends.
     assert f"cfg.control_period = {gbc._f(cfg['planner']['control_period'])};" in content
     assert f"cfg.actuation_delay = {gbc._f(cfg['planner']['actuation_delay'])};" in content
-    # tovez.json's own planner.heading_hold_gain is 0.0 (130-011 zeroed the
-    # limit-cycle-prone gain) -- NOT the stale 2.0 the three pre-existing
-    # test_gen_boot_config_planner.py failures still expect.
-    assert "cfg.heading_hold_gain = 0.0f;" in content
+    # Derived from the JSON, not pinned to a literal -- this assertion used to
+    # hard-code 0.0f (130-011's zeroed gain), which contradicted this test's
+    # own stated property two comments up ("the generator faithfully emits what
+    # the JSON says") and turned a deliberate re-tune into a test failure. The
+    # value moved 0.0 -> 1.0 on 2026-08-13 when heading hold was re-enabled on
+    # the OTOS; see tovez.json's planner._settle_note for why 130-011's
+    # zeroing rationale no longer applies.
+    assert f"cfg.heading_hold_gain = {gbc._f(cfg['planner']['heading_hold_gain'])};" in content
     assert "cfg.decel_plan_fraction = 0.4f;" in content
     # 134-003 terminal fine-align. align_tol is RADIANS -- 0.017453 rad is
     # the bench report's 1.0 DEGREE operating point, converted once in

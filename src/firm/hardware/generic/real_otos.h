@@ -96,6 +96,21 @@ class RealOtos : public Hal::Otos {
   static constexpr float kPosMmPerLsb = 0.305f;                             // [mm/LSB]
   static constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);  // [rad/LSB]
 
+  // The VELOCITY registers have their own full-scale ranges -- they are NOT
+  // the position ones. All four quantities share the same int16 span, but
+  // position covers 10 m and heading pi rad, while linear velocity covers
+  // 5 m/s and angular velocity 34.9 rad/s (2000 deg/s). Decoding velocity
+  // with the POSITION constants (what this driver did until 2026-08-13)
+  // therefore reads linear velocity 2x HIGH and angular velocity 11.1x LOW.
+  //
+  // MEASURED on tovez against overhead-camera truth rather than taken from
+  // the datasheet: a 400 mm leg at a commanded 140 mm/s (camera-confirmed
+  // 401.3 mm travelled) reported 279.0 mm/s, ratio 1.993; a pivot commanded
+  // at 1.2 rad/s reported 0.1100 rad/s, ratio 0.0917 (implied 10.91x). Those
+  // match 0.305/0.15259 = 1.999 and 34.9/pi = 11.11.
+  static constexpr float kVelocityPerLsb = 5000.0f / 32768.0f;   // [mm/s/LSB]
+  static constexpr float kOmegaPerLsb = 34.9f / 32768.0f;        // [rad/s/LSB]
+
   static constexpr uint32_t kBusClearance = 4000;  // [us]
 
   static constexpr uint64_t kReadPeriod = 20000;  // [us]
