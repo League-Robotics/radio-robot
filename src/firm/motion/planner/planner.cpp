@@ -1619,7 +1619,23 @@ void Planner::planActive(uint32_t now, float dt, const Measurement& measured) {
     case Move::Kind::Distance:
     case Move::Kind::Angle: {
       planWheels(dt, measured);
-      if (m.kind == Move::Kind::Distance) applyHeadingHold();
+      // Heading hold applies only to a Distance move that commands NO
+      // rotation. An arc -- omega != 0 on a Twist, or unequal wheel speeds
+      // on a Wheels move -- is a move whose own plan says the heading SHOULD
+      // change; holding the ACTIVATION heading through it cancels exactly
+      // the curvature the caller asked for. Motion::Navigator steers by
+      // issuing precisely such arcs, so an ungated hold silently disables
+      // GO_TO steering altogether.
+      //
+      // MEASURED in sim at headingHoldGain = 1.0, ungated: the streamed
+      // GO_TO scenario drove straight down y = 0 to x = 1129 and never
+      // steered toward ANY waypoint's y (targets were y = 0/30/60/90),
+      // stalling 119.8 mm from the final target; WORLD_GOTO's own arrival
+      // error went 17.7 mm -> 49.0 mm. Both recover with this gate.
+      const bool commandsRotation =
+          (m.velocityKind == Move::VelocityKind::Twist) ? (m.omega != 0.0f)
+                                                        : (m.vLeft != m.vRight);
+      if (m.kind == Move::Kind::Distance && !commandsRotation) applyHeadingHold();
       break;
     }
     case Move::Kind::Time: {
