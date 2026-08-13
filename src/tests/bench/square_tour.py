@@ -451,7 +451,8 @@ class SimBackend(_Backend):
 class HardwareBackend(_Backend):
     label = "hardware"
 
-    def __init__(self, port: str, robot_json: "str | pathlib.Path") -> None:
+    def __init__(self, port: str, robot_json: "str | pathlib.Path",
+                 stall: "bool | None" = None) -> None:
         import json
 
         from robot_radio.config.robot_config import load_robot_config
@@ -487,6 +488,9 @@ class HardwareBackend(_Backend):
         time.sleep(BOOT_WAIT)
         self.proto.read_pending_binary_tlm_frames()  # discard the boot burst
 
+        if stall is False:
+            self._disableStall()
+
         # kAuto (the default emit policy) keeps a parked real robot SILENT
         # until something moves it or asks explicitly -- force streaming-
         # always now, before ANY mode's first telemetry read, rather than
@@ -500,6 +504,49 @@ class HardwareBackend(_Backend):
         self.enableTelemetry()
 
     geofence = None
+
+    def _disableStall(self) -> None:
+        """Zero the wheel-control stall detector for THIS session (`--no-stall`).
+
+        Why a run needs this: the stall detector's primary test is the OTOS,
+        not the encoders (`Control::DifferentialDrive::updateStall()`), because
+        on a slippery surface a blocked robot's wheels still turn. **On a
+        stand that test inverts.** The wheels spin freely while the body never
+        moves, so `bodyStill` is true the whole time and any segment demanding
+        more than `stall_demand` latches a stall after `stall_window` and the
+        loop halts the robot.
+
+        The symptom is NOT "stalled" anywhere in the output -- it is every
+        segment's completion ack never arriving, which reads as a comms or
+        firmware fault. Measured 2026-08-13 on `tovez`: stock tour on a stand
+        timed out all 8 segments and reported 327/2000 mm; with the detector
+        zeroed the same tour completed every segment at 2007/2000 mm.
+
+        RAM-only, so it lasts exactly as long as this connection: opening the
+        port resets the robot and the baked values come back. That is also why
+        pushing it from a separate process before the run does not work.
+
+        Read back rather than trusting the ack -- config that acks OK and lands
+        nowhere is a live failure mode in this codebase
+        (`.claude/rules/configuration-discipline.md`).
+        """
+        from robot_radio.robot.pb2 import robot_config_pb2 as rc
+
+        try:
+            self.proto.tlmNow()
+            time.sleep(0.5)
+            self.proto.set_config(**{"stall.speed": 0.0, "stall.demand": 0.0,
+                                     "stall.window": 0.0})
+            time.sleep(1.5)
+            wc = self.proto.get_config(rc.WHEEL_CONTROL)
+            print(f"stall detector DISABLED for this run -- read back "
+                  f"speed={wc.stall_speed} demand={wc.stall_demand} "
+                  f"window={wc.stall_window}")
+            if (wc.stall_speed, wc.stall_demand, wc.stall_window) != (0.0, 0.0, 0.0):
+                print("  !! read-back is NOT zero -- the push did not land; "
+                      "expect stall halts on a stand")
+        except Exception as exc:
+            print(f"  !! stall disable FAILED ({exc}) -- expect stall halts on a stand")
 
     def enableTelemetry(self) -> None:
         """See `_Backend.enableTelemetry()`'s own docstring for why this
@@ -1920,6 +1967,15 @@ def main() -> int:
                    help="[deg] fail if total heading change is farther than this from 360")
     p.add_argument("--no-geofence", action="store_true",
                    help="DISABLE the camera geofence. Do not use on the playfield.")
+    p.add_argument("--no-stall", action="store_true",
+                   help="zero the wheel-control stall detector for this run "
+                        "(hardware only). REQUIRED ON A STAND: the detector's "
+                        "primary test is the OTOS, so wheels-spinning/body-still "
+                        "latches a stall and halts every segment -- which shows "
+                        "up as completion acks never arriving, not as the word "
+                        "'stall'. RAM-only, so it lasts one connection. Leave it "
+                        "ON for floor/playfield runs, where it is the thing that "
+                        "stops a jammed robot.")
     p.add_argument("--geofence-margin", type=float, default=12.0,
                    help="[cm] halt this close to the field edge (default 10)")
     p.add_argument("--leg-mode", choices=("move", "wheels"), default="move",
@@ -1975,7 +2031,8 @@ def main() -> int:
 
     backend: _Backend = (
         SimBackend(args.robot_json, realTime=(args.mode == "goto")) if args.sim
-        else HardwareBackend(args.port, args.robot_json))
+        else HardwareBackend(args.port, args.robot_json,
+                             stall=not args.no_stall))
     if not args.sim and not args.no_geofence:
         checkPlayfieldLights()
         backend.geofence = Geofence(backend.proto, margin=args.geofence_margin)
