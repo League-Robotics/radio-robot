@@ -183,7 +183,7 @@ PlannerBootConfig defaultPlannerLimits() {
     cfg.settleRestOmega = 0.16f;          // [rad/s]
     cfg.settleEpsilonLinear = 4.0f;  // [mm]
     cfg.settleEpsilonAngular = 0.035f;  // [rad]
-    cfg.headingHoldGain = 0.0f;  // [1/s]
+    cfg.headingHoldGain = 1.0f;  // [1/s]
 
     cfg.decelPlanFraction = 0.4f;  // [1]
 
@@ -323,7 +323,7 @@ msg::Planner defaultPlannerGroup() {
     cfg.settle_rest_omega = 0.16f;          // [rad/s]
     cfg.settle_epsilon_linear = 4.0f;  // [mm]
     cfg.settle_epsilon_angular = 0.035f;  // [rad]
-    cfg.heading_hold_gain = 0.0f;   // [1/s]
+    cfg.heading_hold_gain = 1.0f;   // [1/s]
     cfg.decel_plan_fraction = 0.4f;  // [1]
     cfg.align_tol = 0.017453f;  // [rad]
     cfg.align_max_nudges = 6;
