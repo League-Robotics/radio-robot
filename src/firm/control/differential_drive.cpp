@@ -336,7 +336,24 @@ void DifferentialDrive::tick(const Types::RobotState& state) {
   const bool otosBelievable =
       state.otos.present && state.otos.connected &&
       sampleAge(state.time.cycleStart, state.otos.sampleTime) <= kMaxSampleAge;
-  const bool bodyStill = std::fabs(state.otos.v_x) <= bounds_.stallSpeed &&
+  // SPEED MAGNITUDE, not v_x. The OTOS reports its linear velocity in the
+  // WORLD frame, not the body frame, so v_x is the world-x COMPONENT of the
+  // robot's motion -- it collapses to ~0 whenever the robot drives north or
+  // south, no matter how fast it is going. Testing v_x alone therefore made
+  // this detector heading-dependent: it fired constantly on a robot driving
+  // along world-y and never on the same robot driving along world-x.
+  //
+  // MEASURED on tovez at a commanded 140 mm/s, camera-confirmed motion:
+  //   heading +150.3 deg -> |v_x| 117.6, |v_y|  71.4, speed 137.2 mm/s
+  //   heading -119.4 deg -> |v_x|  74.8, |v_y| 111.2, speed 134.0 mm/s
+  // Both speeds correct; each COMPONENT swings from 75 to 118 purely with
+  // heading, and against stallSpeed = 15 the v_x test latched on 71% of
+  // moving samples. Symptoms: a 400 mm leg travelling 75 mm with STALL_L/R
+  // set, 300 mm arcs stopping at 44-95 mm, and GO_TO legs freezing mid-route
+  // pointing straight at their target.
+  const float bodySpeed =
+      std::sqrt(state.otos.v_x * state.otos.v_x + state.otos.v_y * state.otos.v_y);
+  const bool bodyStill = bodySpeed <= bounds_.stallSpeed &&
                          std::fabs(state.otos.omega) * halfTrack <= bounds_.stallSpeed;
 
   // Gate on the RAW cmdVelocity, not the post-floor speed*: applySpeedFloor()
