@@ -125,7 +125,7 @@ OtosBootConfig defaultOtosBootConfig() {
     cfg.offsetY = 3.5f;        // [mm]
     cfg.offsetYaw = -0.077f;    // [rad]
     cfg.linearScale = 1.0f;
-    cfg.angularScale = 0.987f;
+    cfg.angularScale = 0.9908f;
     return cfg;
 }
 
@@ -370,7 +370,7 @@ msg::Otos defaultOtosGroup() {
     cfg.offset_y = 3.5f;          // [mm]
     cfg.offset_yaw = -0.077f;      // [rad]
     cfg.linear_scale = 1.0f;
-    cfg.angular_scale = 0.987f;
+    cfg.angular_scale = 0.9908f;
     return cfg;
 }
 

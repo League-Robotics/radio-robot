@@ -146,7 +146,7 @@
     "offset_y": 3.5,
     "offset_yaw": -0.0770,
     "linear_scale": 1.0,
-    "angular_scale": 0.987,
+    "angular_scale": 0.9908,
     "_ekf_r_otos_theta": 0.01,
     "_otos_linear_scale_note": "2026-08-05, TAPE-measured on the playfield, robot untethered (battery + gauti). Supersedes the 2026-07-30 (126-003) value of 1.0275, which was camera-anchored and is therefore invalid: the overhead camera overstates the ROBOT's displacement by ~11-12% because tag 100 sits 12cm above the playfield plane (registered z_cm=12.0) and the height correction is not landing -- flat tags 12/14/15/16 on the same field read true to ~1cm, so it is the elevated tag only, not the playfield calibration. Method: linear_scale pushed to 1.0 (verified by read-back), world pose seeded from the camera, one 1000mm leg, then a human tape measure chord start-to-end. Raw OTOS read 971.7mm against 990mm of tape => 990/971.7 = 1.0188. Verified on two further legs, opposite directions: 900mm commanded read 895.0mm, and a repeat 1000mm leg read 992.0mm against 990mm of tape (+0.2%, inside the tape's own reading precision). The camera read 1109.7 / 1000.7 / 1110.0mm on those same three legs -- precise to 0.3mm on a repeat, but biased +12%, which is what a geometric height error looks like as opposed to noise. NOTE this also falsifies the long-standing 'robot over-delivers distance 1.10-1.14x' finding: the planner delivers 1000mm as 990mm (1%), and the over-delivery was the camera all along."
   },
