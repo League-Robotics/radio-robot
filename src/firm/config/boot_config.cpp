@@ -77,8 +77,8 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
     // was calibration.mm_per_wheel_deg_{left,right} before the
     // grouped-shape migration) for the drive-pair ports (ports
     // 1/2); other ports use the bench placeholder.
-    out[0].setTravelCalib(0.7165f);   // [mm/deg] port 1
-    out[1].setTravelCalib(0.7077f);   // [mm/deg] port 2
+    out[0].setTravelCalib(0.7885f);   // [mm/deg] port 1
+    out[1].setTravelCalib(0.7789f);   // [mm/deg] port 2
     out[2].setTravelCalib(0.487f);   // [mm/deg] port 3
     out[3].setTravelCalib(0.487f);   // [mm/deg] port 4
 
@@ -123,8 +123,8 @@ OtosBootConfig defaultOtosBootConfig() {
     OtosBootConfig cfg;
     cfg.offsetX = -47.7f;        // [mm]
     cfg.offsetY = 3.5f;        // [mm]
-    cfg.offsetYaw = 0.0f;    // [rad]
-    cfg.linearScale = 1.0188f;
+    cfg.offsetYaw = -0.077f;    // [rad]
+    cfg.linearScale = 1.0f;
     cfg.angularScale = 0.987f;
     return cfg;
 }
@@ -245,8 +245,8 @@ msg::Motors defaultMotorsGroup() {
     // what boot_wiring.cpp actually reads to bind motorL_/motorR_.
     cfg.left_port = 2;
     cfg.right_port = 1;
-    cfg.travel_calib_left = 0.7077f;    // [mm/deg]
-    cfg.travel_calib_right = 0.7165f;  // [mm/deg]
+    cfg.travel_calib_left = 0.7789f;    // [mm/deg]
+    cfg.travel_calib_right = 0.7885f;  // [mm/deg]
     cfg.fwd_sign_left = -1;
     cfg.fwd_sign_right = 1;
     cfg.output_deadband = 0.03f;         // [-1,1] fraction
@@ -368,8 +368,8 @@ msg::Otos defaultOtosGroup() {
     msg::Otos cfg;
     cfg.offset_x = -47.7f;          // [mm]
     cfg.offset_y = 3.5f;          // [mm]
-    cfg.offset_yaw = 0.0f;      // [rad]
-    cfg.linear_scale = 1.0188f;
+    cfg.offset_yaw = -0.077f;      // [rad]
+    cfg.linear_scale = 1.0f;
     cfg.angular_scale = 0.987f;
     return cfg;
 }
