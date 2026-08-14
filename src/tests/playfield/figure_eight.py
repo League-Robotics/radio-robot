@@ -242,18 +242,19 @@ def main():
         R=sum(rs)/len(rs)
         return cx, cy, R*10.0, (sum((r-R)**2 for r in rs)/len(rs))**0.5*10.0
 
-    tr = [(t, x, y) for (t, x, y, _, _) in track]
-    if tr:
-        late = [q for q in tr if q[0] > 0.35 * tr[-1][0]]
-        cross = min(late, key=lambda q: math.hypot(q[1]-s[0], q[2]-s[1]))[0] if late else None
-        lobeA = [(x, y) for (t, x, y) in tr if cross and t < cross]
-        lobeB = [(x, y) for (t, x, y) in tr if cross and t >= cross]
-        for nm, pts in (("lobe A", lobeA), ("lobe B", lobeB)):
-            f = fit_circle(pts)
-            if f:
-                cx, cy, R, rms = f
-                print(f"  {nm}: fitted R {R:6.1f} mm (commanded {args.radius:.0f}, "
-                      f"ratio {R/args.radius:.3f}), fit rms {rms:.1f} mm, {len(pts)} pts")
+    # Split the lobes by SIDE of the crossing, not by time. A time split
+    # depends on guessing when the crossing happened and produced garbage fits
+    # (one lobe fitted R = 0.4 mm at rms 106 mm -- points from both lobes in
+    # one set have no common circle).
+    left  = [(x, y) for (_, x, y, _, _) in track if x < s[0]]
+    right = [(x, y) for (_, x, y, _, _) in track if x >= s[0]]
+    for nm, pts in (("left lobe ", left), ("right lobe", right)):
+        f = fit_circle(pts)
+        if f:
+            cx, cy, R, rms = f
+            flag = "" if rms < 15 else "   (poor fit)"
+            print(f"  {nm}: fitted R {R:6.1f} mm (commanded {args.radius:.0f}, "
+                  f"ratio {R/args.radius:.3f}), rms {rms:4.1f} mm, {len(pts)} pts{flag}")
 
     import matplotlib
     matplotlib.use("Agg")

@@ -95,8 +95,8 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
 
 msg::DrivetrainConfig defaultDrivetrainConfig() {
     msg::DrivetrainConfig cfg;
-    cfg.setTrackwidth(107.5f);   // [mm] baked from robot geometry
-    cfg.setRotationalSlip(0.9371f);   // scrub: actual/ideal rotation, 0 = uncalibrated
+    cfg.setTrackwidth(115.0f);   // [mm] baked from robot geometry
+    cfg.setRotationalSlip(1.0f);   // scrub: actual/ideal rotation, 0 = uncalibrated
     // Turn calibration: actual = gain*commanded + offset[deg], per direction.
     cfg.setRotationGainPos(1.061f);
     cfg.setRotationOffset(-5.54f);
@@ -218,8 +218,8 @@ msg::Geometry defaultGeometryGroup() {
     // trackwidth_for_config()/rotational_slip_for_config()/
     // rotation_calibration_for_config() above.
     msg::Geometry cfg;
-    cfg.trackwidth = 107.5f;                  // [mm]
-    cfg.rotational_slip = 0.9371f;                // scrub: actual/ideal rotation, 0 = uncalibrated
+    cfg.trackwidth = 115.0f;                  // [mm]
+    cfg.rotational_slip = 1.0f;                // scrub: actual/ideal rotation, 0 = uncalibrated
     cfg.rotation_gain_pos = 1.061f;
     cfg.rotation_offset = -5.54f;              // [deg]
     cfg.rotation_gain_neg = 1.071f;
