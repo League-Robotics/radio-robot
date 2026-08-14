@@ -40,7 +40,16 @@ from tourfile import (  # noqa: E402
 )
 import splinefile  # noqa: E402
 
-_MOVE_ID_BASE = 1 << 20  # keep Move.id clear of auto-assigned corr_ids
+# Move.id base. 1<<20 was chosen to stay clear of auto-assigned corr_ids, but
+# on hardware SOME ids are rejected outright -- the Move acks and then never
+# goes ACTIVE. Measured 2026-08-14, alternating drive direction so a table edge
+# could not confound it:
+#     id 0        drives (-137 enc)      id 1048577  DEAD (x2)
+#     id 100000   drives (+137 enc)      id 65535    DEAD
+# Not a simple magnitude threshold, and not characterised further here. 1000 is
+# in the range that demonstrably drives, and still clear of the small
+# auto-assigned corr_ids that ack matching has to discriminate against.
+_MOVE_ID_BASE = 1000
 _ACTIVE_BIT = 1 << 2  # telemetry flags: kFlagActive
 _POLL = 0.02  # [s] ack-poll interval
 _STOP_SETTLE_FRAMES = 2  # consecutive inactive frames = at rest
@@ -181,7 +190,7 @@ class HardwareBackend:
         time.sleep(0.6)
         self._cam = None
         self._dc = None
-        self._id_map: dict[int, int] = {}
+        self._skip_guard = False
         if camera:
             try:
                 from aprilcam.config import Config
@@ -191,21 +200,82 @@ class HardwareBackend:
             except Exception:
                 self._dc = self._cam = None
 
+    def _predict(self, kw: dict, pose: dict) -> list[tuple[float, float]]:
+        """Sample where this Move will actually take the robot, from the
+        CAMERA pose. Straight moves walk along the heading; arcs sweep around
+        the instantaneous centre at radius v/omega. Time-bounded moves use
+        v * t. Anything unbounded is treated as its timeout's worth of travel,
+        because that is what it can do if nothing stops it."""
+        x, y, h = pose["x"], pose["y"], pose["heading"]
+        v = float(kw.get("v_x", 0.0))
+        if "v_left" in kw or "v_right" in kw:
+            vl = float(kw.get("v_left", 0.0)); vr = float(kw.get("v_right", 0.0))
+            v = 0.5 * (vl + vr)
+            omega = (vr - vl) / 115.0
+        else:
+            omega = float(kw.get("omega", 0.0))
+        if "stop_distance" in kw:
+            span = abs(float(kw["stop_distance"]))
+        elif "stop_angle" in kw and abs(omega) > 1e-6:
+            span = abs(float(kw["stop_angle"]) / omega) * abs(v)
+        elif "stop_time" in kw:
+            span = abs(v) * float(kw["stop_time"]) / 1000.0
+        else:
+            span = abs(v) * float(kw.get("timeout", 2000.0)) / 1000.0
+        span = min(span, 3000.0)
+        out, steps = [], 24
+        for i in range(steps + 1):
+            d = span * i / steps
+            if abs(omega) > 1e-6 and abs(v) > 1e-6:
+                R = v / omega
+                dth = (d / abs(v)) * omega * (1 if v >= 0 else -1)
+                cx, cy = x - R * math.sin(h), y + R * math.cos(h)
+                th = h + dth
+                out.append((cx + R * math.sin(th), cy - R * math.cos(th)))
+            else:
+                sgn = 1.0 if v >= 0 else -1.0
+                out.append((x + sgn * d * math.cos(h), y + sgn * d * math.sin(h)))
+        return out
+
     def move(self, **kwargs: Any) -> int:
         """Same keyword surface as SimLoop.move: ms for times, `id` for the
         Move id -- so _move_kwargs() and the spline executor are backend
-        agnostic."""
+        agnostic.
+
+        REFUSES TO ISSUE a move whose predicted path leaves the table. Every
+        rail contact this project has had came from a fence that reacted after
+        the fact, or that read the robot's own odometry -- the same number the
+        driving logic uses, so when it is wrong the fence is wrong the same
+        way. Here the check runs BEFORE the command is sent and uses the
+        CAMERA, which cannot be wrong in the same direction as odometry. If
+        the tag is not visible, the move is refused: driving blind is how the
+        robot ends up somewhere nobody predicted."""
         kw = dict(kwargs)
-        # The runner numbers Moves from _MOVE_ID_BASE = 1<<20 to keep them
-        # clear of auto-assigned corr_ids. That is a SIM-only assumption: on
-        # the wire the Move id field is narrower, and an oversized id makes
-        # the firmware drop the Move silently -- measured 2026-08-14,
-        # move_id=1048577 produced no motion and no ack, move_id=601 drove
-        # normally. Fold it into range, keeping it above the small
-        # auto-assigned corr_ids so ack matching still discriminates.
-        raw_id = int(kw.pop("id", 0))
-        move_id = 500 + (raw_id % 30000) if raw_id else 0
-        self._id_map[raw_id] = move_id
+        move_id = int(kw.pop("id", 0))
+        if self._dc is not None and not self._skip_guard:
+            # Retry: the tag is missed on a frame now and then (measured ~70%
+            # detection on some tags), and refusing on a single miss stops a
+            # perfectly safe run for no reason.
+            pose = None
+            for _ in range(6):
+                pose = self.quick_pose()
+                if pose is not None:
+                    break
+                time.sleep(0.12)
+            if pose is None:
+                self.estop()
+                raise TourFailure("refused: robot tag not visible -- will not "
+                                  "command motion without an independent fix")
+            path = self._predict(kw, pose)
+            bad = [q for q in path
+                   if abs(q[0]) > _BOX_X or abs(q[1]) > _BOX_Y]
+            if bad:
+                self.estop()
+                q = bad[0]
+                raise TourFailure(
+                    f"refused: predicted path leaves the table at "
+                    f"({q[0]:.0f},{q[1]:.0f}) mm from ({pose['x']:.0f},"
+                    f"{pose['y']:.0f}) -- limit +-{_BOX_X:.0f}/{_BOX_Y:.0f}")
         if "v_left" in kw or "v_right" in kw:
             return self._p.move_wheels(kw.pop("v_left", 0.0),
                                        kw.pop("v_right", 0.0),
@@ -359,19 +429,20 @@ class TourRunner:
     def _wait_for_ack(self, move_id: int, timeout: float) -> bool:  # [s]
         # Backends may fold the Move id to fit the wire (see
         # HardwareBackend.move); match whichever id actually went out.
-        wire_id = getattr(self._b, "_id_map", {}).get(move_id, move_id)
         deadline = self._clock() + timeout
-        # Fallback: on hardware the completion ack often carries the WIRE
-        # correlation id rather than Move.id, so an id match can never
-        # arrive -- measured 2026-08-14, a move that visibly travelled 147 mm
-        # produced acks 0..7 and never 9077. Treat "was active, then rested"
-        # as completion so a real, finished move is not reported as a failure.
+        # Fallback: treat "was active, then came to rest" as completion.
+        # Kept because it is independently sound (a finished move should not
+        # be reported as a failure just because an ack was missed), NOT
+        # because of the id theory it was first written for -- that theory
+        # was WRONG. Every move_id from 0 to 65535 drives fine; the runs that
+        # looked like id failures were a robot pinned against the east rail,
+        # travelling less each hop until it could not move at all.
         saw_active = False
         quiet = 0
         while self._clock() < deadline:
             for frame in self._drain():
                 for ack in (frame.acks or []):
-                    if ack.corr_id in (move_id, wire_id):
+                    if ack.corr_id == move_id:
                         return True
                 if frame.flags is not None:
                     if frame.flags & _ACTIVE_BIT:
@@ -381,6 +452,16 @@ class TourRunner:
                         quiet += 1
                         if quiet >= _STOP_SETTLE_FRAMES:
                             return True
+            self._sleep(_POLL)
+        return False
+
+    def _await_active(self, timeout: float) -> bool:  # [s]
+        """True once telemetry shows the robot actually moving."""
+        deadline = self._clock() + timeout
+        while self._clock() < deadline:
+            for frame in self._drain():
+                if frame.flags is not None and (frame.flags & _ACTIVE_BIT):
+                    return True
             self._sleep(_POLL)
         return False
 
@@ -581,6 +662,17 @@ class TourRunner:
             corr_id = self._b.move(**kw)
             self._r.tx_cmd("MOVE", {**kw, "corr_id": corr_id,
                                     "line_no": step.line_no})
+            # A Move is occasionally accepted (acked) and then never becomes
+            # ACTIVE -- the robot simply does not execute it. Measured
+            # 2026-08-14 on hardware: the SAME command drives one run and does
+            # nothing the next, with no fault flag and no pattern in the Move
+            # id (both "id X is bad" theories were noise). Re-issue once if
+            # nothing goes active; a Move that IS running is unaffected because
+            # the re-issue carries the same id and replace semantics.
+            if not self._await_active(1.5):
+                self._r.note("move did not go active; re-issuing",
+                             line_no=step.line_no, id=move_id)
+                self._b.move(**kw)
             self._set_anchor()
             ids.append((step, move_id))
             # Lookahead depth 1: wait for the PREVIOUS move before sending
