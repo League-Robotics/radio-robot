@@ -24,7 +24,17 @@ FIELD_X, FIELD_Y = 67.15, 44.65    # [cm] physical half-extents
 BODY_R = 9.0                       # [cm] robot footprint radius, centre to corner
 STOP_DIST = 5.0                    # [cm] travel between a halt decision and rest
 MARGIN = 3.0                       # [cm] extra keep-out
-TAG = 100
+# Tag id from the robot config -- tovez moved 100 -> 52 (front-mounted) on
+# 2026-08-14; a literal here means every guard silently sees "no robot".
+def _tag_id(default=100):
+    try:
+        from robot_radio.config.robot_config import load_robot_config
+        return int(load_robot_config("data/robots/tovez.json").vision.robot_tag_id)
+    except Exception:
+        return default
+
+
+TAG = _tag_id()
 GRACE = 0.6                        # [s] tag-loss tolerance while moving
 TURN_FIRST = 0.8726646             # [rad] tovez.json navigator.turn_first_angle
 

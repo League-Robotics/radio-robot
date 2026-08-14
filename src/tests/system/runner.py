@@ -193,19 +193,71 @@ class HardwareBackend:
         # same connection (measured 2026-08-14: 4/4 commands, ~120 enc counts
         # each).
         time.sleep(1.5)
+        self._ensure_data_plane(port)
         self._p.tlmOn()
         time.sleep(0.8)
         self._cam = None
         self._dc = None
         self._skip_guard = False
+        # Tag id and its offset come from the ROBOT CONFIG, never a literal:
+        # tovez moved from tag 100 (centre-mounted) to tag 52 (front-mounted,
+        # 113 mm up) on 2026-08-14, and a hardcoded 100 silently reports "no
+        # tag" -- which the pre-move guard correctly turns into a refusal to
+        # drive, i.e. the whole suite stops with no obvious reason.
+        self._tag_id = 100
+        try:
+            from robot_radio.config.robot_config import load_robot_config
+            cfg = load_robot_config("data/robots/tovez.json")
+            self._tag_id = int(cfg.vision.robot_tag_id)
+            self._tag_cfg = cfg
+        except Exception:
+            self._tag_cfg = None
         if camera:
             try:
                 from aprilcam.config import Config
                 from aprilcam.client.control import DaemonControl
                 self._dc = DaemonControl.connect_default(Config.load())
                 self._cam = self._dc.list_cameras()[0]
+                # Register the mobile-tag offset FROM THE FILE so world_xy
+                # reports the robot's centre of rotation, not the raw tag.
+                # The daemon keeps no mobile-tag state across restarts.
+                if self._tag_cfg is not None:
+                    v = self._tag_cfg.vision
+                    already = {m["tag_id"] for m in self._dc.list_mobile_tags()}
+                    if self._tag_id not in already:
+                        self._dc.register_mobile_tag(
+                            self._tag_id, x_mm=v.tag_offset_x, y_mm=v.tag_offset_y,
+                            z_cm=v.tag_offset_z / 10.0, yaw_deg=v.tag_offset_yaw,
+                            owner=self._tag_cfg.identity.robot_name)
             except Exception:
                 self._dc = self._cam = None
+
+    def _ensure_data_plane(self, port: str) -> None:
+        """Make sure a RELAY is in its data plane before we send commands.
+
+        SerialConnection classifies the device from its HELLO banner, but with
+        the robot streaming telemetry on the same channel that banner is
+        routinely lost -- the connection then reports mode='direct' and never
+        runs _relay_handshake(). Commands go to the relay's CONTROL plane and
+        are silently discarded, while robot->host telemetry keeps flowing, so
+        every Move looks accepted and never executes. Whether a run worked
+        depended on whether some EARLIER !GO had left the relay latched in its
+        data plane -- which is the whole "intermittent move drop" this session
+        chased through bad Move ids, a dead twist path, boot races and a flat
+        battery.
+
+        Sending !GO again is harmless if it is already there.
+        """
+        if getattr(self._conn, "mode", "") == "relay":
+            return
+        try:
+            for cmd in ("!ECHO OFF", "!MODE RAW250", "!GO"):
+                self._conn.send_fast(cmd)
+                time.sleep(0.4)
+            time.sleep(0.6)
+            self._rec.note("relay data-plane handshake sent", port=port)
+        except Exception as exc:
+            self._rec.note("relay handshake failed", port=port, error=str(exc))
 
     def _predict(self, kw: dict, pose: dict) -> list[tuple[float, float]]:
         """Sample where this Move will actually take the robot, from the
@@ -333,7 +385,7 @@ class HardwareBackend:
                 tf = self._dc.get_tags(self._cam)
             except Exception:
                 return None
-            t = next((t for t in tf.tags if t.id == 100 and t.world_xy), None)
+            t = next((t for t in tf.tags if t.id == self._tag_id and t.world_xy), None)
             if t:
                 xs.append(t.world_xy[0]*10.0); ys.append(t.world_xy[1]*10.0)
                 ws.append(t.yaw)
@@ -375,7 +427,7 @@ class HardwareBackend:
             tf = self._dc.get_tags(self._cam)
         except Exception:
             return None
-        t = next((t for t in tf.tags if t.id == 100 and t.world_xy), None)
+        t = next((t for t in tf.tags if t.id == self._tag_id and t.world_xy), None)
         if not t:
             return None
         return {"x": t.world_xy[0]*10.0, "y": t.world_xy[1]*10.0,
