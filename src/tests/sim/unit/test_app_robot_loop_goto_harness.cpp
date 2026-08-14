@@ -3,7 +3,8 @@
 // Navigator-vs-Planner ownership dispatch, exercised end to end against the
 // REAL Core::RobotLoop graph (TestSim::SimHarness, composeRobot() -- the
 // SAME composition root main.cpp uses, baking data/robots/tovez.json's
-// real navigator block: yaw_sign=-1.0, align_tol/align_max_nudges, etc.).
+// real navigator block: yaw_sign=+1.0 since the 2026-08-13 convention
+// fix, align_tol/align_max_nudges, etc.).
 //
 // Landmine 1 (spurious ack(0) per internal segment) is proven here, not
 // merely asserted: every internal Navigator-issued segment carries

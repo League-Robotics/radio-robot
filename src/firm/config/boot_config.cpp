@@ -304,7 +304,7 @@ msg::WheelControl defaultWheelControlGroup() {
     cfg.pos_err_max = 10.0f;  // [mm]
     cfg.stall_speed = 15.0f;  // [mm/s]
     cfg.stall_demand = 40.0f;  // [mm/s]
-    cfg.stall_window = 500.0f;  // [ms]
+    cfg.stall_window = 0.0f;  // [ms]
     return cfg;
 }
 
