@@ -88,8 +88,13 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--speed", type=int, default=1,
                        help="sim speed factor (1..20); wall-clock dwells "
                             "and EXPECT timeouts do not scale")
-    p_run.add_argument("--port", default="/tmp/tovez-tty",
-                       help="serial port (bench/playfield tiers)")
+    p_run.add_argument("--port", default="/dev/cu.usbmodem214102",
+                       help="serial port for bench/playfield tiers. Default is "
+                            "the RELAY (RADIOBRIDGE): driving goes over the "
+                            "radio. The gauti USB tunnel is for FLASHING, not "
+                            "for driving -- take the port from mbdeploy list's "
+                            "ROLE column for this session only, port numbers "
+                            "move on every re-enumeration.")
     p_run.add_argument("--out", default="src/tests/system/out")
     p_run.set_defaults(fn=_cmd_run)
 

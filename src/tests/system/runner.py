@@ -185,9 +185,16 @@ class HardwareBackend:
         self._p = NezhaProtocol(self._conn)
         self._rec = recorder
         self._conn.connect()
-        time.sleep(1.0)
+        # 1.5 s, NOT the 6 s a boot-race theory once suggested. A long idle
+        # before TLM:ON lets the inbound buffer fill, and every Move issued
+        # afterwards is acked and then never executed -- the exact
+        # "acks but never goes ACTIVE" symptom, which this delay CAUSED rather
+        # than cured. With 1.5 s, wheels and twists both drive normally on the
+        # same connection (measured 2026-08-14: 4/4 commands, ~120 enc counts
+        # each).
+        time.sleep(1.5)
         self._p.tlmOn()
-        time.sleep(0.6)
+        time.sleep(0.8)
         self._cam = None
         self._dc = None
         self._skip_guard = False
