@@ -7,7 +7,8 @@ script of the moves (and checks) a system-test run performs. Grammar
     # comment                                blank lines ignored
     TWIST vx=150 [vy=0] [omega=45] (time=|dist=|angle=) [timeout=]
     WHEELS left=100 right=100 (time=|dist=|angle=) [timeout=]
-    SPLINE file=tag_tour.path.json [speed=150] [lookahead=150] [laps=1] [tol=120]
+    SPLINE file=tag_tour.path.json [speed=150] [lookahead=150] [laps=1]
+           [tol=120] [interval=0.12]
     STOP [dwell=1.0]
     DWELL 0.5
     DBG wedge left 1500
@@ -125,6 +126,7 @@ class SplineStep:
     lookahead: float = 150.0       # [mm]
     laps: int = 1
     tol: float = 120.0             # [mm] max allowed cross-track before failing
+    interval: float = 0.12         # [s] pure-pursuit re-issue period
 
 
 @dataclass(frozen=True)
@@ -323,13 +325,14 @@ def parse_tour_text(text: str, *, name: str, source: str = "<text>") -> Tour:
                 raise TourParseError(source, line_no, "SPLINE needs file=")
             kv = _parse_kv(source, line_no, numeric,
                            {"speed": None, "lookahead": None,
-                            "laps": None, "tol": None})
+                            "laps": None, "tol": None, "interval": None})
             steps.append(SplineStep(
                 line_no=line_no, path=path_val,
                 speed=float(kv.get("speed", 150.0)),
                 lookahead=float(kv.get("lookahead", 150.0)),
                 laps=int(kv.get("laps", 1)),
-                tol=float(kv.get("tol", 120.0))))
+                tol=float(kv.get("tol", 120.0)),
+                interval=float(kv.get("interval", 0.12))))
         elif verb == "CAMFIX":
             steps.append(_parse_camfix(source, line_no, rest))
         else:

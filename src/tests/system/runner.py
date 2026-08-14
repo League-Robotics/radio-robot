@@ -218,9 +218,23 @@ class HardwareBackend:
         return r
 
     def read_pending_frames(self) -> list:
-        return self._p.read_pending_binary_tlm_frames()
+        """Drain telemetry AND pump cleartext replies into the recorder.
+
+        Do NOT also drain cleartext lines here. Reading lines from the same
+        buffer STEALS bytes from the binary framing and the decode goes wrong:
+        measured 2026-08-14, odometry pose came back as (2879, 16887) mm and
+        the robot drove onto the north rail, on a path that had tracked to
+        72 mm minutes earlier. Cleartext replies are simply not recoverable
+        while binary telemetry streams."""
+        frames = self._p.read_pending_binary_tlm_frames()
+        for fr in frames:
+            self._rec.rx_tlm(fr)
+        return frames
 
     def send_line(self, line: str) -> None:
+        """Fire-and-forget. A cleartext REPLY cannot be recovered while
+        binary telemetry is streaming (see read_pending_frames), so tours that
+        need a liveness assertion on hardware use CAMFIX instead."""
         self._p.send_fast(line)
 
     def true_pose(self) -> dict | None:
@@ -240,7 +254,8 @@ class HardwareBackend:
         if not xs:
             return None
         med = lambda v: sorted(v)[len(v)//2]
-        return {"x": med(xs), "y": med(ys), "heading": ws[0]}
+        # "h" is the key _run_camfix reads; "heading" is kept for seeding.
+        return {"x": med(xs), "y": med(ys), "h": ws[0], "heading": ws[0]}
 
     def seed_from_camera(self) -> dict | None:
         """Put the robot's odometry into FIELD coordinates.
@@ -259,6 +274,25 @@ class HardwareBackend:
         self._rec.note("seed", x=round(pose["x"], 1), y=round(pose["y"], 1),
                        heading_deg=round(math.degrees(pose["heading"]), 2))
         return pose
+
+    def quick_pose(self) -> dict | None:
+        """ONE camera sample, no averaging -- for the in-loop fence.
+
+        true_pose() takes a median of 9 samples and blocks ~0.45 s. Calling
+        that every 0.5 s inside the pure-pursuit loop halved the control rate
+        and the robot never finished a lap (measured: 17 mm cross-track, 0/1
+        laps). A fence only needs to know roughly where the robot is."""
+        if not self._dc:
+            return None
+        try:
+            tf = self._dc.get_tags(self._cam)
+        except Exception:
+            return None
+        t = next((t for t in tf.tags if t.id == 100 and t.world_xy), None)
+        if not t:
+            return None
+        return {"x": t.world_xy[0]*10.0, "y": t.world_xy[1]*10.0,
+                "heading": t.yaw}
 
     def firmware_version(self) -> str:
         try:
@@ -376,7 +410,8 @@ class TourRunner:
         self._r.note("spline", path=step.path, points=n,
                      length_mm=round(sp.length(), 1),
                      min_radius_mm=round(sp.min_radius(), 1),
-                     speed=v, lookahead=L, laps=target_laps)
+                     speed=v, lookahead=L, laps=target_laps,
+                     interval=step.interval)
 
         pose = None
         deadline = self._clock() + (sp.length()*target_laps/max(v, 1.0))*3.0 + 30.0
@@ -395,6 +430,16 @@ class TourRunner:
         # tracked the path to 2 mm.
         advanced, worst = 0, 0.0
         laps = 0
+        cam_checked = 0.0
+        # Closure is measured against where THIS RUN started, not against a
+        # fixed coordinate: the robot may join a closed path anywhere along
+        # it, and pure pursuit then correctly returns to that join point. A
+        # CAMFIX on the path's first point fails by 593 mm for a lap that
+        # tracked to 43 mm -- it asserts staging, not driving.
+        start_fix = (self._b.quick_pose() if hasattr(self._b, "quick_pose")
+                     else None)
+        start_xy = ((start_fix["x"], start_fix["y"]) if start_fix
+                    else (pose[0], pose[1]))
         while self._clock() < deadline:
             pose = self._pose() or pose
             px, py, ph = pose
@@ -426,6 +471,28 @@ class TourRunner:
                 return StepResult(step.line_no, "spline", False,
                                   f"geofence: pose ({px:.0f},{py:.0f}) mm "
                                   f"outside +-{_BOX_X:.0f}/{_BOX_Y:.0f}")
+            # INDEPENDENT camera fence, ~2 Hz. The odometry check above shares
+            # its input with the follower, so a corrupted pose blinds both --
+            # which is exactly what put the robot on the north rail. The
+            # camera is the only source that cannot be wrong in the same way.
+            now = self._clock()
+            if now - cam_checked > 0.5 and hasattr(self._b, "quick_pose"):
+                cam_checked = now
+                tp = self._b.quick_pose()
+                if tp:
+                    if abs(tp["x"]) > _BOX_X or abs(tp["y"]) > _BOX_Y:
+                        self._b.estop()
+                        return StepResult(
+                            step.line_no, "spline", False,
+                            f"camera geofence: ({tp['x']:.0f},{tp['y']:.0f}) mm")
+                    # odometry vs camera divergence = the pose is not trustworthy
+                    drift = math.hypot(tp["x"]-px, tp["y"]-py)
+                    if drift > 400.0:
+                        self._b.estop()
+                        return StepResult(
+                            step.line_no, "spline", False,
+                            f"odometry/camera disagree by {drift:.0f} mm -- "
+                            f"pose untrustworthy, refusing to steer on it")
             # cross-track error against the NEAREST path point, for the gate
             near = min(range(n), key=lambda i: math.dist(pts[i], (px, py)))
             worst = max(worst, math.dist(pts[near], (px, py)))
@@ -445,20 +512,34 @@ class TourRunner:
             # A FRESH id per twist: reusing one id had the planner treat
             # every re-issue as the same Move, and the robot travelled 3 mm in
             # an entire run while 875 commands went out.
-            kw = dict(v_x=v, v_y=0.0, omega=omega, stop_time=350.0,
-                      timeout=2000.0, replace=True, id=self._next_move_id())
+            # stop_time must comfortably outlive the re-issue period,
+            # otherwise the Move expires between commands and the robot
+            # stutters. timeout is the safety backstop if the host goes quiet.
+            hold = max(0.35, step.interval * 2.5)
+            kw = dict(v_x=v, v_y=0.0, omega=omega, stop_time=hold*1000.0,
+                      timeout=max(2.0, hold*3.0)*1000.0,
+                      replace=True, id=self._next_move_id())
             self._b.move(**kw)
             self._r.tx_cmd("SPLINE_TWIST", {"v_x": v, "omega": round(omega, 4),
                                             "target": [round(tx,1), round(ty,1)],
                                             "pose": [round(px,1), round(py,1),
                                                      round(math.degrees(ph),1)],
                                             "line_no": step.line_no})
-            self._sleep(0.12)
+            self._sleep(step.interval)
         self._b.estop()
+        self._sleep(1.0)
+        end_fix = (self._b.quick_pose() if hasattr(self._b, "quick_pose")
+                   else None)
+        end_xy = ((end_fix["x"], end_fix["y"]) if end_fix
+                  else ((self._pose() or pose)[0], (self._pose() or pose)[1]))
+        closure = math.dist(start_xy, end_xy) if sp.closed else float("nan")
         ok = laps >= target_laps or (not sp.closed)
-        return StepResult(step.line_no, "spline", ok,
-                          f"laps {laps}/{target_laps}, worst cross-track "
-                          f"{worst:.0f} mm")
+        detail = (f"laps {laps}/{target_laps}, worst cross-track {worst:.0f} mm")
+        if sp.closed:
+            detail += f", closure {closure:.0f} mm"
+        self._r.note("spline_result", laps=laps, worst_cross_track_mm=round(worst, 1),
+                     closure_mm=None if math.isnan(closure) else round(closure, 1))
+        return StepResult(step.line_no, "spline", ok, detail)
 
     # -- step executors -------------------------------------------------
 

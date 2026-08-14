@@ -152,7 +152,7 @@ def parse_svg_path(d: str, per_curve: int = 40):
 
 
 def import_svg(svg_path: str | Path, name: str, *, fit: bool = True,
-               per_curve: int = 40) -> SplinePath:
+               per_curve: int = 40, fill: float | None = None) -> SplinePath:
     """Import the LONGEST path in an SVG, mapped into field coordinates.
 
     SVG is y-DOWN and in its own units, so the import flips y and (with
@@ -177,7 +177,11 @@ def import_svg(svg_path: str | Path, name: str, *, fit: bool = True,
         xs = [p[0] for p in pts]; ys = [p[1] for p in pts]
         cx, cy = (min(xs)+max(xs))/2, (min(ys)+max(ys))/2
         w, h = max(xs)-min(xs), max(ys)-min(ys)
-        s = min(2*BOX_X/w if w else 1e9, 2*BOX_Y/h if h else 1e9) * 0.92
+        # 0.78, not 0.92: the follower needs room for its own tracking error.
+        # At 0.92 the imported path reached y = -356 mm against a 386 mm fence
+        # and the camera geofence stopped the run 2 mm outside -- the path
+        # itself was legal but left less margin than the cross-track error.
+        s = min(2*BOX_X/w if w else 1e9, 2*BOX_Y/h if h else 1e9) * (fill or 0.78)
         pts = [((x-cx)*s, (y-cy)*s) for x, y in pts]
     return SplinePath(name=name, points=tuple(pts), closed=closed,
                       source=f"imported from {Path(svg_path).name}"
@@ -185,7 +189,8 @@ def import_svg(svg_path: str | Path, name: str, *, fit: bool = True,
 
 
 def _cmd_import(a):
-    sp = import_svg(a.svg, a.name, fit=a.fit, per_curve=a.per_curve)
+    sp = import_svg(a.svg, a.name, fit=a.fit, per_curve=a.per_curve,
+                    fill=a.fill)
     save(sp, a.out)
     _describe(sp, a.out)
     return 0
@@ -216,6 +221,8 @@ def main(argv=None):
     p.add_argument("--name", required=True)
     p.add_argument("--per-curve", type=int, default=40)
     p.add_argument("--fit", action="store_true", default=True)
+    p.add_argument("--fill", type=float, default=None,
+                   help="fraction of the drivable box to fill (default 0.78)")
     p.add_argument("--no-fit", dest="fit", action="store_false")
     p.set_defaults(fn=_cmd_import)
     p2 = sub.add_parser("info"); p2.add_argument("path"); p2.set_defaults(fn=_cmd_info)

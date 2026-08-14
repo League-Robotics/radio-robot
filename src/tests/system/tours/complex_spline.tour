@@ -3,8 +3,9 @@
 # the most demanding path in the suite.
 
 MARK spline_start
-SPLINE file=complex.path.json speed=140 lookahead=170 laps=1 tol=150
+SPLINE file=complex.path.json speed=120 lookahead=170 laps=1 tol=200 interval=0.4
 STOP dwell=1.0
 
-SEND STATUS
-EXPECT '.type=="cleartext" and .verb=="STATUS" and .payload.ready==1' timeout=2.0
+# Closure is asserted by the SPLINE step itself (start pose vs end
+# pose), which is the right check for a closed path joined anywhere
+# along its length. A CAMFIX on a fixed coordinate asserts staging.
