@@ -14,12 +14,13 @@
     "_i2c_addresses": {}
   },
   "vision": {
-    "robot_tag_id": 100,
+    "robot_tag_id": 52,
     "camera_distance_scale": 1.0022,
-    "tag_offset_x": 0,
-    "tag_offset_y": 0.0,
-    "tag_offset_z": 120.0,
-    "tag_offset_yaw": 0.0
+    "tag_offset_x": 50.2,
+    "tag_offset_y": -0.5,
+    "tag_offset_z": 113.0,
+    "tag_offset_yaw": 0.0,
+    "_tag_note": "2026-08-14: tovez re-tagged from 100 to 52, tag moved to the FRONT of the robot and 113 mm off the deck. offset MEASURED, not guessed: park the robot over tag 1, read the tag pose, rotate 180 deg in place, read again. The centre of rotation is the MIDPOINT of the two readings and the lever arm is half their separation, so the method calibrates itself and needs no ruler. Measured rotation 179.99 deg; centre landed at (+1.6,-1.3) mm i.e. on tag 1, confirming placement; lever arm 50.21 mm. Sign convention VERIFIED by A/B rather than assumed: with x_mm=+50.21 the reported centre moves 9.5 mm through a 180 deg reversal, with x_mm=-50.21 it moves 196.7 mm. tag_offset_x is the tag position relative to the centre of rotation, +x forward. NOTE the camera daemon keeps no mobile-tag state across restarts, so this must be re-registered each session (register_mobile_tag(52, x_mm, y_mm, z_cm, yaw_deg)) -- these fields are the source of truth for that call."
   },
   "geometry": {
     "trackwidth": 115,

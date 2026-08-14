@@ -273,12 +273,16 @@ def ensure_mobile_tag_registered(dc, tag_id: int) -> None:
         print(f"  WARN: no active robot config -- cannot auto-register tag {tag_id} "
               f"as mobile; world_xy will report the raw tag, not the robot centre")
         return
-    offset = cfg.vision.tag_offset_mm
-    dc.register_mobile_tag(tag_id, x_mm=offset.x, y_mm=offset.y,
-                           z_cm=offset.z / 10.0, yaw_deg=math.degrees(offset.yaw_rad),
+    # vision.tag_offset_x/y/z/yaw -- there is no nested `tag_offset_mm`
+    # object. This read `cfg.vision.tag_offset_mm` and raised AttributeError
+    # every time, so the ONLY consumer of these config fields was broken and
+    # the file's measured tag geometry never reached the camera daemon.
+    v = cfg.vision
+    dc.register_mobile_tag(tag_id, x_mm=v.tag_offset_x, y_mm=v.tag_offset_y,
+                           z_cm=v.tag_offset_z / 10.0, yaw_deg=v.tag_offset_yaw,
                            owner=cfg.identity.robot_name)
     print(f"  registered tag {tag_id} as mobile (owner={cfg.identity.robot_name!r}, "
-          f"offset x={offset.x}mm y={offset.y}mm z={offset.z}mm)")
+          f"offset x={v.tag_offset_x}mm y={v.tag_offset_y}mm z={v.tag_offset_z}mm)")
 
 
 def read_cam_pose(dc, cam, tag_id: int, timeout_s: float = 2.0,
