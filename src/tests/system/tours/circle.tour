@@ -1,9 +1,17 @@
-# The circle tour: one full CCW circle of radius ~250 mm, driven as an arc
-# twist (v = omega * r). Gated behind the square's closure by the runner.
-# 150 mm/s at 0.6 rad/s -> r = 250 mm; a full turn is 2*pi rad = 360 deg.
+# The circle tour: one full CCW circle, driven as an arc twist (v = omega*r).
+#
+# PLAYFIELD SIZING (2026-08-14). The original radius was 250 mm, which does
+# not fit: driven CCW from the field centre the circle's centre sits at
+# y = +250 and its top reaches y = +500 mm, against a 386 mm limit for the
+# robot centre. Measured on hardware -- the run drove the robot to
+# (182, 376) mm and the next tour then failed against the north rail.
+#
+# r = 150 mm puts the top of the circle at y = +300 mm, ~85 mm inside the
+# limit, which exceeds the measured closure error so a normal run stays clear.
+# 150 mm/s at 57.3 deg/s -> r = 150 mm; a full turn is 360 deg.
 
 MARK circle
-TWIST vx=150 omega=34.4 angle=360 timeout=30
+TWIST vx=150 omega=57.3 angle=360 timeout=30
 STOP dwell=0.5
 
-CAMFIX x=0 y=0 radius=100
+CAMFIX x=0 y=0 radius=150

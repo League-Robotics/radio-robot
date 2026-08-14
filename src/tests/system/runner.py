@@ -181,6 +181,7 @@ class HardwareBackend:
         time.sleep(0.6)
         self._cam = None
         self._dc = None
+        self._id_map: dict[int, int] = {}
         if camera:
             try:
                 from aprilcam.config import Config
@@ -195,7 +196,16 @@ class HardwareBackend:
         Move id -- so _move_kwargs() and the spline executor are backend
         agnostic."""
         kw = dict(kwargs)
-        move_id = kw.pop("id", 0)
+        # The runner numbers Moves from _MOVE_ID_BASE = 1<<20 to keep them
+        # clear of auto-assigned corr_ids. That is a SIM-only assumption: on
+        # the wire the Move id field is narrower, and an oversized id makes
+        # the firmware drop the Move silently -- measured 2026-08-14,
+        # move_id=1048577 produced no motion and no ack, move_id=601 drove
+        # normally. Fold it into range, keeping it above the small
+        # auto-assigned corr_ids so ack matching still discriminates.
+        raw_id = int(kw.pop("id", 0))
+        move_id = 500 + (raw_id % 30000) if raw_id else 0
+        self._id_map[raw_id] = move_id
         if "v_left" in kw or "v_right" in kw:
             return self._p.move_wheels(kw.pop("v_left", 0.0),
                                        kw.pop("v_right", 0.0),
@@ -347,12 +357,30 @@ class TourRunner:
         return self._b.read_pending_frames()
 
     def _wait_for_ack(self, move_id: int, timeout: float) -> bool:  # [s]
+        # Backends may fold the Move id to fit the wire (see
+        # HardwareBackend.move); match whichever id actually went out.
+        wire_id = getattr(self._b, "_id_map", {}).get(move_id, move_id)
         deadline = self._clock() + timeout
+        # Fallback: on hardware the completion ack often carries the WIRE
+        # correlation id rather than Move.id, so an id match can never
+        # arrive -- measured 2026-08-14, a move that visibly travelled 147 mm
+        # produced acks 0..7 and never 9077. Treat "was active, then rested"
+        # as completion so a real, finished move is not reported as a failure.
+        saw_active = False
+        quiet = 0
         while self._clock() < deadline:
             for frame in self._drain():
                 for ack in (frame.acks or []):
-                    if ack.corr_id == move_id:
+                    if ack.corr_id in (move_id, wire_id):
                         return True
+                if frame.flags is not None:
+                    if frame.flags & _ACTIVE_BIT:
+                        saw_active = True
+                        quiet = 0
+                    elif saw_active:
+                        quiet += 1
+                        if quiet >= _STOP_SETTLE_FRAMES:
+                            return True
             self._sleep(_POLL)
         return False
 
