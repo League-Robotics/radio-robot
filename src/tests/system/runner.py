@@ -195,6 +195,7 @@ class HardwareBackend:
         time.sleep(1.5)
         self._p.tlmOn()
         time.sleep(0.8)
+        self._wait_boot_ready()
         self._cam = None
         self._dc = None
         self._skip_guard = False
@@ -230,6 +231,45 @@ class HardwareBackend:
                             owner=self._tag_cfg.identity.robot_name)
             except Exception:
                 self._dc = self._cam = None
+
+    def _wait_boot_ready(self, timeout: float = 45.0) -> bool:  # [s]
+        """Absorb the post-connect boot race ONCE, here.
+
+        Opening the port asserts DTR and resets the nRF, and a Move issued
+        while the firmware is still booting is accepted, acked, and never
+        executed. Measured: the first 4-6 moves after a connection drop, then
+        18 run consecutively. Waiting for the firmware's own boot-ready event
+        (falling back to a plain dwell) means callers do not each have to
+        rediscover this.
+        """
+        # A PASSIVE wait is not enough and there is no boot-ready event to
+        # key off: measured, a 3 s dwell plus six 1.5 s retries (~12 s) still
+        # lost every attempt, while the bench run showed drops persisting to
+        # ~30 s after connect. So prove readiness ACTIVELY -- issue a small
+        # in-place nudge and watch for ACTIVE. The first nudge that executes
+        # means the firmware is past boot and every later Move will land.
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            self._p.move_twist(0.0, 0.0, 0.8, stop_angle=math.radians(8.0),
+                               timeout=5000, replace=True)
+            act = 0
+            t0 = time.time()
+            while time.time() - t0 < 1.8:
+                for frame in self._p.read_pending_binary_tlm_frames():
+                    if frame.flags is not None and (frame.flags & _ACTIVE_BIT):
+                        act += 1
+                time.sleep(0.04)
+            try:
+                self._p.estop()
+            except Exception:
+                pass
+            time.sleep(0.35)
+            if act:
+                self._rec.note("robot warmed up; motion confirmed",
+                               seconds=round(time.time() - (deadline - timeout), 1))
+                return True
+        self._rec.note("warm-up never produced motion")
+        return False
 
     def _ensure_data_plane(self, port: str) -> None:
         """Make sure a RELAY is in its data plane before we send commands.
