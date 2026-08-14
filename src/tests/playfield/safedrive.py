@@ -129,6 +129,26 @@ def checkPath(pts):
     return None
 
 
+def projected(hist, lead=0.45):
+    """Where the robot will be in `lead` seconds at its current camera speed.
+
+    A fence that tests only the PRESENT position cannot stop a 140 mm/s robot:
+    the camera runs at ~5 Hz and the estop takes effect a beat later, so by the
+    time a breach is seen the robot is already ~5-7 cm past the line. tovez was
+    beached on the north rail three times this way. Projecting forward makes
+    the fence trip BEFORE the line instead of after it.
+    """
+    if len(hist) < 3:
+        return None
+    t1, x1, y1 = hist[-1][0], hist[-1][1], hist[-1][2]
+    t0, x0, y0 = hist[0][0], hist[0][1], hist[0][2]
+    dt = t1 - t0
+    if dt < 0.15:
+        return None
+    vx, vy = (x1 - x0) / dt, (y1 - y0) / dt          # [cm/s]
+    return x1 + vx * lead, y1 + vy * lead
+
+
 def guard(proto, dc, cam, seconds, track=None, odo=None):
     """Wait for rest. Halts on tag loss or boundary breach. Silent on the link."""
     t0 = time.time(); lastSeen = time.time(); hist = []
@@ -150,12 +170,26 @@ def guard(proto, dc, cam, seconds, track=None, odo=None):
             if abs(x) > kx or abs(y) > ky:
                 proto.estop(); time.sleep(0.3); proto.estop()
                 return False, f"boundary ({x:+.1f},{y:+.1f})"
-            hist.append((time.time(), x, y))
+            pr = projected(hist)
+            if pr is not None and (abs(pr[0]) > kx or abs(pr[1]) > ky):
+                proto.estop(); time.sleep(0.3); proto.estop()
+                return False, (f"projected breach ({pr[0]:+.1f},{pr[1]:+.1f}) "
+                               f"from ({x:+.1f},{y:+.1f})")
+            # Settled means NOT MOVING AND NOT TURNING. Position alone is not
+            # enough: Motion::Navigator pivots in place before a large bearing
+            # change, and during a pivot the position is static -- a
+            # position-only test calls that "arrived" and measures the robot
+            # mid-leg. That produced every "outlier" in the world-frame GO_TO
+            # tours (162 mm / 518 mm misses on legs that had only 64-75
+            # telemetry frames against 220-333 for a leg that really finished).
+            hist.append((time.time(), x, y, t.yaw))
             hist = [h for h in hist if time.time() - h[0] <= 1.3]
             if time.time() - t0 > 2.2 and len(hist) >= 5:
                 dx = max(h[1] for h in hist) - min(h[1] for h in hist)
                 dy = max(h[2] for h in hist) - min(h[2] for h in hist)
-                if math.hypot(dx, dy) < 0.4:
+                y0 = hist[0][3]
+                dyaw = max(abs(wrap(h[3] - y0)) for h in hist)
+                if math.hypot(dx, dy) < 0.4 and dyaw < math.radians(2.0):
                     break
         time.sleep(0.06)
     time.sleep(0.9)
@@ -212,7 +246,10 @@ def turn(proto, dc, cam, deltaYaw, omega=0.9, track=None):
         return None, "no camera fix -- refusing to move"
     if abs(deltaYaw) < math.radians(3):
         return p0, "ok"
-    w = -omega if deltaYaw > 0 else omega      # +omega DECREASES camera yaw
+    # 2026-08-13: the omega convention is now REP-103 -- +omega is CCW and
+    # INCREASES camera yaw. This line used to be inverted, for the old
+    # convention; leaving it would silently turn every aim the wrong way.
+    w = omega if deltaYaw > 0 else -omega
     proto.move_twist(0.0, 0.0, w, stop_angle=abs(deltaYaw), timeout=15000)
     ok, why = guard(proto, dc, cam, abs(deltaYaw) / omega + 6.0, track=track)
     return (fix(dc, cam), why if ok else "HALTED: " + why)
