@@ -7,6 +7,7 @@ script of the moves (and checks) a system-test run performs. Grammar
     # comment                                blank lines ignored
     TWIST vx=150 [vy=0] [omega=45] (time=|dist=|angle=) [timeout=]
     WHEELS left=100 right=100 (time=|dist=|angle=) [timeout=]
+    SPLINE file=tag_tour.path.json [speed=150] [lookahead=150] [laps=1] [tol=120]
     STOP [dwell=1.0]
     DWELL 0.5
     DBG wedge left 1500
@@ -109,6 +110,24 @@ class ExpectStep:
 
 
 @dataclass(frozen=True)
+class SplineStep:
+    """Follow a stored spline path with pure pursuit.
+
+    The path itself lives in a .path.json next to the tour (splinefile.py);
+    the tour only says which one, how fast, and how far ahead to aim. A
+    SPLINE is one directive because pure pursuit is a closed-loop follow, not
+    a sequence of bounded Moves -- the runner streams twists until the path
+    is consumed."""
+
+    line_no: int
+    path: str                      # file name, resolved next to the tour
+    speed: float = 150.0           # [mm/s]
+    lookahead: float = 150.0       # [mm]
+    laps: int = 1
+    tol: float = 120.0             # [mm] max allowed cross-track before failing
+
+
+@dataclass(frozen=True)
 class CamfixStep:
     """Independent position validation: camera fix (playfield) or plant
     true pose (sim); robot centre must be within `radius` of (x, y)."""
@@ -122,7 +141,7 @@ class CamfixStep:
 
 
 Step = Union[MoveStep, StopStep, DwellStep, DbgStep, SendStep, ExpectStep,
-             CamfixStep]
+             CamfixStep, SplineStep]
 
 
 @dataclass(frozen=True)
@@ -290,6 +309,27 @@ def parse_tour_text(text: str, *, name: str, source: str = "<text>") -> Tour:
             kv = _parse_kv(source, line_no, kv_tokens, {"timeout": None})
             steps.append(ExpectStep(line_no=line_no, query=rest[0],
                                     timeout=kv.get("timeout", 2.0)))
+        elif verb == "SPLINE":
+            # file= is the one non-numeric value in the grammar, so it is
+            # split out before _parse_kv (which coerces every value to float).
+            path_val = None
+            numeric = []
+            for tok in rest:
+                if tok.startswith("file="):
+                    path_val = tok.partition("=")[2]
+                else:
+                    numeric.append(tok)
+            if not path_val:
+                raise TourParseError(source, line_no, "SPLINE needs file=")
+            kv = _parse_kv(source, line_no, numeric,
+                           {"speed": None, "lookahead": None,
+                            "laps": None, "tol": None})
+            steps.append(SplineStep(
+                line_no=line_no, path=path_val,
+                speed=float(kv.get("speed", 150.0)),
+                lookahead=float(kv.get("lookahead", 150.0)),
+                laps=int(kv.get("laps", 1)),
+                tol=float(kv.get("tol", 120.0))))
         elif verb == "CAMFIX":
             steps.append(_parse_camfix(source, line_no, rest))
         else:

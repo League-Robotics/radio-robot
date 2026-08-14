@@ -1,0 +1,10 @@
+# The hand-drawn complex spline, imported from SVG and fitted to the field.
+# 473 cm, minimum turn radius 4.3 cm, with repeated left/right reversals --
+# the most demanding path in the suite.
+
+MARK spline_start
+SPLINE file=complex.path.json speed=140 lookahead=170 laps=1 tol=150
+STOP dwell=1.0
+
+SEND STATUS
+EXPECT '.type=="cleartext" and .verb=="STATUS" and .payload.ready==1' timeout=2.0

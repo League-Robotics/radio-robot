@@ -35,15 +35,17 @@ import jq
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from recorder import Recorder  # noqa: E402
 from tourfile import (  # noqa: E402
-    CamfixStep, DbgStep, DwellStep, ExpectStep, MoveStep, SendStep, StopStep,
-    Tour,
+    CamfixStep, DbgStep, DwellStep, ExpectStep, MoveStep, SendStep, SplineStep,
+    StopStep, Tour,
 )
+import splinefile  # noqa: E402
 
 _MOVE_ID_BASE = 1 << 20  # keep Move.id clear of auto-assigned corr_ids
 _ACTIVE_BIT = 1 << 2  # telemetry flags: kFlagActive
 _POLL = 0.02  # [s] ack-poll interval
 _STOP_SETTLE_FRAMES = 2  # consecutive inactive frames = at rest
 _STOP_TIMEOUT = 15.0  # [s] bounded wait for a planned stop to land
+_BOX_X, _BOX_Y = 611.0, 386.0  # [mm] drivable box for the robot centre
 
 
 class TourFailure(Exception):
@@ -154,6 +156,134 @@ def _move_kwargs(step: MoveStep, move_id: int, *, replace: bool) -> dict:
     return kw
 
 
+class HardwareBackend:
+    """Drives the REAL robot over serial/relay. Same backend surface as
+    SimBackend, so the executor and every tour file are unchanged.
+
+    true_pose() comes from the overhead camera when one is reachable -- it is
+    the independent check CAMFIX needs, and the robot's own odometry cannot
+    serve as its own validator. If no camera is available the backend still
+    runs; CAMFIX steps then report unavailable rather than silently passing.
+    """
+
+    name = "hardware"
+
+    def __init__(self, port: str, *, recorder: Recorder, camera: bool = True):
+        from robot_radio.io.serial_conn import SerialConnection
+        from robot_radio.robot.protocol import NezhaProtocol
+
+        self._conn = SerialConnection(port=port)
+        self._p = NezhaProtocol(self._conn)
+        self._rec = recorder
+        self._conn.connect()
+        time.sleep(1.0)
+        self._p.tlmOn()
+        time.sleep(0.6)
+        self._cam = None
+        self._dc = None
+        if camera:
+            try:
+                from aprilcam.config import Config
+                from aprilcam.client.control import DaemonControl
+                self._dc = DaemonControl.connect_default(Config.load())
+                self._cam = self._dc.list_cameras()[0]
+            except Exception:
+                self._dc = self._cam = None
+
+    def move(self, **kwargs: Any) -> int:
+        """Same keyword surface as SimLoop.move: ms for times, `id` for the
+        Move id -- so _move_kwargs() and the spline executor are backend
+        agnostic."""
+        kw = dict(kwargs)
+        move_id = kw.pop("id", 0)
+        if "v_left" in kw or "v_right" in kw:
+            return self._p.move_wheels(kw.pop("v_left", 0.0),
+                                       kw.pop("v_right", 0.0),
+                                       move_id=move_id, **kw)
+        return self._p.move_twist(kw.pop("v_x", 0.0), kw.pop("v_y", 0.0),
+                                  kw.pop("omega", 0.0), move_id=move_id, **kw)
+
+    def stop(self) -> int:
+        return self._p.stop()
+
+    def estop(self) -> int:
+        # A halt is a REQUEST: the brick latches its last speed and a lost
+        # zero write is permanent, so it is always sent twice.
+        r = self._p.estop()
+        time.sleep(0.25)
+        try:
+            self._p.estop()
+        except Exception:
+            pass
+        return r
+
+    def read_pending_frames(self) -> list:
+        return self._p.read_pending_binary_tlm_frames()
+
+    def send_line(self, line: str) -> None:
+        self._p.send_fast(line)
+
+    def true_pose(self) -> dict | None:
+        if not self._dc:
+            return None
+        xs, ys, ws = [], [], []
+        for _ in range(9):
+            try:
+                tf = self._dc.get_tags(self._cam)
+            except Exception:
+                return None
+            t = next((t for t in tf.tags if t.id == 100 and t.world_xy), None)
+            if t:
+                xs.append(t.world_xy[0]*10.0); ys.append(t.world_xy[1]*10.0)
+                ws.append(t.yaw)
+            time.sleep(0.05)
+        if not xs:
+            return None
+        med = lambda v: sorted(v)[len(v)//2]
+        return {"x": med(xs), "y": med(ys), "heading": ws[0]}
+
+    def seed_from_camera(self) -> dict | None:
+        """Put the robot's odometry into FIELD coordinates.
+
+        Pure pursuit compares the robot's pose against path points expressed
+        in the field frame, so without this the robot chases a path drawn
+        around an arbitrary odometry origin. Camera-seeding once at the start
+        is a surveyed start, not closed-loop camera steering -- nothing reads
+        the camera again while the path is being followed."""
+        pose = self.true_pose()
+        if not pose:
+            return None
+        self._p.send_fast(f"SEED:{pose['x']:.0f},{pose['y']:.0f},"
+                          f"{pose['heading']:.4f}")
+        time.sleep(1.2)
+        self._rec.note("seed", x=round(pose["x"], 1), y=round(pose["y"], 1),
+                       heading_deg=round(math.degrees(pose["heading"]), 2))
+        return pose
+
+    def firmware_version(self) -> str:
+        try:
+            return self._p.version()
+        except Exception:
+            return "?"
+
+    def enable_telemetry(self) -> None:
+        self._p.tlmOn()
+
+    def close(self) -> None:
+        try:
+            self.estop()
+        finally:
+            try:
+                self._conn.disconnect()
+            except Exception:
+                pass
+            if self._dc:
+                try:
+                    self._dc.close()
+                except Exception:
+                    pass
+
+
 class TourRunner:
     """Executes one Tour against a backend, recording as it goes."""
 
@@ -205,6 +335,130 @@ class TourRunner:
                     quiet = 0
             self._sleep(_POLL)
         return False
+
+    # -- pure pursuit ---------------------------------------------------
+
+    def _pose(self):
+        """Latest robot pose (x [mm], y [mm], heading [rad]) or None.
+
+        Drains through the SAME single destructive drain as everything else --
+        a second drain would starve the ack loop."""
+        got = None
+        for frame in self._drain():
+            pose = getattr(frame, "pose", None)
+            if not pose:
+                continue
+            # frame.pose is (x_mm, y_mm, heading_CENTIDEGREES) -- the same
+            # decode recorder.py does ("x, y, h_cdeg = frame.pose"). Reading
+            # the third field as radians yields headings of tens of thousands
+            # of degrees and the follower diverges immediately.
+            px, py, h_cdeg = pose
+            got = (float(px), float(py), math.radians(float(h_cdeg) / 100.0))
+        return got
+
+    def _run_spline(self, step: SplineStep, tour_dir: Path) -> StepResult:
+        """Follow a stored path with pure pursuit.
+
+        Classic form: find the point on the path one lookahead ahead of the
+        robot, transform it into the body frame, and command the arc that
+        reaches it -- omega = 2*v*y_body / L^2. Twists are re-issued
+        continuously with a short time bound so a lost command expires
+        instead of latching (every Move is bounded by construction, and the
+        Nezha brick latches its last speed if a zero is lost).
+        """
+        sp = splinefile.load(tour_dir / step.path)
+        pts = list(sp.points)
+        n = len(pts)
+        v = step.speed
+        L = step.lookahead
+        target_laps = max(1, step.laps)
+
+        self._r.note("spline", path=step.path, points=n,
+                     length_mm=round(sp.length(), 1),
+                     min_radius_mm=round(sp.min_radius(), 1),
+                     speed=v, lookahead=L, laps=target_laps)
+
+        pose = None
+        deadline = self._clock() + (sp.length()*target_laps/max(v, 1.0))*3.0 + 30.0
+        # start at the path point nearest the robot
+        for _ in range(200):
+            pose = self._pose()
+            if pose:
+                break
+            self._sleep(_POLL)
+        if not pose:
+            return StepResult(step.line_no, "spline", False, "no pose telemetry")
+        idx = min(range(n), key=lambda i: math.dist(pts[i], pose[:2]))
+        # Lap accounting by TOTAL index advance, not by landing exactly on the
+        # start index -- the lookahead advance skips indices, so an equality
+        # test can miss the wrap entirely and report 0 laps on a run that
+        # tracked the path to 2 mm.
+        advanced, worst = 0, 0.0
+        laps = 0
+        while self._clock() < deadline:
+            pose = self._pose() or pose
+            px, py, ph = pose
+            # advance the target index while it is closer than the lookahead
+            j = idx
+            for _ in range(n):
+                if math.dist(pts[j], (px, py)) >= L:
+                    break
+                j = (j + 1) % n
+                advanced += 1
+                if not sp.closed and j >= n - 1:
+                    break
+            laps = advanced // n
+            if laps >= target_laps:
+                break
+            if not sp.closed and advanced >= n - 1:
+                break
+            idx = j
+            tx, ty = pts[idx]
+            dx, dy = tx - px, ty - py
+            # GEOFENCE. The firmware stall detector cannot save us here: it
+            # needs ~500 ms of sustained stall, and pure pursuit re-issues a
+            # replace=True Move every ~120 ms, which restarts that window
+            # every time. Measured 2026-08-14 -- the robot drove into the rail
+            # and ground there with stall detection enabled and no flag set.
+            # So the follower fences itself.
+            if abs(px) > _BOX_X or abs(py) > _BOX_Y:
+                self._b.estop()
+                return StepResult(step.line_no, "spline", False,
+                                  f"geofence: pose ({px:.0f},{py:.0f}) mm "
+                                  f"outside +-{_BOX_X:.0f}/{_BOX_Y:.0f}")
+            # cross-track error against the NEAREST path point, for the gate
+            near = min(range(n), key=lambda i: math.dist(pts[i], (px, py)))
+            worst = max(worst, math.dist(pts[near], (px, py)))
+            if worst > step.tol:
+                self._b.estop()
+                return StepResult(step.line_no, "spline", False,
+                                  f"cross-track {worst:.0f} mm exceeded "
+                                  f"tol {step.tol:.0f} mm")
+            # body frame
+            y_b = -math.sin(ph)*dx + math.cos(ph)*dy
+            x_b = math.cos(ph)*dx + math.sin(ph)*dy
+            dist = math.hypot(dx, dy) or 1.0
+            omega = 2.0 * v * y_b / (dist*dist)
+            if x_b < 0:                      # target behind: turn hard, don't reverse
+                omega = math.copysign(max(abs(omega), 1.0), y_b or 1.0)
+            # Same units/keys as _move_kwargs: ms, and `id` (not move_id).
+            # A FRESH id per twist: reusing one id had the planner treat
+            # every re-issue as the same Move, and the robot travelled 3 mm in
+            # an entire run while 875 commands went out.
+            kw = dict(v_x=v, v_y=0.0, omega=omega, stop_time=350.0,
+                      timeout=2000.0, replace=True, id=self._next_move_id())
+            self._b.move(**kw)
+            self._r.tx_cmd("SPLINE_TWIST", {"v_x": v, "omega": round(omega, 4),
+                                            "target": [round(tx,1), round(ty,1)],
+                                            "pose": [round(px,1), round(py,1),
+                                                     round(math.degrees(ph),1)],
+                                            "line_no": step.line_no})
+            self._sleep(0.12)
+        self._b.estop()
+        ok = laps >= target_laps or (not sp.closed)
+        return StepResult(step.line_no, "spline", ok,
+                          f"laps {laps}/{target_laps}, worst cross-track "
+                          f"{worst:.0f} mm")
 
     # -- step executors -------------------------------------------------
 
@@ -337,6 +591,8 @@ class TourRunner:
     # -- the run --------------------------------------------------------
 
     def run(self, tour: Tour) -> TourRunResult:
+        self._tour_dir = (Path(tour.source).resolve().parent
+                          if tour.source not in ("<text>", "") else Path("."))
         result = TourRunResult(tour=tour.name, ok=True)
         steps = list(tour.steps)
         i = 0
@@ -372,6 +628,12 @@ class TourRunner:
                     if not r.ok:
                         raise TourFailure(
                             f"line {step.line_no}: EXPECT failed: {r.detail}")
+                elif isinstance(step, SplineStep):
+                    res = self._run_spline(step, self._tour_dir)
+                    result.steps.append(res)
+                    if not res.ok:
+                        raise TourFailure(f"line {step.line_no}: spline "
+                                          f"failed -- {res.detail}")
                 elif isinstance(step, CamfixStep):
                     r = self._run_camfix(step)
                     result.steps.append(r)

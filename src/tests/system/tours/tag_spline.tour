@@ -1,0 +1,11 @@
+# The tag-tour spline: a closed spline that passes through all six field
+# tags exactly (1 -> 14 -> 12 -> 16 -> 10 -> 13 -> 1), followed with pure
+# pursuit. 370 cm, minimum turn radius 5.5 cm -- tighter than any arc the
+# robot has been characterised on, which is the point of the test.
+
+MARK spline_start
+SPLINE file=tag_tour.path.json speed=120 lookahead=140 laps=1 tol=150
+STOP dwell=1.0
+
+SEND STATUS
+EXPECT '.type=="cleartext" and .verb=="STATUS" and .payload.ready==1' timeout=2.0
