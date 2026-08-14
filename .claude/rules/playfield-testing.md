@@ -39,9 +39,29 @@ fixed: if tag 1 is missing, the problem is the room, not the robot.
 
 ## Heading convention (measured, never assume)
 
-Camera yaw: **0 = East, +90 = North**, radians, CCW-positive. **Positive
-commanded omega DECREASES camera yaw** — so a square tour with `omega > 0` at
-its corners runs CLOCKWISE in world frame.
+Camera yaw: **0 = East, +90 = North**, radians, CCW-positive (ROS REP-103).
+**Positive commanded omega INCREASES camera yaw** — `omega > 0` is CCW, so a
+square tour with `omega > 0` at its corners runs COUNTER-CLOCKWISE in world
+frame.
+
+CHANGED 2026-08-13, and the old text said the exact opposite — if you find a
+script or note claiming "+omega DECREASES camera yaw", it predates this and is
+wrong. Everything now speaks one convention: camera, OTOS, encoder odometry
+and commanded omega are all REP-103 CCW-positive.
+
+The old behaviour was not a convention choice, it was a bug: on `tovez` the
+firmware's "left" wheel was physically the RIGHT wheel (it is wired port 1 =
+right), and since `omega = (vR - vL) / b` that negated every wheel-derived
+heading while leaving forward motion correct — so nothing surfaced it, and it
+got patched FOUR times downstream instead (`navigator.yaw_sign`, the
+Navigator's own `pose.heading = -state.otos.heading`, `planner.cpp`'s
+`applyOtosHeading(-...)`, and the sim's `kOtosHardwareMountSign`). All four are
+gone; the truth now lives once, in the robot JSON's
+`motors.left_port`/`right_port`.
+
+Verified on tovez against camera truth: forward 150 mm commanded → +149 mm
+along heading; `omega = +1.0` with a 90° angle stop → +92.6° CCW; from due
+north, +90° → faces West, −90° → faces East.
 
 ## Halting: `estop()`, never `stop()`
 

@@ -180,6 +180,33 @@ K_MOTOR_COUNT = 4
 LEFT_PORT  = 1
 RIGHT_PORT = 2
 
+
+def drive_ports(cfg):
+    """(left_port, right_port) for THIS robot, defaulting to 1/2.
+
+    Which physical motor port carries the LEFT wheel is per-robot wiring, not
+    a universal constant. tovez is wired the other way round (port 1 is its
+    RIGHT wheel), and hardcoding 1/2 made its firmware call the right wheel
+    "left" -- which negates every heading derived from
+    omega = (vR - vL) / b while leaving forward motion looking fine, so
+    nothing surfaced it. Note this must move TOGETHER with the per-wheel
+    calibrations (travel_calib_*, fwd_sign_*, wheel_gain_*): swapping only the
+    values, with the ports fixed, inverts BOTH motors instead of relabelling
+    them -- which reverses forward as well as rotation (measured 2026-08-13:
+    a commanded +150 mm leg travelled -152 mm).
+
+    PUBLIC on purpose: this is the ONE definition of the binding, and the
+    host shares it (robot_radio.calibration.sim_boot_config's
+    motor_boot_config_for()) rather than keeping a second copy that can
+    skew. Absent OR zero means "not stated" -- proto3's uint32 default is 0,
+    so a grouped RobotConfig for a robot whose JSON omits these keys arrives
+    here as 0, and that must mean the historical 1/2, not port zero.
+    """
+    motors = cfg.get("motors", {}) or {}
+    lp = motors.get("left_port") or LEFT_PORT
+    rp = motors.get("right_port") or RIGHT_PORT
+    return int(lp), int(rp)
+
 # fwd_sign placeholder for any port OTHER than LEFT_PORT/RIGHT_PORT (088-002)
 # -- the two motor ports the shipped 2-wheel differential drivetrain does not
 # actually drive. Provably inert: polled_for_ports() excludes them from the
@@ -343,13 +370,14 @@ def travel_calib_for_ports(cfg: dict):
     the placeholder.
     """
     motors = cfg.get("motors", {}) or {}
+    lp, rp = drive_ports(cfg)
     left  = _get(motors, "travel_calib_left")
     right = _get(motors, "travel_calib_right")
     out = []
     for port in range(1, K_MOTOR_COUNT + 1):
-        if port == LEFT_PORT and left is not None:
+        if port == lp and left is not None:
             out.append(float(left))
-        elif port == RIGHT_PORT and right is not None:
+        elif port == rp and right is not None:
             out.append(float(right))
         else:
             out.append(TRAVEL_CALIB_PLACEHOLDER)
@@ -388,13 +416,14 @@ def fwd_sign_for_ports(cfg: dict):
     to travel the same physical direction.
     """
     motors = cfg.get("motors", {}) or {}
+    lp, rp = drive_ports(cfg)
     left  = _get(motors, "fwd_sign_left")
     right = _get(motors, "fwd_sign_right")
     out = []
     for port in range(1, K_MOTOR_COUNT + 1):
-        if port == LEFT_PORT and left is not None:
+        if port == lp and left is not None:
             out.append(int(left))
-        elif port == RIGHT_PORT and right is not None:
+        elif port == rp and right is not None:
             out.append(int(right))
         else:
             out.append(FWD_SIGN)
@@ -850,10 +879,25 @@ def generate(cfg: dict, source_path: str) -> str:
     # this schema; see robot_config.proto's own header checklist). Reuse
     # the SAME travel_calib/fwd_sign lists computed above (same _get() call
     # sites, same placeholder fallback) rather than re-deriving them.
-    motors_travel_calib_left = travel_calib[LEFT_PORT - 1]
-    motors_travel_calib_right = travel_calib[RIGHT_PORT - 1]
-    motors_fwd_sign_left = fwd_sign[LEFT_PORT - 1]
-    motors_fwd_sign_right = fwd_sign[RIGHT_PORT - 1]
+    #
+    # Indexed by THIS robot's own port binding (drive_ports), not by the
+    # LEFT_PORT/RIGHT_PORT defaults. The group's fields are labelled by
+    # WHEEL, and that is how they are consumed: boot_wiring.cpp binds
+    # `motorL_` to `drivetrainConfig.left_port`, and configurator.cpp's
+    # live MOTORS push calls `configureMotor(motorL_, config, isLeft=true)`
+    # -> `config.motors.travel_calib_left`. Indexing at the DEFAULT ports
+    # here transposed both pairs on any robot wired the other way round
+    # (tovez): the baked group reported port 1's calibration as "left"
+    # while defaultMotorConfigs() correctly put the left wheel's on port 2,
+    # so a live MOTORS push applied each wheel the OTHER wheel's travel
+    # calib. Round-tripping the JSON labels exactly is the invariant here
+    # (configuration-discipline.md: a pushed config and a rebuilt image
+    # cannot disagree).
+    drive_left_index, drive_right_index = drive_ports(cfg)
+    motors_travel_calib_left = travel_calib[drive_left_index - 1]
+    motors_travel_calib_right = travel_calib[drive_right_index - 1]
+    motors_fwd_sign_left = fwd_sign[drive_left_index - 1]
+    motors_fwd_sign_right = fwd_sign[drive_right_index - 1]
 
     calib_lines = "\n".join(
         f"    out[{i}].setTravelCalib({_f(v)});   // [mm/deg] port {i + 1}"
@@ -869,6 +913,10 @@ def generate(cfg: dict, source_path: str) -> str:
         f"    out[{i}].setPolled({'true' if v else 'false'});   // port {i + 1}"
         for i, v in enumerate(polled)
     )
+
+    # Per-robot drive-pair binding (see drive_ports): which physical port
+    # carries the LEFT wheel is wiring, not a constant.
+    DRIVE_LEFT_PORT, DRIVE_RIGHT_PORT = drive_ports(cfg)
 
     return f"""\
 // AUTO-GENERATED — do not edit by hand.
@@ -968,8 +1016,8 @@ msg::DrivetrainConfig defaultDrivetrainConfig() {{
     cfg.setRotationOffsetNeg({_f(rot_cal[3])});
     // The drive-pair port binding lives in DrivetrainConfig (the robot's
     // normal drive pair); the coupled bench rig re-binds via `DEV DT PORTS`.
-    cfg.setLeftPort({LEFT_PORT});
-    cfg.setRightPort({RIGHT_PORT});
+    cfg.setLeftPort({DRIVE_LEFT_PORT});
+    cfg.setRightPort({DRIVE_RIGHT_PORT});
     return cfg;
 }}
 
@@ -1093,13 +1141,22 @@ msg::Geometry defaultGeometryGroup() {{
 
 msg::Motors defaultMotorsGroup() {{
     // Drive-pair-only slice of travel_calib_for_ports()/fwd_sign_for_ports()
-    // (ports {LEFT_PORT}/{RIGHT_PORT} only -- Config::Robot's schema has no
-    // per-port array, see this file's own comment above) plus
-    // motors.vel_*/output_deadband/reversal_dwell (132-017 JSON reshape
-    // retarget -- all lived under `control` before the grouped-shape
-    // migration), shared by both bound motors (vel_gains_for_config()/
-    // output_deadband_for_config()/reversal_dwell_for_config() above).
+    // (this robot's OWN drive ports, left={DRIVE_LEFT_PORT} right={DRIVE_RIGHT_PORT} --
+    // Config::Robot's schema has no per-port array, see this file's own
+    // comment above) plus motors.vel_*/output_deadband/reversal_dwell
+    // (132-017 JSON reshape retarget -- all lived under `control` before the
+    // grouped-shape migration), shared by both bound motors
+    // (vel_gains_for_config()/output_deadband_for_config()/
+    // reversal_dwell_for_config() above).
     msg::Motors cfg;
+    // The port binding itself, so this group round-trips the robot JSON
+    // exactly (configuration-discipline.md invariant 2). Boot-only: the
+    // live MOTORS push path (Core::configureMotor) applies travel_calib
+    // only, and re-binding a running robot's drive ports is not a thing it
+    // does. msg::DrivetrainConfig (defaultDrivetrainConfig(), above) is
+    // what boot_wiring.cpp actually reads to bind motorL_/motorR_.
+    cfg.left_port = {DRIVE_LEFT_PORT};
+    cfg.right_port = {DRIVE_RIGHT_PORT};
     cfg.travel_calib_left = {_f(motors_travel_calib_left)};    // [mm/deg]
     cfg.travel_calib_right = {_f(motors_travel_calib_right)};  // [mm/deg]
     cfg.fwd_sign_left = {motors_fwd_sign_left};

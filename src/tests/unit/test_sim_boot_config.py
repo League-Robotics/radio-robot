@@ -179,13 +179,27 @@ def test_motor_boot_config_for_real_robot_config_takes_the_grouped_path_no_raise
     property was ever reached (data/robots/*.json were still OLD-shaped).
     132-017's JSON reshape flipped it to an unexpected pass -- the marker
     is dropped here and the original no-raise assertion restored.
+
+    2026-08-13: port 1 is expected to yield tovez's fwd_sign_RIGHT, not
+    fwd_sign_left. That is not a swapped expectation -- it is the physical
+    wiring finally written down: tovez.json declares motors.left_port = 2 /
+    right_port = 1, so port 1 carries the RIGHT wheel. The assertion is
+    written against the file's own binding rather than a hardcoded side, so
+    it follows any robot's JSON instead of re-encoding tovez's.
     """
     cfg = load_robot_config(_ROBOTS_DIR / "tovez.json")
 
     result = motor_boot_config_for(cfg, port=1)
 
+    left_port, right_port = gbc.drive_ports(
+        {"motors": {"left_port": cfg.motors.left_port,
+                    "right_port": cfg.motors.right_port}}
+    )
+    assert (left_port, right_port) == (2, 1), "tovez is wired port 1 = RIGHT wheel"
     assert result == {"vel_filt_alpha": cfg.motors.vel_filt_alpha,
-                       "fwd_sign": cfg.motors.fwd_sign_left}
+                       "fwd_sign": cfg.motors.fwd_sign_right}
+    # ...and the other port gets the other wheel's sign.
+    assert motor_boot_config_for(cfg, port=left_port)["fwd_sign"] == cfg.motors.fwd_sign_left
 
 
 # ---------------------------------------------------------------------------

@@ -42,6 +42,8 @@ struct Geometry {
 
 // Motors
 struct Motors {
+    uint32_t left_port = 0;
+    uint32_t right_port = 0;
     float travel_calib_left = 0.0f;
     float travel_calib_right = 0.0f;
     int32_t fwd_sign_left = 0;

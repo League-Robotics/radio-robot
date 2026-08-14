@@ -129,7 +129,7 @@ void testMaterialChangeThrottleNotEveryTick() {
   Types::RobotState state{};
   state.otos.present = true;
   state.otos.connected = true;
-  state.otos.heading = 0.0f;  // wire sign; encoder-sign heading = 0, facing +x
+  state.otos.heading = 0.0f;  // true-world CCW; heading = 0, facing +x
 
   GotoTarget target;
   target.id = 102;
@@ -207,7 +207,7 @@ void testHalfArcMandatoryRefreshFiresWithoutMaterialChange() {
     state.time.cycleStart = now;
     state.otos.x = x;
     state.otos.y = y;
-    state.otos.heading = -heading;  // wire/hardware-mounted sign, ticket 008
+    state.otos.heading = heading;  // one REP-103 CCW convention (2026-08-13)
     state.otos.sampleTime = now;
     nav.tick(state);
     now += static_cast<uint32_t>(kPeriod);
@@ -375,7 +375,7 @@ void testSmallBearingNoPivotNoOscillation() {
     state.time.cycleStart = now;
     state.otos.x = x;
     state.otos.y = y;
-    state.otos.heading = -heading;
+    state.otos.heading = heading;  // one REP-103 CCW convention (2026-08-13)
     state.otos.sampleTime = now;
     nav.tick(state);
     if (planner.lifecycle() == MoveLifecycle::Stopping) sawStopping = true;
@@ -481,9 +481,11 @@ void testOtosDisconnectAbortsWithinWindow() {
 }
 
 // --- Landmine 4 (135-004): NavigatorLimits::yawSign converts worldPose's
-// own (true-world) omega convention to the wire's Move::omega convention,
-// matching goto_otos.py's own YAW_SIGN = -1.0 exactly -- see navigator.h's
-// own comment for the full derivation. Deliberately picks a raw heading
+// own (true-world) omega convention to the wire's Move::omega convention.
+// No robot in the tree bakes yawSign = -1.0 any more (tovez's -1.0 was its
+// swapped drive ports, fixed at the source 2026-08-13), so this exercises
+// the FIELD's contract for a hypothetical robot that measures the quirk --
+// see navigator.h's own comment. Deliberately picks a raw heading
 // that is NEITHER 0 nor 90 deg: both degenerate cases numerically hide a
 // sign error that a generic heading exposes (0 deg: worldPose.heading ==
 // pose.heading trivially, since -0 == 0; 90 deg: cos(heading) == 0
@@ -493,14 +495,15 @@ void testOtosDisconnectAbortsWithinWindow() {
 void testYawSignMatchesGotoOtosConvention() {
   Planner planner(defaultPlannerLimits());
   NavigatorLimits limits = defaultNavLimits();
-  limits.yawSign = -1.0f;  // matches goto_otos.py's measured YAW_SIGN
+  limits.yawSign = -1.0f;  // hypothetical robot; no shipped robot bakes this
   Navigator nav(limits, planner);
 
   Types::RobotState state{};
   state.otos.present = true;
   state.otos.connected = true;
-  // Raw, un-negated wire heading == true-world CCW convention (ticket 008
-  // settled this -- navigator.h's own OTOS sign convention comment).
+  // Raw wire heading == true-world CCW convention, and yawSign no longer
+  // touches the POSE at all (2026-08-13) -- worldPose.heading IS this value,
+  // so the derivation below is the solver's actual input.
   state.otos.heading = static_cast<float>(30.0 * kPi / 180.0);  // 30 deg
   state.otos.x = 0.0f;
   state.otos.y = 0.0f;

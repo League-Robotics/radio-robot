@@ -20,7 +20,10 @@ CAMERA = "arducam-ov9782-usb-camera"
 ROBOT_TAG = 100
 
 PIVOT_OMEGA = 1.4     # [rad/s]
-YAW_SIGN = -1.0       # commanded omega is opposite to world CCW
+YAW_SIGN = +1.0       # 2026-08-13: commanded omega is now REP-103 CCW-positive,
+                      # i.e. it INCREASES camera yaw. Was -1.0, a workaround for
+                      # tovez's swapped drive-motor labelling (port 1 was its RIGHT
+                      # wheel); fixed at source via motors.left_port/right_port.
 SETTLE = 1.6          # [s]
 
 DEFAULT_ANGLES = [90.0, -90.0, 45.0, -45.0, 180.0, 15.0, -15.0, 30.0]

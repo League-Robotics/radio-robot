@@ -77,6 +77,8 @@ class Geometry(BaseModel):
 
 class Motors(BaseModel):
     model_config = ConfigDict(extra="forbid")
+    left_port: int = 0
+    right_port: int = 0
     travel_calib_left: float = 0.0
     travel_calib_right: float = 0.0
     fwd_sign_left: int = 0

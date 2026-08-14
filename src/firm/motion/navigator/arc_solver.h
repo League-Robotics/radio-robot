@@ -199,16 +199,23 @@ struct NavigatorLimits {
   // Sign relating commanded Move::omega to true-world CCW (135-004,
   // "Landmine 4" -- see navigator.h's own NavigatorLimits::yawSign-area
   // comment for the
-  // full derivation). +-1 only, dimensionless. +1.0 (default): no
-  // correction -- Move::omega already agrees with the convention
-  // Navigator's own world-frame bearing solve uses (every ctest/sim
-  // plant's own implicit convention, since none of them can independently
-  // model a real drivetrain's own commanded-omega-vs-world-CCW quirk).
-  // -1.0: this robot's commanded Move::omega is measured OPPOSITE
-  // true-world CCW (matches src/tests/bench/goto_otos.py's own
-  // `YAW_SIGN`) -- set per-robot from a real bench pass (ticket 006),
-  // never guessed. Not read by ArcSolver::solve() itself -- Navigator
-  // applies it at its own pose-building and Move-construction boundary.
+  // full derivation). +-1 only, dimensionless. +1.0 (default, and what
+  // every robot JSON now bakes): no correction -- Move::omega already
+  // agrees with true-world CCW, which is the whole REP-103 convention this
+  // codebase runs on. -1.0: this robot's commanded Move::omega is measured
+  // OPPOSITE true-world CCW -- set per-robot from a real camera/bench
+  // pass, never guessed, and never as a way to make some test pass.
+  //
+  // Before reaching for -1.0, check `motors.left_port`/`motors.right_port`
+  // in that robot's JSON. tovez carried yaw_sign = -1.0 for months purely
+  // because its drive ports were mis-bound (port 1 is its RIGHT wheel, and
+  // the generator hardcoded 1 = left), which negates omega = (vR - vL) / b
+  // and so inverts commanded rotation AND encoder heading together. Fixing
+  // the binding put this back to +1.0 -- see navigator.h's own OTOS sign
+  // convention section.
+  //
+  // Not read by ArcSolver::solve() itself -- Navigator applies it at its
+  // own pose-building and Move-construction boundary.
   float yawSign = 1.0f;
 };
 

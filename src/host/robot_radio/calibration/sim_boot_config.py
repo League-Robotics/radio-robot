@@ -161,9 +161,20 @@ def motor_boot_config_for(config: Any, port: int) -> "dict[str, float | int]":
     """
     if _is_grouped_robot_config(config):
         motors = config.motors
-        if port == gbc.LEFT_PORT:
+        # THIS robot's own port binding, via the generator's single
+        # definition -- not the LEFT_PORT/RIGHT_PORT defaults. `motors` is
+        # labelled by WHEEL, and which port each wheel sits on is per-robot
+        # wiring: tovez is port 1 = RIGHT. Reading the labels at the default
+        # ports handed port 1 the LEFT wheel's fwd_sign, so a configure_from_
+        # robot() push disagreed with the same robot's baked boot_config.cpp
+        # (caught by test_sim_boot_config_parity.py's golden-parity check).
+        left_port, right_port = gbc.drive_ports(
+            {"motors": {"left_port": getattr(motors, "left_port", 0),
+                        "right_port": getattr(motors, "right_port", 0)}}
+        )
+        if port == left_port:
             fwd_sign = motors.fwd_sign_left
-        elif port == gbc.RIGHT_PORT:
+        elif port == right_port:
             fwd_sign = motors.fwd_sign_right
         else:
             # Every other port (no drive-pair mount) -- the SAME placeholder

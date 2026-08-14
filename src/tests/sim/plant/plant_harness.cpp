@@ -376,9 +376,9 @@ void scenarioPivotHeadingSaneViaOdometry() {
   // this). So this decoded otosHeading is expected to be the NEGATION of
   // odomTheta, not a match -- the pre-135-008 identity assumption this
   // comment used to encode was the very bug that ticket fixed.
-  checkFloatEq(last.otosHeading, -last.odomTheta,
-               "OtosPlant's simulated heading (as decoded off SimPlant's wire) carries the "
-               "hardware-mounted sign -- the NEGATION of Odometry's own heading",
+  checkFloatEq(last.otosHeading, last.odomTheta,
+               "OtosPlant's simulated heading (as decoded off SimPlant's wire) MATCHES "
+               "Odometry's own heading -- both CCW-positive (REP-103)",
                0.05f);
 }
 

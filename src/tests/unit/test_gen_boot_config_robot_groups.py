@@ -151,14 +151,30 @@ def test_default_geometry_group_matches_tovez_json():
 
 def test_default_motors_group_matches_tovez_json_drive_pair_only():
     """Motors: the drive-pair-only slice of travel_calib_for_ports()/
-    fwd_sign_for_ports() (port 1/2, mirror-mounted signs -- 088-002) plus
-    the shared vel_*/output_deadband/reversal_dwell fields."""
-    content = gbc.generate(_tovez_cfg(), "data/robots/tovez.json")
+    fwd_sign_for_ports() plus the shared vel_*/output_deadband/
+    reversal_dwell fields.
 
-    assert "cfg.travel_calib_left = 0.7165f;" in content
-    assert "cfg.travel_calib_right = 0.7077f;" in content
-    assert "cfg.fwd_sign_left = 1;" in content
-    assert "cfg.fwd_sign_right = -1;" in content
+    The four per-wheel values are asserted as a ROUND TRIP against the JSON
+    read at test time, not as pinned literals. That is the property that
+    actually matters and the one that broke: the group's fields are
+    labelled by WHEEL and consumed that way (boot_wiring.cpp binds
+    `motorL_` to `drivetrain.left_port`; a live MOTORS push reaches
+    `configureMotor(motorL_, config, isLeft=true)` ->
+    `config.motors.travel_calib_left`), but the generator sliced the
+    per-port array at the DEFAULT ports. On tovez -- wired port 1 = RIGHT
+    wheel, so `motors.left_port` is 2 -- that transposed both pairs, and
+    the pinned literals here passed while doing so, because they were
+    snapshots of the pre-swap file. Anything that reads a per-port array
+    back out to wheel labels must index by `drive_ports()`.
+    """
+    cfg = _tovez_cfg()
+    content = gbc.generate(cfg, "data/robots/tovez.json")
+    motors = cfg["motors"]
+
+    assert f"cfg.travel_calib_left = {gbc._f(motors['travel_calib_left'])};" in content
+    assert f"cfg.travel_calib_right = {gbc._f(motors['travel_calib_right'])};" in content
+    assert f"cfg.fwd_sign_left = {motors['fwd_sign_left']};" in content
+    assert f"cfg.fwd_sign_right = {motors['fwd_sign_right']};" in content
     assert "cfg.output_deadband = 0.03f;" in content
     assert "cfg.reversal_dwell = 100.0f;" in content
     assert "cfg.vel_kp = 0.0016f;" in content

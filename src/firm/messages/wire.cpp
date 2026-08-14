@@ -618,6 +618,8 @@ constexpr FieldDesc kFields_Geometry[] = {
 constexpr MessageTable kTable_Geometry = { kFields_Geometry, 6 };
 
 constexpr FieldDesc kFields_Motors[] = {
+    { .number = 13, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(Motors, left_port), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin | kHasMax, .minVal = 1.0f, .maxVal = 4.0f, .absMaxVal = 0.0f },  // left_port
+    { .number = 14, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kUint32, .offset = offsetof(Motors, right_port), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin | kHasMax, .minVal = 1.0f, .maxVal = 4.0f, .absMaxVal = 0.0f },  // right_port
     { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Motors, travel_calib_left), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0001f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // travel_calib_left
     { .number = 2, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Motors, travel_calib_right), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0001f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // travel_calib_right
     { .number = 3, .wireType = WireRuntime::WireType::kVarint, .kind = FieldKind::kScalar, .scalarType = ScalarType::kInt32, .offset = offsetof(Motors, fwd_sign_left), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin | kHasMax, .minVal = -1.0f, .maxVal = 1.0f, .absMaxVal = 0.0f },  // fwd_sign_left
@@ -631,7 +633,7 @@ constexpr FieldDesc kFields_Motors[] = {
     { .number = 11, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Motors, vel_kaw), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // vel_kaw
     { .number = 12, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Motors, vel_filt_alpha), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // vel_filt_alpha
 };
-constexpr MessageTable kTable_Motors = { kFields_Motors, 12 };
+constexpr MessageTable kTable_Motors = { kFields_Motors, 14 };
 
 constexpr FieldDesc kFields_Drive[] = {
     { .number = 1, .wireType = WireRuntime::WireType::kFixed32, .kind = FieldKind::kScalar, .scalarType = ScalarType::kFloat, .offset = offsetof(Drive, duty_per_speed_left), .offset2 = 0, .oneofKindValue = 0, .cap = 0, .tableIndex = 0xFF, .elemStride = 0, .flags = kHasMin, .minVal = 0.0f, .maxVal = 0.0f, .absMaxVal = 0.0f },  // duty_per_speed_left

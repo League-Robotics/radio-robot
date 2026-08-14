@@ -106,12 +106,18 @@ NavResult Navigator::tick(Types::RobotState& state) {
   if (state.otos.connected) {
     pose.x = state.otos.x;
     pose.y = state.otos.y;
-    // The ONE sign flip this file performs -- see navigator.h's header
-    // comment ("OTOS sign convention") for the full citation. state.otos.
-    // heading is the wire/hardware-mounted sign (ticket 008); negating it
-    // mirrors planner.cpp:513's own reconciliation, landing in the same
-    // encoder-sign convention Move::omega/ArcSolution::omega already use.
-    pose.heading = -state.otos.heading;
+    // NOT negated (2026-08-13) -- see navigator.h's header comment ("OTOS
+    // sign convention") for the full story. This line used to read
+    // `-state.otos.heading`, mirroring the negation planner.cpp then
+    // carried in applyOtosHeading(). BOTH were compensating for the same
+    // root cause, and it was never the OTOS: on tovez the firmware's
+    // "left" wheel was physically its RIGHT wheel, which negates every
+    // encoder-derived heading via omega = (vR - vL) / b. With the port
+    // binding fixed at its source (motors.left_port/right_port in the
+    // robot JSON, read by gen_boot_config.py), encoder heading, raw OTOS
+    // heading and true-world CCW are ONE convention (REP-103), so the raw
+    // wire value is already the frame every angular decision here wants.
+    pose.heading = state.otos.heading;
 
     lastGoodPose_ = pose;
     lastGoodWheelPose_ = Pose{state.pose.x, state.pose.y, state.pose.heading};
@@ -148,16 +154,24 @@ NavResult Navigator::tick(Types::RobotState& state) {
 
   // True-world-frame pose for BEARING/ARC-SOLVE geometry (135-004,
   // "Landmine 4" -- see NavigatorLimits::yawSign's own comment in
-  // navigator.h). `pose` above is deliberately kept in encoder-sign
-  // convention (it just served the SUC-005 dead-reckoning bookkeeping);
-  // `limits_.yawSign` (default +1.0) is a no-op here, leaving worldPose ==
-  // pose exactly -- ticket 003's original, unchanged behavior for every
-  // ctest/sim scenario. A robot configured with yawSign=-1.0 (measured,
-  // per-robot) instead recovers the raw OTOS/world value ArcSolver's
-  // tangent-arc geometry and the pivot bearing need. Valid in BOTH
-  // branches above (OTOS-connected and dead-reckoning), since
-  // `pose.heading` is uniformly encoder-sign convention in either case.
-  const Pose worldPose{pose.x, pose.y, limits_.yawSign * pose.heading};
+  // navigator.h). Now an ALIAS: `pose.heading` is already true-world CCW
+  // in both branches above (OTOS-connected: the raw wire value;
+  // dead-reckoning: that value plus encoder deltas, which are the same
+  // convention). Kept as a distinct name because the two remaining
+  // `limits_.yawSign *` sites below convert OUT of this frame, and reading
+  // them against a pose named `worldPose` is what makes that legible.
+  //
+  // This line used to read `limits_.yawSign * pose.heading`. That was
+  // correct only while `pose` was encoder-sign and encoder-sign was
+  // inverted from the world -- i.e. only while tovez's drive ports were
+  // mis-bound. It is a category error now: yawSign relates commanded
+  // Move::omega to world CCW, so it belongs at the Move-construction
+  // boundary and NOWHERE else. Applying it to a pose too meant a robot
+  // with yawSign = -1 solved its bearing in a mirrored frame AND flipped
+  // the answer, which is a different (wrong) transform, not a stronger
+  // one. No-op for every robot in the tree today (all bake yaw_sign = 1.0,
+  // and BootOverrides::navigatorYawSign pins the sim harnesses to +1.0).
+  const Pose worldPose{pose.x, pose.y, pose.heading};
 
   // --- Arrival (independent of allowSolve -- a stale-but-connected or
   // dead-reckoned pose is still the best truth available this cycle).

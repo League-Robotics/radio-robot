@@ -24,7 +24,10 @@ ROBOT_TAG = 100
 
 CRUISE = 150.0        # [mm/s]
 PIVOT_OMEGA = 1.6     # [rad/s]
-YAW_SIGN = -1.0       # positive commanded omega DECREASES camera yaw
+YAW_SIGN = +1.0       # 2026-08-13: commanded omega is now REP-103 CCW-positive,
+                      # i.e. it INCREASES camera yaw. Was -1.0, a workaround for
+                      # tovez's swapped drive-motor labelling (port 1 was its RIGHT
+                      # wheel); fixed at source via motors.left_port/right_port.
 SETTLE = 1.4          # [s] rest dwell before every fix
 
 FENCE_X, FENCE_Y = 620.0, 400.0   # [mm] inside the 671/446 table half-widths

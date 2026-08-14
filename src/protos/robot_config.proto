@@ -406,6 +406,33 @@ message Geometry {
 // velocity-PID gains. Consumed by Devices::Motor (left AND right,
 // independently) via Configurator::install(MOTORS).
 message Motors {
+  // Which physical motor port carries each wheel. Per-robot WIRING, not a
+  // universal constant: tovez is wired port 1 = RIGHT, port 2 = LEFT.
+  // gen_boot_config.py's _drive_ports() reads these (defaulting to 1/2 when
+  // absent, so no other robot's bake moves) and bakes them into
+  // msg::DrivetrainConfig.left_port/right_port, which boot_wiring.cpp uses
+  // to bind motorL_/motorR_ to the right channels.
+  //
+  // These MUST move together with every *_left/*_right value in this group
+  // and in Drive: those are labelled by WHEEL, and each label has to follow
+  // its own physical wheel. Swapping the values alone, with the ports
+  // fixed, inverts BOTH motors instead of relabelling them -- which
+  // reverses forward travel as well as rotation (measured: a commanded
+  // +150 mm leg travelled -152 mm).
+  //
+  // Why this field exists at all: hardcoding left=1/right=2 in the
+  // generator made tovez's firmware call its right wheel "left", which
+  // negates omega = (vR - vL) / b and therefore every encoder-derived
+  // heading, while leaving forward motion correct. It hid for months and
+  // was patched three times downstream (navigator.cpp's pose negation,
+  // planner.cpp's applyOtosHeading negation, sim_plant.cpp's
+  // kOtosHardwareMountSign) before being fixed here at the source.
+  //
+  // Boot-only, like fwd_sign/output_deadband/vel_* alongside them: a live
+  // MOTORS push re-binding a running robot's drive ports is not a thing
+  // Core::configureMotor() does (it live-applies travel_calib only).
+  uint32 left_port          = 13 [(min) = 1, (max) = 4];
+  uint32 right_port         = 14 [(min) = 1, (max) = 4];
   float travel_calib_left   = 1  [(min) = 0.0001];  // [mm/deg] must be positive
   float travel_calib_right  = 2  [(min) = 0.0001];  // [mm/deg]
   int32 fwd_sign_left       = 3  [(min) = -1, (max) = 1];  // +1 or -1

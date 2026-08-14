@@ -35,36 +35,49 @@
 // cycle" -- the same one-cycle bootstrap latency every other
 // Planner::move() caller in this codebase already accepts.
 //
-// --- OTOS sign convention (ticket 008's settled fix) --------------------
+// --- OTOS sign convention (settled 2026-08-13, superseding ticket 008) ---
 //
-// state.otos.heading is the WIRE-level value, the hardware-mounted sign
-// (ticket 008's Completion Notes: "the settled sign convention") -- the
-// NEGATION of encoder-derived heading. Motion::Planner's own internal
-// pose_ (estimation.h's PoseTracker) reconciles this at exactly one point,
-// planner.cpp:513 (`pose_.applyOtosHeading(-state.otos.heading, ...)`),
-// landing in the encoder-sign convention every other angular decision in
-// this codebase (Move::omega, ArcSolution::omega, Pose::heading) already
-// uses. Planner exposes NO pose accessor Navigator could read instead
-// (planner.h's public surface has none), so Navigator independently
-// negates the SAME raw wire value, the SAME way, in the ONE place this
-// file builds its own working Pose from state.otos -- see navigator.cpp's
-// tick(). This is not a second, competing sign flip; it is the same
-// reconciliation ticket 008 already settled, applied a second time
-// because there are structurally two independent readers of the one raw
-// wire fact (Planner's pose_, and this file), not because the convention
-// itself is in question.
+// ONE convention, everywhere: ROS REP-103. Right-handed, x forward, y
+// left, angles CCW-positive. state.otos.heading (the raw wire value),
+// Core::Odometry's encoder-derived state.pose.heading, Move::omega,
+// ArcSolution::omega, Pose::heading and the overhead camera are all in it.
+// There is nothing to reconcile and this file performs NO sign flip when
+// it builds its working Pose from state.otos -- see navigator.cpp's
+// tick().
 //
-// This reconciled `pose` (encoder-sign convention) is the right frame for
-// exactly two things this file does: the arrival/frozen distance check
-// (rotation-invariant -- either convention gives the same distance) and
-// the SUC-005 dead-reckoning fallback (`lastGoodPose_`/`lastGoodWheelPose_`
-// difference against `state.pose`, which IS encoder-sign convention, by
-// construction -- Odometry's own accumulated heading). It is the WRONG
-// frame for a WORLD-frame bearing-to-target computation -- see ticket
-// 004's own "omega sign" comment on `NavigatorLimits::yawSign` below for
-// why, and for
-// `worldPose`, the second, separately-purposed pose this file builds for
-// exactly that computation.
+// This paragraph used to say the opposite: that the wire heading was "the
+// hardware-mounted sign... the NEGATION of encoder-derived heading", and
+// that this file therefore had to negate it the same way planner.cpp's
+// applyOtosHeading() call did. The underlying MEASUREMENT was real (one
+// rotation read +84.58deg optical against -82.45deg encoder) but the
+// diagnosis was backwards. The OTOS was right and the ENCODERS were
+// wrong: on tovez the firmware's "left" wheel was physically its RIGHT
+// wheel, because gen_boot_config.py hardcoded LEFT_PORT=1/RIGHT_PORT=2
+// while that robot is wired port 1 = right. Swapping the two labels
+// negates omega = (vR - vL) / b, hence every encoder-derived heading,
+// while leaving forward motion correct -- which is exactly why it hid for
+// so long and got patched THREE times downstream (this file's negation,
+// planner.cpp's, and sim_plant.cpp's kOtosHardwareMountSign) instead of
+// once at the source.
+//
+// The source fix is per-robot `motors.left_port`/`right_port` in the
+// robot JSON (gen_boot_config.py's _drive_ports()), moved TOGETHER with
+// that robot's paired *_left/*_right calibrations. Verified on tovez
+// against overhead-camera truth: one physical CCW rotation measured
+// camera +79.1deg, OTOS raw +80.5deg, encoder odometry +79.9deg.
+//
+// `Kinematics::Differential` keeps the standard omega = (vR - vL) / b and
+// must NOT be "fixed" to compensate -- src/tests/sim/unit/
+// test_kinematics.py asserts that formula by name. If some angle looks
+// backwards, the bug is a stale assumption somewhere, not a missing flip.
+//
+// With one convention there is no longer an encoder-frame/world-frame
+// split to navigate: `pose` serves the arrival/frozen distance check
+// (rotation-invariant anyway) AND the SUC-005 dead-reckoning fallback
+// (`lastGoodPose_`/`lastGoodWheelPose_` differenced against `state.pose`,
+// which is now the SAME convention, by construction) AND, via the
+// now-identity `worldPose` below, the world-frame bearing-to-target
+// computation.
 #pragma once
 
 #include <cstdint>
@@ -96,69 +109,44 @@ inline constexpr float kNavRefreshFraction = 0.5f;             // [1]
 // --- Omega sign at the Navigator/Planner command boundary (135-004,
 // "Landmine 4") -----------------------------------------------------------
 //
-// Commanded Move::omega is opposite true-world CCW ON REAL HARDWARE --
-// measured, and reconciled on the host TODAY by every bench script's own
-// `YAW_SIGN = -1.0` (e.g. src/tests/bench/goto_otos.py:54, "commanded
-// omega is opposite to world CCW (measured)"; matches
-// src/firm/motion/planner/planner.cpp:509-512's own comment naming the RIGHT
-// fix as "the body kinematics' omega sign", deliberately deferred --
-// Option B, out of scope this sprint, ticket 008's own "Scope" section).
+// SUPERSEDED 2026-08-13, kept because the reasoning is instructive. This
+// block used to assert that "commanded Move::omega is opposite true-world
+// CCW ON REAL HARDWARE", citing every bench script's own `YAW_SIGN =
+// -1.0`, and insisted it was "a SEPARATE fact" from the OTOS-mount sign
+// above -- "both are real, both apply, and they compose by simple
+// sequencing, not cancellation."
 //
-// This is a SEPARATE fact from ticket 008's OTOS-mount sign (the
-// `pose`/`-state.otos.heading` reconciliation above): that one settles
-// how the OTOS chip's own mounted orientation relates to encoder-derived
-// heading; THIS one is about how the DRIVETRAIN's own commanded-omega
-// convention relates to true-world CCW, independent of OTOS entirely (it
-// is exactly as present on a robot with no OTOS at all -- goto_otos.py's
-// sibling scripts measure it via camera, not OTOS). Both are real,
-// both apply, and they compose by simple sequencing, not cancellation.
+// They were not two facts. They were one: tovez's swapped drive ports
+// (see this header's OTOS sign convention section). A robot whose "left"
+// wheel is physically its right wheel has BOTH symptoms at once -- its
+// encoder heading runs backwards AND its commanded omega turns it the
+// wrong way -- because both come from the same omega = (vR - vL) / b with
+// the labels transposed. Fixing the port binding retires both symptoms
+// together, and tovez.json's `navigator.yaw_sign` is now +1.0.
 //
-// `Motion::ArcSolver::solve()` (135-002) is pure geometry with no
-// knowledge of either quirk: fed a pose, it returns an omega in THAT
-// pose's own heading convention (arc_solver.h's own `ArcSolution::omega`
-// doc: "CCW-positive, Pose::heading's own sign convention"). Whether that
-// pose's heading should be RAW `state.otos.heading` (true-world) or the
-// encoder-sign `pose` above depends entirely on whether THIS robot's
-// drivetrain has the quirk -- a real, hardware-specific, physically-
-// measured fact this file cannot derive or assume, and which no firmware
-// simulator (IdealPlant/SimPlant alike) can expose either: both read
-// `Move`-commanded wheel velocities directly as their own ground truth,
-// so they are tautologically self-consistent with whichever convention
-// Navigator uses, by construction, regardless of what a REAL robot's
-// motors/encoders happen to do (verified directly: hardcoding this flip
-// unconditionally reproduces testConvergesFromRestAndSettles's own
-// failure against the ctest suite's IdealPlant -- there is no plant
-// model that can validate this sign choice in sim, only a real bench
-// pass, ticket 006, can).
+// `Motion::ArcSolver::solve()` (135-002) is pure geometry: fed a pose, it
+// returns an omega in THAT pose's own heading convention (arc_solver.h's
+// own `ArcSolution::omega` doc: "CCW-positive, Pose::heading's own sign
+// convention"). Now that `pose`, `worldPose`, `Move::omega` and the world
+// are ALL one convention, that is the only convention in play.
 //
-// `NavigatorLimits::yawSign` (below) is therefore a CONFIGURABLE field,
-// following configuration-discipline.md exactly the way a per-direction
-// rotation-calibration gain already does elsewhere in this codebase: it
-// defaults to `+1.0` (no flip), which makes `worldPose.heading` (below)
-// equal `pose.heading` (encoder-sign) EXACTLY -- i.e. every existing
-// ctest/sim scenario that does not set it (every one as of this ticket)
-// is COMPLETELY UNCHANGED from ticket 003's original behavior, byte for
-// byte. A robot whose bench pass (ticket 006) measures the quirk sets
-// `yawSign = -1.0` in ITS OWN robot JSON `navigator` block (this ticket's
-// own NavigatorLimits config group), matching goto_otos.py's measured
-// `YAW_SIGN` for that same robot.
+// `NavigatorLimits::yawSign` (below) stays a CONFIGURABLE field, per
+// configuration-discipline.md, and stays at its `+1.0` default -- which
+// makes `worldPose.heading` equal `pose.heading` exactly and both of this
+// file's `limits_.yawSign * ...` multiplications identities. It is now an
+// escape hatch, not a correction anyone is expected to need: reach for it
+// ONLY for a robot measured to turn opposite its commanded omega with its
+// drive ports already correctly bound. A robot that needs `yawSign =
+// -1.0` should be suspected of a mis-bound `motors.left_port`/
+// `right_port` FIRST, because that is what the -1.0 here was really
+// standing in for.
 //
-// `worldPose.heading = yawSign * pose.heading`: at `yawSign = +1` this is
-// `pose.heading` (encoder-sign, ticket 003's original convention,
-// unchanged). At `yawSign = -1` this is `-pose.heading` == raw, un-negated
-// `state.otos.heading` (ticket 008 settled that this raw wire value
-// tracks true-world CCW directly) -- exactly the pose goto_otos.py's own
-// `solve_arc()` feeds its identical tangent-arc formula. `solve()`'s
-// returned omega, and the pivot sub-machine's own bearing-sign omega, are
-// therefore in THAT SAME convention `worldPose.heading` used -- multiplying
-// by the SAME `yawSign`, at the ONE place each is assigned into a `Move`
-// handed to `planner_.move()`, converts back to Move::omega's own wire
-// convention (a no-op at `yawSign = +1`; goto_otos.py's own `YAW_SIGN`
-// conversion at `yawSign = -1`). This is the "one constant, one comment,
-// one flip" discipline ticket 008's own Completion Notes already applied
-// to ITS sign fix (`kOtosHardwareMountSign`) -- change the ONE config
-// value, not scattered call sites, if and when Option B (the deferred
-// kinematics fix) ever lands and makes this field obsolete.
+// NOTE the sim cannot referee this choice for you: SimPlant/IdealPlant
+// both read `Move`-commanded wheel velocities directly as their own
+// ground truth, so they are tautologically self-consistent with whatever
+// convention Navigator uses. `Core::BootOverrides::navigatorYawSign`
+// pins the sim harnesses to +1.0 for exactly that reason. Only a camera
+// pass on real hardware can measure this.
 //
 // Internal bookkeeping that threads omega between successive solve()
 // calls (`previousOmega_`, `lastIssuedOmega_`) stays in solve()'s own

@@ -35,7 +35,10 @@ ROBOT_TAG = 100
 
 CRUISE = 150.0          # [mm/s]
 PIVOT_OMEGA = 1.6       # [rad/s]
-YAW_SIGN = -1.0         # positive omega decreases camera yaw (forward)
+YAW_SIGN = +1.0       # 2026-08-13: commanded omega is now REP-103 CCW-positive,
+                      # i.e. it INCREASES camera yaw. Was -1.0, a workaround for
+                      # tovez's swapped drive-motor labelling (port 1 was its RIGHT
+                      # wheel); fixed at source via motors.left_port/right_port.
 
 TURN_FIRST_DEG = 30.0   # beyond this, pivot to face before moving
 POS_TOL = 0.6           # [cm]

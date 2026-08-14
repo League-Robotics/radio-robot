@@ -39,26 +39,29 @@ constexpr uint8_t kOtosExpectedProductId = 0x5F;
 constexpr float kPosMmPerLsb = 0.305f;                              // [mm/LSB]
 constexpr float kHdgRadPerLsb = 0.00549f * (3.14159265f / 180.0f);  // [rad/LSB]
 
-// Hardware-mounted OTOS heading sign (135-008,
-// sim-otos-heading-sign-diverges-from-hardware-angle-moves-never-stop.md,
-// Option A). OtosPlant's own (x, y, heading) accumulator carries the SAME
-// sign as encoder-derived heading -- it integrates via the identical
-// midpoint-arc math Core::Odometry uses (otos_plant.h's own header comment).
-// The REAL chip does not: it is measurably mounted with its heading sign
-// INVERTED relative to encoder heading (+84.58deg optical vs. -82.45deg
-// encoder on one measured rotation -- planner.cpp:499-513's own comment),
-// and the firmware reconciles that at exactly one place,
-// planner.cpp:513 -- `pose_.applyOtosHeading(-state.otos.heading, ...)`.
-// That single negation is only correct if the OTOS heading it receives
-// already carries the hardware's inverted sign. So this constant makes the
-// SIMULATED chip report the SAME (inverted) sign the real chip does --
-// negated relative to OtosPlant's own internal accumulator -- so
-// planner.cpp:513's negation reconciles sim and hardware IDENTICALLY
-// (double negative = matches encoder sign, same as hardware). If and when
-// Option B (planner.cpp:509-512 -- fixing the body-kinematics omega sign at
-// its root) ever lands, planner.cpp:513's negation and this constant flip
-// together in the SAME change; see the issue file for the full analysis.
-constexpr float kOtosHardwareMountSign = -1.0f;
+// OTOS heading sign as this simulated chip reports it on the wire.
+//
+// +1.0 since 2026-08-13: identity. The real chip's heading, encoder-
+// derived heading and true-world CCW are ONE convention (REP-103), so the
+// simulated chip reports OtosPlant's own internal accumulator unmodified.
+//
+// This was -1.0 from 135-008 until then, on the theory that the real chip
+// is "measurably mounted with its heading sign INVERTED relative to
+// encoder heading" (+84.58deg optical vs. -82.45deg encoder on one
+// measured rotation). The measurement was real; the attribution was not.
+// It was the ENCODERS that ran backwards, because tovez's firmware "left"
+// wheel was physically its RIGHT wheel (gen_boot_config.py hardcoded
+// LEFT_PORT=1 on a robot wired port 1 = right), and omega = (vR - vL) / b
+// with the labels transposed negates every encoder-derived heading. This
+// constant existed only to make the sim reproduce that inversion so
+// planner.cpp's matching negation would cancel it. Both are gone now: the
+// port binding is per-robot config (motors.left_port/right_port) and
+// applyOtosHeading() takes the raw value.
+//
+// Keep it as a named constant rather than deleting the multiply: it is
+// the one place a genuinely mirror-mounted OTOS would be expressed, and
+// its absence is what let the last inversion hide in three call sites.
+constexpr float kOtosHardwareMountSign = +1.0f;
 
 // Color/line sensors -- source/devices/{color_sensor,line_sensor}.h. These
 // are never simulated devices (no plant models them); every transaction to

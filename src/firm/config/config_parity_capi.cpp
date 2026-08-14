@@ -60,6 +60,7 @@ uint32_t configParityFieldOffsets(uint32_t group, uint32_t* out, uint32_t count)
     case ConfigParityGroup::Motors: {
       using T = msg::Motors;
       static const uint32_t kOffsets[] = {
+          offsetof(T, left_port),          offsetof(T, right_port),
           offsetof(T, travel_calib_left),  offsetof(T, travel_calib_right),
           offsetof(T, fwd_sign_left),      offsetof(T, fwd_sign_right),
           offsetof(T, output_deadband),    offsetof(T, reversal_dwell),

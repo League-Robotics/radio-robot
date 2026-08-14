@@ -496,21 +496,29 @@ TickResult Planner::tick(const Types::RobotState& state) {
   //
   // Absent or stale chip falls straight back to the wheel path, with no jump
   // at either transition (PoseTracker::applyOtosHeading()).
-  // NEGATED, and that is not a fudge -- it reconciles a real, pre-existing
-  // sign inversion. Measured 2026-08-05 on a single commanded rotation: the
-  // OTOS turned +84.58deg while the encoder-derived heading reported
-  // -82.45deg. Same magnitude, opposite sign. The wheel path has always been
-  // internally self-consistent (it closes the loop on its own heading), so
-  // nothing ever surfaced it -- but it is why every host tool carries a
-  // YAW_SIGN = -1, and feeding unnegated optical truth into a planner built
-  // on the inverted convention makes the Angle stop condition count the wrong
-  // way and spin forever.
   //
-  // The RIGHT fix is the body kinematics' omega sign, so commanded omega and
-  // world CCW finally agree. That is deliberately not done here: it changes
-  // the meaning of omega on the wire and invalidates both stored per-direction
-  // rotation calibrations, so it needs its own change with the bench free.
-  pose_.applyOtosHeading(-state.otos.heading, state.otos.present, state.otos.connected);
+  // NOT negated (2026-08-13). This call carried a negation from 2026-08-05,
+  // justified by a measurement on tovez: "the OTOS turned +84.58deg while the
+  // encoder-derived heading reported -82.45deg. Same magnitude, opposite
+  // sign." The measurement was real; the diagnosis was backwards. It was the
+  // ENCODER that disagreed with the world, because this robot's firmware
+  // "left" wheel was physically its RIGHT wheel -- every motors/drive
+  // *_left/*_right value was labelled by firmware label, not by wheel. With
+  // that relabelled in the robot JSON, encoder heading is CCW-positive like
+  // the world, the OTOS agrees with it, and negating optical truth here is
+  // what would break the Angle stop instead of fixing it.
+  //
+  // Verified on tovez against overhead-camera truth after the relabel: one
+  // physical CCW rotation measured camera +79.1deg, OTOS raw +80.5deg,
+  // encoder odometry +79.9deg -- all three the same sign, same magnitude.
+  //
+  // This is the "RIGHT fix" the superseded comment here described as
+  // deliberately deferred ("the body kinematics' omega sign, so commanded
+  // omega and world CCW finally agree"). It did NOT need a kinematics change:
+  // Kinematics::Differential stays the standard REP-103 omega = (vR-vL)/b,
+  // which src/tests/sim/unit/test_kinematics.py asserts by name. Flipping
+  // that formula was tried and rejected -- the test caught it immediately.
+  pose_.applyOtosHeading(state.otos.heading, state.otos.present, state.otos.connected);
   // OTOS heading blend -- DELETED by 130-009 along with
   // PlannerLimits::headingOtosWeight/otosStaleness: the feature was live
   // code (pose_.blendHeading()) but configured off in every robot JSON

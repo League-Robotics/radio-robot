@@ -373,6 +373,13 @@ REQUIRED_FIELD_HOMES = [
     ("Motors", "travel_calib_right"),
     ("Motors", "fwd_sign_left"),
     ("Motors", "fwd_sign_right"),
+    # drive_ports() -- also soft (_get() with a 1/2 default), and read by
+    # BOTH of the two functions above to decide which port each wheel's
+    # value lands on. Without a schema home the host loader rejects the key
+    # outright (extra="forbid"), which is how tovez.json became unloadable
+    # the moment its real wiring was written down.
+    ("Motors", "left_port"),
+    ("Motors", "right_port"),
 ]
 
 

@@ -115,7 +115,11 @@ struct IdealPlant {
     state.otos.connected = true;
     state.otos.x = x;
     state.otos.y = y;
-    state.otos.heading = -heading;  // wire/hardware-mounted sign, ticket 008
+    // Same sign as the encoder pose above -- one REP-103 CCW-positive
+    // convention for encoders, OTOS and world alike (2026-08-13). The
+    // negation this line used to carry was the tovez swapped-drive-port bug
+    // seen from the encoder side, not an OTOS mount fact.
+    state.otos.heading = heading;
     state.otos.sampleTime = sampleTime;
   }
 };

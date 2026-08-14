@@ -104,8 +104,8 @@ msg::DrivetrainConfig defaultDrivetrainConfig() {
     cfg.setRotationOffsetNeg(-7.04f);
     // The drive-pair port binding lives in DrivetrainConfig (the robot's
     // normal drive pair); the coupled bench rig re-binds via `DEV DT PORTS`.
-    cfg.setLeftPort(1);
-    cfg.setRightPort(2);
+    cfg.setLeftPort(2);
+    cfg.setRightPort(1);
     return cfg;
 }
 
@@ -229,17 +229,26 @@ msg::Geometry defaultGeometryGroup() {
 
 msg::Motors defaultMotorsGroup() {
     // Drive-pair-only slice of travel_calib_for_ports()/fwd_sign_for_ports()
-    // (ports 1/2 only -- Config::Robot's schema has no
-    // per-port array, see this file's own comment above) plus
-    // motors.vel_*/output_deadband/reversal_dwell (132-017 JSON reshape
-    // retarget -- all lived under `control` before the grouped-shape
-    // migration), shared by both bound motors (vel_gains_for_config()/
-    // output_deadband_for_config()/reversal_dwell_for_config() above).
+    // (this robot's OWN drive ports, left=2 right=1 --
+    // Config::Robot's schema has no per-port array, see this file's own
+    // comment above) plus motors.vel_*/output_deadband/reversal_dwell
+    // (132-017 JSON reshape retarget -- all lived under `control` before the
+    // grouped-shape migration), shared by both bound motors
+    // (vel_gains_for_config()/output_deadband_for_config()/
+    // reversal_dwell_for_config() above).
     msg::Motors cfg;
-    cfg.travel_calib_left = 0.7165f;    // [mm/deg]
-    cfg.travel_calib_right = 0.7077f;  // [mm/deg]
-    cfg.fwd_sign_left = 1;
-    cfg.fwd_sign_right = -1;
+    // The port binding itself, so this group round-trips the robot JSON
+    // exactly (configuration-discipline.md invariant 2). Boot-only: the
+    // live MOTORS push path (Core::configureMotor) applies travel_calib
+    // only, and re-binding a running robot's drive ports is not a thing it
+    // does. msg::DrivetrainConfig (defaultDrivetrainConfig(), above) is
+    // what boot_wiring.cpp actually reads to bind motorL_/motorR_.
+    cfg.left_port = 2;
+    cfg.right_port = 1;
+    cfg.travel_calib_left = 0.7077f;    // [mm/deg]
+    cfg.travel_calib_right = 0.7165f;  // [mm/deg]
+    cfg.fwd_sign_left = -1;
+    cfg.fwd_sign_right = 1;
     cfg.output_deadband = 0.03f;         // [-1,1] fraction
     cfg.reversal_dwell = 100.0f;            // [ms]
     cfg.vel_kp = 0.0016f;
@@ -263,13 +272,13 @@ msg::Drive defaultDriveGroup() {
     cfg.duty_per_speed_left = 0.001182f;    // [duty/(mm/s)]
     cfg.duty_per_speed_right = 0.001182f;  // [duty/(mm/s)]
     cfg.crawl_pulse = 0.0f;                    // [-1,1]; 0 = off
-    cfg.wheel_gain_left_accel = 0.9075f;
+    cfg.wheel_gain_left_accel = 0.8f;
     cfg.wheel_intercept_left_accel = 0.0f;      // [mm/s]
-    cfg.wheel_gain_left_decel = 0.9075f;
+    cfg.wheel_gain_left_decel = 0.8f;
     cfg.wheel_intercept_left_decel = 0.0f;      // [mm/s]
-    cfg.wheel_gain_right_accel = 0.8f;
+    cfg.wheel_gain_right_accel = 0.9075f;
     cfg.wheel_intercept_right_accel = 0.0f;     // [mm/s]
-    cfg.wheel_gain_right_decel = 0.8f;
+    cfg.wheel_gain_right_decel = 0.9075f;
     cfg.wheel_intercept_right_decel = 0.0f;     // [mm/s]
     return cfg;
 }
@@ -389,7 +398,7 @@ msg::Navigator defaultNavigatorGroup() {
     cfg.approach_radius = 0.0f;           // [mm]
     cfg.approach_speed = 0.0f;             // [mm/s]
     cfg.default_arrival_tolerance = 10.0f;  // [mm]
-    cfg.yaw_sign = -1.0f;
+    cfg.yaw_sign = 1.0f;
     return cfg;
 }
 
