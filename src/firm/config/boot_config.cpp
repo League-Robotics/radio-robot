@@ -77,8 +77,8 @@ void defaultMotorConfigs(msg::MotorConfig* out) {
     // was calibration.mm_per_wheel_deg_{left,right} before the
     // grouped-shape migration) for the drive-pair ports (ports
     // 1/2); other ports use the bench placeholder.
-    out[0].setTravelCalib(0.7885f);   // [mm/deg] port 1
-    out[1].setTravelCalib(0.7789f);   // [mm/deg] port 2
+    out[0].setTravelCalib(0.7837f);   // [mm/deg] port 1
+    out[1].setTravelCalib(0.7837f);   // [mm/deg] port 2
     out[2].setTravelCalib(0.487f);   // [mm/deg] port 3
     out[3].setTravelCalib(0.487f);   // [mm/deg] port 4
 
@@ -245,8 +245,8 @@ msg::Motors defaultMotorsGroup() {
     // what boot_wiring.cpp actually reads to bind motorL_/motorR_.
     cfg.left_port = 2;
     cfg.right_port = 1;
-    cfg.travel_calib_left = 0.7789f;    // [mm/deg]
-    cfg.travel_calib_right = 0.7885f;  // [mm/deg]
+    cfg.travel_calib_left = 0.7837f;    // [mm/deg]
+    cfg.travel_calib_right = 0.7837f;  // [mm/deg]
     cfg.fwd_sign_left = -1;
     cfg.fwd_sign_right = 1;
     cfg.output_deadband = 0.03f;         // [-1,1] fraction
