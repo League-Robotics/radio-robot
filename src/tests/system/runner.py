@@ -193,7 +193,6 @@ class HardwareBackend:
         # same connection (measured 2026-08-14: 4/4 commands, ~120 enc counts
         # each).
         time.sleep(1.5)
-        self._ensure_data_plane(port)
         self._p.tlmOn()
         time.sleep(0.8)
         self._cam = None
@@ -470,6 +469,8 @@ class TourRunner:
         self._move_seq = 0
         # All records, appended by bus subscription -- EXPECT's haystack.
         self._records: list[dict] = []
+        # Every ack id ever drained, by any waiter (see _drain).
+        self._seen_acks: set[int] = set()
         recorder.subscribe(self._records.append)
         # seq_file of the previous directive's own tx record -- EXPECT's
         # window anchor ("between the previous command and the timeout").
@@ -482,12 +483,27 @@ class TourRunner:
         return _MOVE_ID_BASE + self._move_seq
 
     def _drain(self) -> list:
-        """THE single destructive telemetry drain."""
-        return self._b.read_pending_frames()
+        """THE single destructive telemetry drain.
+
+        Because it is destructive and MORE THAN ONE waiter drains it
+        (_wait_for_ack, _await_active, _wait_at_rest), every ack seen here is
+        remembered in _seen_acks. Otherwise an ack that arrives while a
+        DIFFERENT waiter is draining is consumed and lost forever, and the
+        move it belonged to is reported as "never completed" even though the
+        robot ran it perfectly. That is exactly what _await_active's 1.5 s
+        window did to the ack of the move it was watching.
+        """
+        frames = self._b.read_pending_frames()
+        for frame in frames:
+            for ack in (frame.acks or []):
+                self._seen_acks.add(ack.corr_id)
+        return frames
 
     def _wait_for_ack(self, move_id: int, timeout: float) -> bool:  # [s]
         # Backends may fold the Move id to fit the wire (see
         # HardwareBackend.move); match whichever id actually went out.
+        if move_id in self._seen_acks:
+            return True
         deadline = self._clock() + timeout
         # Fallback: treat "was active, then came to rest" as completion.
         # Kept because it is independently sound (a finished move should not
@@ -499,18 +515,19 @@ class TourRunner:
         saw_active = False
         quiet = 0
         while self._clock() < deadline:
-            for frame in self._drain():
-                for ack in (frame.acks or []):
-                    if ack.corr_id == move_id:
+            frames = self._drain()
+            if move_id in self._seen_acks:
+                return True
+            for frame in frames:
+                if frame.flags is None:
+                    continue
+                if frame.flags & _ACTIVE_BIT:
+                    saw_active = True
+                    quiet = 0
+                elif saw_active:
+                    quiet += 1
+                    if quiet >= _STOP_SETTLE_FRAMES:
                         return True
-                if frame.flags is not None:
-                    if frame.flags & _ACTIVE_BIT:
-                        saw_active = True
-                        quiet = 0
-                    elif saw_active:
-                        quiet += 1
-                        if quiet >= _STOP_SETTLE_FRAMES:
-                            return True
             self._sleep(_POLL)
         return False
 
@@ -728,9 +745,23 @@ class TourRunner:
             # id (both "id X is bad" theories were noise). Re-issue once if
             # nothing goes active; a Move that IS running is unaffected because
             # the re-issue carries the same id and replace semantics.
-            if not self._await_active(1.5):
+            # Re-issue until the robot ACTUALLY starts moving, not once.
+            # Measured 2026-08-14 on the bench: drops are FRONT-LOADED after a
+            # connection -- iterations 0,1,2,3,5 of a 24-move run dropped and
+            # then 18 ran consecutively with none. Opening the serial port
+            # asserts DTR and resets the nRF, so every fresh connection reboots
+            # the robot; systest opens one per tour and fires its first Move
+            # ~2 s in, straight into the boot window, where a Move is accepted
+            # and silently never executed. Long single-connection runs never
+            # saw it because they had already warmed past it. This is the
+            # "intermittent move drop" that was blamed in turn on Move ids,
+            # direction, the twist path, the stall detector, the relay data
+            # plane, and the battery.
+            for attempt in range(6):
+                if self._await_active(1.5):
+                    break
                 self._r.note("move did not go active; re-issuing",
-                             line_no=step.line_no, id=move_id)
+                             line_no=step.line_no, id=move_id, attempt=attempt + 1)
                 self._b.move(**kw)
             self._set_anchor()
             ids.append((step, move_id))
