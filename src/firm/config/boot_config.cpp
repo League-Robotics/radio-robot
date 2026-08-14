@@ -276,9 +276,9 @@ msg::Drive defaultDriveGroup() {
     cfg.wheel_intercept_left_accel = 0.0f;      // [mm/s]
     cfg.wheel_gain_left_decel = 0.8f;
     cfg.wheel_intercept_left_decel = 0.0f;      // [mm/s]
-    cfg.wheel_gain_right_accel = 0.9075f;
+    cfg.wheel_gain_right_accel = 0.9567f;
     cfg.wheel_intercept_right_accel = 0.0f;     // [mm/s]
-    cfg.wheel_gain_right_decel = 0.9075f;
+    cfg.wheel_gain_right_decel = 0.9567f;
     cfg.wheel_intercept_right_decel = 0.0f;     // [mm/s]
     return cfg;
 }
