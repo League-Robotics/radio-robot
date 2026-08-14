@@ -36,7 +36,12 @@ BODY_R = 9.0                        # [cm]
 EMERG_X = FIELD_X - BODY_R          # [cm] genuine drive-off only
 EMERG_Y = FIELD_Y - BODY_R
 SPEED = 140.0                       # [mm/s]
-RADIUS = 220.0                      # [mm] lobe radius; x span 4R, y span 2R
+# 150, not 220: the figure must live in the MIDDLE of the table. At R=220 the
+# lobes reach x = +-44 cm and the body corner +-53 cm against a 58.15 cm limit
+# -- close enough to the rails that a normal tracking error puts the robot on
+# one, where it wedges and the run is over. At R=150 the figure spans x +-30 cm
+# (body +-39) and y +-15 cm (body +-24): comfortably interior, all margin.
+RADIUS = 150.0                      # [mm] lobe radius; x span 4R, y span 2R
 
 
 def wrap(d):
@@ -101,28 +106,72 @@ def main():
         proto.tlmOn(); time.sleep(0.8)
 
         # Stage at the crossing point, facing NORTH: the lobes then lie left
-        # and right along the table's long axis. Camera-walked; this is setup.
-        for _ in range(10):
+        # and right along the table's long axis. Camera-walked; setup, not
+        # steering. Self-contained on purpose -- safedrive's halt line is a
+        # conservative +-53.2/30.6 with a predictive margin on top, which trips
+        # on an ordinary approach here and strands the run before it starts.
+        # This uses the real body-on-table limit, which is what actually
+        # matters.
+        # First: if it STARTS outside the limit, walk it inward. The fence
+        # refuses to move a robot already outside, so without this one bad
+        # ending strands every subsequent run.
+        for _ in range(6):
             p = fix(dc, cam, n=7)
             if p is None:
                 print("  no camera fix"); return 1
-            d = math.hypot(p[0], p[1])
-            if d < 4.0:
+            if abs(p[0]) <= EMERG_X - 2 and abs(p[1]) <= EMERG_Y - 2:
                 break
-            e = wrap(math.atan2(-p[1], -p[0]) - p[2])
-            if abs(e) > math.radians(6):
+            gx = -math.copysign(1.0, p[0]) if abs(p[0]) > EMERG_X - 2 else 0.0
+            gy = -math.copysign(1.0, p[1]) if abs(p[1]) > EMERG_Y - 2 else 0.0
+            nn = math.hypot(gx, gy) or 1.0
+            gx, gy = gx / nn, gy / nn
+            proj = math.cos(p[2]) * gx + math.sin(p[2]) * gy
+            if abs(proj) < 0.5:
+                e = wrap(math.atan2(gy, gx) - p[2])
                 proto.move_twist(0, 0, 1.0 if e > 0 else -1.0,
                                  stop_angle=abs(e), timeout=15000)
-                time.sleep(abs(e) / 1.0 + 2.2); continue
-            hop = min(300.0, d * 10.0)
+                time.sleep(abs(e) / 1.0 + 2.5)
+                continue
+            proto.move_twist((1.0 if proj > 0 else -1.0) * 100.0, 0, 0,
+                             stop_distance=200.0, timeout=12000)
+            time.sleep(200 / 100.0 + 2.5)
+
+        for _ in range(20):
+            p = fix(dc, cam, n=7)
+            if p is None:
+                print("  no camera fix"); return 1
+            r = math.hypot(p[0], p[1])
+            if r < 8.0:
+                break
+            e = wrap(math.atan2(-p[1], -p[0]) - p[2])
+            if abs(e) > math.radians(5):
+                proto.move_twist(0, 0, 1.0 if e > 0 else -1.0,
+                                 stop_angle=abs(e), timeout=15000)
+                time.sleep(abs(e) / 1.0 + 2.5)
+                continue
+            hop = min(250.0, max(60.0, (r - 6.0) * 10.0))
             proto.move_twist(110.0, 0, 0, stop_distance=hop, timeout=15000)
-            time.sleep(hop / 110.0 + 2.0)
+            t0 = time.time()
+            # Wait out the FULL move: the aim turn leaves a few degrees of
+            # error, so the hop tracks slightly off-radial and needs several
+            # iterations to converge. Cutting the wait short left the robot
+            # mid-hop each time and the loop ran out of attempts far from the
+            # centre.
+            while time.time() - t0 < hop / 110.0 + 4.0:
+                t = raw(dc, cam)
+                if t and (abs(t.world_xy[0]) > EMERG_X or abs(t.world_xy[1]) > EMERG_Y):
+                    proto.estop(); time.sleep(0.3); proto.estop(); break
+                time.sleep(0.06)
+            time.sleep(1.0)
         p = fix(dc, cam, n=7)
+        if p is None or math.hypot(p[0], p[1]) > 12.0:
+            print(f"  could not centre (at {p[0]:+.1f},{p[1]:+.1f}) -- refusing")
+            return 1
         e = wrap(math.pi / 2 - p[2])
         if abs(e) > math.radians(3):
             proto.move_twist(0, 0, 1.0 if e > 0 else -1.0,
                              stop_angle=abs(e), timeout=15000)
-            time.sleep(abs(e) / 1.0 + 2.2)
+            time.sleep(abs(e) / 1.0 + 2.5)
 
         start = fix(dc, cam)
         marks.append(("start", start))
@@ -144,7 +193,12 @@ def main():
                              timeout=int(lobe_t * 1000) + 12000, replace=False)
             proto.move_twist(args.speed, 0.0, -omega, stop_angle=2 * math.pi,
                              timeout=int(lobe_t * 1000) + 12000, replace=False)
-            ok = record(proto, dc, cam, 2 * lobe_t + 6.0, track, f"lap{lap+1}")
+            # Generous window: the robot's actual omega runs below commanded,
+            # so a lobe takes LONGER than 2*pi/omega. A window sized to the
+            # ideal time truncates the trace and makes the lobes look smaller
+            # than they are -- which is exactly how a 42%-too-LARGE radius got
+            # misread as 2 cm too tight.
+            ok = record(proto, dc, cam, 2 * lobe_t * 1.8 + 8.0, track, f"lap{lap+1}")
             p = fix(dc, cam)
             marks.append((f"lap{lap+1}", p))
             c = math.hypot(p[0]-start[0], p[1]-start[1]) * 10.0
@@ -165,6 +219,41 @@ def main():
     closure = math.hypot(e[0]-s[0], e[1]-s[1]) * 10.0
     dyaw = math.degrees(wrap(e[2]-s[2]))
     print(f"\n  CLOSURE: {closure:.1f} mm   heading {dyaw:+.2f} deg")
+
+    # Fit each lobe: split the track at the crossing (closest approach to the
+    # start after the first lobe is well underway).
+    def fit_circle(pts):
+        n = len(pts)
+        if n < 12:
+            return None
+        sx=sum(p[0] for p in pts); sy=sum(p[1] for p in pts)
+        sxx=sum(p[0]**2 for p in pts); syy=sum(p[1]**2 for p in pts)
+        sxy=sum(p[0]*p[1] for p in pts)
+        sxxx=sum(p[0]**3 for p in pts); syyy=sum(p[1]**3 for p in pts)
+        sxyy=sum(p[0]*p[1]**2 for p in pts); sxxy=sum(p[0]**2*p[1] for p in pts)
+        A=2*(sx*sx-n*sxx); B=2*(sx*sy-n*sxy); C=2*(sy*sy-n*syy)
+        D=sxx*sx-n*sxxx+sx*syy-n*sxyy
+        D2=sxx*sy-n*sxxy+syy*sy-n*syyy
+        det=A*C-B*B
+        if abs(det) < 1e-9:
+            return None
+        cx=(D*C-B*D2)/det; cy=(A*D2-B*D)/det
+        rs=[math.hypot(q[0]-cx,q[1]-cy) for q in pts]
+        R=sum(rs)/len(rs)
+        return cx, cy, R*10.0, (sum((r-R)**2 for r in rs)/len(rs))**0.5*10.0
+
+    tr = [(t, x, y) for (t, x, y, _, _) in track]
+    if tr:
+        late = [q for q in tr if q[0] > 0.35 * tr[-1][0]]
+        cross = min(late, key=lambda q: math.hypot(q[1]-s[0], q[2]-s[1]))[0] if late else None
+        lobeA = [(x, y) for (t, x, y) in tr if cross and t < cross]
+        lobeB = [(x, y) for (t, x, y) in tr if cross and t >= cross]
+        for nm, pts in (("lobe A", lobeA), ("lobe B", lobeB)):
+            f = fit_circle(pts)
+            if f:
+                cx, cy, R, rms = f
+                print(f"  {nm}: fitted R {R:6.1f} mm (commanded {args.radius:.0f}, "
+                      f"ratio {R/args.radius:.3f}), fit rms {rms:.1f} mm, {len(pts)} pts")
 
     import matplotlib
     matplotlib.use("Agg")

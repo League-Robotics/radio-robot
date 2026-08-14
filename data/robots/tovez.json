@@ -22,7 +22,7 @@
     "tag_offset_yaw": 0.0
   },
   "geometry": {
-    "trackwidth": 128,
+    "trackwidth": 107.5,
     "otos_untrusted": true,
     "rotational_slip": 0.9371,
     "rotation_gain_pos": 1.061,
