@@ -140,6 +140,11 @@ class CamfixStep:
     radius: float  # [mm]
     heading: float | None = None  # [rad] optional yaw assertion
     tol: float = 5.0 * _DEG  # [rad]
+    relative: bool = False
+    # relative=True: x/y are offsets from the RUN'S OWN starting truth pose --
+    # the natural form for a closure assertion, and the only form that lets
+    # one tour run both in sim (which always starts at the origin) and on the
+    # playfield (staged wherever the tour needs room to fit the table).
 
 
 Step = Union[MoveStep, StopStep, DwellStep, DbgStep, SendStep, ExpectStep,
@@ -248,7 +253,7 @@ def _parse_wheels(source: str, line_no: int, tokens: list[str]) -> MoveStep:
 def _parse_camfix(source: str, line_no: int, tokens: list[str]) -> CamfixStep:
     kv = _parse_kv(source, line_no, tokens,
                    {"x": None, "y": None, "radius": None, "heading": None,
-                    "tol": None})
+                    "tol": None, "relative": None})
     for req in ("x", "y", "radius"):
         if req not in kv:
             raise TourParseError(source, line_no, f"CAMFIX needs {req}=")
@@ -257,7 +262,8 @@ def _parse_camfix(source: str, line_no: int, tokens: list[str]) -> CamfixStep:
     heading = kv["heading"] * _DEG if "heading" in kv else None
     tol = kv.get("tol", 5.0) * _DEG
     return CamfixStep(line_no=line_no, x=kv["x"], y=kv["y"],
-                      radius=kv["radius"], heading=heading, tol=tol)
+                      radius=kv["radius"], heading=heading, tol=tol,
+                      relative=bool(kv.get("relative", 0.0)))
 
 
 def parse_tour_text(text: str, *, name: str, source: str = "<text>") -> Tour:

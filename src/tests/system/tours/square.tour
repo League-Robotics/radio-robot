@@ -36,4 +36,9 @@ STOP dwell=0.5
 # replies cannot be read back while binary telemetry streams (they interleave
 # in one buffer and the line reader cannot separate them), so that EXPECT can
 # never pass on hardware even though the robot answers.
-CAMFIX x=0 y=0 radius=80
+# The square occupies 0..+300 mm in x AND y from its start, so it must START
+# at (-150,-150) to sit centred on the field -- from the origin its north edge
+# has only ~86 mm of margin and normal drift walks the pre-move guard into a
+# refusal (measured: predicted end y=388 vs the 386 limit). Stage the robot at
+# (-150,-150) facing East; closure is asserted there.
+CAMFIX x=0 y=0 radius=80 relative=1

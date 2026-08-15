@@ -40,4 +40,6 @@ STOP dwell=0.5
 # replies cannot be read back while binary telemetry streams (they interleave
 # in one buffer and the line reader cannot separate them), so that EXPECT can
 # never pass on hardware even though the robot answers.
-CAMFIX x=0 y=0 radius=80
+# CW mirror: occupies 0..+300 in x and 0..-300 in y from its start, so it
+# starts at (-150,+150) to sit centred. See square.tour for the reasoning.
+CAMFIX x=0 y=0 radius=80 relative=1

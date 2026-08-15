@@ -121,6 +121,7 @@ class SimBackend:
             self._loop.set_speed_factor(speed_factor)
 
     def move(self, **kwargs: Any) -> int:
+        kwargs.pop("streaming", None)   # radio-only concept; sim is lossless
         return self._loop.move(**kwargs)
 
     def stop(self) -> int:
@@ -447,7 +448,34 @@ class HardwareBackend:
                     f"refused: predicted path leaves the table at "
                     f"({q[0]:.0f},{q[1]:.0f}) mm from ({pose['x']:.0f},"
                     f"{pose['y']:.0f}) -- limit +-{_BOX_X:.0f}/{_BOX_Y:.0f}")
+        # STREAMING moves (the pure-pursuit follower) skip delivery
+        # confirmation: each twist is replaced ~0.4 s later by the next one,
+        # so a lost packet self-heals, and the confirm path's ~0.4-1 s of
+        # snapshot+wait per send stretches the stream past each move's own
+        # stop_time bound -- the robot executes, expires, halts, executes:
+        # the herky-jerky pulsing observed live on the playfield. Discrete
+        # tour segments keep full confirmation; a stream must not.
+        streaming = bool(kw.pop("streaming", False))
         wheels = "v_left" in kw or "v_right" in kw
+        if streaming:
+            # The follower that issues streamed twists carries its OWN safety:
+            # an odometry geofence every iteration, an independent camera
+            # fence at ~2 Hz, and a cross-track abort -- and each twist is
+            # bounded by a ~1 s stop_time. The backend's pre-issue projection
+            # is redundant there and too conservative: it straight-lines each
+            # twist to its bound, which pokes past the limit on a path that
+            # legitimately hugs the margin (measured: refused at a predicted
+            # (-291,388) on a path whose true extent is y=332).
+            def _send_streaming():
+                k = dict(kw)
+                if wheels:
+                    return self._p.move_wheels(k.pop("v_left", 0.0),
+                                               k.pop("v_right", 0.0),
+                                               move_id=move_id, **k)
+                return self._p.move_twist(k.pop("v_x", 0.0), k.pop("v_y", 0.0),
+                                          k.pop("omega", 0.0),
+                                          move_id=move_id, **k)
+            return _send_streaming()
 
         def _send():
             k = dict(kw)
@@ -784,6 +812,12 @@ class TourRunner:
         advanced, worst = 0, 0.0
         laps = 0
         cam_checked = 0.0
+        # Velocity trace for the SMOOTHNESS gate (stakeholder directive
+        # 2026-08-14: "it goes and stops, and goes and stops -- that is not
+        # acceptable. Measure it, make it part of the test, stop doing it.")
+        # Sampled from odometry pose telemetry; speed is centred-difference
+        # over ~0.3 s windows.
+        speed_trace: list[tuple[float, float, float]] = []  # (t, x, y)
         # Closure is measured against where THIS RUN started, not against a
         # fixed coordinate: the robot may join a closed path anywhere along
         # it, and pure pursuit then correctly returns to that join point. A
@@ -796,6 +830,7 @@ class TourRunner:
         while self._clock() < deadline:
             pose = self._pose() or pose
             px, py, ph = pose
+            speed_trace.append((self._clock(), px, py))
             # advance the target index while it is closer than the lookahead
             j = idx
             for _ in range(n):
@@ -871,7 +906,7 @@ class TourRunner:
             hold = max(0.35, step.interval * 2.5)
             kw = dict(v_x=v, v_y=0.0, omega=omega, stop_time=hold*1000.0,
                       timeout=max(2.0, hold*3.0)*1000.0,
-                      replace=True, id=self._next_move_id())
+                      replace=True, id=self._next_move_id(), streaming=True)
             self._b.move(**kw)
             self._r.tx_cmd("SPLINE_TWIST", {"v_x": v, "omega": round(omega, 4),
                                             "target": [round(tx,1), round(ty,1)],
@@ -888,6 +923,45 @@ class TourRunner:
         closure = math.dist(start_xy, end_xy) if sp.closed else float("nan")
         ok = laps >= target_laps or (not sp.closed)
         detail = (f"laps {laps}/{target_laps}, worst cross-track {worst:.0f} mm")
+
+        # ---- smoothness gate ------------------------------------------
+        # Windowed speed over the trace; ignore the first/last second (spin-up
+        # and the commanded stop). A PULSE is speed dipping below 30% of the
+        # commanded speed for >= 0.35 s and recovering. One may be a scuff;
+        # three or more is the go-stop-go pulsing and FAILS the step.
+        stops = 0
+        mean_speed = 0.0
+        if len(speed_trace) >= 10:
+            t0s, t1s = speed_trace[0][0] + 1.0, speed_trace[-1][0] - 1.0
+            spd = []
+            W = 3
+            for i in range(W, len(speed_trace) - W):
+                ta, xa, ya = speed_trace[i - W]
+                tb, xb, yb = speed_trace[i + W]
+                if tb - ta <= 0 or not (t0s <= speed_trace[i][0] <= t1s):
+                    continue
+                spd.append((speed_trace[i][0],
+                            math.dist((xa, ya), (xb, yb)) / (tb - ta)))
+            if spd:
+                mean_speed = sum(v for _, v in spd) / len(spd)
+                thresh = 0.3 * v
+                low_since = None
+                for t, sv in spd:
+                    if sv < thresh:
+                        if low_since is None:
+                            low_since = t
+                    else:
+                        if low_since is not None and t - low_since >= 0.35:
+                            stops += 1
+                        low_since = None
+                if low_since is not None and spd[-1][0] - low_since >= 0.35:
+                    stops += 1
+        detail += f", mean speed {mean_speed:.0f}/{v:.0f} mm/s, pulses {stops}"
+        self._r.note("spline_smoothness", mean_speed=round(mean_speed, 1),
+                     commanded=v, pulses=stops, samples=len(speed_trace))
+        if stops >= 3:
+            ok = False
+            detail += " -- PULSING (go-stop-go), unacceptable"
         if sp.closed:
             detail += f", closure {closure:.0f} mm"
         self._r.note("spline_result", laps=laps, worst_cross_track_mm=round(worst, 1),
@@ -1026,6 +1100,14 @@ class TourRunner:
                           + step.query)
 
     def _run_camfix(self, step: CamfixStep) -> StepResult:
+        # relative=1: x/y are offsets from the run's starting truth pose.
+        target_x, target_y = step.x, step.y
+        if getattr(step, "relative", False) and self._start_true:
+            target_x += self._start_true["x"]
+            target_y += self._start_true["y"]
+        step = type(step)(line_no=step.line_no, x=target_x, y=target_y,
+                          radius=step.radius, heading=step.heading,
+                          tol=step.tol, relative=False)
         pose = self._b.true_pose()
         if pose is None:
             self._r.camera_fix({"ok": False, "error": "no truth source",
@@ -1063,6 +1145,12 @@ class TourRunner:
     def run(self, tour: Tour) -> TourRunResult:
         self._tour_dir = (Path(tour.source).resolve().parent
                           if tour.source not in ("<text>", "") else Path("."))
+        # The run's own starting truth pose -- the anchor for CAMFIX
+        # relative=1 closure assertions.
+        try:
+            self._start_true = self._b.true_pose()
+        except Exception:
+            self._start_true = None
         result = TourRunResult(tour=tour.name, ok=True)
         steps = list(tour.steps)
         i = 0
