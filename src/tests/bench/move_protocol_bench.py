@@ -880,6 +880,16 @@ def main() -> int:
     p = argparse.ArgumentParser(description=__doc__,
                                 formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--port", default=DEFAULT_PORT)
+    p.add_argument("--no-stall", action="store_true",
+                   help="disable the stall detector for this session (robot "
+                        "on a STAND: wheels spin but the body never moves, so "
+                        "the OTOS body-speed stall check reads ~0 against a "
+                        ">40 mm/s demand and latches ~500 ms into EVERY "
+                        "sustained move -- measured 2026-08-14: each distance "
+                        "move cut at ~80 of 200 mm, completions never "
+                        "reached. Push it HERE, inside this session: closing "
+                        "any prior toggle connection resets the nRF and "
+                        "restores the baked value.)")
     args = p.parse_args()
 
     conn = SerialConnection(port=args.port)
@@ -908,6 +918,18 @@ def main() -> int:
     # parked robot on the stand answered HELLO/PING/READY fine but emitted
     # zero unsolicited telemetry until commanded).
     proto.tlmOn()
+
+    if args.no_stall:
+        import json as _json
+        import pathlib as _pl
+        from robot_radio.robot.pb2 import robot_config_pb2 as _pb
+        _wc = _json.loads((_pl.Path(__file__).resolve().parents[3] / "data" /
+                           "robots" / "tovez.json").read_text())["wheel_control"]
+        _fields = {k: float(v) for k, v in _wc.items() if not k.startswith("_")}
+        _fields["stall_window"] = 0.0
+        _ack = proto.set_config_group(_pb.WHEEL_CONTROL, **_fields)
+        print(f"stall detector OFF for this session (whole wheel_control "
+              f"group pushed; ack {'OK' if _ack and getattr(_ack, 'ok', False) else _ack})")
 
     result = Result()
     try:
