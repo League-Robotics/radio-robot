@@ -4,9 +4,9 @@
 # robot has been characterised on, which is the point of the test.
 
 MARK spline_start
-SPLINE file=tag_tour.path.json speed=100 lookahead=110 laps=1 tol=160 interval=0.4
+SPLINE file=tag_tour.path.json speed=100 lookahead=110 laps=1 tol=85 interval=0.4
 STOP dwell=1.0
 
-# Closure is asserted by the SPLINE file=tag_tour.path.json speed=100 lookahead=110 laps=1 tol=160 interval=0.4
+# Closure is asserted by the SPLINE file=tag_tour.path.json speed=100 lookahead=110 laps=1 tol=85 interval=0.4
 # pose), which is the right check for a closed path joined anywhere
 # along its length. A CAMFIX on a fixed coordinate asserts staging.

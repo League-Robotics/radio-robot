@@ -805,6 +805,20 @@ class TourRunner:
         Nezha brick latches its last speed if a zero is lost).
         """
         sp = splinefile.load(tour_dir / step.path)
+        # PREDICT before driving (stakeholder 2026-08-14: "predict where you
+        # are going and do not go there if it runs off the table"): the swept
+        # BODY footprint -- nose, tail and both sides along the path tangent,
+        # inflated by this tour's own cross-track tolerance -- must fit the
+        # table. Refuse the whole path up front rather than fencing mid-run.
+        worst, wi = splinefile.sweep_violation(
+            list(sp.points), closed=sp.closed, cross_track=step.tol)
+        if worst > 0:
+            q = sp.points[wi]
+            return StepResult(step.line_no, "spline", False,
+                              f"REFUSED: swept footprint leaves the table by "
+                              f"{worst:.0f} mm near ({q[0]:.0f},{q[1]:.0f}) "
+                              f"(tol {step.tol:.0f} mm); fix the path, not "
+                              f"the fence")
         pts = list(sp.points)
         n = len(pts)
         v = step.speed
@@ -835,6 +849,7 @@ class TourRunner:
         advanced, worst = 0, 0.0
         laps = 0
         cam_checked = 0.0
+        last_cam_ok = self._clock()   # tag-loss watchdog anchor
         # Velocity trace for the SMOOTHNESS gate (stakeholder directive
         # 2026-08-14: "it goes and stops, and goes and stops -- that is not
         # acceptable. Measure it, make it part of the test, stop doing it.")
@@ -890,6 +905,24 @@ class TourRunner:
             if now - cam_checked > 0.5 and hasattr(self._b, "quick_pose"):
                 cam_checked = now
                 tp = self._b.quick_pose()
+                if tp is None:
+                    # TAG-LOSS WATCHDOG. When the camera cannot see the robot
+                    # the follower is flying on pure odometry -- and if the
+                    # robot is grinding a rail, the slipping wheels advance
+                    # odometry through the path IN FICTION: the lap
+                    # "completes", closure "passes", and the robot is
+                    # physically against the rail the entire time. Both
+                    # rail-grinding runs that scored PASS on 2026-08-14 were
+                    # exactly this. Losing the tag while moving is an ABORT,
+                    # never a shrug.
+                    if now - last_cam_ok > 2.0:
+                        self._b.estop()
+                        return StepResult(
+                            step.line_no, "spline", False,
+                            "camera lost the robot for >2 s while moving -- "
+                            "aborted; odometry cannot be trusted blind")
+                else:
+                    last_cam_ok = now
                 if tp:
                     if abs(tp["x"]) > _BOX_X or abs(tp["y"]) > _BOX_Y:
                         self._b.estop()
@@ -941,6 +974,7 @@ class TourRunner:
         self._sleep(1.0)
         end_fix = (self._b.quick_pose() if hasattr(self._b, "quick_pose")
                    else None)
+        cam_end = end_fix is not None or not hasattr(self._b, "quick_pose")
         end_xy = ((end_fix["x"], end_fix["y"]) if end_fix
                   else ((self._pose() or pose)[0], (self._pose() or pose)[1]))
         closure = math.dist(start_xy, end_xy) if sp.closed else float("nan")
@@ -993,6 +1027,11 @@ class TourRunner:
             detail += " -- PULSING (go-stop-go), unacceptable"
         if sp.closed:
             detail += f", closure {closure:.0f} mm"
+            if not cam_end:
+                # An odometry-only closure is the number the fiction reports.
+                ok = False
+                detail += " (ODOMETRY ONLY -- camera cannot see the robot at "
+                detail += "the end; not accepted)"
         self._r.note("spline_result", laps=laps, worst_cross_track_mm=round(worst, 1),
                      closure_mm=None if math.isnan(closure) else round(closure, 1))
         return StepResult(step.line_no, "spline", ok, detail)

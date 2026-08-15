@@ -35,6 +35,39 @@ from pathlib import Path
 FIELD_X, FIELD_Y = 671.5, 446.5     # [mm] table half-extents
 HALF_W = 60.0                        # [mm] robot half-width
 BOX_X, BOX_Y = FIELD_X - HALF_W, FIELD_Y - HALF_W
+# The robot is NOT a disc: the nose extends well ahead of the centre of
+# rotation and the caster behind it. A centre-only bound passed a path whose
+# apex put the centre at a "legal" y=370 while the NOSE ground the north rail.
+NOSE = 110.0                         # [mm] centre of rotation -> front extent
+TAIL = 120.0                         # [mm] centre of rotation -> rear extent
+
+
+def sweep_violation(points, closed=True, cross_track=60.0):
+    """Worst intrusion [mm] of the swept BODY footprint outside the table.
+
+    For each path point the heading is the local tangent; the footprint is
+    nose/tail along it and half-width across it, inflated by the follower's
+    allowed cross-track. Returns (worst_mm, index) -- worst <= 0 fits.
+    """
+    import math as _m
+    n = len(points)
+    worst, wi = -1e9, -1
+    for i in range(n):
+        a = points[i - 1]
+        b = points[(i + 1) % n] if closed else points[min(i + 1, n - 1)]
+        hx, hy = b[0] - a[0], b[1] - a[1]
+        L = _m.hypot(hx, hy) or 1.0
+        hx, hy = hx / L, hy / L
+        px, py = points[i]
+        for fx, fy in ((px + hx * NOSE, py + hy * NOSE),
+                       (px - hx * TAIL, py - hy * TAIL),
+                       (px - hy * HALF_W, py + hx * HALF_W),
+                       (px + hy * HALF_W, py - hx * HALF_W)):
+            v = max(abs(fx) - (FIELD_X - cross_track),
+                    abs(fy) - (FIELD_Y - cross_track))
+            if v > worst:
+                worst, wi = v, i
+    return worst, wi
 
 
 @dataclass(frozen=True)
