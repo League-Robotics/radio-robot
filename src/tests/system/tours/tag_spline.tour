@@ -4,7 +4,7 @@
 # robot has been characterised on, which is the point of the test.
 
 MARK spline_start
-SPLINE file=tag_tour.path.json speed=120 lookahead=140 laps=1 tol=200 interval=0.4
+SPLINE file=tag_tour.path.json speed=120 lookahead=140 laps=1 tol=120 interval=0.4
 STOP dwell=1.0
 
 # Closure is asserted by the SPLINE step itself (start pose vs end

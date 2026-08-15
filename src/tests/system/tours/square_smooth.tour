@@ -1,0 +1,8 @@
+# The SMOOTH square: the same 300 mm square as square.tour, corners rounded
+# at r=80 mm, driven as ONE continuous spline -- no stops, no pivots. The
+# discrete square.tour tests bounded-Move sequencing and planned stops; THIS
+# tour shows the same shape the way a spline drives it. Smoothness gate live.
+
+MARK square_smooth
+SPLINE file=square_smooth.path.json speed=120 lookahead=140 laps=1 tol=120 interval=0.4
+STOP dwell=0.5

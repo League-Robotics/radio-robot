@@ -422,6 +422,23 @@ class HardwareBackend:
         CAMERA, which cannot be wrong in the same direction as odometry. If
         the tag is not visible, the move is refused: driving blind is how the
         robot ends up somewhere nobody predicted."""
+        # STREAMING fast path FIRST -- before the camera guard and before
+        # delivery confirmation. The follower that streams twists carries its
+        # own fences (odometry geofence, independent camera fence, cross-track
+        # abort) and each twist is bounded by ~1 s of stop_time; the backend
+        # guard straight-lines each twist to its bound and refuses legal paths
+        # that hug the margin (measured TWICE: north at (-291,388), then south
+        # at (-266,-388) after this block was mistakenly placed BELOW the
+        # guard -- position in this function is load-bearing).
+        if kwargs.get("streaming"):
+            k = dict(kwargs); k.pop("streaming", None)
+            mid = int(k.pop("id", 0))
+            if "v_left" in k or "v_right" in k:
+                return self._p.move_wheels(k.pop("v_left", 0.0),
+                                           k.pop("v_right", 0.0),
+                                           move_id=mid, **k)
+            return self._p.move_twist(k.pop("v_x", 0.0), k.pop("v_y", 0.0),
+                                      k.pop("omega", 0.0), move_id=mid, **k)
         kw = dict(kwargs)
         move_id = int(kw.pop("id", 0))
         if self._dc is not None and not self._skip_guard:
@@ -455,27 +472,7 @@ class HardwareBackend:
         # stop_time bound -- the robot executes, expires, halts, executes:
         # the herky-jerky pulsing observed live on the playfield. Discrete
         # tour segments keep full confirmation; a stream must not.
-        streaming = bool(kw.pop("streaming", False))
         wheels = "v_left" in kw or "v_right" in kw
-        if streaming:
-            # The follower that issues streamed twists carries its OWN safety:
-            # an odometry geofence every iteration, an independent camera
-            # fence at ~2 Hz, and a cross-track abort -- and each twist is
-            # bounded by a ~1 s stop_time. The backend's pre-issue projection
-            # is redundant there and too conservative: it straight-lines each
-            # twist to its bound, which pokes past the limit on a path that
-            # legitimately hugs the margin (measured: refused at a predicted
-            # (-291,388) on a path whose true extent is y=332).
-            def _send_streaming():
-                k = dict(kw)
-                if wheels:
-                    return self._p.move_wheels(k.pop("v_left", 0.0),
-                                               k.pop("v_right", 0.0),
-                                               move_id=move_id, **k)
-                return self._p.move_twist(k.pop("v_x", 0.0), k.pop("v_y", 0.0),
-                                          k.pop("omega", 0.0),
-                                          move_id=move_id, **k)
-            return _send_streaming()
 
         def _send():
             k = dict(kw)
@@ -538,14 +535,40 @@ class HardwareBackend:
         return self._p.stop()
 
     def estop(self) -> int:
-        # A halt is a REQUEST: the brick latches its last speed and a lost
-        # zero write is permanent, so it is always sent twice.
-        r = self._p.estop()
-        time.sleep(0.25)
-        try:
-            self._p.estop()
-        except Exception:
-            pass
+        """Halt and VERIFY, resending until telemetry shows the robot at rest.
+
+        A halt is a REQUEST over a link that loses ~5% of packets, and the
+        brick latches its last commanded speed -- a lost zero write is
+        permanent. "Sent twice" was not enough: the follower's geofence
+        tripped at the north apex, its estop was lost, and the robot ground
+        the rail with a fence that had already "fired". (Same failure the
+        project measured on vevov 2026-08-03: one estop failed 5 of 6 times.)
+        Rest here means the ACTIVE flag clear on consecutive frames.
+        """
+        r = 0
+        for attempt in range(6):
+            try:
+                r = self._p.estop()
+            except Exception:
+                pass
+            quiet = 0
+            deadline = time.time() + 0.7
+            while time.time() < deadline:
+                for f in self._p.read_pending_binary_tlm_frames():
+                    self._rec.rx_tlm(f)
+                    self._stashed.append(f)
+                    if f.flags is not None:
+                        if f.flags & _ACTIVE_BIT:
+                            quiet = 0
+                        else:
+                            quiet += 1
+                if quiet >= 3:
+                    if attempt > 0:
+                        self._rec.note("estop landed after resend",
+                                       attempts=attempt + 1)
+                    return r
+                time.sleep(0.03)
+        self._rec.note("estop NEVER confirmed at rest after 6 sends")
         return r
 
     def read_pending_frames(self) -> list:
