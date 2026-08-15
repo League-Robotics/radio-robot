@@ -112,6 +112,13 @@ def _make_loop():
     return loop
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="firmware bakes tovez's bench-fitted ASYMMETRIC wheel gains "
+           "(L 0.8 / R 0.9567, 2026-08-14 re-fit); the sim plant is "
+           "symmetric, so the real-robot correction CAUSES the crab here -- "
+           "clasi/issues/sim-accuracy-tests-couple-plant-to-baked-per-robot-"
+           "geometry.md")
 def test_straight_700mm_leg_at_150mms_ideal_chip_does_not_crab():
     """Permanent regression test for 118-001's straight-leg crab (119
     ticket 005) -- straight_drift_repro.py's own exact scenario, with
