@@ -1686,7 +1686,16 @@ class NezhaProtocol:
         caller's own pre-Move "just drive this now" usage) flushes pending
         and preempts the active Move, starting this one immediately;
         ``False`` enqueues behind the active Move (``ERR_FULL`` if 4 already
-        pending). ``move_id`` is echoed back in this Move's own COMPLETION
+        pending). TWO HARDWARE FACTS about ``move_id`` (measured 2026-08-14):
+        the firmware DEDUPS accepted ids in a 16-entry ring that OUTLIVES the
+        host session -- a resent id is acked err=0 and silently ignored, which
+        is idempotent-resend behaviour, so a NEW session reusing an old id has
+        its Move swallowed with a success ack. Use ids unique across sessions
+        (or 0, which is never deduped). And the id survives the wire only
+        mod 2**28: ids >= 268,435,456 come back truncated in the completion
+        ack and will never match what was sent.
+
+        ``move_id`` is echoed back in this Move's own COMPLETION
         ack (``Move.id`` — distinct from the enqueue ack, which echoes this
         envelope's ``corr_id`` as usual); the default ``0`` is fine for a
         caller that does not need to distinguish completion acks.

@@ -40,16 +40,29 @@ from tourfile import (  # noqa: E402
 )
 import splinefile  # noqa: E402
 
-# Move.id base. 1<<20 was chosen to stay clear of auto-assigned corr_ids, but
-# on hardware SOME ids are rejected outright -- the Move acks and then never
-# goes ACTIVE. Measured 2026-08-14, alternating drive direction so a table edge
-# could not confound it:
-#     id 0        drives (-137 enc)      id 1048577  DEAD (x2)
-#     id 100000   drives (+137 enc)      id 65535    DEAD
-# Not a simple magnitude threshold, and not characterised further here. 1000 is
-# in the range that demonstrably drives, and still clear of the small
-# auto-assigned corr_ids that ack matching has to discriminate against.
-_MOVE_ID_BASE = 1000
+# Move.id numbering. THE ROOT CAUSE of the "Move acks err=0 and never goes
+# ACTIVE" failure that consumed this whole investigation: the firmware dedups
+# Move ids (RobotLoop::alreadyAccepted, a 16-entry ring) so radio RESENDS of
+# one Move are idempotent -- but the ring OUTLIVES the host session, and a
+# fixed base meant every run reused ids 1001, 1002, ... So the first up-to-16
+# moves of every run after the first were acked err=0 and silently swallowed,
+# indistinguishable from success on the wire. Proven deterministically on
+# hardware:
+#     id=61001 first send   RAN          id=61002 fresh    RAN
+#     id=61001 second send  SWALLOWED    id=0 (unset)      always runs
+#
+# Every earlier theory -- bad id VALUES, boot race, direction, DBG/SEED, stall
+# detector, battery -- was this, sampled through overlapping id ranges between
+# test scripts. (The id VALUES were never the problem; REUSE was.)
+#
+# So the base must be unique per run. One more WIRE FACT, measured in sim
+# with two independent samples: Move.id is echoed back mod 2^28
+# (755582001 -> 218711089 and 355662001 -> 87226545, both exactly id-k*2^28),
+# so ids must stay below 268,435,456 or the completion ack never matches what
+# was sent. Base = seconds folded to < 2.5e8: unique per second across a
+# ~2.9-day cycle, far beyond the firmware's 16-entry accepted-id ring, and
+# the low ids stay clear for auto-assigned corr_ids.
+_MOVE_ID_BASE = 1000 + (int(time.time()) % 250_000) * 1000
 _ACTIVE_BIT = 1 << 2  # telemetry flags: kFlagActive
 _POLL = 0.02  # [s] ack-poll interval
 _STOP_SETTLE_FRAMES = 2  # consecutive inactive frames = at rest
