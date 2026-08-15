@@ -165,6 +165,23 @@ def _move_kwargs(step: MoveStep, move_id: int, *, replace: bool) -> dict:
     return kw
 
 
+def _is_relay_port(port: str) -> bool:
+    """True if `port` is a RADIOBRIDGE per config/devices.json."""
+    try:
+        import json as _json
+        from pathlib import Path as _Path
+        reg = _json.loads(
+            (_Path(__file__).resolve().parents[3] / "config" / "devices.json").read_text())
+        # devices.json is a dict keyed by UID, each value one device record.
+        rows = list(reg.values()) if isinstance(reg, dict) else reg
+        for row in rows:
+            if isinstance(row, dict) and row.get("port") == port:
+                return str(row.get("role", "")).upper() == "RADIOBRIDGE"
+    except Exception:
+        pass
+    return False
+
+
 class HardwareBackend:
     """Drives the REAL robot over serial/relay. Same backend surface as
     SimBackend, so the executor and every tour file are unchanged.
@@ -181,6 +198,12 @@ class HardwareBackend:
         from robot_radio.io.serial_conn import SerialConnection
         from robot_radio.robot.protocol import NezhaProtocol
 
+        # RADIOBRIDGE ports need the data-plane handshake before we connect.
+        # Decide by ROLE from the device registry, never by port number --
+        # port numbers move on every re-enumeration and this project has been
+        # burned by hardcoding them more than once.
+        if _is_relay_port(port):
+            self._force_data_plane(port)
         self._conn = SerialConnection(port=port)
         self._p = NezhaProtocol(self._conn)
         self._rec = recorder
@@ -199,6 +222,12 @@ class HardwareBackend:
         self._cam = None
         self._dc = None
         self._skip_guard = False
+        # Frames consumed by move()'s delivery confirmation are stashed here
+        # and handed to the NEXT read_pending_frames(), so confirming delivery
+        # cannot swallow acks the caller is waiting on. (Draining telemetry in
+        # one place and starving another waiter is a bug this file has already
+        # had once.)
+        self._stashed: list = []
         # Tag id and its offset come from the ROBOT CONFIG, never a literal:
         # tovez moved from tag 100 (centre-mounted) to tag 52 (front-mounted,
         # 113 mm up) on 2026-08-14, and a hardcoded 100 silently reports "no
@@ -270,6 +299,37 @@ class HardwareBackend:
                 return True
         self._rec.note("warm-up never produced motion")
         return False
+
+    def _force_data_plane(self, port: str) -> None:
+        """Walk the relay into its data plane on the RAW port, before
+        SerialConnection opens it.
+
+        SerialConnection classifies from the HELLO banner and, with a robot
+        streaming telemetry on the same channel, routinely misses it: the
+        connection then reports mode='direct', never runs _relay_handshake(),
+        and every command goes to the relay's CONTROL plane and is discarded.
+        Measured that way: 24 of 24 Moves lost. Doing the handshake on the raw
+        port first is reliable, and the relay STAYS in the data plane across
+        the reconnect that follows.
+        """
+        import serial as _serial
+        try:
+            s = _serial.Serial(port, 115200, timeout=0.3)
+        except Exception:
+            return
+        try:
+            time.sleep(1.2); s.reset_input_buffer()
+            for cmd in (b"!ECHO OFF\n", b"!MODE RAW250\n", b"!GO\n"):
+                s.write(cmd); s.flush(); time.sleep(0.45); s.read(400)
+            s.write(b"?\n"); s.flush(); time.sleep(0.5)
+            self._rec.note("relay data plane", info=s.read(200).decode(
+                "ascii", "replace").strip()[:60])
+        except Exception:
+            pass
+        finally:
+            try: s.close()
+            except Exception: pass
+            time.sleep(0.5)
 
     def _ensure_data_plane(self, port: str) -> None:
         """Make sure a RELAY is in its data plane before we send commands.
@@ -374,12 +434,47 @@ class HardwareBackend:
                     f"refused: predicted path leaves the table at "
                     f"({q[0]:.0f},{q[1]:.0f}) mm from ({pose['x']:.0f},"
                     f"{pose['y']:.0f}) -- limit +-{_BOX_X:.0f}/{_BOX_Y:.0f}")
-        if "v_left" in kw or "v_right" in kw:
-            return self._p.move_wheels(kw.pop("v_left", 0.0),
-                                       kw.pop("v_right", 0.0),
-                                       move_id=move_id, **kw)
-        return self._p.move_twist(kw.pop("v_x", 0.0), kw.pop("v_y", 0.0),
-                                  kw.pop("omega", 0.0), move_id=move_id, **kw)
+        wheels = "v_left" in kw or "v_right" in kw
+
+        def _send():
+            k = dict(kw)
+            if wheels:
+                return self._p.move_wheels(k.pop("v_left", 0.0),
+                                           k.pop("v_right", 0.0),
+                                           move_id=move_id, **k)
+            return self._p.move_twist(k.pop("v_x", 0.0), k.pop("v_y", 0.0),
+                                      k.pop("omega", 0.0), move_id=move_id, **k)
+
+        # CONFIRMED DELIVERY. The radio silently loses Moves -- measured
+        # 2026-08-14 with tovez on USB as an independent observer: 5% lost
+        # over the relay (2/40), 13% through this path under tighter timing
+        # (4/30), 0% over USB. A lost Move is invisible to the caller because
+        # the corr_id it gets back is assigned HOST-side.
+        #
+        # Confirmation is the ROBOT's own ack for this command's corr_id, not
+        # the ACTIVE flag: a queued Move (replace=False) legitimately follows
+        # one already running, so ACTIVE cannot distinguish "mine started"
+        # from "the previous one is still going".
+        #
+        # Resends are spaced >= 25 ms: below ~20 ms the relay drops packets
+        # outright, so resending faster makes delivery worse.
+        for attempt in range(1, 7):
+            corr = _send()
+            deadline = time.time() + 0.6
+            while time.time() < deadline:
+                for frame in self._p.read_pending_binary_tlm_frames():
+                    self._rec.rx_tlm(frame)
+                    self._stashed.append(frame)
+                    for ack in (frame.acks or []):
+                        if ack.corr_id == corr:
+                            if attempt > 1:
+                                self._rec.note("move delivered after resend",
+                                               corr_id=corr, attempts=attempt)
+                            return corr
+                time.sleep(0.02)
+            time.sleep(0.025)
+        self._rec.note("move NOT confirmed after 6 sends", corr_id=corr)
+        return corr
 
     def stop(self) -> int:
         return self._p.stop()
@@ -407,6 +502,9 @@ class HardwareBackend:
         frames = self._p.read_pending_binary_tlm_frames()
         for fr in frames:
             self._rec.rx_tlm(fr)
+        if self._stashed:
+            frames = self._stashed + frames
+            self._stashed = []
         return frames
 
     def send_line(self, line: str) -> None:
@@ -786,6 +884,13 @@ class TourRunner:
             # nothing goes active; a Move that IS running is unaffected because
             # the re-issue carries the same id and replace semantics.
             # Re-issue until the robot ACTUALLY starts moving, not once.
+            # ROOT CAUSE (measured 2026-08-14, tovez on USB as an independent
+            # observer while commands went over the radio): the relay loses
+            # ~5% of Moves (2/40) where USB loses none (0/40). A lost Move is
+            # lost SILENTLY -- the enqueue ack is generated host-side, so the
+            # caller sees a normal acceptance for a command the robot never
+            # received. Confirming delivery from TELEMETRY and resending is
+            # the only thing that closes it.
             # Measured 2026-08-14 on the bench: drops are FRONT-LOADED after a
             # connection -- iterations 0,1,2,3,5 of a 24-move run dropped and
             # then 18 ran consecutively with none. Opening the serial port
@@ -798,10 +903,14 @@ class TourRunner:
             # direction, the twist path, the stall detector, the relay data
             # plane, and the battery.
             for attempt in range(6):
-                if self._await_active(1.5):
+                if self._await_active(1.2):
                     break
                 self._r.note("move did not go active; re-issuing",
                              line_no=step.line_no, id=move_id, attempt=attempt + 1)
+                # >= 25 ms before resending: the relay silently DROPS packets
+                # spaced closer than ~20 ms (measured: 0% loss at 20 ms and
+                # above, 2-3% below), so resending faster makes delivery worse.
+                self._sleep(0.025)
                 self._b.move(**kw)
             self._set_anchor()
             ids.append((step, move_id))
