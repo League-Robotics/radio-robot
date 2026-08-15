@@ -967,7 +967,13 @@ class TourRunner:
                             math.dist((xa, ya), (xb, yb)) / (tb - ta)))
             if spd:
                 mean_speed = sum(v for _, v in spd) / len(spd)
-                thresh = 0.3 * v
+                # A pulse is a NEAR-STOP, not a slow-down: on a tight-radius
+                # path (tag_tour's loops are r=47-54 mm) the wheel-speed limits
+                # legitimately drop body speed well below the commanded cruise
+                # while the robot never stops moving. Gating at 30% of cruise
+                # flagged those turns as "pulsing" (4 pulses, mean 71/120) on a
+                # lap that never halted. Near-zero is what go-stop-go means.
+                thresh = max(0.15 * v, 25.0)
                 low_since = None
                 for t, sv in spd:
                     if sv < thresh:
