@@ -458,6 +458,23 @@ class HardwareBackend:
         #
         # Resends are spaced >= 25 ms: below ~20 ms the relay drops packets
         # outright, so resending faster makes delivery worse.
+        # Snapshot the ack ring FIRST. The ring is re-sent in every telemetry
+        # frame and survives across connections, while corr_ids restart at 1
+        # per connection -- so matching on corr_id alone hits a STALE entry
+        # from an earlier session and "confirms" a command the robot never
+        # received. Measured: delivery confirmed on the first send every time
+        # while the robot sat still for 487 frames. Only an ack that was NOT
+        # already in the ring counts.
+        before: set[int] = set()
+        t_snap = time.time() + 0.35
+        while time.time() < t_snap:
+            for frame in self._p.read_pending_binary_tlm_frames():
+                self._rec.rx_tlm(frame)
+                self._stashed.append(frame)
+                for ack in (frame.acks or []):
+                    before.add(ack.corr_id)
+            time.sleep(0.02)
+
         for attempt in range(1, 7):
             corr = _send()
             deadline = time.time() + 0.6
@@ -466,7 +483,7 @@ class HardwareBackend:
                     self._rec.rx_tlm(frame)
                     self._stashed.append(frame)
                     for ack in (frame.acks or []):
-                        if ack.corr_id == corr:
+                        if ack.corr_id == corr and corr not in before:
                             if attempt > 1:
                                 self._rec.note("move delivered after resend",
                                                corr_id=corr, attempts=attempt)
