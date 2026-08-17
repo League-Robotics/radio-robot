@@ -125,6 +125,11 @@ class DifferentialDrive {
     float stallSpeed = 0.0f;         // [counts/s]
     float stallDemand = 0.0f;        // [counts/s] 0 = detector off
     float stallWindow = 0.0f;        // [ms]
+    // Authority-headroom scaling. Ships OFF so the first bench pass and
+    // the golden-trace fidelity gate both run the PURE port of the old
+    // pipeline -- λ is a stage the old control law never had, and leaving
+    // it on from the start would make any discrepancy unattributable.
+    bool lambdaEnabled = false;
     // Output shaping.
     float crawlPulse = 0.0f;         // [-1, 1] sub-breakaway pulse amplitude; 0 = off
     // Kernel cadence.
@@ -135,16 +140,31 @@ class DifferentialDrive {
   // block the kernel fiber publishes every cycle.
   struct Output {
     uint32_t now = 0;               // [ms] kernel clock at publish
-    uint32_t nowMicros = 0;         // [us] same instant — age-math base
-    uint32_t cycleCount = 0;        // heartbeat
-    uint32_t cyclePeriod = 0;       // [us] measured (feeds all dt terms)
+    uint32_t nowFine = 0;           // [us] same instant — age-math base.
+                                    //   No unit in the name (the [us] tag
+                                    //   rules); named apart from now [ms].
+    uint32_t cycleCount = 0;        // heartbeat — the RobotLoop sentinel
+                                    //   watches THIS for advance
+    uint32_t cyclePeriodMeasured = 0;  // [us] measured (feeds all dt terms).
+                                    //   Named apart from Config::cyclePeriod
+                                    //   [ms] so the two units cannot be
+                                    //   confused at a call site.
     uint32_t cycleBusy = 0;         // [us]
+    uint32_t cycleOverrunCount = 0;  // cycles that missed their absolute
+                                    //   deadline — the observability half of
+                                    //   lesson 17
     // Measurement timestamps: stamped at collect SUCCESS only (the
     // 131-002 rule) — a failed collect HOLDS the stamp, so age grows
     // honestly. Right is deterministically ~one settle window younger
-    // than left (sequential split-phase). Age = (int32)(nowMicros − t).
+    // than left (sequential split-phase). Age = (int32)(nowFine − t).
     uint32_t sampleTimeLeft = 0;    // [us]
     uint32_t sampleTimeRight = 0;   // [us]
+    // Per-wheel software-rebaseline epoch. Bumped when THAT wheel's
+    // accumulated position is rebaselined — never a device reset. Feeds
+    // the telemetry encoder reading's own position_epoch so a host can
+    // tell "the robot moved backwards" from "the origin moved".
+    uint32_t positionEpochLeft = 0;
+    uint32_t positionEpochRight = 0;
     float positionLeft = 0.0f;      // [counts] accumulated, never device-reset
     float positionRight = 0.0f;     // [counts]
     // Per-wheel velocity over the GENUINE inter-sample interval (computed
@@ -174,6 +194,12 @@ class DifferentialDrive {
     bool deficitLeft = false, deficitRight = false;
     bool connectedLeft = false, connectedRight = false;
     uint32_t leaseExpiryCount = 0;  // sticky diagnostics
+    // Failed-collect cycles, derived from sample-stamp NON-ADVANCE: the
+    // leaf's requestSample()/tick() return void, so sampleTime() not
+    // moving across a cycle is the only observable "that collect did not
+    // land". Sticky, never reset — a climbing count under load is the
+    // bus-health signal.
+    uint32_t i2cFaultCount = 0;
   };
 
   DifferentialDrive(Hal::Motor& left, Hal::Motor& right,
@@ -202,6 +228,7 @@ class DifferentialDrive {
   DifferentialDrive& setDeficit(float threshold, float window);  // [counts/s] [ms]
   DifferentialDrive& setStall(float speed, float demand,
                               float window);  // [counts/s] [counts/s] [ms]
+  DifferentialDrive& setLambdaEnabled(bool enabled);
   DifferentialDrive& setCrawlPulse(float crawlPulse);      // [-1, 1]
   DifferentialDrive& setCyclePeriod(uint32_t period);      // [ms]
 
@@ -397,6 +424,16 @@ class DifferentialDrive {
   PositionRef posRefLeft_;
   PositionRef posRefRight_;
   TwistRef twistRef_;
+
+  // Per-wheel rebaseline epochs published on Output. Separate from
+  // epoch_ (which is the INTEGRATOR re-anchor generation, bumped on the
+  // same event but consumed internally): the published epochs are a
+  // host-facing contract, and keeping them apart means a future
+  // single-wheel rebaseline does not have to re-anchor both integrators.
+  uint32_t positionEpochLeft_ = 0;
+  uint32_t positionEpochRight_ = 0;
+  uint32_t i2cFaultCount_ = 0;     // failed-collect cycles, sticky
+  uint32_t cycleOverrunCount_ = 0;  // missed absolute deadlines, sticky
 
   float biasLeft_ = 0.0f;          // [counts/s] Stage C's adapted parameter
   float biasRight_ = 0.0f;         // [counts/s]

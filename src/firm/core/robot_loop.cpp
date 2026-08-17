@@ -322,12 +322,13 @@ void RobotLoop::boot() {
 }
 
 void RobotLoop::publishWheel(float rawPosition, float rawVelocity, uint32_t rawSampleTimeUs,
-                             bool connected, Types::RobotState::Wheel& wheel, bool& clamped) {
+                             bool connected, uint32_t positionEpoch,
+                             Types::RobotState::Wheel& wheel, bool& clamped) {
   wheel.position = clampToPositionWireBound(rawPosition, &clamped);
   wheel.velocity = rawVelocity;
   wheel.sampleTime = rawSampleTimeUs / 1000u;  // [us] -> [ms]
   wheel.connected = connected;
-  wheel.positionEpoch = positionEpoch_;
+  wheel.positionEpoch = static_cast<uint8_t>(positionEpoch);
 }
 
 // publishWheels() -- reads Control::DifferentialDrive::output() ONCE per
@@ -356,15 +357,20 @@ void RobotLoop::publishWheels() {
   if (std::fabs(positionLeft) >= kPositionRebaselineMargin ||
       std::fabs(positionRight) >= kPositionRebaselineMargin) {
     drive_.rebasePosition();
-    ++positionEpoch_;
   }
 
   bool clampedL = false;
   bool clampedR = false;
+  // The epoch is the KERNEL's own per-wheel counter now, not a RobotLoop
+  // tally. RobotLoop only REQUESTS a rebaseline; the kernel decides which
+  // cycle it actually lands on (rebasePosition() is a one-shot counter
+  // handshake consumed at the next cycle start). Counting here incremented
+  // on the request instead, so the published epoch could advance a cycle
+  // before the position it describes actually moved.
   publishWheel(positionLeft, out.velocityLeft * countsToMmLeft, out.sampleTimeLeft,
-              out.connectedLeft, state_.wheelLeft, clampedL);
+              out.connectedLeft, out.positionEpochLeft, state_.wheelLeft, clampedL);
   publishWheel(positionRight, out.velocityRight * countsToMmRight, out.sampleTimeRight,
-              out.connectedRight, state_.wheelRight, clampedR);
+              out.connectedRight, out.positionEpochRight, state_.wheelRight, clampedR);
 
   state_.health.wedgeLatch = out.wedgeLeft || out.wedgeRight;
   state_.health.wheelFrozenLeft = out.wedgeSuspectLeft;

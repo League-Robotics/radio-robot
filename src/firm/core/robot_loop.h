@@ -168,7 +168,8 @@ class RobotLoop {
   // Publish one wheel's state section (rebaseline/clamp/read), after its
   // collect. `clamped` reports the defensive wire-bound clamp.
   void publishWheel(float rawPosition, float rawVelocity, uint32_t rawSampleTimeUs,
-                    bool connected, Types::RobotState::Wheel& wheel, bool& clamped);  // [counts] [counts/s] [us]
+                    bool connected, uint32_t positionEpoch,
+                    Types::RobotState::Wheel& wheel, bool& clamped);  // [counts] [counts/s] [us]
   void publishWheels();               // both wheels + wedge/health, from drive_.output()
   void publishOtos();
 
@@ -223,13 +224,12 @@ class RobotLoop {
   // point.
   Types::RobotState state_;
 
-  // Single shared position-rebaseline generation counter. Control::
-  // DifferentialDrive::rebasePosition() rebases BOTH encoders atomically
-  // (there is no per-wheel rebase in the kernel), so both wheels'
-  // positionEpoch always move together -- unlike the pre-kernel
-  // per-wheel positionEpochLeft_/Right_ pair, one counter is now correct,
-  // not a simplification that loses information.
-  uint8_t positionEpoch_ = 0;
+  // No position-epoch counter here any more. RobotLoop only REQUESTS a
+  // rebaseline (drive_.rebasePosition(), a one-shot counter handshake);
+  // the KERNEL decides which cycle it lands on and owns the per-wheel
+  // epochs it publishes on Output. Counting here incremented on the
+  // request, so the published epoch could advance a cycle before the
+  // position it describes actually moved.
 
   uint32_t cycleCount_ = 0;
 

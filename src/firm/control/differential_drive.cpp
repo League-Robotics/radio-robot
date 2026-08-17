@@ -244,6 +244,13 @@ DifferentialDrive& DifferentialDrive::setStall(float speed, float demand,
   return *this;
 }
 
+DifferentialDrive& DifferentialDrive::setLambdaEnabled(bool enabled) {
+  // No finite check: a bool cannot be non-finite.
+  staged_.lambdaEnabled = enabled;
+  ++cfgSeq_;
+  return *this;
+}
+
 DifferentialDrive& DifferentialDrive::setCrawlPulse(float crawlPulse) {
   // Non-finite in = refused, and RECORDED: this setter must return
   // *this to chain, so lastError() is the only way a caller can see it.
@@ -356,8 +363,12 @@ void DifferentialDrive::run() {
           static_cast<uint32_t>((deadlineUs - nowUs + 999) / 1000);  // [ms]
       sleeper_.sleepMillis(shortfall);
     } else {
-      // Overrun: no budget left, but still yield once so the main fiber
-      // (comms, sensors) is never starved by a hot kernel loop.
+      // Overrun: the cycle missed its absolute deadline. Counted (lesson
+      // 17's observability half — a soak run whose overrun count climbs
+      // is the signal that the cadence is not actually being met), and we
+      // still yield once so the main fiber (comms, sensors) is never
+      // starved by a hot kernel loop.
+      ++cycleOverrunCount_;
       sleeper_.yield();
     }
   }
@@ -522,6 +533,11 @@ void DifferentialDrive::step() {
     left_.rebaseline();
     right_.rebaseline();
     ++epoch_;  // every integrator re-anchors; sample caches restart
+    // Published, host-facing epochs: both wheels rebaseline together
+    // today, but they are counted separately so a future single-wheel
+    // rebaseline is not a contract change for the host.
+    ++positionEpochLeft_;
+    ++positionEpochRight_;
     sampleLeft_ = WheelSample{};
     sampleRight_ = WheelSample{};
   }
@@ -568,8 +584,21 @@ void DifferentialDrive::step() {
   sleeper_.sleepMillis(kSettle);
   right_.tick(clock_.nowMicros());
 
+  // i2cFaultCount, derived from sample-stamp NON-ADVANCE. The leaf's
+  // requestSample()/tick() both return void, so there is no direct "that
+  // collect failed" signal; sampleTime() failing to move across a cycle
+  // in which we DID request a sample is the observable equivalent (the
+  // 131-002 rule: a failed collect HOLDS the stamp rather than restamping
+  // a stale reading). Counted once per cycle in which either wheel's
+  // stamp stood still, not once per wheel — the failure is a bus event.
+  const uint64_t stampLeftBefore = sampleLeft_.sampleTime;
+  const uint64_t stampRightBefore = sampleRight_.sampleTime;
   refreshSample(left_, sampleLeft_);
   refreshSample(right_, sampleRight_);
+  if (sampleLeft_.sampleTime == stampLeftBefore ||
+      sampleRight_.sampleTime == stampRightBefore) {
+    ++i2cFaultCount_;
+  }
 
   const uint64_t busyEndUs = clock_.nowMicros();
   publishOutput(nowMs, cycleStartUs, busyEndUs, measuredPeriodUs,
@@ -638,18 +667,33 @@ void DifferentialDrive::controlStep(const Command& cmd, uint8_t effectiveMode,
   const float demandMagRight = std::fabs(dutyDemandRight_);
   satLeft_ = demandMagLeft > rail;
   satRight_ = demandMagRight > rail;
-  float lambdaInstant = 1.0f;
-  if (satLeft_) lambdaInstant = std::min(lambdaInstant, rail / demandMagLeft);
-  if (satRight_) lambdaInstant = std::min(lambdaInstant, rail / demandMagRight);
-  if (lambdaInstant < lambda_) {
-    lambda_ = lambdaInstant;  // fast attack: shed authority immediately
-  } else if (dt > 0.0f) {
-    // Slow release: creep back toward full authority so the boundary
-    // cannot limit-cycle.
-    lambda_ += (lambdaInstant - lambda_) *
-               std::min(1.0f, dt / kLambdaReleaseTau);
+  // GATED (Config::lambdaEnabled, ships OFF). With λ disabled the kernel
+  // is the pure port of the old pipeline — which is what the first bench
+  // pass and the golden-trace fidelity gate must measure. Turning
+  // authority-headroom scaling on from the start would mean every early
+  // number carries a stage the old law never had, and any discrepancy
+  // would be unattributable.
+  //
+  // λ is pinned at exactly 1.0 when off, so every downstream λ-scaled
+  // term (targets, the twist-hold reference, the anti-windup position
+  // reference) degenerates to the unscaled value rather than needing its
+  // own gate.
+  if (!active_.lambdaEnabled) {
+    lambda_ = 1.0f;
+  } else {
+    float lambdaInstant = 1.0f;
+    if (satLeft_) lambdaInstant = std::min(lambdaInstant, rail / demandMagLeft);
+    if (satRight_) lambdaInstant = std::min(lambdaInstant, rail / demandMagRight);
+    if (lambdaInstant < lambda_) {
+      lambda_ = lambdaInstant;  // fast attack: shed authority immediately
+    } else if (dt > 0.0f) {
+      // Slow release: creep back toward full authority so the boundary
+      // cannot limit-cycle.
+      lambda_ += (lambdaInstant - lambda_) *
+                 std::min(1.0f, dt / kLambdaReleaseTau);
+    }
+    lambda_ = clampf(lambda_, 0.0f, 1.0f);
   }
-  lambda_ = clampf(lambda_, 0.0f, 1.0f);
 
   // Scaling BOTH targets by one λ preserves the commanded ratio exactly —
   // the healthy wheel slows to match the saturated one (authority
@@ -882,11 +926,12 @@ void DifferentialDrive::publishOutput(uint32_t nowMs, uint64_t cycleStartUs,
                                       uint32_t measuredPeriod,
                                       bool leaseExpired) {
   ++outSeq_;  // odd: write in progress
-  out_.cyclePeriod = measuredPeriod;
+  out_.cyclePeriodMeasured = measuredPeriod;
   out_.leaseExpired = leaseExpired;
   out_.now = nowMs;
-  out_.nowMicros = static_cast<uint32_t>(busyEndUs);
+  out_.nowFine = static_cast<uint32_t>(busyEndUs);
   out_.cycleCount = cycleCount_;
+  out_.cycleOverrunCount = cycleOverrunCount_;
   out_.cycleBusy = static_cast<uint32_t>(busyEndUs - cycleStartUs);
   out_.sampleTimeLeft = static_cast<uint32_t>(sampleLeft_.sampleTime);
   out_.sampleTimeRight = static_cast<uint32_t>(sampleRight_.sampleTime);
@@ -917,6 +962,9 @@ void DifferentialDrive::publishOutput(uint32_t nowMs, uint64_t cycleStartUs,
   out_.connectedLeft = sampleLeft_.connected;
   out_.connectedRight = sampleRight_.connected;
   out_.leaseExpiryCount = leaseExpiryCount_;
+  out_.i2cFaultCount = i2cFaultCount_;
+  out_.positionEpochLeft = positionEpochLeft_;
+  out_.positionEpochRight = positionEpochRight_;
   ++outSeq_;  // even: committed
 }
 
