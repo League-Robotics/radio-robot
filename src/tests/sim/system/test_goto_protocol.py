@@ -55,10 +55,7 @@ _APP_SOURCES = [
     _MOTION_PLANNER_DIR / "estimation.cpp",
     _MOTION_PLANNER_DIR / "shape.cpp",
     _MOTION_PLANNER_DIR / "planner.cpp",
-    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
-    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
     _SOURCE_DIR / "control" / "differential_drive.cpp",
-    _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
     _SOURCE_DIR / "core" / "preamble.cpp",
     _SOURCE_DIR / "core" / "boot_wiring.cpp",
     _SOURCE_DIR / "core" / "boot_calibration.cpp",

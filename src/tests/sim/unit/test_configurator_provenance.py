@@ -101,8 +101,6 @@ def test_configurator_provenance(tmp_path):
             str(_SOURCE_DIR),
             "-I",
             str(_REPO_ROOT / "src"),
-            "-I",
-            str(_REPO_ROOT / "src" / "firm" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
             "-o",
             str(binary),
             *[str(src) for src in sources],

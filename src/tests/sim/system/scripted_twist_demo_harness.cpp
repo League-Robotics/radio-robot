@@ -268,12 +268,14 @@ int main() {
   beginScenario("twist: injected command drives the REAL plant's velocity ramp");
   std::printf("  TWIST commanded: v_x=%.1f mm/s omega=%.1f rad/s (corrId=%u)\n", static_cast<double>(kCmdVx),
               static_cast<double>(kCmdOmega), kTwistCorrId);
-  // 116-006 (MOVE protocol cutover): bare TWIST/injectTwist() is gone --
-  // a TIME-stop MOVE with a stop value/timeout far longer than this run
-  // is the equivalent "hold this twist indefinitely" injection.
-  sim.injectMove(kCmdVx, /*v_y=*/0.0f, kCmdOmega, TestSupport::MoveStopKind::kTime,
-                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/kTwistCorrId,
-                 kTwistCorrId);
+  // 116-006 replaced bare TWIST with a TIME-stop MOVE; the kernel rework
+  // deregisters MOVE outright, so the injection is now a WHEELS command
+  // carrying the same body twist (injectBodyTwist() resolves it against the
+  // SAME baked trackwidth the firmware uses). A long duration is the "hold
+  // this twist indefinitely" equivalent -- the lease, not a stop condition,
+  // is what bounds it now.
+  sim.injectBodyTwist(kCmdVx, kCmdOmega, /*duration=*/100000.0f, /*id=*/kTwistCorrId,
+                      kTwistCorrId);
 
   printTraceHeader();
   bool twistAcked = false;
@@ -310,11 +312,17 @@ int main() {
 
   checkTrue(twistAcked, "the twist's corrId was acked OK");
   checkTrue(sawRampData, "at least one frame carried vel/enc data during the ramp");
-  checkFloatGe(peakVelLeft, 300.0f, "velLeft ramped well above its starting value toward the plant's ceiling");
-  checkFloatGe(peakVelRight, 300.0f, "velRight ramped well above its starting value toward the plant's ceiling");
+  // REBAKED to counts/s alongside kConvergedVelocity below -- same reason,
+  // and this one matters MORE than it looks: these are >= checks, so a
+  // counts/s reading (~14x the mm/s number) sails past an mm/s bound
+  // without failing. Left stale it would keep "passing" while asserting
+  // roughly nothing. 300 mm/s == 300 / 0.704871 * 10 == ~4256 counts/s.
+  constexpr float kRampedWell = 4256.0f;  // [counts/s] (== 300 mm/s)
+  checkFloatGe(peakVelLeft, kRampedWell, "velLeft ramped well above its starting value toward the plant's ceiling");
+  checkFloatGe(peakVelRight, kRampedWell, "velRight ramped well above its starting value toward the plant's ceiling");
   checkTrue(peakVelLeft > firstVelLeft, "velLeft increased over the ramp (the commanded direction)");
   checkTrue(lastEncLeft > firstEncLeft, "encLeft advanced over the ramp (real encoder movement)");
-  std::printf("  RAMP OK: velLeft/velRight reached ~%.0f/%.0f mm/s (plant ceiling 500mm/s)\n\n",
+  std::printf("  RAMP OK: velLeft/velRight reached ~%.0f/%.0f counts/s (plant ceiling 500mm/s == ~7093 counts/s)\n\n",
               static_cast<double>(peakVelLeft), static_cast<double>(peakVelRight));
 
   // ===========================================================================
@@ -343,7 +351,16 @@ int main() {
   // controller actively braking to a small residual any more. The bound
   // is what a ~0.23 s plant genuinely decays to across this window from
   // the ramp's peak, not a controller-quality figure.
-  constexpr float kConvergedVelocity = 30.0f;  // [mm/s]
+  // REBAKED to counts/s with the counts-native leaf (kernel rework):
+  // Hardware::NezhaMotor::velocity() reports encoder counts/s now, never
+  // mm/s. 30 mm/s at tovez's baked travel_calib (0.704871 mm/deg, 1 count =
+  // 0.1 deg) is 30 / 0.704871 * 10 == ~426 counts/s. Left at the old
+  // literal 30 this check compares a counts/s reading against an mm/s bound
+  // and fails a robot that has genuinely stopped -- the measured residual
+  // was 125 counts/s == ~8.8 mm/s, well inside the intended envelope. This
+  // is lesson 7's silent unit drift, caught in the test tree rather than in
+  // a safety constant.
+  constexpr float kConvergedVelocity = 426.0f;  // [counts/s] (== 30 mm/s)
 
   beginScenario("stop: STOP acks OK, active clears, velocity converges to (approximately) zero");
   std::printf("  STOP commanded (corrId=%u)\n", kStopCorrId);
@@ -390,7 +407,7 @@ int main() {
   // on its way to zero, see this file's header's own per-cycle trace).
   checkFloatLe(std::fabs(lastVelLeft), kConvergedVelocity, "velLeft converged to (approximately) zero within the window");
   checkFloatLe(std::fabs(lastVelRight), kConvergedVelocity, "velRight converged to (approximately) zero within the window");
-  std::printf("  STOP OK: velLeft/velRight converged from ~%.0f/%.0f to ~%.1f/%.1f mm/s in %d cycles"
+  std::printf("  STOP OK: velLeft/velRight converged from ~%.0f/%.0f to ~%.1f/%.1f counts/s in %d cycles"
               " (within %.0fmm/s of zero -- full convergence, not a partial drop)\n\n",
               static_cast<double>(peakVelLeft), static_cast<double>(peakVelRight), static_cast<double>(lastVelLeft),
               static_cast<double>(lastVelRight), kStopCycles, static_cast<double>(kConvergedVelocity));

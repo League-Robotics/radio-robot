@@ -152,8 +152,6 @@ def test_config_gate_harness_compiles_and_passes(tmp_path):
             "-I",
             str(_REPO_ROOT / "src"),
             "-I",
-            str(_REPO_ROOT / "src" / "firm" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
-            "-I",
             str(_SUPPORT_DIR),
             "-I",
             str(_PLANT_DIR),

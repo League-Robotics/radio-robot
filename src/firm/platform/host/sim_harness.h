@@ -233,9 +233,32 @@ class SimHarness {
     injectCommand(TestSupport::armorWheelsCommand(vLeft, vRight, duration, id, corrId));
   }
 
-  // injectGoto() -- 135-004: arms Motion::Navigator via Core::RobotLoop::
-  // handleGoto(). `frame`: 0 = WORLD (OTOS/SEED frame), 1 = ROBOT.
-  // `speed`/`arrive` <= 0 fall open to the config default.
+  // injectBodyTwist() -- a body twist (v_x, omega) expressed as the WHEELS
+  // command, which is the only motion arm left: MOVE and GO_TO are both
+  // DEREGISTERED in this tree (handleMoveOrGoto() acks ERR_UNIMPLEMENTED),
+  // so every harness that used to say injectMove(v_x, 0, omega, ...) says
+  // this instead.
+  //
+  // The differential inverse-kinematics done here is deliberately NOT in
+  // the kernel: Control::DifferentialDrive is counts-native and knows no
+  // chassis geometry at all. Resolving a body twist into per-wheel speeds
+  // is the APPLICATION's job now, and a test harness is an application.
+  // Reads the SAME baked trackwidth the firmware does, so a harness and the
+  // robot cannot disagree about what "omega" meant.
+  //
+  //   vLeft  = v_x - omega * b/2
+  //   vRight = v_x + omega * b/2      (REP-103: +omega is CCW)
+  void injectBodyTwist(float v_x, float omega, float duration,  // [mm/s] [rad/s] [ms]
+                       uint32_t id = 0, uint32_t corrId = 0) {
+    const float trackwidth = graph_.configurator().config().geometry.trackwidth;  // [mm]
+    const float halfTrack = 0.5f * trackwidth;
+    injectWheels(v_x - omega * halfTrack, v_x + omega * halfTrack, duration, id, corrId);
+  }
+
+  // injectGoto() -- GO_TO is DEREGISTERED in this tree (ERR_UNIMPLEMENTED);
+  // kept only so the protocol-level "a deregistered arm still acks, and acks
+  // an ERROR" coverage can still send one. Not a motion primitive any more.
+  // `frame`: 0 = WORLD (OTOS/SEED frame), 1 = ROBOT.
   void injectGoto(float x, float y, uint32_t frame, float speed, float arrive,  // [mm] [mm] [] [mm/s] [mm]
                   float timeout, uint32_t id = 0, uint32_t corrId = 0) {  // [ms]
     injectCommand(TestSupport::armorGotoCommand(x, y, frame, speed, arrive, timeout, id, corrId));
