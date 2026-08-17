@@ -33,6 +33,7 @@
 #include "core/comms.h"
 #include "control/differential_drive.h"
 #include "core/telemetry.h"
+#include "hal/clock.h"
 #include "hal/motor.h"
 #include "firm/types/robot_state.h"
 #include "messages/envelope.h"
@@ -40,18 +41,20 @@
 #include "messages/wire_runtime.h"
 #include "support/fake_transport.h"
 
-// StubMotor/testDrive() -- 130-005: Telemetry::update() now takes a
-// `const Drive&` for its own observability accessors; this harness never
-// ticks it. Duplicated per this codebase's established per-harness-file
-// fixture convention (see e.g. app_telemetry_harness.cpp's own identical
-// pair).
+// StubMotor/StubClock/StubSleeper/testDrive() -- Telemetry::update() takes
+// a `const Control::DifferentialDrive&` for its own observability
+// accessors; this harness never ticks/starts it, only constructs it.
+// EXPLORATORY-KERNEL REWRITE (2026-08-15): applyTravelCalib() is gone
+// (Hal::Motor no longer declares it -- the leaf is counts-native) and the
+// kernel's constructor now takes a Hal::Clock&/Hal::Sleeper& instead of a
+// trackWidth (the kernel has no trackWidth concept at all -- see
+// differential_drive.h's own header).
 class StubMotor : public Hal::Motor {
  public:
   void begin() override {}
   void requestSample() override {}
   void setDuty(float) override {}
   void setNeutral(Hal::Neutral) override {}
-  void applyTravelCalib(float) override {}
   bool reconfigure(const Hal::MotorConfig&) override { return true; }
   void tick(uint64_t) override {}
   float position() const override { return 0.0f; }
@@ -63,10 +66,23 @@ class StubMotor : public Hal::Motor {
   void rebaseline() override {}
 };
 
+class StubClock : public Hal::Clock {
+ public:
+  uint64_t nowMicros() const override { return 0; }
+};
+
+class StubSleeper : public Hal::Sleeper {
+ public:
+  void sleepMillis(uint32_t) override {}
+  void yield() override {}
+};
+
 Control::DifferentialDrive& testDrive() {
   static StubMotor left;
   static StubMotor right;
-  static Control::DifferentialDrive drive(left, right, /*trackWidth=*/200.0f);
+  static StubClock clock;
+  static StubSleeper sleeper;
+  static Control::DifferentialDrive drive(left, right, clock, sleeper);
   return drive;
 }
 

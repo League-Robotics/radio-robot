@@ -71,7 +71,14 @@ class MotorArmor : public Hal::Motor {
   void requestSample() override { inner_.requestSample(); }
   void setDuty(float duty) override { inner_.setDuty(duty); }
   void setNeutral(Hal::Neutral mode) override { inner_.setNeutral(mode); }
-  void applyTravelCalib(float travelCalib) override { inner_.applyTravelCalib(travelCalib); }
+  // applyTravelCalib() is DELETED (counts-native leaf, 2026-08-15 --
+  // motor.h's own header) -- Hal::Motor no longer declares it, so this
+  // override has nothing left to override. Removed here as a required
+  // compile fix for the exploratory-kernel rewrite (the leaf/base-class
+  // side of this change had already landed; this decorator's own mirror
+  // of the deleted virtual had not) -- see this rewrite's own report for
+  // why a file the task brief said not to touch still needed this one
+  // line gone.
 
   void tick(uint64_t nowUs) override {
     processResetIfPending();
@@ -177,7 +184,7 @@ class MotorArmor : public Hal::Motor {
   uint32_t hardResetCount_ = 0;
   uint32_t softResetCount_ = 0;
 
-  float wedgePrevPosition_ = 0.0f;        // [mm]
+  float wedgePrevPosition_ = 0.0f;        // [counts]
   bool wedgePrevValid_ = false;
   uint8_t stuckCount_ = 0;                // raw, unconditional
   uint8_t movingStuckCount_ = 0;          // gated by |appliedDuty()| > motionThreshold_
@@ -192,7 +199,11 @@ class MotorArmor : public Hal::Motor {
 
   // Standstill-guard constants — engineering starting guesses, a
   // bench-tuning question.
-  static constexpr float kRestVelocity = 5.0f;        // [mm/s]
+  // COUNTS REBAKE (2026-08-15, counts-native leaf): was 5.0 mm/s ~= 64
+  // counts/s at tovez's 0.7837 mm/deg; rounded to 60. An un-rebaked value
+  // would have made the at-rest gate 10x tighter and near-unreachable,
+  // starving the staged hard-reset path.
+  static constexpr float kRestVelocity = 60.0f;        // [counts/s]
   static constexpr uint8_t kRestTicksRequired = 5;
 
   // Consecutive-identical-reading threshold for the wedge latch.

@@ -92,14 +92,15 @@ int main() {
   state.wheelLeft.sampleTime = 1000;
   state.wheelLeft.connected = true;
   state.wheelLeft.positionEpoch = 3;
-  state.wheelLeft.cmdVelocity = 60.0f;
+  // cmdVelocity -- DELETED (exploratory-kernel rewrite, 2026-08-15): the
+  // commanded target lives inside Control::DifferentialDrive's own private
+  // Command mailbox now, not on this blackboard.
 
   state.wheelRight.position = -40.0f;
   state.wheelRight.velocity = -20.0f;
   state.wheelRight.sampleTime = 1001;
   state.wheelRight.connected = false;
   state.wheelRight.positionEpoch = 5;
-  state.wheelRight.cmdVelocity = -25.0f;
 
   state.otos.present = true;
   state.otos.connected = true;
@@ -123,36 +124,22 @@ int main() {
   state.pose.v_y = 0.0f;
   state.pose.omega = 0.125f;
 
-  state.estimate.wheelLeft.distance = 101.0f;
-  state.estimate.wheelLeft.velocity = 51.0f;
-  state.estimate.wheelLeft.basisTime = 1003;
-  state.estimate.wheelLeft.valid = true;
-  state.estimate.wheelRight.distance = -41.0f;
-  state.estimate.wheelRight.velocity = -21.0f;
-  state.estimate.wheelRight.basisTime = 1004;
-  state.estimate.wheelRight.valid = true;
-  state.estimate.body.x = 12.0f;
-  state.estimate.body.y = 24.0f;
-  state.estimate.body.heading = 0.375f;
-  state.estimate.body.v_x = 34.0f;
-  state.estimate.body.v_y = 0.5f;
-  state.estimate.body.omega = 0.625f;
-  state.estimate.body.basisTime = 1005;
-  state.estimate.body.valid = true;
-  state.estimate.innovations.heading = 0.01f;
-  state.estimate.innovations.omega = 0.02f;
-  state.estimate.innovations.valid = true;
+  // estimate -- DELETED (exploratory-kernel rewrite, 2026-08-15): fed the
+  // long-gone Core::StateEstimator (deleted sprint 128 ticket 016);
+  // nothing has written or read this block since.
 
   state.command.mode = Types::Mode::Velocity;
   state.command.moveActive = true;
-  state.command.v_x = 45.0f;
-  state.command.omega = 0.9f;
+  // command.v_x/omega -- DELETED: nothing read them; the kernel's own
+  // Command mailbox is the one place "what is currently commanded" lives.
 
   state.health.i2cSafetyNetCount = 7;
   state.health.commsMalformedCount = 2;
   state.health.wedgeLatch = true;
-  state.health.moveTimeout = false;
-  state.health.shapingDisabled = true;
+  // health.moveTimeout/shapingDisabled -- DELETED: both were written only
+  // by the now-deleted Core::RobotLoop::publishMoveResult()/
+  // publishGotoResult(), which fed Motion::Planner/Motion::Navigator
+  // fault state that no longer exists.
 
   // --- Golden copy: a plain `=` copy (the trivially-copyable contract in
   // action -- no custom copy constructor to get wrong). Every field below
@@ -168,14 +155,12 @@ int main() {
   checkUintEq(copy.wheelLeft.sampleTime, 1000, "wheelLeft.sampleTime");
   checkTrue(copy.wheelLeft.connected, "wheelLeft.connected");
   checkUintEq(copy.wheelLeft.positionEpoch, 3, "wheelLeft.positionEpoch");
-  checkFloatEq(copy.wheelLeft.cmdVelocity, 60.0f, "wheelLeft.cmdVelocity");
 
   checkFloatEq(copy.wheelRight.position, -40.0f, "wheelRight.position");
   checkFloatEq(copy.wheelRight.velocity, -20.0f, "wheelRight.velocity");
   checkUintEq(copy.wheelRight.sampleTime, 1001, "wheelRight.sampleTime");
   checkTrue(!copy.wheelRight.connected, "wheelRight.connected (false)");
   checkUintEq(copy.wheelRight.positionEpoch, 5, "wheelRight.positionEpoch");
-  checkFloatEq(copy.wheelRight.cmdVelocity, -25.0f, "wheelRight.cmdVelocity");
 
   checkTrue(copy.otos.present, "otos.present");
   checkTrue(copy.otos.connected, "otos.connected");
@@ -199,36 +184,17 @@ int main() {
   checkFloatEq(copy.pose.v_y, 0.0f, "pose.v_y");
   checkFloatEq(copy.pose.omega, 0.125f, "pose.omega");
 
-  checkFloatEq(copy.estimate.wheelLeft.distance, 101.0f, "estimate.wheelLeft.distance");
-  checkFloatEq(copy.estimate.wheelLeft.velocity, 51.0f, "estimate.wheelLeft.velocity");
-  checkUintEq(copy.estimate.wheelLeft.basisTime, 1003, "estimate.wheelLeft.basisTime");
-  checkTrue(copy.estimate.wheelLeft.valid, "estimate.wheelLeft.valid");
-  checkFloatEq(copy.estimate.wheelRight.distance, -41.0f, "estimate.wheelRight.distance");
-  checkFloatEq(copy.estimate.wheelRight.velocity, -21.0f, "estimate.wheelRight.velocity");
-  checkUintEq(copy.estimate.wheelRight.basisTime, 1004, "estimate.wheelRight.basisTime");
-  checkTrue(copy.estimate.wheelRight.valid, "estimate.wheelRight.valid");
-  checkFloatEq(copy.estimate.body.x, 12.0f, "estimate.body.x");
-  checkFloatEq(copy.estimate.body.y, 24.0f, "estimate.body.y");
-  checkFloatEq(copy.estimate.body.heading, 0.375f, "estimate.body.heading");
-  checkFloatEq(copy.estimate.body.v_x, 34.0f, "estimate.body.v_x");
-  checkFloatEq(copy.estimate.body.v_y, 0.5f, "estimate.body.v_y");
-  checkFloatEq(copy.estimate.body.omega, 0.625f, "estimate.body.omega");
-  checkUintEq(copy.estimate.body.basisTime, 1005, "estimate.body.basisTime");
-  checkTrue(copy.estimate.body.valid, "estimate.body.valid");
-  checkFloatEq(copy.estimate.innovations.heading, 0.01f, "estimate.innovations.heading");
-  checkFloatEq(copy.estimate.innovations.omega, 0.02f, "estimate.innovations.omega");
-  checkTrue(copy.estimate.innovations.valid, "estimate.innovations.valid");
+  // estimate -- DELETED, see the setup block's own comment above.
 
   checkTrue(copy.command.mode == Types::Mode::Velocity, "command.mode");
   checkTrue(copy.command.moveActive, "command.moveActive");
-  checkFloatEq(copy.command.v_x, 45.0f, "command.v_x");
-  checkFloatEq(copy.command.omega, 0.9f, "command.omega");
+  // command.v_x/omega -- DELETED, see the setup block's own comment above.
 
   checkUintEq(copy.health.i2cSafetyNetCount, 7, "health.i2cSafetyNetCount");
   checkUintEq(copy.health.commsMalformedCount, 2, "health.commsMalformedCount");
   checkTrue(copy.health.wedgeLatch, "health.wedgeLatch");
-  checkTrue(!copy.health.moveTimeout, "health.moveTimeout (false)");
-  checkTrue(copy.health.shapingDisabled, "health.shapingDisabled");
+  // health.moveTimeout/shapingDisabled -- DELETED, see the setup block's
+  // own comment above.
 
   // The original is untouched by mutating the copy -- proves the copy is a
   // genuine independent value, not a reference/alias (byte-for-byte memcmp

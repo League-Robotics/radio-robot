@@ -21,6 +21,7 @@
 #include "platform/microbit/microbit_banner.h"
 #include "platform/microbit/microbit_boot_identity.h"
 #include "platform/microbit/microbit_clock.h"
+#include "platform/microbit/microbit_fiber.h"
 #include "platform/microbit/microbit_i2c_bus.h"
 #include "platform/microbit/microbit_radio_link.h"
 #include "platform/microbit/microbit_serial_port.h"
@@ -84,6 +85,18 @@ int main() {
   // RobotLoop::run() is boot() followed by cycle() forever; it is spelled
   // out here instead so the display can be turned off in between.
   graph.robotLoop().boot();
+
+  // EXPLORATORY-KERNEL REWRITE (2026-08-15): the wheel kernel's begin()
+  // (prime both encoders, arm the boot zero-write) runs HERE -- after
+  // Preamble::done(), never before (see boot_wiring.h's "Lifecycle, one
+  // level up" note) -- followed immediately by start(), which launches
+  // the kernel's own cooperative fiber on a real Platform::
+  // MicroBitFiberRunner. From this point on the kernel's fiber is the
+  // ONLY writer of the motors; RobotLoop::cycle() below never touches
+  // them.
+  static Platform::MicroBitFiberRunner driveFiberRunner;
+  graph.drive().begin();
+  graph.drive().start(driveFiberRunner);
 
   // 132-015 (trap 1, the-configuration-object.md): loadPersistedTuning()
   // MUST run AFTER boot(), not before -- the pre-132-015 order here. Every

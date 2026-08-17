@@ -19,18 +19,16 @@
 //
 // `setDuty()` is the ONLY command-staging verb: every Motor takes a duty
 // target and reports what the encoder actually said, nothing else --
-// there is no velocity control law or PID here; that lives in the motion
-// library. `applyTravelCalib(float)` is the one MotorConfig field this
-// interface still live-applies (calibration, not control); gain routing
-// (kp/ki/kff/iMax/kaw) belongs to whoever owns the relocated control law.
+// there is no velocity control law or PID here; that lives in
+// Control::DifferentialDrive (the wheel kernel), the sole consumer.
 //
-// Surface: exactly the union of what the app graph calls today —
-// Core::DifferentialDrive (setDuty), Core::Odometry (position/velocity),
-// Core::Preamble (begin), Core::RobotLoop (requestSample/tick/
-// position/velocity/connected/wedged/applyTravelCalib) — plus the raw-duty
-// and reset verbs the bench/test surface uses. wedged()/wedgeSuspect()
-// default to false so a bare (armor-less) motor is honest: nothing is
-// watching for a wedge.
+// COUNTS-NATIVE (exploratory kernel, 2026-08-15): position()/velocity()
+// report shaft encoder counts / counts-per-second (1 count = 0.1 deg, the
+// Nezha 0x46 register's own unit). The old applyTravelCalib() mm seam is
+// deleted — no mm value exists at or below this interface; travel
+// calibration (`travel_calib` in the robot JSON) belongs to the
+// application layer. wedged()/wedgeSuspect() default to false so a bare
+// (armor-less) motor is honest: nothing is watching for a wedge.
 #pragma once
 
 #include <cstdint>
@@ -58,28 +56,16 @@ class Motor {
   virtual void setDuty(float duty) = 0;           // [-1, 1] raw duty
   virtual void setNeutral(Neutral mode) = 0;
 
-  // Live travel-calibration apply (Core::configureMotor(), side-selected --
-  // robot_config.proto's Motors.travel_calib_left/right). The ONE
-  // MotorConfig field this interface still live-applies; gain routing
-  // moved out with the PID (this file's own header).
-  //
-  // No Config::Robot-consuming configure() on THIS interface (132-007,
-  // the-configuration-object.md): the devices isolation invariant (this
-  // file's own DESIGN.md §3) forbids devices/ from naming a Config::
-  // type at all. Core::configureMotor(Hal::Motor&, const
-  // Config::Robot&, bool isLeft) -> bool (app/boot_calibration.h) is the
-  // Config::Robot-consuming entry point instead — the same Core::-layer
-  // pattern toDeviceMotorConfig() (same file) already uses for
-  // msg::MotorConfig -> Hal::MotorConfig. It calls applyTravelCalib()
-  // below, guarded like reconfigure()'s own at-rest check.
-  virtual void applyTravelCalib(float travelCalib) = 0;
+  // applyTravelCalib() is DELETED (counts-native leaf — this file's own
+  // header). No Config::Robot-consuming configure() on THIS interface
+  // either (132-007, the-configuration-object.md): the devices isolation
+  // invariant (DESIGN.md §3) forbids devices/ from naming a Config:: type
+  // at all — Core::-layer helpers convert and call reconfigure() below.
 
   // reconfigure — a guarded, post-construction, WHOLE-config replacement
-  // (port/fwdSign/slewRate/wheelTravelCalib/reversalDwell/outputDeadband
-  // — every MotorConfig field). This is NOT applyTravelCalib()'s live wire
-  // CFG-patch surface above — that is the always-safe, narrow,
-  // bounded-retuning path RobotLoop::handleConfig() uses at any time;
-  // reconfigure() replaces fields (fwdSign, port) that are a
+  // (port/fwdSign/slewRate/reversalDwell/outputDeadband/writeThrottle
+  // — every MotorConfig field). reconfigure() replaces fields (fwdSign,
+  // port) that are a
   // runaway-direction hazard if flipped mid-drive, so it is guarded: an
   // implementation must refuse (return false, leave its config unchanged)
   // unless the motor has never yet been commanded or is independently
@@ -99,8 +85,8 @@ class Motor {
   virtual void setForcedWedge(bool) {}
 
   // --- Getters ---
-  virtual float position() const = 0;        // [mm]
-  virtual float velocity() const = 0;        // [mm/s] signed -- a naive
+  virtual float position() const = 0;        // [counts] shaft, accumulated
+  virtual float velocity() const = 0;        // [counts/s] signed -- a naive
                                               // per-tick difference
                                               // quotient: no freshness
                                               // gate, glitch rejection, or

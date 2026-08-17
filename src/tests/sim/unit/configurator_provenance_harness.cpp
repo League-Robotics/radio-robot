@@ -53,6 +53,7 @@
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
 #include "config/robot.h"
+#include "hal/clock.h"
 #include "hal/motor.h"
 #include "hardware/generic/real_otos.h"
 #include "firm/types/robot_state.h"
@@ -60,9 +61,6 @@
 #include "messages/robot_config.h"
 #include "messages/wire.h"
 #include "messages/wire_runtime.h"
-#include "motion/navigator/arc_solver.h"
-#include "motion/planner/planner.h"
-#include "motion/planner/planner_types.h"
 
 namespace {
 
@@ -172,7 +170,6 @@ class RecordingMotor : public Hal::Motor {
   void requestSample() override {}
   void setDuty(float duty) override { lastDuty = duty; }
   void setNeutral(Hal::Neutral) override {}
-  void applyTravelCalib(float travelCalib) override { lastTravelCalib = travelCalib; }
   [[nodiscard]] bool reconfigure(const Hal::MotorConfig&) override { return true; }
   void tick(uint64_t) override {}
 
@@ -186,7 +183,19 @@ class RecordingMotor : public Hal::Motor {
   void rebaseline() override {}
 
   float lastDuty = 0.0f;
-  float lastTravelCalib = -1.0f;
+  // lastTravelCalib -- DELETED (exploratory-kernel rewrite, 2026-08-15):
+  // applyTravelCalib() no longer exists on Hal::Motor.
+};
+
+class StubClock : public Hal::Clock {
+ public:
+  uint64_t nowMicros() const override { return 0; }
+};
+
+class StubSleeper : public Hal::Sleeper {
+ public:
+  void sleepMillis(uint32_t) override {}
+  void yield() override {}
 };
 
 class RecordingOtos : public Hal::Otos {
@@ -227,11 +236,10 @@ int main() {
 
   RecordingMotor motorL, motorR;
   RecordingOtos otos;
-  Control::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/128.0f);
-  Motion::PlannerLimits limits;
-  Motion::Planner planner(limits);
-  Motion::NavigatorLimits navigatorLimits;
-  Core::Configurator configurator(drive, motorL, motorR, otos, planner, navigatorLimits, /*tuningStore=*/nullptr);
+  StubClock clock;
+  StubSleeper sleeper;
+  Control::DifferentialDrive drive(motorL, motorR, clock, sleeper);
+  Core::Configurator configurator(drive, motorL, motorR, otos, /*tuningStore=*/nullptr);
 
   // --- 1. Before loadBaked(): UNSPECIFIED, which is the honest answer ----
 
@@ -425,8 +433,7 @@ int main() {
       "BAKED would be a fresh instance of the dishonesty this exists to "
       "remove (a robot running tuned values its read-back denies)");
   {
-    Motion::NavigatorLimits freshNavigatorLimits;
-    Core::Configurator fresh(drive, motorL, motorR, otos, planner, freshNavigatorLimits, /*tuningStore=*/nullptr);
+    Core::Configurator fresh(drive, motorL, motorR, otos, /*tuningStore=*/nullptr);
     fresh.loadBaked();
 
     Config::TuningSnapshot snapshot;

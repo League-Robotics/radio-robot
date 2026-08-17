@@ -1,5 +1,5 @@
 // boot_calibration.h -- Core:: free functions that convert the generated
-// Config::boot_config.cpp bake into the Core:: / Motion:: types the
+// Config::boot_config.cpp bake into the Core::/Control:: types the
 // composition root wires together, and install that calibration onto an
 // already-constructed graph.
 //
@@ -8,31 +8,47 @@
 // function here reads config/boot_config.h (the generated, robot-JSON-
 // baked constants), while boot_wiring.cpp's own graph-construction code
 // does not need to be recompiled/relinked just because a caller only wants
-// one small conversion helper (e.g. effectiveTrackWidth()). Splitting the
-// two avoids dragging boot_wiring.cpp's wider Core::/Motion:: graph
-// dependencies into a test that only wants a calibration conversion, and
-// vice versa -- see 130-002's own ticket note on the "four-source-list
-// trap": a caller that links boot_calibration.cpp without boot_wiring.cpp
-// pulls in config/boot_config.cpp's generated robot bake, nothing else.
+// one small conversion helper. Splitting the two avoids dragging
+// boot_wiring.cpp's wider Core:: graph dependencies into a test that only
+// wants a calibration conversion, and vice versa.
 //
-// Every function here is a straight extraction of main.cpp's own pre-130-
-// 002 inline conversion/install code (toDeviceMotorConfig()/
-// toPlannerLimits() and the DriveBootConfig/rotation-calibration install
-// blocks) -- see git history around 45cd56df and earlier for the
-// pre-extraction shape. Behavior is unchanged; only the location moved.
+// EXPLORATORY-KERNEL REWRITE (2026-08-15,
+// clasi/issues/differentialdrive-one-class-one-fiber-exploratory-worktree.md):
+// bootPlannerLimits()/configurePlanner()/configureNavigator() and their
+// Motion::* return/parameter types are DELETED along with the whole
+// src/firm/motion/ tree -- Motion::Planner/Motion::Navigator no longer
+// exist, so there is nothing left for either function to configure.
+// toDeviceMotorConfig() drops its `wheelTravelCalib` line (the leaf is
+// counts-native now, Hal::MotorConfig has no such field) and gains
+// `writeThrottle`, derived from the kernel's own cycle period.
+// buildDriveKernelConfig() is NEW: the one place a whole
+// Config::Robot (DRIVE + WHEEL_CONTROL groups, plus MOTORS.travel_calib_*
+// for the mm<->counts rebake) becomes a Control::DifferentialDrive::Config
+// -- the kernel's own config object, in counts. configureMotor() is
+// DELETED outright: its entire job was pushing `travel_calib` onto the
+// motor leaf via the now-deleted Hal::Motor::applyTravelCalib(); travel
+// calibration lives at THIS layer now (feeding buildDriveKernelConfig()),
+// not on the leaf, so there is nothing left for it to do.
 #pragma once
 
 #include "config/robot.h"
+#include "control/differential_drive.h"
 #include "hal/device_config.h"
 #include "hal/motor.h"
 #include "hardware/generic/real_otos.h"
-#include "messages/drivetrain.h"
 #include "messages/motor.h"
-#include "motion/navigator/arc_solver.h"
-#include "motion/planner/planner.h"
-#include "motion/planner/planner_types.h"
 
 namespace Core {
+
+// kKernelCyclePeriod -- the wheel kernel's own fiber cadence.
+// TODO(config): not yet a JSON key. The exploratory tree bakes this as a
+// plain C++ constant rather than adding a robot-JSON field for it --
+// promoting it to `wheel_control.cycle_period` (or similar) in
+// gen_boot_config.py is real, wanted follow-up work once this kernel
+// design is no longer exploratory (configuration-discipline.md: "we have
+// to be able to configure everything we bake" -- this is the one
+// documented exception, and it is documented for exactly that reason).
+constexpr uint32_t kKernelCyclePeriod = 24;  // [ms]
 
 // toDeviceMotorConfig -- converts the boot config's wire-plane
 // msg::MotorConfig into the Devices-local MotorConfig NezhaMotor's
@@ -40,123 +56,57 @@ namespace Core {
 // isolation invariant (DESIGN.md) forbids that leaf layer from including
 // messages/ or config/.
 //
+// wheelTravelCalib is NOT copied (Hal::MotorConfig has no such field any
+// more -- the leaf is counts-native, 2026-08-15). writeThrottle is NEW:
+// replaces the leaf's old hand-synced kMinWriteIntervalUs literal
+// (nezha_motor.cpp's own historical TRAP note) with a config-derived
+// value, `(kKernelCyclePeriod - 5) * 1000` [us] -- the same "cycle minus a
+// few ms of jitter margin" shape the old literal encoded, now tracking the
+// KERNEL's cycle period (the only fiber writing duty) instead of the
+// long-gone RobotLoop::kCycle it used to silently assume.
+//
 // vel_gains/vel_filt_alpha/min_duty are NOT copied here -- Devices::
-// MotorConfig has no such fields (the velocity PID they fed has been
-// deleted outright -- see drive.h's own header). vel_filt_alpha has no
-// live consumer at all -- the wire field itself is untouched (no protocol
-// change), simply unread by firmware for now.
+// MotorConfig has no such fields (the velocity PID they fed was deleted
+// long before this rewrite). vel_filt_alpha has no live consumer at all --
+// the wire field itself is untouched (no protocol change), simply unread
+// by firmware for now.
 Hal::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src);
 
-// effectiveTrackWidth -- physical separation corrected for SCRUB.
+// buildDriveKernelConfig -- the ONE place a whole Config::Robot becomes a
+// Control::DifferentialDrive::Config: DRIVE (Stage A wheel correction +
+// crawl pulse) and WHEEL_CONTROL (Stage B/C gains/bounds + stall/deficit
+// windows), converted from the robot JSON's mm/mm-s domain into the
+// kernel's native counts/counts-s domain via MOTORS.travel_calib_left/
+// right (mean, per the "one population-scale value" convention
+// duty_per_speed already follows -- see configurator.cpp's own doc
+// comment on that convention). `fullDutyVelocity` is the one PER-WHEEL
+// conversion (duty_per_speed_left/right each divide by their OWN wheel's
+// travel_calib before being averaged into one kernel-wide plant gain --
+// the kernel has no per-wheel fullDutyVelocity slot, matching
+// duty_per_speed's own existing single-value convention).
 //
-// Ideal differential kinematics say omega = (vR - vL) / b, but a skid-steer
-// robot drags its wheels sideways through a turn and rotates LESS than that
-// for a given wheel differential. rotational_slip is the measured ratio of
-// actual to ideal rotation, so every kinematic use of the track wants
-// b / slip, not b.
+// twistHoldGain has no robot-JSON key yet (no wire field exists for it) --
+// left at 0 (off); a bench session sets it live via
+// DifferentialDrive::setTwistHoldGain() directly. maxDuty likewise has no
+// robot-JSON key -- left at Config's own 100.0f default (full authority).
+// cyclePeriod is always kKernelCyclePeriod, never robot-JSON-sourced (see
+// that constant's own TODO(config) note).
 //
-// `trackwidth` stays the caliper-measured wheel separation and must NOT be
-// bent to absorb scrub -- that would destroy the one value in the robot
-// JSON that is independently verifiable, and hide the scrub instead of
-// measuring it.
-//
-// slip == 0 is the "uncalibrated" sentinel (config.proto's `{0} u
-// [0.5, 1.0]` domain), meaning apply no correction.
-float effectiveTrackWidth(const msg::DrivetrainConfig& drivetrainConfig);  // [mm]
+// Called from Configurator::install() every time DRIVE, WHEEL_CONTROL, or
+// MOTORS (travel_calib) changes -- see configurator.h's re-appliability
+// table -- so a live push of any of the three actually reaches the
+// kernel, per configuration-discipline.md's "every value in the file
+// reaches the robot" half.
+Control::DifferentialDrive::Config buildDriveKernelConfig(const Config::Robot& config);
 
-// bootPlannerLimits -- converts Config::defaultPlannerLimits() (the
-// plant-validated tuning baked from the active robot JSON's own `planner`
-// section) into a Motion::PlannerLimits, with trackWidth/
-// velocityFilterWeight sourced from drivetrainConfig/trackWidth (the two
-// PlannerLimits fields NOT carried by Config::PlannerBootConfig -- see
-// that struct's own doc comment).
-Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainConfig,
-                                        float trackWidth);  // [mm]
-
-// installShaperLimits/installDriveCalibration/installWheelController --
-// DELETED, 132-015 (dead-code sweep, the-configuration-object.md). All
-// three had already lost their only call site by 132-006/132-009
-// (Configurator::install(), configurator.cpp, does the equivalent
-// fan-out inline instead, reading Config::Robot directly) -- this
-// ticket's own fresh grep re-confirmed zero remaining callers and
-// deleted them, alongside DriveBootConfig/WheelControllerBootConfig
-// (config/boot_config.h, deleted the same ticket -- see that file's own
-// note for the struct-level half of this cleanup).
-//
-// installRotationCalibration -- DELETED (132-007). Superseded by
-// RobotLoop::configure(const Config::Robot&) (robot_loop.h), which reads
-// config/robot.h's rotationOffsetPos()/rotationOffsetNeg() derived
-// methods instead of doing its own degrees->radians conversion inline;
-// boot_wiring.cpp's constructor calls robotLoop_.configure(configurator_.
-// config()) directly now, in place of this function's only call site.
-
-// --- Config::Robot-consuming entry points (132-007, the-configuration-
-// object.md's "subsystems take the whole object" pattern) for the THREE
-// subsystems that cannot take a Config::Robot& as a member method
-// themselves --
-//   - Motion::Planner (src/firm/motion/planner/): that tree's own, narrower
-//     dependency rule (src/firm/motion/DESIGN.md §3) forbids ANY
-//     Core::/Devices::/Config:: dependency, no exception -- "No Devices::*,
-//     Core::*, or bus/timing collaborator anywhere in this tree."
-//   - Hal::Motor / Hal::Otos (src/firm/devices/): the devices
-//     isolation invariant (src/firm/DESIGN.md §5) forbids devices/ from
-//     including messages/ or config/ headers, and (otos.h's own "Scope
-//     changes" section) Hal::Otos deliberately keeps its OWN narrow
-//     Hal::OtosConfig for exactly this reason today.
-// toDeviceMotorConfig() above already lives here, in Core::, for the
-// identical reason -- these three functions are that same pattern
-// extended to Config::Robot: Core:: is the one layer that can see both a
-// Config:: type and the lower-layer subsystem's own API, so the
-// conversion/apply happens here, not down in the subsystem itself. Each
-// reuses an EXISTING setter -- no new firmware control logic.
-
-// configurePlanner -- reuses Motion::Planner::applyShaperLimits(), the
-// SAME setter Configurator::install() (configurator.cpp) already calls,
-// reading config.planner's six shaper-ceiling fields.
-void configurePlanner(Motion::Planner& planner, const Config::Robot& config);
-
-// configureMotor -- reuses Hal::Motor::applyTravelCalib(), the ONE
-// MotorConfig field this interface still live-applies post-construction
-// (motor.h's own doc comment), side-selected exactly like RobotLoop's
-// own CONFIG merge path already does (isLeft picks motors.
-// travel_calib_left vs. travel_calib_right). Guarded the same way
-// NezhaMotor::reconfigure() is guarded (nezha_motor.cpp): refuses
-// (returns false, applies nothing) while the motor reports itself in
-// motion via its own public velocity()/appliedDuty() accessors -- the
-// SAME "is moving" signal reconfigure()'s own atRest check uses, read
-// through the public Hal::Motor interface rather than a
-// leaf-private field, since this function operates on the interface,
-// not a concrete leaf. Configurator maps a `false` return to ERR_BUSY
-// (ticket 009's own job); this function's scope is only the bool.
-[[nodiscard]] bool configureMotor(Hal::Motor& motor, const Config::Robot& config,
-                                  bool isLeft);
-
-// configureOtos -- reuses setLinearScalar()/setAngularScalar()/
-// setOffset(), the SAME setters Configurator::applyOtosPatch() (the old
-// patch surface, configurator.cpp) already call. Trap 3's multiplier-
-// vs-register domain mismatch is CLOSED here (132-010): linear_scale/
-// angular_scale are converted through Hardware::scaleToRegister() (otos.h,
-// a free function since 132-010 -- see its own doc comment) before
-// reaching the chip-level setters, the same conversion RealOtos::begin()
-// applies to the baked value at boot, so a live push and a boot bake now
-// agree on what a given multiplier means.
+// configureOtos -- reuses setLinearScalar()/setAngularScalar()/setOffset(),
+// the SAME setters both boot and a live OTOS config push have always
+// called. linear_scale/angular_scale are converted through
+// Hardware::scaleToRegister() (otos.h) before reaching the chip-level
+// setters -- the SAME conversion RealOtos::begin() applies to the baked
+// value at boot, so a live push and a boot bake agree on what a given
+// multiplier means. Unaffected by the exploratory-kernel rewrite; kept
+// here verbatim (motion/'s deletion has nothing to do with OTOS).
 void configureOtos(Hal::Otos& otos, const Config::Robot& config);
-
-// configureNavigator -- 135-004: writes config.navigator's fields DIRECTLY
-// into `limits` -- not a setter call, because Motion::Navigator holds its
-// NavigatorLimits by const reference (navigator.h's own design: `tick()`
-// reads `limits_` fresh every call, so there is no "re-apply" step to
-// invoke at all -- a write here takes effect on the very next tick()).
-// `limits` is therefore RobotGraph's own owned Motion::NavigatorLimits
-// object (boot_wiring.h), the SAME one Motion::Navigator was constructed
-// with a reference to -- never a temporary.
-//
-// trackWidth is deliberately NOT copied from config.navigator (that
-// message has no such field, by design -- robot_config.proto's Navigator
-// message header comment): sourced from config.effectiveTrackWidth()
-// instead, the SAME scrub-corrected value Drive/Odometry/PlannerLimits
-// already use, so there is exactly one place trackwidth/rotational_slip
-// are combined, never a second copy that can drift from it.
-void configureNavigator(Motion::NavigatorLimits& limits, const Config::Robot& config);
 
 }  // namespace Core

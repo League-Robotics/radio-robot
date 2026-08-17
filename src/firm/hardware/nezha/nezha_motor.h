@@ -102,10 +102,9 @@ class NezhaMotor : public Hal::Motor {
   void resetPosition() override;
   void rebaseline() override;
 
-  // applyTravelCalib -- the ONE field this leaf still live-applies (see
-  // motor.h's own header). No reflash, no I2C side effect -- tick()'s own
-  // position() conversion reads config_.wheelTravelCalib fresh every call.
-  void applyTravelCalib(float travelCalib) override;
+  // applyTravelCalib is DELETED (counts-native leaf -- position()/
+  // velocity() report the 0x46 register's own unit, sign-corrected; the
+  // mm conversion moved up to the application layer).
 
   // reconfigure — whole-config replacement, guarded (see motor.h).
   // Refuses (returns false, leaves config_ unchanged) unless
@@ -128,8 +127,8 @@ class NezhaMotor : public Hal::Motor {
   const Hal::MotorConfig& config() const { return config_; }
 
   // --- Primitive getters (Hal::Motor overrides) ---
-  float position() const override;      // [mm]
-  float velocity() const override;      // [mm/s] signed -- naive per-tick difference quotient, see this file's own header
+  float position() const override;      // [counts] shaft, sign-corrected
+  float velocity() const override;      // [counts/s] signed -- naive per-tick difference quotient, see this file's own header
   float appliedDuty() const override;   // [-1, 1]
 
   bool connected() const override { return connected_; }
@@ -176,8 +175,8 @@ class NezhaMotor : public Hal::Motor {
   Hal::Neutral neutralTarget_ = Hal::Neutral::Coast;
 
   // ---- tick() encoder-sample cache ----
-  float lastPosition_ = 0.0f;          // [mm]
-  float velocity_ = 0.0f;              // [mm/s] naive per-tick difference quotient (see this file's own header)
+  float lastPosition_ = 0.0f;          // [counts]
+  float velocity_ = 0.0f;              // [counts/s] naive per-tick difference quotient (see this file's own header)
   uint64_t lastTickUs_ = 0;            // [us] this leaf's own time seam — see file header
   // Genuine freshness (131-002, issue A-commanded-zero-leaks-through-
   // stage-b.md): advances ONLY when THIS tick's collectEncoder() actually
@@ -239,7 +238,12 @@ class NezhaMotor : public Hal::Motor {
   // kRestVelocity at-rest threshold (motor_armor.h)
   // conceptually, but is NOT shared across the class boundary: this is a
   // leaf-local constant for a leaf-local guard.
-  static constexpr float kReconfigureRestVelocity = 5.0f;  // [mm/s] mirrors MotorArmor's own kRestVelocity at-rest threshold
+  // COUNTS REBAKE (2026-08-15, counts-native leaf): was 5.0 mm/s; at
+  // tovez's 0.7837 mm/deg that is ~6.4 deg/s ~= 64 counts/s. Rounded to
+  // 60. Left in the OLD unit this threshold would have meant 0.5 deg/s --
+  // a 10x-tighter guard that near-never passes; the silent-unit-drift
+  // trap this comment exists to flag.
+  static constexpr float kReconfigureRestVelocity = 60.0f;  // [counts/s]
 
   // writeRawDuty()'s stopNotTaken threshold (129-001, issue 07 -- see that
   // file's own doc comment below). lastWrittenPct_ records the WRITE
@@ -252,7 +256,11 @@ class NezhaMotor : public Hal::Motor {
   // claims was sent. NOT shared with kReconfigureRestVelocity above or
   // MotorArmor's own kRestVelocity -- same "leaf-local constant for a
   // leaf-local guard" reasoning.
-  static constexpr float kStopConfirmVelocity = 8.0f;  // [mm/s]
+  // COUNTS REBAKE (2026-08-15): was 8.0 mm/s ~= 102 counts/s at tovez's
+  // 0.7837 mm/deg; rounded to 100. This threshold arms the stopNotTaken
+  // safety net -- an un-rebaked value would have quietly disarmed it
+  // (see kReconfigureRestVelocity's own rebake note above).
+  static constexpr float kStopConfirmVelocity = 100.0f;  // [counts/s]
 
   // ---- Private helpers: write path ----
   // Returns the CODAL status from bus_.write() (0/kOk == success):

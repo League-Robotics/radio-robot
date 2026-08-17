@@ -297,18 +297,21 @@ const char* sim_firmware_version() { return FIRMWARE_VERSION_STR; }
 // per-instance state).
 int sim_cycle_dt_us() { return static_cast<int>(TestSim::SimHarness::kCycleDtUs); }
 
-// Commanded per-wheel velocity (the interim PID SETPOINT Control::DifferentialDrive stages
-// -- 125-003: read from Drive's own driveTargetVelLeft/Right() accessor now,
-// NOT Hal::Motor::velocityTarget(), which is deleted -- the velocity
-// PID moved off NezhaMotor entirely, see drive.h's own header). cmd_vel is
-// NOT on the wire at all (it never made it off TelemetrySecondary before
-// that message was deleted outright, 124-009 -- see Types::RobotState::
-// Wheel::cmdVelocity's own doc comment for the current, unwired state). The
-// sim can see this normally-invisible inner-loop command at full rate,
-// which is exactly what TestGUI's "commanded vs actual" wheel-speed graph
-// plots. Signed [mm/s].
-float sim_cmd_vel_left(SimHandle h) { return asHarness(h)->driveTargetVelLeft(); }
-float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->driveTargetVelRight(); }
+// EXPLORATORY-KERNEL REWRITE (2026-08-15): SimHarness::driveTargetVelLeft/
+// Right() are DELETED -- they read Types::RobotState::Wheel::cmdVelocity,
+// which no longer exists (the commanded target lives inside the kernel's
+// own private Command mailbox now, not on any public accessor). There is
+// NO replacement for "the currently-commanded PID setpoint" on this ABI
+// any more -- these two exports fall back to the kernel's MEASURED
+// velocity (drive().output().velocityLeft/Right) instead, so a caller
+// (TestGUI's "commanded vs actual" wheel-speed graph) gets a real signal
+// rather than a broken build, but it is no longer the commanded value --
+// it is now numerically identical to whatever "actual" already plots.
+// Signed [counts/s] (NOT mm/s any more -- the kernel is counts-native
+// end to end; a caller wanting mm/s must convert using its own
+// travel_calib knowledge, same as any other counts-domain reading).
+float sim_cmd_vel_left(SimHandle h) { return asHarness(h)->drive().output().velocityLeft; }
+float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->drive().output().velocityRight; }
 
 // Velocity-PID enable/disable (stakeholder 2026-07-18, TestGUI "PID"
 // checkbox next to the Test buttons) -- 125-003: NOW A NO-OP. The velocity
@@ -612,12 +615,30 @@ void sim_configure_drivetrain(SimHandle h, float gainPos, float offsetPos,  // [
 // cost, and why main.cpp's third install (setWheelCorrection(), a
 // hardware-gearbox linearization) is deliberately NOT mirrored here.
 //
-// Pure passthrough: no unit conversion, no defaulting. `drive()` is already a
-// public accessor (sim_harness.h) -- no new SimHarness method needed.
+// EXPLORATORY-KERNEL REWRITE (2026-08-15): no longer a pure passthrough --
+// Control::DifferentialDrive::setDutyPerSpeed() is gone (the kernel has
+// ONE kernel-wide fullDutyVelocity in counts/s, not a settable left/right
+// mm-domain pair). This export keeps its OWN C ABI signature (host-side
+// callers still push dutyPerSpeedLeft/Right, matching the robot JSON's
+// own field names) and converts here, the SAME mm->counts formula
+// boot_calibration.cpp's buildDriveKernelConfig() uses:
+// fullDutyVelocity = 10 / (duty_per_speed * travel_calib), averaged
+// across the two sides via each side's own values first, then the
+// current CONFIG's travel_calib mean (whatever Configurator::loadBaked()
+// most recently landed -- a caller that also pushes MOTORS.travel_calib
+// via CONFIG should do so BEFORE this call for the conversion to use the
+// right value).
 void sim_configure_drive(SimHandle h, float dutyPerSpeedLeft, float dutyPerSpeedRight,
                          float crawlPulse) {
-  Control::DifferentialDrive& drive = asHarness(h)->drive();
-  drive.setDutyPerSpeed(dutyPerSpeedLeft, dutyPerSpeedRight);
+  TestSim::SimHarness* harness = asHarness(h);
+  Control::DifferentialDrive& drive = harness->drive();
+  const Config::Robot& cfg = harness->configurator().config();
+  const float travelCalibMean =
+      0.5f * (cfg.motors.travel_calib_left + cfg.motors.travel_calib_right);
+  const float dutyPerSpeedMean = 0.5f * (dutyPerSpeedLeft + dutyPerSpeedRight);
+  if (dutyPerSpeedMean > 0.0f && travelCalibMean > 0.0f) {
+    drive.setFullDutyVelocity(10.0f / (dutyPerSpeedMean * travelCalibMean));
+  }
   drive.setCrawlPulse(crawlPulse);
 }
 
