@@ -12,17 +12,32 @@ namespace {
 
 constexpr uint32_t kPreamblePace = 10;  // [ms] boot-loop probe pacing
 
-// Position wire-bound / rebaseline margin -- COUNTS DOMAIN (the kernel is
-// counts-native; these used to be 32000/30000 mm). msg::EncoderReading::
-// packPosition() packs into a plain int32_t (kPositionScale == 1.0f), so
-// there is no WIRE truncation risk at any float32-representable magnitude
-// -- this bound exists for float32 PRECISION hygiene instead: float32's
-// 24-bit mantissa loses sub-integer precision above 2^23 (~8.39M). Picking
-// well below that (2,000,000 counts == 200,000 deg == ~555 wheel
-// revolutions, a comparable order of physical distance to the old 32m mm
-// bound) keeps every published position exact to the count.
-constexpr float kPositionWireBound = 2000000.0f;         // [counts]
-constexpr float kPositionRebaselineMargin = 1800000.0f;  // [counts]
+// Position wire-bound / rebaseline margin -- MILLIMETRE DOMAIN, restored.
+//
+// These were briefly rebaked into the counts domain (2,000,000 / 1,800,000
+// counts) on the reasoning that the kernel is counts-native. That reasoning
+// is right about the KERNEL and wrong about the WIRE. msg::EncoderReading
+// is a wire field whose documented unit is [mm] (position) and [mm/s]
+// (velocity) -- src/host/robot_radio/robot/protocol.py says so, and
+// src/tests/bench/{plant_id,speed_sweep,stall_gate,crawl_sweep,
+// velocity_profile_gate}.py all compute physical distances from it. Nothing
+// host-side was migrated. Publishing counts under an unchanged frame SHAPE
+// therefore changes what the field MEANS by ~14.19x (1 count == 0.1 deg ==
+// 0.0705 mm at tovez's travel_calib) with no rename to warn anyone -- a
+// protocol change by stealth, and protocol changes are explicitly out of
+// scope for this exploration.
+//
+// So the counts->mm conversion happens HERE, at the outbound adapter, per
+// wheel, from the same two travel calibrations the inbound WHEELS adapter
+// uses (the issue's own "Outbound" contract). The kernel keeps its counts;
+// the wire keeps its millimetres; the class still never sees mm.
+//
+// The float32-precision concern the counts rebake raised is real but is a
+// property of the KERNEL's accumulator, not of this bound: 30 m of travel
+// is ~425,500 counts, comfortably inside float32's exact-integer range
+// (2^24), so the rebaseline fires long before precision degrades.
+constexpr float kPositionWireBound = 32000.0f;         // [mm]
+constexpr float kPositionRebaselineMargin = 30000.0f;  // [mm]
 
 // [counts/s] a wheel reading at or below this counts as "still" for
 // CALIBRATE's parked precondition. COUNTS REBAKE (2026-08-15): was 5.0
@@ -324,18 +339,32 @@ void RobotLoop::publishWheel(float rawPosition, float rawVelocity, uint32_t rawS
 void RobotLoop::publishWheels() {
   const Control::DifferentialDrive::Output out = drive_.output();
 
-  if (std::fabs(out.positionLeft) >= kPositionRebaselineMargin ||
-      std::fabs(out.positionRight) >= kPositionRebaselineMargin) {
+  // counts -> mm, PER WHEEL, from the same two travel calibrations
+  // handleWheels() uses on the way in. travel_calib is [mm/deg] and one
+  // count is 0.1 deg, hence the 0.1 factor. A zero/absent calibration
+  // yields 0 rather than a garbage scale -- the same fail-closed posture
+  // the inbound adapter takes.
+  const Config::Robot& cfg = configurator_.config();
+  const float countsToMmLeft =
+      (cfg.motors.travel_calib_left > 0.0f) ? cfg.motors.travel_calib_left * 0.1f : 0.0f;
+  const float countsToMmRight =
+      (cfg.motors.travel_calib_right > 0.0f) ? cfg.motors.travel_calib_right * 0.1f : 0.0f;
+
+  const float positionLeft = out.positionLeft * countsToMmLeft;    // [mm]
+  const float positionRight = out.positionRight * countsToMmRight;  // [mm]
+
+  if (std::fabs(positionLeft) >= kPositionRebaselineMargin ||
+      std::fabs(positionRight) >= kPositionRebaselineMargin) {
     drive_.rebasePosition();
     ++positionEpoch_;
   }
 
   bool clampedL = false;
   bool clampedR = false;
-  publishWheel(out.positionLeft, out.velocityLeft, out.sampleTimeLeft, out.connectedLeft,
-              state_.wheelLeft, clampedL);
-  publishWheel(out.positionRight, out.velocityRight, out.sampleTimeRight, out.connectedRight,
-              state_.wheelRight, clampedR);
+  publishWheel(positionLeft, out.velocityLeft * countsToMmLeft, out.sampleTimeLeft,
+              out.connectedLeft, state_.wheelLeft, clampedL);
+  publishWheel(positionRight, out.velocityRight * countsToMmRight, out.sampleTimeRight,
+              out.connectedRight, state_.wheelRight, clampedR);
 
   state_.health.wedgeLatch = out.wedgeLeft || out.wedgeRight;
   state_.health.wheelFrozenLeft = out.wedgeSuspectLeft;

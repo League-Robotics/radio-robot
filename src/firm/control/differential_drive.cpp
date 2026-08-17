@@ -698,6 +698,8 @@ void DifferentialDrive::publishOutput(uint32_t nowMs, uint64_t cycleStartUs,
   out_.appliedDutyLeft = left_.appliedDuty() * 100.0f;
   out_.appliedDutyRight = right_.appliedDuty() * 100.0f;
   out_.lambda = lambda_;
+  out_.biasLeft = biasLeft_;
+  out_.biasRight = biasRight_;
   out_.ready = begun_ && active_.fullDutyVelocity > 0.0f;
   out_.estopped = estopLatch_;
   out_.stallHalted = stallHalted_;

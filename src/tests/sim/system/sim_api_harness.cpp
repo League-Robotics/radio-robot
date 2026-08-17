@@ -176,12 +176,11 @@ void scenarioTwistDrivesRealPlantRamp() {
   sim.step(3);  // settle: both leaves' own one-time zero-duty activation writes land (cycles 0, 1)
   (void)sim.drainTelemetry();  // discard boot/settle frames -- this scenario only cares about the ramp
 
-  // 116-006 (MOVE protocol cutover): bare TWIST/injectTwist() is gone --
-  // a TIME-stop MOVE with a stop value/timeout far longer than this run
-  // is the equivalent "hold this twist indefinitely" injection.
-  sim.injectMove(/*v_x=*/1000.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
-                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/42,
-                 /*corrId=*/42);
+  // 116-006 replaced bare TWIST with a TIME-stop MOVE; the kernel rework
+  // deregisters MOVE, so this is a WHEELS command carrying the same body
+  // twist. A long duration IS the lease -- "hold this twist indefinitely".
+  sim.injectBodyTwist(/*v_x=*/1000.0f, /*omega=*/0.0f, /*duration=*/100000.0f,
+                      /*id=*/42, /*corrId=*/42);
   sim.step(15);  // ~750ms of virtual ramp time -- comfortably >> TestSim::kDefaultTau (130ms)
 
   std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
@@ -211,8 +210,12 @@ void scenarioTwistDrivesRealPlantRamp() {
   }
 
   checkTrue(!first, "at least one frame carried encoder data");
-  checkFloatGe(lastVelLeft, 300.0f, "velLeft ramped well above its starting value toward the plant's ceiling");
-  checkFloatGe(lastVelRight, 300.0f, "velRight ramped well above its starting value toward the plant's ceiling");
+  // [mm/s]: telemetry-sourced, and the telemetry encoder reading is
+  // millimetre-domain -- RobotLoop::publishWheels() converts the kernel's
+  // counts per wheel before staging the frame.
+  constexpr float kRampedWell = 300.0f;  // [mm/s]
+  checkFloatGe(lastVelLeft, kRampedWell, "velLeft ramped well above its starting value toward the plant's ceiling");
+  checkFloatGe(lastVelRight, kRampedWell, "velRight ramped well above its starting value toward the plant's ceiling");
   checkTrue(lastVelLeft > firstVelLeft, "velLeft increased over the ramp (moving in the commanded direction)");
   checkTrue(lastEncLeft > firstEncLeft, "encLeft advanced over the ramp (real encoder movement in TLM)");
 }
@@ -229,12 +232,10 @@ void scenarioStopAcksAndClearsActive() {
   TestSim::SimHarness sim;
   TestSupport::configureSimForBenchTest(sim);
   sim.boot();
-  // 116-006 (MOVE protocol cutover): bare TWIST/injectTwist() is gone --
-  // a TIME-stop MOVE with a stop value/timeout far longer than this run
-  // is the equivalent "hold this twist indefinitely" injection.
-  sim.injectMove(1000.0f, /*v_y=*/0.0f, 0.0f, TestSupport::MoveStopKind::kTime,
-                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/7,
-                 /*corrId=*/7);
+  // 116-006 replaced bare TWIST with a TIME-stop MOVE; the kernel rework
+  // deregisters MOVE, so this is a WHEELS command carrying the same body
+  // twist. A long duration IS the lease -- "hold this twist indefinitely".
+  sim.injectBodyTwist(1000.0f, 0.0f, /*duration=*/100000.0f, /*id=*/7, /*corrId=*/7);
   sim.step(5);  // ramp a bit so there is real motion to stop
   (void)sim.drainTelemetry();
 
@@ -278,35 +279,42 @@ void scenarioStopAcksAndClearsActive() {
 // ===========================================================================
 
 void scenarioMoveExpiryStopsPlantWithNoFurtherHostTraffic() {
-  beginScenario("MOVE expiry: no STOP ever sent, TIME stop condition ends the Move on its own, "
-                "active clears (116-006)");
+  beginScenario("LEASE expiry: no STOP ever sent, the command's own lease ends the motion and the "
+                "wheels stop with zero further host traffic");
 
   TestSim::SimHarness sim;
   TestSupport::configureSimForBenchTest(sim);
   sim.boot();
-  const uint32_t kMoveId = 5;
-  sim.injectMove(1000.0f, /*v_y=*/0.0f, 0.0f, TestSupport::MoveStopKind::kTime,
-                 /*stopValue=*/120.0f, /*timeout=*/100000.0f, /*replace=*/true, kMoveId,
-                 /*corrId=*/kMoveId);  // [ms] -- stop condition met ~3 cycles after activation
-  sim.step(2);  // cycles 0, 1 -- the Move's own R/L activation writes land, not yet met
+  const uint32_t kCommandId = 5;
+  // 120ms of lease against SimHarness::kCycleDtUs -- expires a few cycles
+  // after activation, exactly as the old TIME-stop MOVE's stopValue did.
+  // This is the SAME guarantee, relocated: it used to belong to
+  // MoveQueue::tick()'s "queue empty -> stop", and now belongs to the
+  // kernel's own lease, which zeroes through the full stop path consulting
+  // nobody. Refreshing the command IS feeding the watchdog; not refreshing
+  // it is this scenario.
+  sim.injectBodyTwist(1000.0f, 0.0f, /*duration=*/120.0f, kCommandId, /*corrId=*/kCommandId);
+  sim.step(2);  // activation writes land, lease not yet expired
   // No further command is ever injected below -- the whole point of this
-  // scenario (matching the deleted deadman's own "host silence -> stop"
-  // guarantee) is that MoveQueue::tick() ends the Move and stops the
-  // plant on its own, with zero additional host traffic.
-  sim.step(3);  // cycles 2 (quiet), 3 (stop condition met, chain-empty -> Drive::stop()), 4
+  // scenario (inherited from the deleted deadman's own "host silence ->
+  // stop" guarantee) is that the robot stops on its own.
+  sim.step(3);
   sim.step(1);  // emit-lag buffer cycle
 
   std::vector<DecodedLine> frames = onlyTelemetry(sim.drainTelemetry());
-  checkTrue(!frames.empty(), "telemetry decoded across the MOVE's own window");
-  checkTrue(anyAckMatches(frames, kMoveId), "the Move's completion ack (ack_corr==Move.id, ack_err==0) "
-                                            "reached the wire with no STOP ever sent");
+  checkTrue(!frames.empty(), "telemetry decoded across the command's own window");
+  checkTrue(anyAckMatches(frames, kCommandId),
+            "the completion ack (ack_corr==id, ack_err==0) reached the wire with no STOP ever sent");
 
-  bool sawInactive = false;
-  for (const auto& f : frames) {
-    if (!(f.telemetry.flags & Core::kFlagActive)) sawInactive = true;
-  }
-  checkTrue(sawInactive, "decoded telemetry shows active=false once the Move's own TIME stop "
-                         "condition is met (no STOP was ever sent, no deadman lease involved)");
+  // The kernel's own view is the load-bearing one: the lease expired and it
+  // zeroed itself. Assert on that directly rather than only on a telemetry
+  // flag -- leaseExpired is exactly the signal the old kFlagEventDeadmanExpired
+  // bit used to stand for, and it is a real published field now.
+  const Control::DifferentialDrive::Output out = sim.drive().output();
+  checkTrue(out.leaseExpired, "the kernel reports leaseExpired -- it stopped itself, unprompted");
+  checkTrue(std::fabs(out.appliedDutyLeft) < 0.001f && std::fabs(out.appliedDutyRight) < 0.001f,
+            "applied duty is zero on BOTH wheels after lease expiry (the stop actually reached "
+            "the wire, not merely the mailbox)");
 }
 
 // ===========================================================================
@@ -442,9 +450,10 @@ void scenarioVirtualCycleTimingDiagnostic() {
 // ===========================================================================
 
 void scenarioBiasPersistsAcrossChainedMoveLegs() {
-  beginScenario("131-001: a chained, multi-leg MOVE sequence (2+ legs) holds a converged Stage C "
-                "bias across every leg boundary -- RobotLoop::handleMove()'s drive_.takeover() "
-                "call does not reset it, unlike the drive_.estop() call it replaces");
+  beginScenario("131-001 (kernel rework): a chained, multi-command WHEELS sequence (2+ commands) "
+                "holds a converged Stage C bias across every command boundary -- a fresh drive() "
+                "replaces the mailbox WITHOUT resetting adaptive state, the property takeover() "
+                "used to carry");
 
   TestSim::SimHarness sim;
   TestSupport::configureSimForBenchTest(sim);
@@ -454,53 +463,67 @@ void scenarioBiasPersistsAcrossChainedMoveLegs() {
   // 1/kDefaultDutyVelMax) -- 80% of the true value under-predicts the duty
   // needed for a given commanded speed, so the wheel genuinely
   // under-delivers and Stage C has a real, nonzero error to close.
-  const float trueKff = 1.0f / TestSim::kDefaultDutyVelMax;
-  sim.drive().setDutyPerSpeed(trueKff * 0.8f, trueKff * 0.8f);
+  // The kernel takes ONE fullDutyVelocity [counts/s] instead of a per-wheel
+  // duty-per-speed [duty per mm/s]. Mis-calibrating 20% HIGH here is the
+  // same deliberate error as the old 20%-low kff: duty = velocity /
+  // fullDutyVelocity, so an inflated denominator under-predicts the duty a
+  // commanded speed needs, the wheel under-delivers, and Stage C has a
+  // real, nonzero error to close.
+  const Config::Robot& robotCfg = sim.configurator().config();
+  const float travelCalibMean = 0.5f * (robotCfg.motors.travel_calib_left +
+                                        robotCfg.motors.travel_calib_right);
+  const float trueFullDutyVelocity = TestSim::kDefaultDutyVelMax * 10.0f / travelCalibMean;
+  sim.drive().setFullDutyVelocity(trueFullDutyVelocity * 1.25f);
 
-  Control::DifferentialDrive::AdaptationBounds bounds;
-  bounds.vMin = 0.0f;
-  bounds.biasMax = 80.0f;   // [mm/s]
-  bounds.tauAdapt = 1.0f;   // [s] -- converges within a few seconds of virtual cruise
-  bounds.aSteady = 1.0e6f;  // effectively unshaped, matching configureSimForBenchTest()'s own
-                            // unshaped shaper ceilings -- always "steady" outside the one-cycle
-                            // ramp instant
-  sim.drive().setAdaptationBounds(bounds);
+  // setAdaptationBounds()/AdaptationBounds are gone -- Stage C's three
+  // parameters are a grouped setter on the kernel's own Config now (grouped
+  // precisely because they must move together against the fiber's per-cycle
+  // config snapshot). biasMax rebaked mm/s -> counts/s.
+  sim.drive()
+      .setSpeedFloor(0.0f)
+      .setAdaptation(/*biasMax=*/80.0f * 10.0f / travelCalibMean,  // [counts/s] (== 80 mm/s)
+                     /*tauAdapt=*/1.0f,     // [s] converges within a few seconds of cruise
+                     /*aSteady=*/1.0e6f);   // effectively always "steady" outside the ramp instant
 
   sim.boot();
 
-  // Leg 1: a long TIME-stop cruise, long enough for Stage C to converge
-  // well away from 0 under the deliberate 20% under-calibration above.
-  sim.injectMove(/*v_x=*/200.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
-                 /*stopValue=*/8000.0f, /*timeout=*/20000.0f, /*replace=*/true, /*id=*/1,
-                 /*corrId=*/1);
-  sim.step(160);  // 160 * 50ms == 8s of virtual cruise -- comfortably past tauAdapt=1s
+  // The bias bound rebakes with everything else: the old 5.0f was mm/s.
+  const float kConverged = 5.0f * 10.0f / travelCalibMean;  // [counts/s] (== 5 mm/s)
+
+  // Command 1: a long cruise, long enough for Stage C to converge well away
+  // from 0 under the deliberate mis-calibration above. The old TIME-stop
+  // MOVE's stopValue is now simply the LEASE -- the kernel bounds motion by
+  // lease expiry, not by a planner stop condition.
+  sim.injectBodyTwist(/*v_x=*/200.0f, /*omega=*/0.0f, /*duration=*/8000.0f,
+                      /*id=*/1, /*corrId=*/1);
+  sim.step(160);  // 160 cycles of virtual cruise -- comfortably past tauAdapt=1s
   (void)sim.drainTelemetry();
 
-  const float biasAfterLeg1 = sim.drive().biasLeft();
-  checkTrue(std::fabs(biasAfterLeg1) > 5.0f,
+  const float biasAfterLeg1 = sim.drive().output().biasLeft;
+  checkTrue(std::fabs(biasAfterLeg1) > kConverged,
             "setup: Stage C genuinely converged away from 0 under the deliberate mis-calibration");
 
-  // Leg 2 -- a SECOND, chained MOVE (a fresh id; leg 1's own TIME stop
-  // condition has already ended it). This is the EXACT RobotLoop::
-  // handleMove() call site this ticket changes (robot_loop.cpp:227):
-  // drive_.takeover(), not drive_.estop().
-  sim.injectMove(180.0f, 0.0f, 0.0f, TestSupport::MoveStopKind::kTime, /*stopValue=*/8000.0f,
-                 /*timeout=*/20000.0f, /*replace=*/true, /*id=*/2, /*corrId=*/2);
-  sim.step(1);  // the cycle handleMove() actually runs on
-  checkFloatGe(std::fabs(sim.drive().biasLeft()), 5.0f,
-               "leg boundary 1: bias did NOT reset to 0 at the SECOND leg's own handleMove()/"
-               "takeover() call");
+  // Command 2 -- a SECOND, chained WHEELS. This is the call site that used
+  // to be handleMove()'s drive_.takeover(): handleWheels() now just calls
+  // drive_.drive() with a fresh mailbox entry, and the point of the
+  // scenario is unchanged -- that doing so does NOT wipe Stage C. (estop()
+  // still does reset all adaptive state; that asymmetry is deliberate and
+  // is lesson 13.)
+  sim.injectBodyTwist(180.0f, 0.0f, /*duration=*/8000.0f, /*id=*/2, /*corrId=*/2);
+  sim.step(1);  // the cycle handleWheels() actually runs on
+  checkFloatGe(std::fabs(sim.drive().output().biasLeft), kConverged,
+               "command boundary 1: bias did NOT reset to 0 at the SECOND command's own "
+               "handleWheels()/drive() call");
 
-  sim.step(40);  // ~2s further into leg 2
+  sim.step(40);  // ~2s further into the second command
 
-  // Leg 3 -- a THIRD chained MOVE (2+ leg boundaries, "equivalent to a
+  // Command 3 -- a THIRD chained WHEELS (2+ boundaries, "equivalent to a
   // tour" per this ticket's own acceptance criterion).
-  sim.injectMove(160.0f, 0.0f, 0.0f, TestSupport::MoveStopKind::kTime, /*stopValue=*/8000.0f,
-                 /*timeout=*/20000.0f, /*replace=*/true, /*id=*/3, /*corrId=*/3);
+  sim.injectBodyTwist(160.0f, 0.0f, /*duration=*/8000.0f, /*id=*/3, /*corrId=*/3);
   sim.step(1);
-  checkFloatGe(std::fabs(sim.drive().biasLeft()), 5.0f,
-               "leg boundary 2: bias STILL has not reset to 0 at the THIRD leg's boundary -- 2+ "
-               "chained legs, no reset anywhere along the tour");
+  checkFloatGe(std::fabs(sim.drive().output().biasLeft), kConverged,
+               "command boundary 2: bias STILL has not reset to 0 at the THIRD command's boundary "
+               "-- 2+ chained commands, no reset anywhere along the tour");
 }
 
 }  // namespace

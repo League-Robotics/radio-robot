@@ -128,6 +128,12 @@ class DifferentialDrive {
     float appliedDutyLeft = 0.0f;   // [%]
     float appliedDutyRight = 0.0f;  // [%]
     float lambda = 1.0f;            // [1] authority scale currently applied
+    // Stage C's adapted trim, published for the same reason lambda is: it is
+    // the pipeline's one slow-moving LEARNED parameter, so "did adaptation
+    // converge, and did it survive the last command?" is otherwise
+    // unanswerable from outside. Bench-visible by design.
+    float biasLeft = 0.0f;          // [counts/s]
+    float biasRight = 0.0f;         // [counts/s]
     bool ready = false;             // begun + calibrated (velocity mode usable)
     bool estopped = false;
     bool leaseExpired = false;

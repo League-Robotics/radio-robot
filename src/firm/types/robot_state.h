@@ -29,16 +29,23 @@ struct RobotState {
   // Wheel -- MEASURED state only, published once per cycle from
   // Control::DifferentialDrive::output() (the wheel kernel now owns both
   // motors on its own fiber; RobotLoop never touches them directly -- see
-  // core/robot_loop.h's own header). position/velocity are in COUNTS now
-  // (1 count = 0.1 deg shaft), not mm -- the kernel is counts-native
-  // end to end; mm belongs to the application (WHEELS-verb adapter),
-  // never to this blackboard. cmdVelocity/cmdAccel are GONE: the
-  // commanded target lives inside the kernel's own Command mailbox, not
-  // here -- there is no cross-cycle "what did we ask for" field on this
-  // side of the interface any more.
+  // core/robot_loop.h's own header). position/velocity are in MILLIMETRES
+  // here, converted per wheel by RobotLoop::publishWheels() from the
+  // kernel's counts using the robot JSON's two travel calibrations -- the
+  // same pair the inbound WHEELS adapter uses. The KERNEL is counts-native
+  // end to end and never sees mm; this blackboard is on the application
+  // side of that boundary, and it feeds the telemetry encoder reading,
+  // whose wire unit is [mm]/[mm/s] and whose host-side readers
+  // (protocol.py, the bench scripts) were never migrated. Publishing
+  // counts here changes that field's meaning ~14x under an unchanged
+  // frame shape -- see robot_loop.cpp's own kPositionWireBound comment.
+  //
+  // cmdVelocity/cmdAccel are GONE: the commanded target lives inside the
+  // kernel's own Command mailbox, not here -- there is no cross-cycle
+  // "what did we ask for" field on this side of the interface any more.
   struct Wheel {
-    float position = 0.0f;  // [counts] Control::DifferentialDrive::Output::positionLeft/Right
-    float velocity = 0.0f;  // [counts/s] signed
+    float position = 0.0f;  // [mm] from Control::DifferentialDrive::Output::positionLeft/Right
+    float velocity = 0.0f;  // [mm/s] signed
     uint32_t sampleTime = 0;  // [ms] this reading's own genuine collect time
     bool connected = false;
     uint8_t positionEpoch = 0;  // bumped only when RobotLoop triggers drive_.rebasePosition()

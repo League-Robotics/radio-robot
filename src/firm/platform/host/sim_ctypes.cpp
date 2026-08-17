@@ -307,11 +307,28 @@ int sim_cycle_dt_us() { return static_cast<int>(TestSim::SimHarness::kCycleDtUs)
 // (TestGUI's "commanded vs actual" wheel-speed graph) gets a real signal
 // rather than a broken build, but it is no longer the commanded value --
 // it is now numerically identical to whatever "actual" already plots.
-// Signed [counts/s] (NOT mm/s any more -- the kernel is counts-native
-// end to end; a caller wanting mm/s must convert using its own
-// travel_calib knowledge, same as any other counts-domain reading).
-float sim_cmd_vel_left(SimHandle h) { return asHarness(h)->drive().output().velocityLeft; }
-float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->drive().output().velocityRight; }
+// Signed [mm/s], unchanged from before the rework. The kernel publishes
+// counts/s, so these convert per wheel using the robot config's own
+// travel_calib pair -- the SAME conversion RobotLoop::publishWheels() does
+// for telemetry, and for the same reason: this C ABI is the APPLICATION
+// boundary, and every caller of it (sim_loop.py's wheel-speed plumbing,
+// TestGUI's wheel-speed graph, test_sim_wire_loopback.py) reads mm/s and
+// was never migrated. Returning counts/s here silently rescales those
+// readings by ~14.19x under an unchanged signature.
+namespace {
+float countsToMm(SimHandle h, bool left) {  // [mm per count]
+  const Config::Robot& cfg = asHarness(h)->configurator().config();
+  const float calib = left ? cfg.motors.travel_calib_left : cfg.motors.travel_calib_right;
+  return (calib > 0.0f) ? calib * 0.1f : 0.0f;  // travel_calib [mm/deg], 1 count = 0.1 deg
+}
+}  // namespace
+
+float sim_cmd_vel_left(SimHandle h) {
+  return asHarness(h)->drive().output().velocityLeft * countsToMm(h, /*left=*/true);
+}
+float sim_cmd_vel_right(SimHandle h) {
+  return asHarness(h)->drive().output().velocityRight * countsToMm(h, /*left=*/false);
+}
 
 // Velocity-PID enable/disable (stakeholder 2026-07-18, TestGUI "PID"
 // checkbox next to the Test buttons) -- 125-003: NOW A NO-OP. The velocity
@@ -349,10 +366,19 @@ void sim_step(SimHandle h, int cycles) { asHarness(h)->step(cycles); }
 // deadman.h's own arm() doc comment). `corr` doubles as both the
 // enqueue-ack corr_id and the MOVE's own completion id -- this call site
 // never distinguished the two.
+// KERNEL REWORK: the ABI (name, signature, and what the caller means by it
+// -- a body twist held for `duration` ms) is UNCHANGED. What changed is the
+// wire command built underneath. MOVE is DEREGISTERED
+// (handleMoveOrGoto() acks ERR_UNIMPLEMENTED unconditionally), so building
+// a MOVE here acks an error and the plant never moves -- which is exactly
+// how this surfaced: SimLoop.twist() reported "accepted" and produced zero
+// motion. WHEELS is the surviving motion arm; injectBodyTwist() resolves
+// (v_x, omega) into per-wheel speeds against the same baked trackwidth the
+// firmware itself uses. `duration` is now the LEASE rather than a TIME stop
+// condition -- the same observable bound, enforced by the kernel instead of
+// by a planner stop condition.
 void sim_inject_twist(SimHandle h, float v_x, float omega, float duration, uint32_t corr) {
-  asHarness(h)->injectMove(v_x, /*v_y=*/0.0f, omega, TestSupport::MoveStopKind::kTime,
-                            /*stopValue=*/duration, /*timeout=*/duration, /*replace=*/true,
-                            /*id=*/corr, corr);
+  asHarness(h)->injectBodyTwist(v_x, omega, duration, /*id=*/corr, corr);
 }
 
 // sim_inject_stop -- retargeted at ESTOP (command-ingestion-ring-buffered-

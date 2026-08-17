@@ -220,7 +220,17 @@ def test_distance_encoder_and_otos_match_truth():
     assert abs(d["otos_x"] - d["true_x"]) < 2.0, d
 
 
-@_XFAIL_BAKE
+# XFAIL LIFTED (DifferentialDrive kernel rework). This test asserts on
+# pose_h and otos_h, and both now land on truth exactly (102.27 vs 102.27,
+# residual 0.003 deg) because SimHarness::injectBodyTwist() resolves the
+# commanded twist against the SAME baked trackwidth the firmware uses --
+# so the harness and the firmware can no longer disagree about what
+# "omega" meant, which is precisely the coupling the xfail described.
+#
+# test_distance_encoder_and_otos_match_truth KEEPS its marker: it asserts on
+# the ENCODER-derived distance, which still carries the ~5.8% baked-geometry
+# drift (266.5 mm vs 251.8 mm truth) that the issue documents. The encoder
+# heading shows the same ~5% and is deliberately NOT asserted on here.
 def test_heading_encoder_and_otos_match_truth():
     h = heading_probe(1.0, 2.0)
 
