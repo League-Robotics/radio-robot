@@ -73,6 +73,16 @@ namespace Control {
 
 class DifferentialDrive {
  public:
+  enum class Status : uint8_t {  // every refusal visible at the callsite
+    kOk = 0,
+    kRefusedUnconfigured,  // maxDuty == 0; or VELOCITY with fullDutyVelocity == 0
+    kRefusedNotRunning,    // command before start()
+    kRefusedEstopped,
+    kRefusedNonFinite,
+    kCadencePreserved,     // post-begin setConfig with a differing cyclePeriod:
+                           //   block applied, frozen cadence kept
+  };
+
   struct Config {                    // value type -- fetch/replace by copy
     // Every default is fail-closed: a default-constructed Config refuses
     // BOTH modes (maxDuty == 0 -> no authority at all; fullDutyVelocity
@@ -130,10 +140,11 @@ class DifferentialDrive {
                                      //   observability, now a real field)
     uint32_t sampleTimeLeft;         // [us] last SUCCESSFUL L collect
     uint32_t sampleTimeRight;        // [us] ~4-5 ms younger than L
-    uint32_t positionEpoch;          // bumps on every software rebaseline --
-                                     //   the TLM adapter's epoch source
-    float positionLeft;              // [counts] accumulated, never device-reset
-    float positionRight;             // [counts]
+    uint32_t positionEpochLeft;      // bump on that wheel's software
+    uint32_t positionEpochRight;     //   rebaseline -- feed telemetry's
+                                     //   per-wheel EncoderReading.position_epoch
+    float positionLeft;              // [counts] accumulated between software
+    float positionRight;             //   rebaselines; never device-reset
     float velocityLeft;              // [counts/s] over genuine inter-sample dt
     float velocityRight;             // [counts/s]
     float velocity;                  // [counts/s] measured mean
@@ -145,12 +156,19 @@ class DifferentialDrive {
     bool satLeft, satRight, stallLeft, stallRight;
     bool wedgeLeft, wedgeRight, connectedLeft, connectedRight;
     uint32_t leaseExpiryCount;       // sticky diagnostics
-    uint32_t i2cFaultCount;          // counted IN-CLASS from leaf status
-                                     //   returns -- no new Hal::Motor surface
+    uint32_t i2cFaultCount;          // failed-collect cycles, derived from
+                                     //   sample-stamp non-advance (the leaf's
+                                     //   requestSample()/tick() return void;
+                                     //   sampleTime()/connected() are the
+                                     //   observable surface)
   };
 
+  // Hal::FiberLauncher: NEW one-method HAL seam, launch(entry, arg) --
+  // platform/microbit wraps codal create_fiber; the host build's
+  // implementation fails the test if invoked (host drives step()).
   DifferentialDrive(Hal::Motor& left, Hal::Motor& right,
-                    const Hal::Clock& clock, Hal::Sleeper& sleeper);
+                    const Hal::Clock& clock, Hal::Sleeper& sleeper,
+                    Hal::FiberLauncher& launcher);
 
   // ---- config surface 1: chainable single-field setters ----
   DifferentialDrive& setMaxDuty(float maxDuty);            // [%]
@@ -181,27 +199,29 @@ class DifferentialDrive {
   DifferentialDrive& setCyclePeriod(uint32_t period);      // [ms] REFUSED
                                                            //   after begin()
   // ---- config surfaces 2 + 3: whole-block replace, fetch (copy) ----
-  void setConfig(const Config& config);
+  Status setConfig(const Config& config);  // post-begin: differing
+                                           //   cyclePeriod -> kCadencePreserved
   Config config() const;
 
   // ---- lifecycle (ordering: see "Lifecycle and boot ordering") ----
-  void begin();          // software init + boot zero-write, called AFTER the
+  Status begin();        // software init + boot zero-write, called AFTER the
                          //   Preamble resolves (Preamble keeps motor priming);
                          //   freezes cyclePeriod, derives the leaf throttle
-  void start();          // launch the kernel fiber (idempotent); the fiber
-                         //   body just loops step() via the Sleeper
+  Status start();        // launch the kernel fiber via the injected launcher
+                         //   (idempotent); the fiber body just loops step()
   bool running() const;
   void step();           // ONE kernel cycle, synchronously -- the host
                          //   harness's deterministic entry point; never
                          //   called while the fiber is running
 
   // ---- commands; lease is a DURATION from now, expiry stops ----
-  void drive(float velocity, float twist,
-             uint32_t lease);         // [counts/s] [counts/s] [ms]
-  void driveDuty(float dutyLeft, float dutyRight,
-                 uint32_t lease);     // [%] [%] [ms]
+  Status drive(float velocity, float twist,
+               uint32_t lease);       // [counts/s] [counts/s] [ms]
+  Status driveDuty(float dutyLeft, float dutyRight,
+                   uint32_t lease);   // [%] [%] [ms]
   void neutral();        // commanded stop through the full stop path
-  void estop();          // latch: zero NOW; holds until estopClear()
+  void estop();          // latch set immediately; zero written at the next
+                         //   kernel cycle; holds until estopClear()
   void estopClear();
 
   // ---- output: seq-consistent COPY of the published block ----
@@ -262,13 +282,18 @@ class DifferentialDrive {
   `ready == false`, not the old silent no-write return. Every setter,
   `setConfig()`, and command rejects non-finite values (fastPid's
   fail-closed posture applied at the boundary, lesson 10); a refused
-  command leaves current state untouched. Commands before `start()`
-  are refused the same way.
+  command leaves current state untouched AND returns the reason — the
+  `Status` enum makes every refusal observable at the callsite, not
+  just in Output. Commands before `start()` are refused the same way.
 - **`driveDuty()` semantics**: bypasses Stage A/PID/λ entirely; still
   goes through `writeShapedDuty()` (never raw), still bounded by
-  `maxDuty`, still lease-guarded, and stop-enforce + stall detection
-  stay armed. It is a plant-ID/bench mode, not an unshaped escape
-  hatch.
+  `maxDuty`, still lease-guarded, and stop-enforce stays armed. Stall
+  detection needs a demand in counts/s: in duty mode the demand is
+  `duty × fullDutyVelocity / 100`; with `fullDutyVelocity == 0`
+  (uncalibrated plant-ID runs) no speed-equivalent demand exists, so
+  the stall detector is DISARMED in duty mode — documented, and
+  visible (`stallLeft/Right` stay false). It is a plant-ID/bench
+  mode, not an unshaped escape hatch.
 - **Atomicity**: cooperative fibers on one core; aligned 32-bit stores
   are atomic; each block is single-writer, seq-committed; readers copy
   under a seq check and RETRY UNTIL CONSISTENT (a retry-once seqlock
@@ -287,37 +312,61 @@ contracts, verified against `core/preamble.cpp` and `main.cpp`
 2026-08-16):
 
 1. `Core::composeRobot()` CONSTRUCTS the class — no I2C, no fiber.
-2. `RobotLoop::boot()` runs the Preamble as today: power-settle, then
+2. **Baked Config applies at compose**: `setConfig()` with the
+   `gen_boot_config.py`-baked block, INCLUDING `cyclePeriod`.
+   Memory-only — no I2C happens here, so a pre-boot apply is safe
+   (the 132-015 trap was OTOS register writes, not struct
+   assignment). This is where the JSON cadence reaches the class:
+   before the freeze, by construction.
+3. `RobotLoop::boot()` runs the Preamble as today: power-settle, then
    bounded round-robin probes. **The Preamble keeps motor priming** —
    the class never re-primes. One owner, never both.
-3. `begin()` — called from `boot()` after the Preamble resolves:
+4. `begin()` — called from `boot()` after the Preamble resolves:
    software init (position epochs, latches), the boot zero-write
-   through the leaf's stop path, cyclePeriod freeze + leaf-throttle
+   through the leaf's stop path, cyclePeriod FREEZE + leaf-throttle
    derivation. Bounded like everything else in boot (lesson 17).
-4. `loadPersistedTuning()` — persisted config lands AFTER boot, as
-   today (132-015: an earlier apply is silently discarded); it flows
-   into `setConfig()`/setters.
-5. `start()` — the fiber launches only after the object is configured.
-   Commands are accepted from here on; earlier ones are refused with
-   `ready == false`.
+5. `loadPersistedTuning()` — persisted LIVE fields land after boot,
+   as today (132-015); they flow into setters/`setConfig()`. Cadence
+   is not among them: a post-begin `setConfig()` whose block carries
+   a different `cyclePeriod` PRESERVES the frozen value, applies the
+   rest, and returns a Status saying so; `setCyclePeriod()` after
+   `begin()` is refused outright.
+6. `start()` — the fiber launches (via the injected launcher) only
+   after the object is configured. Commands are accepted from here
+   on; earlier ones are refused (`Status` return, `ready == false`).
 
-**Host-harness seam**: the class takes `Hal::Sleeper` alongside
+**Host-harness seam**: the class takes `Hal::Sleeper` and a
+`Hal::FiberLauncher` (NEW one-method HAL interface — `launch(entry,
+arg)`; platform/microbit wraps codal `create_fiber`, the host build's
+implementation fails the test if ever invoked) alongside
 `Hal::Clock`, and the fiber body is a loop over the public `step()`.
 The host harness drives `step()` directly against the stepped plant —
-deterministic, no fibers, no CODAL — and never calls `start()`. The
-CODAL fiber launch inside `start()` is the only platform-specific
-line in the class.
+deterministic, no fibers — and never calls `start()`. NOTHING in the
+class names a CODAL symbol, so the same two files compile and link in
+both builds: the launcher seam, not an #ifdef, is the split.
 
-**Heartbeat sentinel (defense in depth)**: `RobotLoop` keeps exactly
-one safety job — each main-loop cycle it checks `output().cycleCount`
-is advancing; if it stalls for more than `kSentinelPeriods` cycle
-periods while motion was commanded, it re-asserts a zero write
-directly and raises a fault flag. Fiber-atomic I2C makes the
-emergency write safe (worst case it destroys one pending encoder
-sample — the right trade in an emergency). This restores a
-stop-enforcement point INDEPENDENT of the kernel fiber; without it, a
-wedged kernel fiber leaves the brick latched at its last speed (the
-936 mm runaway class of failure).
+**Heartbeat sentinel (defense in depth, limits stated)**: `RobotLoop`
+keeps exactly one safety job — each main-loop cycle it checks
+`output().cycleCount` is advancing; if it stalls for more than
+`kSentinelPeriods` cycle periods while motion was commanded, it (a)
+raises a sticky fault flag on telemetry and (b) calls the leaf's NEW
+`Hal::Motor::emergencyStop()` on both motors — an immediate, unstaged
+zero write through the never-shaped stop path (stop already bypasses
+all shaping, lesson 2). `setDuty(0)` would NOT do: it only stages,
+and the dead kernel fiber's `tick()` is what executes stages.
+`emergencyStop()` is the one sanctioned exception to the kernel-only
+0x10 rule — fiber-atomic I2C makes the interleaving safe (worst case
+it destroys one pending encoder sample; the right trade in an
+emergency) — and it joins the leaf's short exception list.
+
+Scope of the guarantee, honestly: the sentinel covers failures where
+the MAIN loop still runs — kernel fiber crashed, exited, or
+logic-stalled while the bus is alive (brick latched at last speed,
+the 936 mm runaway class). It CANNOT cover the dead-bus busy-wait
+(lesson 17): `waitForStop()` freezes every fiber, sentinel included —
+though in that failure the bus that would carry the zero write is
+itself the thing that died. Only the deferred hardware WDT covers
+that class.
 
 **Safety scope, stated honestly**: with CODAL I2C busy-waiting
 (`waitForStop`, lesson 17) and the hardware WDT deferred to the MP
@@ -332,7 +381,7 @@ it.
 - `sampleTimeLeft/Right` are stamped at collect SUCCESS only (the
   131-002 rule from `NezhaMotor::lastFreshUs_`): failed collects HOLD
   the stamp so age grows honestly; `connectedLeft/Right` complement it.
-- Age = `(int32)(nowMicros − sampleTime)` — wrap-safe signed difference.
+- Age = `(int32)(nowFine − sampleTime)` — wrap-safe signed difference.
 - L and R differ by construction: sequential split-phase collects L,
   then R one settle window later — R deterministically ~4-5 ms younger;
   an observer can model the fixed skew. Fault-driven divergence (ages
@@ -376,14 +425,32 @@ it.
 - Motor leaf + anti-latch shaping (`nezha_motor.cpp`) and MotorArmor
   stay byte-identical, EXCEPT: `travel_calib` is REMOVED from the leaf
   — `position()`/`velocity()` become counts-native; travel calibration
-  moves up to the application.
+  moves up to the application — and `Hal::Motor::emergencyStop()` is
+  ADDED (immediate unstaged zero through the never-shaped stop path;
+  the sentinel's actuation primitive, emergency-only).
 
 ### The fiber and the main loop
 
-The kernel fiber free-runs `run()`: snapshot command+config → estop/
-lease check → requestL → settle (fiber_sleep) → collectL → requestR →
-settle → collectR → control step (λ, twist hold, PID, shaped writes; no
-yields) → publish Output → sleep to the ABSOLUTE next-cycle deadline.
+The kernel fiber free-runs `run()`, PRESERVING today's loop schedule
+(`RobotLoop::cycle()`): the control step runs FIRST, on the PREVIOUS
+cycle's published samples, because `Hal::Motor` is stage-then-execute
+— `setDuty()` only stages, and `tick()` both collects the encoder AND
+executes the staged duty. A duty computed after both collects would
+land a cycle late, and a second `tick()` would perform an invalid
+extra collect. So:
+
+snapshot command+config → estop/lease check → control step on last
+cycle's samples (λ, twist hold, PID; stage shaped writes via
+`setDuty()`; no yields) → requestL → settle (sleeper) → tickL
+(collect L + execute staged L) → requestR → settle → tickR (collect R
++ execute staged R) → publish Output → sleep to the ABSOLUTE
+next-cycle deadline.
+
+The one-cycle command-to-write latency is IDENTICAL to today's loop —
+which is what the golden-trace equivalence gate requires. The
+alternative (splitting collect and apply into separate leaf
+operations) is a real interface change to a leaf this issue promises
+to keep byte-identical, and is explicitly NOT taken.
 
 `Core::RobotLoop` no longer runs the drive. The main fiber keeps
 comms, telemetry, sensors (OTOS et al.), the heartbeat sentinel
@@ -391,19 +458,21 @@ comms, telemetry, sensors (OTOS et al.), the heartbeat sentinel
 "thin" does not mean unspecified:
 
 - **Inbound** (`Wheels` is [mm/s] on the wire, `envelope.proto`):
-  `v_left`/`v_right` → counts/s via the application-held travel
-  calibration (robot JSON `travel_calib`, mm/deg, one value); then
-  `velocity = (l+r)/2`, `twist = (r−l)/2`;
-  `lease = Wheels.duration` (clamped to `kLeaseMax`). ESTOP→
-  `estop()`, STOP→`neutral()`.
+  `v_left`/`v_right` → counts/s PER WHEEL via the application-held
+  travel calibrations (robot JSON `travel_calib_left`/
+  `travel_calib_right`, mm/deg — two independent values,
+  `robot_config.proto` Motors); then `velocity = (l+r)/2`,
+  `twist = (r−l)/2`; `lease = Wheels.duration` (clamped to
+  `kLeaseMax`). ESTOP→`estop()`, STOP→`neutral()`.
 - **Outbound** (TLM frame SHAPE unchanged): `output()` counts → mm
-  via the same calibration, the existing ±32 m wire clamp preserved,
-  and the encoder rebaseline-epoch contract (`telemetry.proto`) fed
-  from `Output::positionEpoch`. Pose sources OTOS only; with OTOS
-  absent the pose valid bit stays clear — encoder-pose is the
+  per wheel via the same two calibrations, the existing ±32 m wire
+  clamp preserved, and the per-wheel rebaseline-epoch contract
+  (`EncoderReading.position_epoch`, `telemetry.proto`) fed from
+  `Output::positionEpochLeft/Right`. Pose sources OTOS only; with
+  OTOS absent the pose valid bit stays clear — encoder-pose is the
   application's job now.
-- One calibration value, one conversion each way, owned by the
-  adapter — the class never sees millimeters.
+- Two calibration values, one conversion each way per wheel, owned by
+  the adapter — the class never sees millimeters.
 
 Bench scripts that speak MOVE (`move_protocol_bench`, `twist_drive`,
 `velocity_step_response`, the accuracy benches) get ERR in this tree.
@@ -416,8 +485,9 @@ budgeted in execution step 4, not assumed away.
   "spend the settle usefully" property is preserved by construction.
 - Bus safety: CODAL I2C transactions never yield mid-transaction
   (fiber-atomic); per-device clearances are per-address; the kernel is
-  the ONLY 0x10 client, so select→collect ordering is preserved
-  structurally. Main-fiber OTOS traffic (0x17) CAN land inside a kernel
+  the ONLY 0x10 client in normal operation (sole sanctioned exception:
+  the sentinel's `emergencyStop()`), so select→collect ordering is
+  preserved structurally. Main-fiber OTOS traffic (0x17) CAN land inside a kernel
   settle window — the one unmeasured interleaving (wedgelab
   mixed-traffic evidence says it is fine); measured explicitly on the
   bench (see Verification).
@@ -508,9 +578,11 @@ base):
 
 16. Any 0x10 transaction between a 0x46 select and its read destroys
     the pending sample (416/416 measured) — the kernel fiber is the
-    sole 0x10 client, ever. Foreign-address interleaving during settle
-    is unmeasured (wedgelab mixed-traffic says fine) → explicit bench
-    check.
+    sole 0x10 client in normal operation; the sentinel's
+    `emergencyStop()` is the one exception and knowingly accepts a
+    destroyed pending sample. Foreign-address interleaving during
+    settle is unmeasured (wedgelab mixed-traffic says fine) →
+    explicit bench check.
 17. CODAL I2C transactions busy-wait and never yield mid-transaction —
     fiber-atomicity is what makes the shared bus safe. A dead external
     bus parks `waitForStop` toward ~10 s with everything frozen (the
@@ -628,9 +700,10 @@ attributable diff, not a crater. Ordering revised 2026-08-16.
    telemetry reads `output()`. motion/ stays compiled but uncomposed
    for now.
 6. Config: baked values flow from the same robot JSON via
-   `gen_boot_config.py` (mm→counts rebake) into `setConfig()` at the
-   132-015-correct point — one file, bake and runtime read the same
-   source.
+   `gen_boot_config.py` (mm→counts rebake) into the COMPOSE-TIME
+   `setConfig()` (lifecycle step 2 — memory-only, before the cadence
+   freeze); persisted live fields land post-boot per lifecycle step 5
+   — one file, bake and runtime read the same source.
 7. Host harness + surviving suite green.
 8. Bench gates (see Verification). Nothing has been deleted yet — a
    failure here is attributable and cheap to abandon.
