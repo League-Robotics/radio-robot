@@ -66,10 +66,39 @@ class DifferentialDrive {
   static constexpr uint8_t kModeVelocity = 1;
   static constexpr uint8_t kModeRawDuty = 2;
 
+  // Status — every refusal visible AT THE CALLSITE, not only as a bit in
+  // the next published Output. The old silent no-write return is the
+  // failure mode this exists to remove: a command that does nothing and
+  // says nothing is indistinguishable from one that worked.
+  enum class Status : uint8_t {
+    kOk = 0,
+    kRefusedUnconfigured,  // maxDuty == 0; or VELOCITY with fullDutyVelocity == 0
+    kRefusedNotBegun,      // command before begin(). NOT before start(): the
+                           //   host harness commands and step()s WITHOUT ever
+                           //   launching the fiber, so readiness is begin()'s
+                           //   to grant, not start()'s
+    kRefusedEstopped,
+    kRefusedNonFinite,
+    kCadencePreserved,     // post-begin setConfig with a differing cyclePeriod:
+                           //   block applied, frozen cadence kept
+  };
+
+  // Lease ceiling. Far below INT32_MAX ms so the wrap-safe signed compare
+  // against Command::validUntil is never ambiguous.
+  static constexpr uint32_t kLeaseMax = 3600000u;  // [ms]
+
   // Config — value type; fetch/replace by copy. All speeds counts/s.
+  //
+  // EVERY DEFAULT IS FAIL-CLOSED. A default-constructed Config refuses
+  // BOTH modes: maxDuty == 0 means no authority at all, and
+  // fullDutyVelocity == 0 additionally refuses VELOCITY. Nothing moves
+  // until something configures it. This is deliberate and load-bearing —
+  // an unconfigured robot that silently drives is the failure this whole
+  // class of default exists to prevent.
   struct Config {
     // Authority / plant gain.
-    float maxDuty = 100.0f;          // [%] authority rail (lambda scales to this)
+    float maxDuty = 0.0f;            // [%] authority rail (lambda scales to
+                                     //   this); 0 = ALL modes refused
     float fullDutyVelocity = 0.0f;   // [counts/s] wheel rate at 100% duty;
                                      //   0 = uncalibrated → VELOCITY refused
     // Velocity PID (Stage B). tovez ships pure-I: kp=0, ki on the clamped
@@ -177,26 +206,49 @@ class DifferentialDrive {
   DifferentialDrive& setCyclePeriod(uint32_t period);      // [ms]
 
   // ---- config surfaces 2 + 3: whole-block replace / fetch (copies) ---
-  void setConfig(const Config& config);
+  // setConfig(): post-begin, a block carrying a DIFFERENT cyclePeriod
+  // applies every other field and PRESERVES the frozen cadence, returning
+  // kCadencePreserved to say so.
+  Status setConfig(const Config& config);
   Config config() const;
+
+  // ---- how a REFUSED SETTER is observed ------------------------------
+  // The chainable setters above must return DifferentialDrive& to chain,
+  // so they cannot return Status. Without this pair, a rejected
+  // non-finite value or a post-begin() setCyclePeriod() would be refused
+  // SILENTLY — exactly the behaviour Status exists to remove, reintroduced
+  // across the whole config surface. Sticky: holds the FIRST refusal since
+  // the last clear, so a caller can run a long chain and check once at the
+  // end rather than after every call.
+  Status lastError() const { return lastError_; }
+  void clearLastError() { lastError_ = Status::kOk; }
 
   // ---- lifecycle: start the object, then start the fiber -------------
   // begin(): hardware init — primes both encoders (the 0x46 register sits
   // frozen at 0 until its first atomic read) and arms the boot zero-write
   // (the first cycles assert commanded zero — the Nezha brick latches its
-  // last speed across nRF resets, so boot ALWAYS re-asserts stop).
-  void begin();
+  // last speed across nRF resets, so boot ALWAYS re-asserts stop). Also
+  // FREEZES cyclePeriod. Returns kRefusedUnconfigured if the config still
+  // has no authority (maxDuty == 0).
+  Status begin();
   // start(): launch the kernel fiber (idempotent). The runner is passed
   // here, not stored from construction — a host-test harness never calls
-  // start() and drives cycleOnce() directly instead.
-  void start(Hal::FiberRunner& runner);
+  // start() and drives step() directly instead.
+  //
+  // start() does NOT gate command acceptance: readiness is begin()'s to
+  // grant. Gating on start() would make the golden-trace host harness
+  // impossible to write, since it steps the kernel without ever launching
+  // a fiber.
+  Status start(Hal::FiberRunner& runner);
   bool running() const { return running_; }
 
   // ---- commands; lease is a DURATION [ms] from now — expiry stops ----
-  void drive(float velocity, float twist,
-             uint32_t lease);         // [counts/s] [counts/s] [ms]
-  void driveDuty(float dutyLeft, float dutyRight,
-                 uint32_t lease);     // [%] [%] [ms]
+  // Lease is clamped to kLeaseMax. A refused command leaves current state
+  // untouched AND returns the reason.
+  Status drive(float velocity, float twist,
+               uint32_t lease);       // [counts/s] [counts/s] [ms]
+  Status driveDuty(float dutyLeft, float dutyRight,
+                   uint32_t lease);   // [%] [%] [ms]
   void neutral();        // commanded stop through the full stop path
   void estop();          // latch: zero NOW; holds until estopClear()
   void estopClear();
@@ -216,8 +268,8 @@ class DifferentialDrive {
   // injected Sleeper) → publish. The fiber body is a loop over this plus
   // absolute-deadline pacing. Public FOR THE HOST TEST HARNESS (which has
   // no fiber); production code never calls it — start() is the one
-  // production entry.
-  void cycleOnce();
+  // production entry. Never called while the fiber is running.
+  void step();
 
  private:
   // ---- mailbox / published blocks (see file header for the
@@ -261,9 +313,14 @@ class DifferentialDrive {
 
   // ---- fiber ---------------------------------------------------------
   static void fiberEntry(void* self);
-  void run();  // the kernel fiber body: cycleOnce() + absolute-deadline pace
+  void run();  // the kernel fiber body: step() + absolute-deadline pace
 
   // ---- cycle internals ----------------------------------------------
+  // Shared refusal gate for drive()/driveDuty(). A refused command leaves
+  // the mailbox UNTOUCHED, so whatever was already commanded keeps running
+  // under its own lease rather than being replaced by a rejected command.
+  Status checkCommandable(bool needsVelocityCalibration) const;
+
   void snapshotConfig();
   Command snapshotCommand() const;
   void controlStep(const Command& cmd, uint8_t effectiveMode, float dt,
@@ -317,6 +374,14 @@ class DifferentialDrive {
   volatile uint32_t rebaseReq_ = 0;
   uint32_t seenClearStallReq_ = 0;
   uint32_t seenRebaseReq_ = 0;
+
+  // Sticky first-refusal, for the chainable setters that cannot return a
+  // Status. Written from the caller's fiber only (the kernel fiber never
+  // touches it), so it needs no seq protection.
+  Status lastError_ = Status::kOk;
+  void noteRefusal(Status status) {
+    if (lastError_ == Status::kOk) lastError_ = status;
+  }
 
   // ---- kernel-fiber state --------------------------------------------
   bool begun_ = false;

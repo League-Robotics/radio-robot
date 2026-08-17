@@ -139,7 +139,7 @@ class SimHarness {
   // zero-write, mirroring main.cpp's own post-boot() sequencing exactly
   // (core/boot_wiring.h's "Lifecycle, one level up" note). Deliberately
   // does NOT call drive_.start() -- a host harness has no real
-  // Hal::FiberRunner and drives the kernel's cycleOnce() itself instead
+  // Hal::FiberRunner and drives the kernel's step() itself instead
   // (see step() below). Idempotent -- a second call is a no-op (booted_
   // already true).
   void boot() {
@@ -151,11 +151,11 @@ class SimHarness {
   }
 
   // Advances the sim `cycles` times: plant_.tick(dt) THEN clock_.
-  // advanceMicros(kCycleDtUs) THEN drive_.cycleOnce() THEN robotLoop_.
+  // advanceMicros(kCycleDtUs) THEN drive_.step() THEN robotLoop_.
   // cycle() -- see this file's own header for the plant-before-loop
   // ordering invariant. Call boot() first.
   //
-  // drive_.cycleOnce() runs ONCE per outer step here, not on its own
+  // drive_.step() runs ONCE per outer step here, not on its own
   // kKernelCyclePeriod cadence (the kernel has no fiber in a host
   // harness -- there is nothing else to pace it). This is a known
   // simplification: the kernel's own internal dt terms read ~kCycleDtUs
@@ -171,7 +171,7 @@ class SimHarness {
     for (int i = 0; i < cycles; ++i) {
       plant_.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s]
       clock_.advanceMicros(kCycleDtUs);
-      graph_.drive().cycleOnce();
+      graph_.drive().step();
       graph_.robotLoop().cycle();
       ++cycleCount_;
     }

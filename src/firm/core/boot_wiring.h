@@ -53,7 +53,7 @@
 //      preamble-then-motor-begin() order.
 //   4. graph.drive().start(fiberRunner) -- ARM only; launches the
 //      kernel's own fiber. A host test harness never calls this --
-//      it drives graph.drive().cycleOnce() directly instead.
+//      it drives graph.drive().step() directly instead.
 #pragma once
 
 #include "control/differential_drive.h"

@@ -87,7 +87,22 @@ Control::DifferentialDrive::Config buildDriveKernelConfig(const Config::Robot& c
   // No robot-JSON key yet for either -- see this function's own header
   // doc comment.
   cfg.twistHoldGain = 0.0f;
-  // cfg.maxDuty stays at Config{}'s own 100.0f default.
+
+  // maxDuty: the kernel's Config default is FAIL-CLOSED now (0 = every
+  // mode refused), so the bake must grant authority EXPLICITLY. It can no
+  // longer ride a permissive class default -- that is the point of the
+  // change: an unconfigured kernel refuses rather than driving at full
+  // authority.
+  //
+  // CONFIGURATION-DISCIPLINE GAP, stated rather than hidden: this is a C++
+  // literal, not a value from the robot JSON, so it breaks invariant 1
+  // ("every value the robot uses comes from the file") the same way
+  // twistHoldGain above does. Not a regression -- the value was previously
+  // an even less visible class-member default -- but a debt:
+  // `drive.max_duty` needs a real key in robot_config.proto, the four
+  // robot JSONs and the schema, with this line then reading it. Tracked in
+  // the issue's conformance plan.
+  cfg.maxDuty = 100.0f;  // [%] full authority rail
 
   cfg.cyclePeriod = kKernelCyclePeriod;
 

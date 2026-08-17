@@ -18,6 +18,30 @@ float clampf(float v, float lo, float hi) {
   return v;
 }
 
+// fastPid() already fails closed on non-finite input; these push that same
+// posture out to the BOUNDARY so a NaN never enters the config or the
+// mailbox in the first place, rather than being caught mid-pipeline.
+bool isFinite(float v) { return std::isfinite(v); }
+
+bool allFinite(const Control::DifferentialDrive::Config& c) {
+  const float scalars[] = {
+      c.maxDuty, c.fullDutyVelocity, c.kp, c.ki, c.iMax, c.kaff, c.pidMax,
+      c.twistHoldGain, c.vMin, c.posErrMax, c.biasMax, c.tauAdapt, c.aSteady,
+      c.deficitThreshold, c.deficitWindow, c.stallSpeed, c.stallDemand,
+      c.stallWindow, c.crawlPulse,
+  };
+  for (float v : scalars) {
+    if (!std::isfinite(v)) return false;
+  }
+  for (int i = 0; i < 2; ++i) {
+    for (int j = 0; j < 2; ++j) {
+      if (!std::isfinite(c.wheelGain[i][j])) return false;
+      if (!std::isfinite(c.wheelIntercept[i][j])) return false;
+    }
+  }
+  return true;
+}
+
 }  // namespace
 
 DifferentialDrive::DifferentialDrive(Hal::Motor& left, Hal::Motor& right,
@@ -31,48 +55,96 @@ DifferentialDrive::DifferentialDrive(Hal::Motor& left, Hal::Motor& right,
 // ---------------------------------------------------------------------------
 
 DifferentialDrive& DifferentialDrive::setMaxDuty(float maxDuty) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(maxDuty)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.maxDuty = maxDuty;
   ++cfgSeq_;
   return *this;
 }
 
 DifferentialDrive& DifferentialDrive::setFullDutyVelocity(float velocity) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(velocity)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.fullDutyVelocity = velocity;
   ++cfgSeq_;
   return *this;
 }
 
 DifferentialDrive& DifferentialDrive::setKp(float kp) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(kp)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.kp = kp;
   ++cfgSeq_;
   return *this;
 }
 
 DifferentialDrive& DifferentialDrive::setKi(float ki) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(ki)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.ki = ki;
   ++cfgSeq_;
   return *this;
 }
 
 DifferentialDrive& DifferentialDrive::setIMax(float iMax) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(iMax)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.iMax = iMax;
   ++cfgSeq_;
   return *this;
 }
 
 DifferentialDrive& DifferentialDrive::setKaff(float kaff) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(kaff)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.kaff = kaff;
   ++cfgSeq_;
   return *this;
 }
 
 DifferentialDrive& DifferentialDrive::setPidMax(float pidMax) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(pidMax)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.pidMax = pidMax;
   ++cfgSeq_;
   return *this;
 }
 
 DifferentialDrive& DifferentialDrive::setTwistHoldGain(float gain) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(gain)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.twistHoldGain = gain;
   ++cfgSeq_;
   return *this;
@@ -82,6 +154,15 @@ DifferentialDrive& DifferentialDrive::setWheelCorrection(
     float gainLeftAccel, float interceptLeftAccel, float gainLeftDecel,
     float interceptLeftDecel, float gainRightAccel, float interceptRightAccel,
     float gainRightDecel, float interceptRightDecel) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(gainLeftAccel) || !isFinite(interceptLeftAccel) ||
+      !isFinite(gainLeftDecel) || !isFinite(interceptLeftDecel) ||
+      !isFinite(gainRightAccel) || !isFinite(interceptRightAccel) ||
+      !isFinite(gainRightDecel) || !isFinite(interceptRightDecel)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.wheelGain[0][0] = gainLeftAccel;
   staged_.wheelIntercept[0][0] = interceptLeftAccel;
   staged_.wheelGain[0][1] = gainLeftDecel;
@@ -95,12 +176,24 @@ DifferentialDrive& DifferentialDrive::setWheelCorrection(
 }
 
 DifferentialDrive& DifferentialDrive::setSpeedFloor(float vMin) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(vMin)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.vMin = (vMin > 0.0f) ? vMin : 0.0f;
   ++cfgSeq_;
   return *this;
 }
 
 DifferentialDrive& DifferentialDrive::setPositionErrorMax(float posErrMax) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(posErrMax)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.posErrMax = (posErrMax > 0.0f) ? posErrMax : 0.0f;
   ++cfgSeq_;
   return *this;
@@ -109,6 +202,12 @@ DifferentialDrive& DifferentialDrive::setPositionErrorMax(float posErrMax) {
 DifferentialDrive& DifferentialDrive::setAdaptation(float biasMax,
                                                     float tauAdapt,
                                                     float aSteady) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(biasMax) || !isFinite(tauAdapt) || !isFinite(aSteady)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.biasMax = biasMax;
   staged_.tauAdapt = tauAdapt;
   staged_.aSteady = (aSteady > 0.0f) ? aSteady : 0.0f;
@@ -118,6 +217,12 @@ DifferentialDrive& DifferentialDrive::setAdaptation(float biasMax,
 
 DifferentialDrive& DifferentialDrive::setDeficit(float threshold,
                                                  float window) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(threshold) || !isFinite(window)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.deficitThreshold = threshold;
   staged_.deficitWindow = window;
   ++cfgSeq_;
@@ -126,6 +231,12 @@ DifferentialDrive& DifferentialDrive::setDeficit(float threshold,
 
 DifferentialDrive& DifferentialDrive::setStall(float speed, float demand,
                                                float window) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(speed) || !isFinite(demand) || !isFinite(window)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.stallSpeed = speed;
   staged_.stallDemand = demand;
   staged_.stallWindow = window;
@@ -134,20 +245,53 @@ DifferentialDrive& DifferentialDrive::setStall(float speed, float demand,
 }
 
 DifferentialDrive& DifferentialDrive::setCrawlPulse(float crawlPulse) {
+  // Non-finite in = refused, and RECORDED: this setter must return
+  // *this to chain, so lastError() is the only way a caller can see it.
+  if (!isFinite(crawlPulse)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return *this;
+  }
   staged_.crawlPulse = crawlPulse;
   ++cfgSeq_;
   return *this;
 }
 
 DifferentialDrive& DifferentialDrive::setCyclePeriod(uint32_t period) {
+  // REFUSED after begin(): the leaf's write throttle was derived from the
+  // cadence at that moment (lesson 6), and any leaf window counted in
+  // ticks changes wall-clock meaning with it. Live-mutating it would move
+  // a constant out from under the leaf mid-cycle.
+  if (begun_) {
+    noteRefusal(Status::kCadencePreserved);
+    return *this;
+  }
   staged_.cyclePeriod = period;
   ++cfgSeq_;
   return *this;
 }
 
-void DifferentialDrive::setConfig(const Config& config) {
+DifferentialDrive::Status DifferentialDrive::setConfig(const Config& config) {
+  if (!allFinite(config)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return Status::kRefusedNonFinite;
+  }
+  // Cadence is FROZEN at begin(): the leaf's write throttle was derived
+  // from it at that moment, and re-deriving it live would mutate a
+  // constant out from under the leaf mid-cycle. Apply everything else and
+  // say what happened, rather than refusing the whole block (persisted
+  // tuning legitimately carries a full Config, cadence included).
+  const bool cadenceDiffers =
+      begun_ && config.cyclePeriod != staged_.cyclePeriod;
+  const uint32_t frozen = staged_.cyclePeriod;
   staged_ = config;
+  if (cadenceDiffers) {
+    staged_.cyclePeriod = frozen;
+    ++cfgSeq_;
+    noteRefusal(Status::kCadencePreserved);
+    return Status::kCadencePreserved;
+  }
   ++cfgSeq_;
+  return Status::kOk;
 }
 
 DifferentialDrive::Config DifferentialDrive::config() const {
@@ -158,23 +302,39 @@ DifferentialDrive::Config DifferentialDrive::config() const {
 // Lifecycle
 // ---------------------------------------------------------------------------
 
-void DifferentialDrive::begin() {
+DifferentialDrive::Status DifferentialDrive::begin() {
   // Primes both encoders (the 0x46 register sits frozen at 0 until its
   // first atomic read — the leaf's hardReset() burst) and arms the boot
   // zero-write: the first cycles run the stop path, and the leaf's
   // first-write slew exemption sends the zero immediately. The brick
   // latches its last commanded speed across nRF resets, so boot ALWAYS
   // re-asserts stop.
+  //
+  // The boot zero-write runs even when the config has no authority: an
+  // unconfigured robot must still assert stop, which is the whole point
+  // of the fail-closed posture. The refusal is REPORTED, not acted on by
+  // skipping the safety work.
   left_.begin();
   right_.begin();
   stopEnforceCountdown_ = kStopEnforceTicks;
   begun_ = true;
+  // Cadence freezes HERE — see setConfig()'s own comment.
+  if (staged_.maxDuty <= 0.0f) {
+    noteRefusal(Status::kRefusedUnconfigured);
+    return Status::kRefusedUnconfigured;
+  }
+  return Status::kOk;
 }
 
-void DifferentialDrive::start(Hal::FiberRunner& runner) {
-  if (running_) return;
+DifferentialDrive::Status DifferentialDrive::start(Hal::FiberRunner& runner) {
+  if (!begun_) {
+    noteRefusal(Status::kRefusedNotBegun);
+    return Status::kRefusedNotBegun;
+  }
+  if (running_) return Status::kOk;  // idempotent
   running_ = true;
   runner.createFiber(&DifferentialDrive::fiberEntry, this);
+  return Status::kOk;
 }
 
 void DifferentialDrive::fiberEntry(void* self) {
@@ -184,7 +344,7 @@ void DifferentialDrive::fiberEntry(void* self) {
 void DifferentialDrive::run() {
   while (true) {
     const uint64_t cycleStartUs = clock_.nowMicros();
-    cycleOnce();
+    step();
     // Absolute-deadline pacing (the 131-005 lesson): sleep to
     // cycleStart + period, never a gap relative to "now" — gap-relative
     // sleeps compound their own rounding into structural drift.
@@ -207,25 +367,66 @@ void DifferentialDrive::run() {
 // Commands (main-fiber writers of the mailbox)
 // ---------------------------------------------------------------------------
 
-void DifferentialDrive::drive(float velocity, float twist, uint32_t lease) {
+// Shared refusal gate for both command arms. A refused command leaves the
+// mailbox UNTOUCHED — the previously-commanded motion continues under its
+// own lease rather than being silently replaced by a rejected one.
+DifferentialDrive::Status DifferentialDrive::checkCommandable(
+    bool needsVelocityCalibration) const {
+  if (!begun_) return Status::kRefusedNotBegun;
+  if (estopLatch_) return Status::kRefusedEstopped;
+  if (staged_.maxDuty <= 0.0f) return Status::kRefusedUnconfigured;
+  if (needsVelocityCalibration && staged_.fullDutyVelocity <= 0.0f) {
+    return Status::kRefusedUnconfigured;
+  }
+  return Status::kOk;
+}
+
+DifferentialDrive::Status DifferentialDrive::drive(float velocity, float twist,
+                                                   uint32_t lease) {
+  if (!isFinite(velocity) || !isFinite(twist)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return Status::kRefusedNonFinite;
+  }
+  const Status gate = checkCommandable(/*needsVelocityCalibration=*/true);
+  if (gate != Status::kOk) {
+    noteRefusal(gate);
+    return gate;
+  }
   Command c;
   c.mode = kModeVelocity;
   c.velocity = velocity;
   c.twist = twist;
-  c.validUntil = static_cast<uint32_t>(clock_.nowMicros() / 1000) + lease;
+  c.validUntil = static_cast<uint32_t>(clock_.nowMicros() / 1000) +
+                 (lease > kLeaseMax ? kLeaseMax : lease);
   command_ = c;
   ++cmdSeq_;
+  return Status::kOk;
 }
 
-void DifferentialDrive::driveDuty(float dutyLeft, float dutyRight,
-                                  uint32_t lease) {
+DifferentialDrive::Status DifferentialDrive::driveDuty(float dutyLeft,
+                                                       float dutyRight,
+                                                       uint32_t lease) {
+  if (!isFinite(dutyLeft) || !isFinite(dutyRight)) {
+    noteRefusal(Status::kRefusedNonFinite);
+    return Status::kRefusedNonFinite;
+  }
+  // Duty mode needs no fullDutyVelocity: it bypasses the velocity->duty
+  // map entirely. That is what makes it usable for plant-ID runs on an
+  // uncalibrated robot (the stall detector is disarmed there in exchange).
+  const Status gate = checkCommandable(/*needsVelocityCalibration=*/false);
+  if (gate != Status::kOk) {
+    noteRefusal(gate);
+    return gate;
+  }
   Command c;
   c.mode = kModeRawDuty;
   c.dutyLeft = dutyLeft;
   c.dutyRight = dutyRight;
-  c.validUntil = static_cast<uint32_t>(clock_.nowMicros() / 1000) + lease;
+  c.validUntil = static_cast<uint32_t>(clock_.nowMicros() / 1000) +
+                 (lease > kLeaseMax ? kLeaseMax : lease);
   command_ = c;
   ++cmdSeq_;
+  return Status::kOk;
 }
 
 void DifferentialDrive::neutral() {
@@ -291,7 +492,7 @@ DifferentialDrive::Command DifferentialDrive::snapshotCommand() const {
   return copy;
 }
 
-void DifferentialDrive::cycleOnce() {
+void DifferentialDrive::step() {
   const uint64_t cycleStartUs = clock_.nowMicros();
   const uint32_t nowMs = static_cast<uint32_t>(cycleStartUs / 1000);
 
