@@ -20,7 +20,10 @@ status: in-progress
 > renames — is **not in the implementation**.
 >
 > The live task is therefore a CONFORMANCE pass, not a build: close the
-> gap between the extant code and this spec. The gap is enumerated in
+> gap between the extant code and this spec. **That pass is now
+> largely DONE — head `7c682fc4`, 9 of 14 audit items closed.** See
+> "Conformance status" at the end for what is closed, what is not,
+> and the one finding the fidelity gate produced. The gap is enumerated in
 > "Conformance audit" and the work is planned in "Conformance plan",
 > both near the end of this file. Read those two sections before
 > touching anything.
@@ -1067,3 +1070,97 @@ profile ships zero feedback this may be honest open-loop map error
 rather than a kernel defect — but it is unexplained, and P10 is the
 step most likely to attribute it. Do not trust a velocity number out of
 this tree until it is measured against master.
+
+## Conformance status (2026-08-17) — head `7c682fc4`
+
+Nine of the fourteen audit items are closed. Gates after every step:
+
+| gate | result |
+|---|---|
+| micro:bit firmware (`build.py`) | `MICROBIT.hex`, 0 errors |
+| host sim library | builds |
+| `src/tests/sim` + `src/tests/unit` | **1449 passed, 4 xfailed** |
+
+| item | status |
+|---|---|
+| C1 `Status` on every entry point | **DONE** (P1) |
+| C2 `lastError()`/`clearLastError()` | **DONE** (P1) |
+| C3 fail-closed `maxDuty` | **DONE** (P2) |
+| C4 gated λ | **DONE** (P5) |
+| C5 heartbeat sentinel | **DONE** (P6) |
+| C6 `Hal::Motor::emergencyStop()` | **DONE** (P6) |
+| C7 `kLeaseMax` clamp | **DONE** (P3) |
+| C8 `FiberLauncher` at construction | **DONE** (P7) |
+| C9 `step()` | **DONE** (P1) |
+| C10 `nowFine`/`cyclePeriodMeasured` | **DONE** (P4) |
+| C11 overrun/i2cFault/positionEpoch on Output | **DONE** (P4) |
+| C12 `start()` after persisted tuning | **DONE** (P8) |
+| C13 dead `vel_*` keys deleted | **NOT DONE** — see below |
+| C14 golden-trace fidelity gate | **BUILT, and it found something** |
+
+### C14 — what the fidelity gate proved, and what it did not
+
+`src/tests/sim/fidelity/` holds the pre-rework control law recovered from
+`ab43963c` and frozen (`golden_ref_drive.{h,cpp}`, `golden_ref_state.h`),
+plus a harness that drives it and the current kernel through identical
+commands against identical plants and compares the DUTY each produces.
+
+**The feedforward path is EXACT.** With `kp=ki=0` the worst duty delta
+across the run is `0.000000` — not "within tolerance", identical. The
+`duty_per_speed` → `fullDutyVelocity` rebake, the mm→counts command
+conversion and Stage A's gain/intercept/direction logic all survived the
+rework bit-for-bit. Half the "zero math changes" claim is now proven
+rather than asserted.
+
+**The integral path does NOT match.** Once the I term engages the duty
+diverges by ~2% of full authority — `0.022746` at the cycle it first
+contributes (`ref 0.2000` vs `new 0.1773`, and 0.1773 is exactly the
+pure-feedforward value, so the kernel's I term engages a cycle later or
+with a different magnitude). Recorded as `xfail(strict=True)`, NOT tuned
+away.
+
+Three independent harness corrections were tried and the number did not
+move by a single digit — a harness artifact would have:
+
+1. pacing the kernel clock to a full 24 ms cycle (this one DID move it,
+   0.209 → 0.0227: the kernel measures its own dt, and `step()` alone
+   only advances `2*kSettle` = 8 ms);
+2. making both sides read a difference-quotient velocity, as the real
+   leaf reports (lesson 15), rather than instantaneous plant velocity;
+3. aligning sample-freshness ordering so the reference also runs on the
+   PREVIOUS cycle's samples, which is the schedule the kernel preserves.
+
+**This is the leading candidate explanation for the open-loop tracking
+falloff** recorded below (−20% at 250 mm/s on `tovez_nocal`). Both are
+integral-path behaviour on a profile whose feedforward is provably exact.
+Chase them together.
+
+### C13 — not done, deliberately
+
+Deleting the dead `motors.vel_*` keys means a schema migration:
+`robot_config.proto`, the generated `robot_config.h`/`robot_config_pb2.py`/
+`robot_config_generated.py`, `gen_boot_config.py` (24 refs),
+`gen_default_config.py`, `boot_config.cpp`, four robot JSONs, the schema,
+and six test files — with a protobuf regeneration step in the middle.
+That is the **lowest-value item on the list** (dead keys harm tidiness,
+nothing else) with **by far the widest blast radius**, and it is
+unverifiable on hardware from here. Left for a session that can run the
+codegen and re-bake every robot.
+
+### One debt this pass ADDED, stated rather than hidden
+
+`buildDriveKernelConfig()` now sets `cfg.maxDuty = 100.0f` as a C++
+literal. The fail-closed default (C3) means the bake must grant authority
+explicitly, and there is no `drive.max_duty` key to read. This is not a
+regression — the value was previously an even less visible class-member
+default — but it breaks configuration-discipline invariant 1 exactly the
+way `twistHoldGain` beside it does. `drive.max_duty` wants a real key in
+the proto, the four robot JSONs and the schema; it is the same migration
+as C13 and should go with it.
+
+### Still true, and unchanged by any of this
+
+**Nothing here has been on the robot.** Every gate above is off-hardware.
+The entire Verification list stands owed, and the two findings — the
+integral-path divergence and the tracking falloff — are exactly the kind
+of thing the bench exists to settle.
