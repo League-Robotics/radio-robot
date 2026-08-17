@@ -4,6 +4,11 @@ status: pending
 
 # DifferentialDrive: one class, one fiber — exploratory worktree
 
+*Revised 2026-08-16, out of process: incorporates the two-agent design
+review — Config completeness, lifecycle/boot ordering, estop honesty,
+adapter contract, gated λ, execution reorder, verification bounds,
+reference hygiene.*
+
 ## Description
 
 Build an exploratory version of the firmware in which motor control is
@@ -69,7 +74,13 @@ namespace Control {
 class DifferentialDrive {
  public:
   struct Config {                    // value type -- fetch/replace by copy
-    float maxDuty = 100.0f;          // [%] authority rail
+    // Every default is fail-closed: a default-constructed Config refuses
+    // BOTH modes (maxDuty == 0 -> no authority at all; fullDutyVelocity
+    // == 0 -> VELOCITY additionally refused). Nothing moves until
+    // configured. This struct carries the ENTIRE tuned surface of the
+    // pipeline being ported (Drive + WheelControl proto groups, rebaked
+    // counts-native) -- no hidden constants, no silently dropped stage.
+    float maxDuty = 0.0f;            // [%] authority rail; 0 = ALL modes refused
     float fullDutyVelocity = 0.0f;   // [counts/s] wheel rate at 100% duty;
                                      //   0 = uncalibrated, VELOCITY refused
     float kp = 0.0f;                 // [1]
@@ -77,21 +88,50 @@ class DifferentialDrive {
     float iMax = 0.0f;               // [counts/s]
     float kaff = 0.0f;               // [s] accel feedforward
     float pidMax = 0.0f;             // [counts/s]
+    // Stage A commanded->actual correction, per wheel per approach
+    // direction (counts rebake of Drive's wheel_gain_*/wheel_intercept_*)
+    float wheelGainLeftAccel = 1.0f;        // [1]
+    float wheelInterceptLeftAccel = 0.0f;   // [counts/s]
+    float wheelGainLeftDecel = 1.0f;        // [1]
+    float wheelInterceptLeftDecel = 0.0f;   // [counts/s]
+    float wheelGainRightAccel = 1.0f;       // [1]
+    float wheelInterceptRightAccel = 0.0f;  // [counts/s]
+    float wheelGainRightDecel = 1.0f;       // [1]
+    float wheelInterceptRightDecel = 0.0f;  // [counts/s]
+    float crawlPulse = 0.0f;         // [%] sub-breakaway sigma-delta pulse; 0 = off
+    float speedFloor = 0.0f;         // [counts/s] Stage A v_min; 0 = off
+    float posErrMax = 0.0f;          // [counts] Stage B position-error clamp;
+                                     //   0 = unclamped
+    float biasMax = 0.0f;            // [counts/s] Stage C trim authority clamp
+    float tauAdapt = 0.0f;           // [s] Stage C adaptation; <=0 disables
+    float aSteady = 0.0f;            // [counts/s^2] steady-state gate
+    float deficitThreshold = 0.0f;   // [counts/s] sustained-error flag; 0 = off
+    float deficitWindow = 0.0f;      // [ms]
     float twistHoldGain = 0.0f;      // [1/s] twist-integral ratio hold; 0 = off
+    bool lambdaEnabled = false;      // authority-headroom scaling; ships OFF so
+                                     //   the first bench pass runs the pure port
     float stallSpeed = 0.0f;         // [counts/s]
     float stallDemand = 0.0f;        // [counts/s] 0 = detector off
     float stallWindow = 0.0f;        // [ms]
-    uint32_t cyclePeriod = 24;       // [ms] fiber cadence
+    uint32_t cyclePeriod = 24;       // [ms] fiber cadence; FROZEN at begin()
+                                     //   (leaf write throttle derives from it)
   };
 
   struct Output {                    // value type -- output() returns a copy
     uint32_t now;                    // [ms] kernel clock at publish
-    uint32_t nowMicros;              // [us] same instant -- age-math base
-    uint32_t cycleCount;             // heartbeat
-    uint32_t cyclePeriod;            // [us] measured (feeds all dt terms)
+    uint32_t nowFine;                // [us] same instant -- age-math base
+                                     //   (no unit in the name; [us] tag rules)
+    uint32_t cycleCount;             // heartbeat -- the sentinel watches this
+    uint32_t cyclePeriodMeasured;    // [us] measured (feeds all dt terms;
+                                     //   named apart from Config::cyclePeriod
+                                     //   [ms] to keep the units apart)
     uint32_t cycleBusy;              // [us]
+    uint32_t cycleOverrunCount;      // missed absolute deadlines (lesson 17's
+                                     //   observability, now a real field)
     uint32_t sampleTimeLeft;         // [us] last SUCCESSFUL L collect
     uint32_t sampleTimeRight;        // [us] ~4-5 ms younger than L
+    uint32_t positionEpoch;          // bumps on every software rebaseline --
+                                     //   the TLM adapter's epoch source
     float positionLeft;              // [counts] accumulated, never device-reset
     float positionRight;             // [counts]
     float velocityLeft;              // [counts/s] over genuine inter-sample dt
@@ -105,11 +145,12 @@ class DifferentialDrive {
     bool satLeft, satRight, stallLeft, stallRight;
     bool wedgeLeft, wedgeRight, connectedLeft, connectedRight;
     uint32_t leaseExpiryCount;       // sticky diagnostics
-    uint32_t i2cFaultCount;
+    uint32_t i2cFaultCount;          // counted IN-CLASS from leaf status
+                                     //   returns -- no new Hal::Motor surface
   };
 
   DifferentialDrive(Hal::Motor& left, Hal::Motor& right,
-                    const Hal::Clock& clock);
+                    const Hal::Clock& clock, Hal::Sleeper& sleeper);
 
   // ---- config surface 1: chainable single-field setters ----
   DifferentialDrive& setMaxDuty(float maxDuty);            // [%]
@@ -120,17 +161,39 @@ class DifferentialDrive {
   DifferentialDrive& setKaff(float kaff);                  // [s]
   DifferentialDrive& setPidMax(float pidMax);              // [counts/s]
   DifferentialDrive& setTwistHoldGain(float gain);         // [1/s]
+  DifferentialDrive& setWheelCorrection(
+      float gainLeftAccel, float interceptLeftAccel,
+      float gainLeftDecel, float interceptLeftDecel,
+      float gainRightAccel, float interceptRightAccel,
+      float gainRightDecel, float interceptRightDecel);
+                              // [1] gains, [counts/s] intercepts -- Stage A
+  DifferentialDrive& setCrawlPulse(float crawlPulse);      // [%]
+  DifferentialDrive& setSpeedFloor(float speedFloor);      // [counts/s]
+  DifferentialDrive& setPosErrMax(float posErrMax);        // [counts]
+  DifferentialDrive& setAdaptation(float biasMax, float tauAdapt,
+                                   float aSteady);
+                              // [counts/s] [s] [counts/s^2] -- Stage C
+  DifferentialDrive& setDeficit(float threshold, float window);
+                              // [counts/s] [ms]
+  DifferentialDrive& setLambdaEnabled(bool enabled);
   DifferentialDrive& setStall(float speed, float demand,
                               float window);   // [counts/s] [counts/s] [ms]
-  DifferentialDrive& setCyclePeriod(uint32_t period);      // [ms]
+  DifferentialDrive& setCyclePeriod(uint32_t period);      // [ms] REFUSED
+                                                           //   after begin()
   // ---- config surfaces 2 + 3: whole-block replace, fetch (copy) ----
   void setConfig(const Config& config);
   Config config() const;
 
-  // ---- lifecycle: start the object, then start the fiber ----
-  void begin();          // hardware init: prime encoders, boot zero-write
-  void start();          // launch the kernel fiber (idempotent)
+  // ---- lifecycle (ordering: see "Lifecycle and boot ordering") ----
+  void begin();          // software init + boot zero-write, called AFTER the
+                         //   Preamble resolves (Preamble keeps motor priming);
+                         //   freezes cyclePeriod, derives the leaf throttle
+  void start();          // launch the kernel fiber (idempotent); the fiber
+                         //   body just loops step() via the Sleeper
   bool running() const;
+  void step();           // ONE kernel cycle, synchronously -- the host
+                         //   harness's deterministic entry point; never
+                         //   called while the fiber is running
 
   // ---- commands; lease is a DURATION from now, expiry stops ----
   void drive(float velocity, float twist,
@@ -151,7 +214,7 @@ class DifferentialDrive {
     float dutyLeft, dutyRight;    // [%]
     uint32_t validUntil;          // [ms] absolute, computed in drive()
   };
-  void run();            // the kernel fiber body
+  void run();            // fiber body: loop { step(); sleep to deadline }
   // + config snapshot (seq'd), internal Output instance (seq'd),
   //   estop latch (single u32, outside the seq handshake),
   //   ported pipeline state (position refs, biases, latch timers)
@@ -164,24 +227,105 @@ class DifferentialDrive {
 
 - **Lease is relative**: `drive(v, t, 300)` = valid 300 ms from now.
   The class computes absolute expiry against its own clock internally —
-  no clock-domain coupling in the API. Expiry zeroes through the full
-  stop path (stop-enforce countdown, stopNotTaken), consulting nobody;
-  it only ever moves motion toward zero (the `zeroUnownedMotion`
-  monotone contract restated as a timestamp). Refreshing the command IS
-  feeding the watchdog.
-- **Estop is not a mode**: a kernel-side latch set outside the seq
-  handshake (single atomic u32); cleared only by `estopClear()` + a
-  fresh command.
-- **Config is live**: the fiber snapshots the config block (under seq)
-  at each cycle start, so chained setters work mid-run — preserves the
-  bench live-tuning workflow. Write shaping (reversal dwell, deadband,
+  no clock-domain coupling in the API. Lease durations are clamped to
+  `kLeaseMax` (3,600,000 ms — far below INT32_MAX ms so the wrap-safe
+  signed compare against `validUntil` is never ambiguous). Expiry
+  zeroes through the full stop path (stop-enforce countdown,
+  stopNotTaken), consulting nobody; it only ever moves motion toward
+  zero (the `zeroUnownedMotion` monotone contract restated as a
+  timestamp). Refreshing the command IS feeding the watchdog.
+- **Estop: the honest guarantee.** `estop()` sets a kernel-side latch
+  outside the seq handshake (single atomic u32) from the caller's
+  fiber. It does NOT write the motors itself — the kernel fiber is the
+  only 0x10 client, always. The zero is issued at the next kernel
+  cycle start: **latched immediately; zero written within one
+  cyclePeriod when the kernel is healthy.** A wedged kernel fiber
+  (dead-bus busy-wait, lesson 17) delays enforcement — see the
+  heartbeat sentinel and the safety-scope note in "Lifecycle and boot
+  ordering". `estopClear()` clears the latch only; the pending command
+  was invalidated at estop, so motion resumes only on a FRESH
+  `drive()`/`driveDuty()`.
+- **Config is live, except cadence**: the fiber snapshots the config
+  block (under seq) at each cycle start, so chained setters work
+  mid-run — preserves the bench live-tuning workflow. A chain of
+  single-field setters is NOT atomic against that snapshot: a cycle
+  can see a half-applied chain (benign for independent gains; the
+  grouped setters — `setStall`, `setWheelCorrection`, `setAdaptation`,
+  `setDeficit` — exist for fields that must move together).
+  `cyclePeriod` is the exception: frozen at `begin()`, when the leaf
+  write throttle is derived from it (lesson 6); `setCyclePeriod()`
+  after `begin()` is refused. Write shaping (reversal dwell, deadband,
   slew) stays motor-leaf config.
-- **Uncalibrated is visible**: `fullDutyVelocity == 0` refuses VELOCITY
-  mode with `ready == false` — not the old silent no-write return.
+- **Fail-closed by default, visible when refused**: a default Config
+  refuses everything — `maxDuty == 0` refuses BOTH modes,
+  `fullDutyVelocity == 0` additionally refuses VELOCITY — with
+  `ready == false`, not the old silent no-write return. Every setter,
+  `setConfig()`, and command rejects non-finite values (fastPid's
+  fail-closed posture applied at the boundary, lesson 10); a refused
+  command leaves current state untouched. Commands before `start()`
+  are refused the same way.
+- **`driveDuty()` semantics**: bypasses Stage A/PID/λ entirely; still
+  goes through `writeShapedDuty()` (never raw), still bounded by
+  `maxDuty`, still lease-guarded, and stop-enforce + stall detection
+  stay armed. It is a plant-ID/bench mode, not an unshaped escape
+  hatch.
 - **Atomicity**: cooperative fibers on one core; aligned 32-bit stores
   are atomic; each block is single-writer, seq-committed; readers copy
-  under a seq check (retry once). Methods are called from the main
-  fiber; the kernel fiber is the only writer of Output.
+  under a seq check and RETRY UNTIL CONSISTENT (a retry-once seqlock
+  can return a torn copy; the retry loop is bounded only by a debug
+  assert). Methods are called from the main fiber; the kernel fiber is
+  the only writer of Output. The no-preemption assumption (CODAL
+  fibers switch only at yield points) is load-bearing — verify it
+  against codal-core's scheduler source before trusting the seq
+  scheme, and record the finding here.
+
+### Lifecycle and boot ordering
+
+Composition constructs; nothing touches hardware until the boot
+sequence says so. The ordering is fixed (132-015 and the Preamble
+contracts, verified against `core/preamble.cpp` and `main.cpp`
+2026-08-16):
+
+1. `Core::composeRobot()` CONSTRUCTS the class — no I2C, no fiber.
+2. `RobotLoop::boot()` runs the Preamble as today: power-settle, then
+   bounded round-robin probes. **The Preamble keeps motor priming** —
+   the class never re-primes. One owner, never both.
+3. `begin()` — called from `boot()` after the Preamble resolves:
+   software init (position epochs, latches), the boot zero-write
+   through the leaf's stop path, cyclePeriod freeze + leaf-throttle
+   derivation. Bounded like everything else in boot (lesson 17).
+4. `loadPersistedTuning()` — persisted config lands AFTER boot, as
+   today (132-015: an earlier apply is silently discarded); it flows
+   into `setConfig()`/setters.
+5. `start()` — the fiber launches only after the object is configured.
+   Commands are accepted from here on; earlier ones are refused with
+   `ready == false`.
+
+**Host-harness seam**: the class takes `Hal::Sleeper` alongside
+`Hal::Clock`, and the fiber body is a loop over the public `step()`.
+The host harness drives `step()` directly against the stepped plant —
+deterministic, no fibers, no CODAL — and never calls `start()`. The
+CODAL fiber launch inside `start()` is the only platform-specific
+line in the class.
+
+**Heartbeat sentinel (defense in depth)**: `RobotLoop` keeps exactly
+one safety job — each main-loop cycle it checks `output().cycleCount`
+is advancing; if it stalls for more than `kSentinelPeriods` cycle
+periods while motion was commanded, it re-asserts a zero write
+directly and raises a fault flag. Fiber-atomic I2C makes the
+emergency write safe (worst case it destroys one pending encoder
+sample — the right trade in an emergency). This restores a
+stop-enforcement point INDEPENDENT of the kernel fiber; without it, a
+wedged kernel fiber leaves the brick latched at its last speed (the
+936 mm runaway class of failure).
+
+**Safety scope, stated honestly**: with CODAL I2C busy-waiting
+(`waitForStop`, lesson 17) and the hardware WDT deferred to the MP
+phase, this experiment demonstrates the interface and the control
+law; it CANNOT claim a starvation-proof stop path.
+`spike-i2c-bus-owning-fiber.md` stage B1 says as much. The sentinel
+narrows that gap; only the deferred WDT/non-blocking-I2C work closes
+it.
 
 ### Measurement age semantics
 
@@ -200,17 +344,25 @@ class DifferentialDrive {
 
 - Per-wheel targets: `left = velocity − twist`, `right = velocity +
   twist` — the commanded RATIO is the (v, twist) pair.
-- **Authority headroom (λ)**: from last cycle's pre-clamp duty demands,
+- **Authority headroom (λ)** — config-gated (`lambdaEnabled`, ships
+  OFF so the first bench pass runs the pure port): SAME-CYCLE two-pass
+  allocation — compute both wheels' unclamped duty demands, derive
   `λ = min(1, maxDuty/|dutyDemandLeft|, maxDuty/|dutyDemandRight|)`,
-  asymmetric-filtered (fast attack, ~300 ms release); both targets
-  scale by λ — curvature preserved, the healthy wheel slows when the
-  other saturates. (Min-lambda shape from `Kinematics::Model::saturate`,
+  scale both targets by λ, then convert and write. Same-cycle because
+  a last-cycle λ distorts curvature for the first cycle after every
+  command step. The asymmetric filter applies to RELEASE only
+  (~300 ms); attack is immediate within the cycle. Curvature
+  preserved — the healthy wheel slows when the other saturates.
+  (Min-lambda shape from `Kinematics::Model::saturate`,
   `src/firm/kinematics/kinematics.h:76` — tested, zero callers.)
 - **Twist-integral hold** (encoder-only ratio maintenance — NOT a
   heading feature): integral of commanded twist vs measured
   differential position, trim clamped to duty headroom. twist=0 →
   equal accumulated counts (straight as wheels can know); twist≠0 →
-  the commanded arc. `twistHoldGain` 0 disables.
+  the commanded arc. `twistHoldGain` 0 disables. The reference
+  integrates the λ-SCALED commanded twist, not the raw command —
+  otherwise a saturation episode teaches the hold an arc the wheels
+  never drove.
 - **Anti-windup**: the λ-SCALED command feeds the integral-of-command
   position reference (the position ref IS the integrator — current
   config runs pure-I). Bias adaptation gated on λ≈1.
@@ -233,10 +385,31 @@ lease check → requestL → settle (fiber_sleep) → collectL → requestR →
 settle → collectR → control step (λ, twist hold, PID, shaped writes; no
 yields) → publish Output → sleep to the ABSOLUTE next-cycle deadline.
 
-`Core::RobotLoop` no longer calls into the drive at all. The main fiber
-keeps comms, telemetry, and sensors (OTOS et al.), interacting only via
-class methods; a thin adapter maps WHEELS-style v5 commands to
-`drive()` calls so rogo/bench tooling keeps working.
+`Core::RobotLoop` no longer runs the drive. The main fiber keeps
+comms, telemetry, sensors (OTOS et al.), the heartbeat sentinel
+(above), and the WHEELS↔class adapter — whose contract is explicit;
+"thin" does not mean unspecified:
+
+- **Inbound** (`Wheels` is [mm/s] on the wire, `envelope.proto`):
+  `v_left`/`v_right` → counts/s via the application-held travel
+  calibration (robot JSON `travel_calib`, mm/deg, one value); then
+  `velocity = (l+r)/2`, `twist = (r−l)/2`;
+  `lease = Wheels.duration` (clamped to `kLeaseMax`). ESTOP→
+  `estop()`, STOP→`neutral()`.
+- **Outbound** (TLM frame SHAPE unchanged): `output()` counts → mm
+  via the same calibration, the existing ±32 m wire clamp preserved,
+  and the encoder rebaseline-epoch contract (`telemetry.proto`) fed
+  from `Output::positionEpoch`. Pose sources OTOS only; with OTOS
+  absent the pose valid bit stays clear — encoder-pose is the
+  application's job now.
+- One calibration value, one conversion each way, owned by the
+  adapter — the class never sees millimeters.
+
+Bench scripts that speak MOVE (`move_protocol_bench`, `twist_drive`,
+`velocity_step_response`, the accuracy benches) get ERR in this tree.
+Verification drives WHEELS-speaking scripts (`wheels()` already
+exists on `NezhaProtocol`); porting the two scripts steps 3-5 need is
+budgeted in execution step 4, not assumed away.
 
 - The kernel's settle windows fiber_sleep — yielding to the main fiber,
   which is where comms pumping already happens; the current design's
@@ -273,9 +446,13 @@ before touching anything near it):
    writes retry next tick instead of latching "already written".
 6. **TRAP — hand-synced throttle**: `kMinWriteIntervalUs = 27000`
    (`:224-229`) is hand-synced to kCycle−5 ms because devices/ may not
-   include core headers. The new class has a CONFIGURABLE cyclePeriod →
-   this must become config-derived (new MotorConfig field, set at
-   compose from `Config::cyclePeriod`), not a stale literal.
+   include core headers. Resolution: `cyclePeriod` is FROZEN at
+   `begin()`, which derives the leaf throttle (new MotorConfig field)
+   from it at that moment — config-derived, never a stale literal,
+   never live-mutated under the leaf. In the same pass, any leaf
+   window counted in TICKS (wedge detect, rest confirm, stop-enforce)
+   changes wall-clock meaning when the cadence changes — re-derive
+   each from the configured period or express it in elapsed time.
 7. **TRAP — leaf constants are in mm/s**: `kStopConfirmVelocity` (8),
    `kReconfigureRestVelocity` (5), MotorArmor's `kRestVelocity` (5) are
    mm/s thresholds. Counts-native `position()`/`velocity()` changes
@@ -371,14 +548,15 @@ drive motors. New code replaces old; the old is deleted, not parked:
   navigator, odometry, estimation, shape, profile, arc_solver, capi,
   and their ~3.3k LOC of tests). Not composed = dead = deleted. Remove
   from all four build source lists (lesson 20).
-- **`Core::RobotLoop`**: `zeroUnownedMotion()` (subsumed by the lease),
+- **`Core::RobotLoop`**: `zeroUnownedMotion()` (subsumed by the lease,
+  with the heartbeat sentinel as its loop-side remnant),
   `haltOnStall()` (stall halt is in-class now), MOVE/GO_TO routing and
   handlers, `publishMoveResult`/`publishGotoResult`,
   `ackDriveCompletion`, odometry integration + `publishPose`'s encoder
   half, the drive tick/update calls and settle-window scheduling (all
   now inside the class fiber). RobotLoop keeps: comms pump, config
   routing, telemetry emit, OTOS/line/color ticks, the WHEELS→drive()
-  adapter, ESTOP→estop(), STOP→neutral().
+  adapter, ESTOP→estop(), STOP→neutral(), and the heartbeat sentinel.
 - **`Types::RobotState`**: `Wheel::cmdVelocity`/`cmdAccel` (the
   actuation boundary moves inside the class), the command/estimate
   blocks only the planner wrote. Wheel measured state for telemetry now
@@ -417,30 +595,52 @@ drive motors. New code replaces old; the old is deleted, not parked:
 
 ### Execution order
 
+Deletion comes LAST — a failure at any gate must leave a small,
+attributable diff, not a crater. Ordering revised 2026-08-16.
+
 1. `git worktree add` an exploratory tree off master; enable OOP
    (`clasi oop on --reason 'exploratory DifferentialDrive kernel'`).
-2. Leaf goes counts-native: strip `travel_calib`/`applyTravelCalib`,
+2. **Baselines first, on master's build**: capture velocity-step
+   traces on tovez (the numbers Verification 3-5 compare against),
+   and measure OTOS-0x17-during-settle interleaving on CURRENT
+   firmware — if mixed traffic breaks encoder freshness, the design
+   needs bus arbitration, and that is cheaper to learn before the
+   class exists than after (lesson 16's open interleaving, moved to
+   the front).
+3. Leaf goes counts-native: strip `travel_calib`/`applyTravelCalib`,
    rebake the three mm/s leaf constants as counts/s (lesson 7), make
-   the write throttle config-derived instead of hand-synced (lesson 6).
-3. Write the new `Control::DifferentialDrive` (two files, replacing the
-   current class): port the pipeline in counts preserving lessons 9-15;
-   add λ, twist-integral hold, lease, Command/Output blocks, fiber body
-   (absolute-deadline pacing, measured-dt), chainable setters.
-4. Execute the deletion inventory: motion/ tree, RobotLoop arms,
-   RobotState command fields, dead config keys, obsolete tests —
-   removing sources from all four build lists.
-5. Rewire `Core::composeRobot()`/`RobotLoop`: construct + `begin()` +
-   `start()`; WHEELS→drive() adapter, ESTOP→estop(), STOP→neutral();
-   telemetry reads `output()`.
+   the write throttle begin()-derived instead of hand-synced and
+   re-derive tick-counted leaf windows (lesson 6).
+4. Write the new `Control::DifferentialDrive` (two files, replacing
+   the current class): port the pipeline in counts preserving lessons
+   9-15; add the GATED λ, twist-integral hold, lease, Command/Output
+   blocks, `step()` + fiber body (absolute-deadline pacing,
+   measured-dt), chainable setters. **Golden-trace fidelity gate**:
+   old pipeline and new class against the same stepped plant
+   (`src/tests/sim/plant/` precedent), λ and twist hold OFF —
+   trajectories must match; the "zero math changes" claim is tested,
+   not asserted. Port the two WHEELS-speaking bench scripts
+   Verification 3-5 need.
+5. Rewire `Core::composeRobot()`/`RobotLoop` per "Lifecycle and boot
+   ordering": construct at compose; `begin()` from `boot()` after the
+   Preamble; persisted tuning; `start()`; WHEELS adapter (contract
+   above), ESTOP→estop(), STOP→neutral(), heartbeat sentinel;
+   telemetry reads `output()`. motion/ stays compiled but uncomposed
+   for now.
 6. Config: baked values flow from the same robot JSON via
-   `gen_boot_config.py` (mm→counts rebake) into a `setConfig()` call at
-   compose time — one file, bake and runtime read the same source.
-7. Post-rewire orphan audit; trimmed test suite green; host-build
-   harness for the new class passing.
-8. Bench (see Verification).
-9. Report findings; then decide the MicroPython landing (this class +
-   a modrobot binding IS the kernel-fiber plan in
-   `docs/handoff/micropython-full-firmware-integration.md` D1-D4).
+   `gen_boot_config.py` (mm→counts rebake) into `setConfig()` at the
+   132-015-correct point — one file, bake and runtime read the same
+   source.
+7. Host harness + surviving suite green.
+8. Bench gates (see Verification). Nothing has been deleted yet — a
+   failure here is attributable and cheap to abandon.
+9. **Only now, the deletion inventory**: motion/ tree, RobotLoop
+   arms, RobotState command fields, dead config keys, obsolete tests
+   — removing sources from all four build lists; post-rewire orphan
+   audit; trimmed suite re-run green; bench smoke re-run.
+10. Report findings; then decide the MicroPython landing (the
+    handoff-doc references are unverified in this checkout — see
+    Related — resolve them before planning against them).
 
 Out of scope: Planner/Navigator/GO_TO replacements, protocol changes,
 MicroPython build, radio/WiFi work, MP-image phases (hardware WDT,
@@ -449,30 +649,48 @@ deferred until this exploration proves the class).
 
 ## Verification
 
-Bench on tovez (stand, clean build, `rogo serve` held open), in order:
+Bench on tovez (stand, clean build, `rogo serve` held open), against
+the execution-step-2 baselines, in order. Pass/fail bounds are
+numeric; "looks right" is not a criterion.
 
+0. Baselines exist (execution step 2): master velocity-step traces +
+   the mixed-traffic interleaving measurement, archived with the run.
 1. Encoder liveness (both wheels, plausible changing counts).
 2. Raw-duty pulse + stop-verify (Δenc == 0 over 2 s after stop).
-3. Velocity steps — measured counts/s tracks commanded within the
-   standard firmware's tuning envelope.
-4. λ authority: brake one wheel progressively — measured ratio holds,
-   healthy wheel slows, λ trace smooth, clean release on the slow
-   filter.
-5. Twist-hold straightness: equal accumulated counts at twist=0 under
-   asymmetric load.
-6. OTOS-traffic interleaving: encoder freshness unchanged while the
-   main fiber hammers 0x17 reads (lesson 16's open interleaving).
+3. Velocity steps — steady-state within ±10% of the step-0 baseline
+   at the same commanded rates; overshoot within baseline + 5
+   percentage points; no oscillation absent from the baseline.
+4. λ authority (`lambdaEnabled` on): brake one wheel progressively —
+   measured L:R ratio within ±5% of commanded until the λ floor,
+   healthy wheel slows, λ monotone during attack, release time
+   ~300 ms ± 30%, no limit cycle.
+5. Twist-hold straightness: |accumulated L − R counts| ≤ 0.5% of the
+   mean accumulated counts over the run, at twist=0 under asymmetric
+   load.
+6. OTOS-traffic interleaving: encoder sample ages within ±1 cycle of
+   the step-0 baseline while the main fiber hammers 0x17 reads
+   (lesson 16's open interleaving, now measured twice).
 7. Lease-kill: kill the commander mid-drive → wheels stop within
-   lease + stop-enforce.
-8. Estop latch: estop mid-drive, verify hold until estopClear() + new
-   command.
+   lease + the stop-enforce window.
+8. Estop latch: estop mid-drive → zero written within one cycle
+   period; holds until estopClear() + a fresh command; a command
+   without estopClear() stays refused.
 9. Stop-confirm rebake check: commanded zero re-asserts while wheels
    are spun by hand (proves lesson 7's counts rebake of
    kStopConfirmVelocity).
+10. Fault injection: disturb the encoder bus mid-run —
+    `i2cFaultCount` climbs, `connectedLeft/Right` drop, sample ages
+    grow honestly, clean recovery on release with no latch-up, and
+    the heartbeat sentinel does NOT false-fire.
+11. Soak, 30 min of mixed driving: `cycleOverrunCount` stays ~0,
+    absolute-deadline pacing shows no cumulative drift (lesson 18),
+    λ stable, position accumulation well-behaved under the
+    positionEpoch rebaseline discipline (float counts grow ~13×
+    faster than mm did).
 
-Plus: trimmed sim/unit suite green; host-build harness for the new
-class passing; `src/tests/sim/unit/test_layer_isolation.py` updated for
-the removed layers and passing.
+Plus: trimmed sim/unit suite green; the golden-trace host harness
+(execution step 4) passing; `src/tests/sim/unit/test_layer_isolation.py`
+updated for the removed layers and passing.
 
 ## Related
 
@@ -493,3 +711,11 @@ the removed layers and passing.
   contract the leaf carries.
 - `.claude/plans/scalable-marinating-puppy.md` — parallel session's
   Pybricks/XRPLib-style library API; this class is its substrate.
+- **Reference hygiene (checked 2026-08-16)**:
+  `docs/handoff/micropython-full-firmware-integration.md`,
+  `.claude/plans/scalable-marinating-puppy.md`, branch
+  `micropython-vevov-handoff`, and commit `b10b5282` are NOT present
+  in this checkout. The RAM/flash headroom numbers and the "Gate 2
+  closed" note above are therefore unverified — resolve these
+  references (other worktree, remote, or stale) before the MP-landing
+  decision leans on them.
