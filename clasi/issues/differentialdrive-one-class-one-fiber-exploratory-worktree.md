@@ -76,7 +76,10 @@ class DifferentialDrive {
   enum class Status : uint8_t {  // every refusal visible at the callsite
     kOk = 0,
     kRefusedUnconfigured,  // maxDuty == 0; or VELOCITY with fullDutyVelocity == 0
-    kRefusedNotRunning,    // command before start()
+    kRefusedNotBegun,      // command before begin(). NOT before start(): the
+                           //   host harness commands and step()s WITHOUT ever
+                           //   launching the fiber, so readiness is begin()'s
+                           //   to grant, not start()'s
     kRefusedEstopped,
     kRefusedNonFinite,
     kCadencePreserved,     // post-begin setConfig with a differing cyclePeriod:
@@ -203,6 +206,17 @@ class DifferentialDrive {
                                            //   cyclePeriod -> kCadencePreserved
   Config config() const;
 
+  // ---- how a REFUSED SETTER is observed -------------------------------
+  // The chainable setters must return DifferentialDrive& to chain, so they
+  // cannot return Status. Without this pair, "every setter rejects
+  // non-finite values" and "setCyclePeriod() after begin() is refused"
+  // would both be SILENT -- exactly the old silent-no-write behaviour this
+  // design set out to kill, reintroduced on the whole config surface.
+  // Sticky: holds the first refusal since the last clear, so a caller can
+  // run a long setter chain and check once at the end.
+  Status lastError() const;
+  void clearLastError();
+
   // ---- lifecycle (ordering: see "Lifecycle and boot ordering") ----
   Status begin();        // software init + boot zero-write, called AFTER the
                          //   Preamble resolves (Preamble keeps motor priming);
@@ -284,7 +298,14 @@ class DifferentialDrive {
   fail-closed posture applied at the boundary, lesson 10); a refused
   command leaves current state untouched AND returns the reason — the
   `Status` enum makes every refusal observable at the callsite, not
-  just in Output. Commands before `start()` are refused the same way.
+  just in Output. Commands before `begin()` are refused the same way.
+  **The chainable setters are the exception that needs its own
+  mechanism**: they return `DifferentialDrive&` so they can chain, so
+  they cannot return `Status`, so a rejected non-finite value or a
+  post-`begin()` `setCyclePeriod()` would be refused SILENTLY — the very
+  behaviour this bullet claims to have removed. `lastError()` /
+  `clearLastError()` (above) carry it: sticky, checked once after a
+  chain.
 - **`driveDuty()` semantics**: bypasses Stage A/PID/λ entirely; still
   goes through `writeShapedDuty()` (never raw), still bounded by
   `maxDuty`, still lease-guarded, and stop-enforce stays armed. Stall
@@ -332,8 +353,16 @@ contracts, verified against `core/preamble.cpp` and `main.cpp`
    rest, and returns a Status saying so; `setCyclePeriod()` after
    `begin()` is refused outright.
 6. `start()` — the fiber launches (via the injected launcher) only
-   after the object is configured. Commands are accepted from here
-   on; earlier ones are refused (`Status` return, `ready == false`).
+   after the object is configured.
+
+**Readiness is `begin()`'s to grant, not `start()`'s.** Commands are
+accepted once `begin()` has completed; a command before that is refused
+`kRefusedNotBegun`. Tying acceptance to `start()` instead would make the
+golden-trace fidelity gate — the one test of the whole "zero math
+changes" claim — impossible to write: the host harness drives `step()`
+directly and NEVER calls `start()` (it has no fibers), so a
+`running()`-gated `drive()` would refuse every command the harness
+issued. `start()` is about who calls `step()`, nothing more.
 
 **Host-harness seam**: the class takes `Hal::Sleeper` and a
 `Hal::FiberLauncher` (NEW one-method HAL interface — `launch(entry,
@@ -526,9 +555,24 @@ before touching anything near it):
 7. **TRAP — leaf constants are in mm/s**: `kStopConfirmVelocity` (8),
    `kReconfigureRestVelocity` (5), MotorArmor's `kRestVelocity` (5) are
    mm/s thresholds. Counts-native `position()`/`velocity()` changes
-   their effective meaning by ~10× (1 count = 0.1°; tovez travel_calib
-   0.7837 mm/deg). Rebake all three as counts/s constants explicitly —
-   silent unit drift here disarms the stop-confirm safety net.
+   their effective meaning. Do the arithmetic once and write it down
+   rather than carrying a rule of thumb: 1 count = 0.1° and tovez's
+   `travel_calib` is 0.7837 mm/deg, so **1 count = 0.07837 mm and
+   1 mm = 12.76 counts** — the factor is ~12.8×, not the "~10×" this
+   list said in an earlier revision (and not the "~13×" Verification 11
+   says; both were loose restatements of the same number, which is
+   exactly how unit drift starts). Rebaked explicitly:
+
+   | constant | old | rebaked |
+   |---|---|---|
+   | `kStopConfirmVelocity` | 8 mm/s | **102 counts/s** |
+   | `kReconfigureRestVelocity` | 5 mm/s | **64 counts/s** |
+   | MotorArmor `kRestVelocity` | 5 mm/s | **64 counts/s** |
+
+   Rebaking off "~10×" instead would set stop-confirm at 80 counts/s —
+   a 22% tighter trip than intended on the one net that catches a lost
+   zero write. Silent unit drift here disarms the stop-confirm safety
+   net, which is why the numbers are tabulated rather than described.
 8. Encoder split-phase: the request's postClear=4000 is the ONLY thing
    making collect honor the brick's select→read settle (collect passes
    0/0); preClear is deliberately 0 (measured wasteful). The brick
@@ -693,6 +737,16 @@ attributable diff, not a crater. Ordering revised 2026-08-16.
    trajectories must match; the "zero math changes" claim is tested,
    not asserted. Port the two WHEELS-speaking bench scripts
    Verification 3-5 need.
+
+   **Capture the golden trace BEFORE step 3, not here.** Step 3 makes
+   the leaf counts-native, which is a destructive edit to the very
+   thing the comparison needs as its reference — after it, the "old
+   pipeline" no longer compiles as it was, so there is nothing left to
+   compare against. Either vendor a frozen copy of the pre-3
+   `differential_drive.cpp` + leaf into the test tree, or capture the
+   old pipeline's host-build traces at step 2 alongside the tovez
+   traces and diff against those. Decide which at step 2; discovering
+   the reference is gone at step 4 costs the whole gate.
 5. Rewire `Core::composeRobot()`/`RobotLoop` per "Lifecycle and boot
    ordering": construct at compose; `begin()` from `boot()` after the
    Preamble; persisted tuning; `start()`; WHEELS adapter (contract
@@ -733,6 +787,14 @@ numeric; "looks right" is not a criterion.
 3. Velocity steps — steady-state within ±10% of the step-0 baseline
    at the same commanded rates; overshoot within baseline + 5
    percentage points; no oscillation absent from the baseline.
+   **State the unit both sides are measured in.** The step-0 baseline
+   is captured on master, whose telemetry reports [mm/s]; the tree
+   under test reports whatever this exploration leaves on the wire.
+   Convert one side explicitly, with the two `travel_calib` values
+   used recorded alongside the numbers (configuration-discipline's
+   read-back rule) — a ±10% bound compared across two different unit
+   domains passes or fails for reasons that have nothing to do with
+   the control law.
 4. λ authority (`lambdaEnabled` on): brake one wheel progressively —
    measured L:R ratio within ±5% of commanded until the λ floor,
    healthy wheel slows, λ monotone during attack, release time
@@ -784,11 +846,92 @@ updated for the removed layers and passing.
   contract the leaf carries.
 - `.claude/plans/scalable-marinating-puppy.md` — parallel session's
   Pybricks/XRPLib-style library API; this class is its substrate.
-- **Reference hygiene (checked 2026-08-16)**:
-  `docs/handoff/micropython-full-firmware-integration.md`,
-  `.claude/plans/scalable-marinating-puppy.md`, branch
-  `micropython-vevov-handoff`, and commit `b10b5282` are NOT present
-  in this checkout. The RAM/flash headroom numbers and the "Gate 2
-  closed" note above are therefore unverified — resolve these
-  references (other worktree, remote, or stale) before the MP-landing
-  decision leans on them.
+- **Reference hygiene (re-checked 2026-08-16, after the pull —
+  supersedes the earlier "NOT present" note, which searched only
+  master's worktree)**. Three of the four references RESOLVE; only one
+  is genuinely missing:
+  - branch `micropython-vevov-handoff` — **exists**, `c43f5a23`,
+    checked out at
+    `/Volumes/Proj/proj/RobotProjects/radio-robot-elite.worktrees/micropython-exploration-repl-commands`.
+  - commit `b10b5282` — **exists**, on that branch: *"feat(build):
+    Gate 2 CLOSED -- vendored CODAL upgraded to the standard set;
+    no-SD link engineered"*. The "Gate 2 closed" note is therefore
+    CONFIRMED, not stale.
+  - `docs/handoff/micropython-full-firmware-integration.md` —
+    **exists** on `micropython-vevov-handoff` (`git show
+    micropython-vevov-handoff:docs/handoff/micropython-full-firmware-integration.md`).
+    It is absent from `master` only. Read it there; the RAM/flash
+    headroom numbers can now be checked against the real document
+    rather than carried as hearsay.
+  - `.claude/plans/scalable-marinating-puppy.md` — **genuinely
+    absent**: no such path on any ref (`git log --all --diff-filter=A`
+    finds nothing) and `.claude/plans/` does not exist on disk. That
+    parallel session's plan was never committed anywhere reachable
+    here. Either recover it from the session that wrote it or drop the
+    reference; do not plan the library-API story against it.
+
+  Net: execution step 10's "resolve the references first" is DONE for
+  three of four, and the MP-landing decision is no longer blocked on
+  them.
+
+## Implementation status (2026-08-17, sim only — NO hardware)
+
+Worktree `explore/differential-drive-kernel`, branch head `1cda1e2f`.
+The 2026-08-15 session's work was uncommitted on a full disk; it is now
+committed and green in sim. **Nothing here has been on the robot.**
+
+Gates passing:
+
+| gate | result |
+|---|---|
+| micro:bit firmware (`build.py`) | `MICROBIT.hex`, 0 errors |
+| host sim library | builds |
+| sim suite (`src/tests/sim`) | 471 passed, 3 xfailed |
+| host unit suite (`src/tests/unit`) | 977 passed |
+
+Deviations from this document found in the implementation and FIXED:
+
+1. **Telemetry published encoder counts under an mm-documented wire
+   field.** `RobotLoop::publishWheels()` passed the kernel's counts
+   straight into the encoder reading, and `sim_cmd_vel_left/right()`
+   returned counts/s. Nothing host-side was migrated (`git diff` over
+   `src/host/` for the whole rework is empty) — `protocol.py` still
+   documents `[mm]`/`[mm/s]`, and five bench scripts compute distances
+   from those fields. Every host consumer was reading a ~14.19x
+   rescaled number under an unchanged frame shape. The "Outbound"
+   adapter contract above is now actually implemented.
+2. **`MotorDriverChannel` still used the deleted `applyTravelCalib`/
+   `wheelTravelCalib`**, so the firmware image did not build at all.
+   It is compiled only by the firmware target, so the host build stayed
+   green over it — lesson 20 in its quiet direction.
+
+Deviations still OPEN (the implementation predates the 2026-08-16
+revision above; it is the pre-revision design):
+
+- no `Status` enum — `begin()`/`start()`/`setConfig()` return `void`,
+  every refusal is silent; `lastError()` does not exist
+- `maxDuty` defaults to 100, not the fail-closed 0
+- `Output` uses `nowMicros`/`cyclePeriod`, not `nowFine`/
+  `cyclePeriodMeasured`; no `cycleOverrunCount`, no `i2cFaultCount`,
+  no `positionEpochLeft/Right`
+- λ is unconditional, not gated by `lambdaEnabled`
+- `Hal::FiberRunner`, injected at `start()`, not `Hal::FiberLauncher`
+  at construction; the host entry is `cycleOnce()`, not `step()`
+- **the golden-trace fidelity gate does not exist.** It is the one
+  test of the "zero math changes" claim, and the leaf has already gone
+  counts-native — so the reference it needed is already gone. See the
+  note added to execution step 4.
+
+Open QUESTION for the bench, found in sim and not yet explained:
+
+- **Open-loop velocity tracking falls off badly with speed.** On
+  `tovez_nocal` (the no-calibration profile: wheel_gain identity, every
+  `wheel_control` gain 0, so there is no feedback at all), commanded vs
+  measured settles at +0.3% at 90 mm/s, **−11% at 150 mm/s and −20% at
+  250 mm/s**, and does NOT converge — still −18% after 290 cycles. The
+  implied plant duty at 250 mm/s is 39% where the open-loop map asks
+  for 50%. Since that profile ships zero feedback this may be honest
+  open-loop map error rather than a kernel defect, but it is unexplained
+  and it is exactly what the golden-trace gate would have attributed.
+  Measure it against master before trusting any velocity number from
+  this tree.
