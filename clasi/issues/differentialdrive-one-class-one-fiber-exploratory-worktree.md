@@ -1,13 +1,37 @@
 ---
-status: pending
+status: in-progress
 ---
 
 # DifferentialDrive: one class, one fiber — exploratory worktree
+
+> ## ⚠ THIS IS NOT A GREENFIELD TASK — AN IMPLEMENTATION ALREADY EXISTS
+>
+> **Do not plan this from scratch, and do not write the class again.**
+> A working implementation of this design is committed on branch
+> `explore/differential-drive-kernel`, worktree
+> `/Volumes/Proj/proj/RobotProjects/radio-robot-elite.worktrees/differential-drive-kernel`,
+> head `1cda1e2f`. It builds (firmware + host) and its suites are green
+> (471 sim, 977 unit). It has NEVER been on the robot.
+>
+> That code implements this document **as it stood on 2026-08-15**. The
+> 2026-08-16 revision below landed a day AFTER the code was written, so
+> the review layer it added — `Status` returns, fail-closed defaults,
+> the heartbeat sentinel, gated λ, the observability counters, several
+> renames — is **not in the implementation**.
+>
+> The live task is therefore a CONFORMANCE pass, not a build: close the
+> gap between the extant code and this spec. The gap is enumerated in
+> "Conformance audit" and the work is planned in "Conformance plan",
+> both near the end of this file. Read those two sections before
+> touching anything.
 
 *Revised 2026-08-16, out of process: incorporates the two-agent design
 review — Config completeness, lifecycle/boot ordering, estop honesty,
 adapter contract, gated λ, execution reorder, verification bounds,
 reference hygiene.*
+
+*Reopened 2026-08-17 as a conformance pass against the extant
+implementation (see the banner above).*
 
 ## Description
 
@@ -874,64 +898,172 @@ updated for the removed layers and passing.
   three of four, and the MP-landing decision is no longer blocked on
   them.
 
-## Implementation status (2026-08-17, sim only — NO hardware)
+## Extant work (2026-08-17)
 
-Worktree `explore/differential-drive-kernel`, branch head `1cda1e2f`.
-The 2026-08-15 session's work was uncommitted on a full disk; it is now
-committed and green in sim. **Nothing here has been on the robot.**
+Branch `explore/differential-drive-kernel`, head `1cda1e2f`, four
+commits off `ab43963c`:
 
-Gates passing:
+| commit | what |
+|---|---|
+| `88dd9ad8` | the 2026-08-15 session's kernel + deletion inventory, recovered from an uncommitted tree on a full disk |
+| `83137b37` | the surviving sim suite retargeted onto the kernel's API |
+| `11b5db9a` | telemetry/ctypes encoder units put back in millimetres |
+| `1cda1e2f` | `MotorDriverChannel` finished counts-native (the firmware image did not build without it) |
+
+Off-hardware gates, all passing at `1cda1e2f`:
 
 | gate | result |
 |---|---|
 | micro:bit firmware (`build.py`) | `MICROBIT.hex`, 0 errors |
 | host sim library | builds |
-| sim suite (`src/tests/sim`) | 471 passed, 3 xfailed |
-| host unit suite (`src/tests/unit`) | 977 passed |
+| `src/tests/sim` | 471 passed, 3 xfailed |
+| `src/tests/unit` | 977 passed |
 
-Deviations from this document found in the implementation and FIXED:
+**No hardware run has happened.** The entire Verification list above is
+still owed, and nothing below changes that.
 
-1. **Telemetry published encoder counts under an mm-documented wire
-   field.** `RobotLoop::publishWheels()` passed the kernel's counts
-   straight into the encoder reading, and `sim_cmd_vel_left/right()`
-   returned counts/s. Nothing host-side was migrated (`git diff` over
-   `src/host/` for the whole rework is empty) — `protocol.py` still
-   documents `[mm]`/`[mm/s]`, and five bench scripts compute distances
-   from those fields. Every host consumer was reading a ~14.19x
-   rescaled number under an unchanged frame shape. The "Outbound"
-   adapter contract above is now actually implemented.
+Two deviations were found and already fixed in the commits above, both
+worth keeping in mind because they are the shape of mistake this port
+invites:
+
+1. **Counts leaked onto the wire.** `RobotLoop::publishWheels()` and
+   `sim_cmd_vel_left/right()` published the kernel's counts under
+   fields documented `[mm]`/`[mm/s]`. Nothing host-side was migrated
+   (`git diff ab43963c..HEAD -- src/host/` is empty), so every host
+   consumer silently read a ~14.19x rescaled number under an unchanged
+   frame shape. The "Outbound" adapter contract is now implemented.
 2. **`MotorDriverChannel` still used the deleted `applyTravelCalib`/
-   `wheelTravelCalib`**, so the firmware image did not build at all.
+   `wheelTravelCalib`**, so the firmware target did not build at all.
    It is compiled only by the firmware target, so the host build stayed
-   green over it — lesson 20 in its quiet direction.
+   green over it — lesson 20 in the direction that hides.
 
-Deviations still OPEN (the implementation predates the 2026-08-16
-revision above; it is the pre-revision design):
+## Conformance audit — extant code vs. this specification
 
-- no `Status` enum — `begin()`/`start()`/`setConfig()` return `void`,
-  every refusal is silent; `lastError()` does not exist
-- `maxDuty` defaults to 100, not the fail-closed 0
-- `Output` uses `nowMicros`/`cyclePeriod`, not `nowFine`/
-  `cyclePeriodMeasured`; no `cycleOverrunCount`, no `i2cFaultCount`,
-  no `positionEpochLeft/Right`
-- λ is unconditional, not gated by `lambdaEnabled`
-- `Hal::FiberRunner`, injected at `start()`, not `Hal::FiberLauncher`
-  at construction; the host entry is `cycleOnce()`, not `step()`
-- **the golden-trace fidelity gate does not exist.** It is the one
-  test of the "zero math changes" claim, and the leaf has already gone
-  counts-native — so the reference it needed is already gone. See the
-  note added to execution step 4.
+Audited clause by clause 2026-08-17. The **control-law port itself is
+faithful**; what is missing is almost exactly the 2026-08-16 review
+layer, because the code predates it by one day.
 
-Open QUESTION for the bench, found in sim and not yet explained:
+### Conforms
 
-- **Open-loop velocity tracking falls off badly with speed.** On
-  `tovez_nocal` (the no-calibration profile: wheel_gain identity, every
-  `wheel_control` gain 0, so there is no feedback at all), commanded vs
-  measured settles at +0.3% at 90 mm/s, **−11% at 150 mm/s and −20% at
-  250 mm/s**, and does NOT converge — still −18% after 290 cycles. The
-  implied plant duty at 250 mm/s is 39% where the open-loop map asks
-  for 50%. Since that profile ships zero feedback this may be honest
-  open-loop map error rather than a kernel defect, but it is unexplained
-  and it is exactly what the golden-trace gate would have attributed.
-  Measure it against master before trusting any velocity number from
-  this tree.
+- **Cycle schedule: exact.** `controlStep` → `requestL` → settle →
+  `tickL` → `requestR` → settle → `tickR` → `publish`. The one-cycle
+  command-to-write latency the golden-trace gate depends on is
+  preserved.
+- **Deletion inventory: done.** `motion/` gone; `cmdVelocity`/
+  `cmdAccel` gone; `zeroUnownedMotion()`/`haltOnStall()` gone;
+  MOVE/GO_TO ack `ERR_UNIMPLEMENTED`.
+- **Lesson 6**: write throttle is a `MotorConfig` field, not the
+  hand-synced `27000` literal.
+- **Lesson 7**: `kStopConfirmVelocity` 100, `kReconfigureRestVelocity`
+  60, MotorArmor `kRestVelocity` 60 counts/s (rounded from 102/64/64).
+- **Atomicity**: `do/while` retry-until-consistent seqlock, per the
+  revision (not the retry-once the pre-revision text had).
+- **Boot ordering**: `setConfig()` at compose (memory-only), `begin()`
+  after the Preamble resolves.
+- **Adapter**: inbound per-wheel `travel_calib`; outbound now converts
+  counts→mm per wheel.
+- Counts-native leaf; `travel_calib`/`applyTravelCalib` deleted.
+
+### Does not conform
+
+| # | spec | extant | consequence |
+|---|---|---|---|
+| C1 | `Status` on every entry point | all `void` | **every refusal silent** — the thing the revision existed to remove |
+| C2 | `lastError()`/`clearLastError()` | absent | chainable setters cannot report refusal at all |
+| C3 | `maxDuty = 0.0` fail-closed | `= 100.0` | a default-constructed Config has FULL authority, not none |
+| C4 | `lambdaEnabled`, ships OFF | absent; λ unconditional | cannot run the pure port first; λ contaminates every first bench number |
+| C5 | heartbeat sentinel in `RobotLoop` | **absent** | no defense-in-depth against a wedged kernel fiber (the 936 mm runaway class) |
+| C6 | `Hal::Motor::emergencyStop()` | **absent** | the sentinel has no actuation primitive |
+| C7 | `kLeaseMax` clamp | absent | the wrap-safe `validUntil` compare is unguarded |
+| C8 | `FiberLauncher` injected at construction | `FiberRunner` injected at `start()` | seam differs in name and injection point |
+| C9 | `step()` | `cycleOnce()` | |
+| C10 | `nowFine`, `cyclePeriodMeasured` | `nowMicros`, `cyclePeriod` | the `Config::cyclePeriod` [ms] / `Output::cyclePeriod` [us] unit collision the rename existed to prevent is still present |
+| C11 | `cycleOverrunCount`, `i2cFaultCount`, `positionEpochLeft/Right` on Output | absent | Verification 10 and 11 assert on fields that do not exist |
+| C12 | `start()` after `loadPersistedTuning()` | `start()` before it | the fiber runs several cycles on pre-persisted config |
+| C13 | dead `vel_*` keys deleted from the schema path | still present, zero consumers | breaks configuration-discipline invariant 2 |
+| C14 | golden-trace fidelity gate | **does not exist** | the only test of "zero math changes" is absent — and step 3 already made the leaf counts-native, so the reference it needed no longer compiles |
+
+Naming-only differences, NOT counted as deviations (same capability,
+different spelling): `Config::vMin` for `speedFloor`;
+`Config::wheelGain[2][2]`/`wheelIntercept[2][2]` for the eight flat
+`wheelGain*Accel`/`wheelIntercept*Decel` fields.
+
+## Conformance plan
+
+Ordered so that each step is independently revertible and the suites
+stay green throughout. Deletion and the risky seam changes come after
+the observable-behaviour changes, same discipline as the original
+execution order.
+
+**P1 — `Status` + `lastError()` (C1, C2).** Add the enum exactly as
+specified. Change `begin()`, `start()`, `setConfig()`, `drive()`,
+`driveDuty()` to return it. Add the sticky `lastError()`/
+`clearLastError()` pair and set it from the chainable setters, which
+must keep returning `DifferentialDrive&`. Refusal reasons:
+`kRefusedUnconfigured`, `kRefusedNotBegun`, `kRefusedEstopped`,
+`kRefusedNonFinite`, `kCadencePreserved`. Readiness gates on `begin()`,
+NOT `start()` — the host harness never calls `start()`.
+
+**P2 — fail-closed defaults (C3).** `maxDuty` 100 → 0. Every call site
+that relied on the permissive default must now set it explicitly; the
+sim harness and `buildDriveKernelConfig()` are the two that matter.
+This is the step most likely to surface a silently-unconfigured path,
+which is the point of it.
+
+**P3 — lease clamp (C7).** `kLeaseMax = 3,600,000 ms`, clamped in
+`drive()`/`driveDuty()` before computing `validUntil`.
+
+**P4 — Output shape (C10, C11).** Rename `nowMicros` → `nowFine` and
+`Output::cyclePeriod` → `cyclePeriodMeasured`. Add
+`cycleOverrunCount` (missed absolute deadlines), `i2cFaultCount`
+(derived from sample-stamp non-advance) and `positionEpochLeft/Right`.
+Point `RobotLoop`'s per-wheel epoch at the kernel's own counters rather
+than its single `positionEpoch_`.
+
+**P5 — gated λ (C4).** Add `lambdaEnabled`, default `false`. Gate the
+whole λ computation on it; λ stays 1.0 when off. This must land before
+any bench pass so the first one runs the pure port.
+
+**P6 — `emergencyStop()` + heartbeat sentinel (C6, C5).** Add
+`Hal::Motor::emergencyStop()` — immediate unstaged zero through the
+never-shaped stop path — implemented on `NezhaMotor`, `MotorArmor`,
+`MotorDriverChannel` and the sim fake. Then the sentinel in
+`RobotLoop::cycle()`: watch `output().cycleCount`; if it stalls beyond
+`kSentinelPeriods` while motion was commanded, raise a sticky telemetry
+fault AND call `emergencyStop()` on both motors. Document the honest
+scope — it cannot cover the dead-bus busy-wait.
+
+**P7 — seam rename (C8, C9).** `Hal::FiberRunner` → `Hal::FiberLauncher`
+with `launch(entry, arg)`, injected at CONSTRUCTION; `cycleOnce()` →
+`step()`. The host implementation fails the test if invoked. Mechanical
+but wide, so it goes after the behavioural work.
+
+**P8 — `start()` after persisted tuning (C12).** Reorder in `main.cpp`.
+
+**P9 — dead `vel_*` keys (C13).** Delete from the schema path and the
+generator. "Delete it, don't wire it."
+
+**P10 — golden-trace fidelity gate (C14).** The hard one, and it is
+listed last because it is the only item whose reference has already
+been destroyed. Reconstruct the pre-rework pipeline from `ab43963c`
+into the test tree as a frozen comparison copy, run both against the
+same stepped plant with λ and twist hold OFF, and require the
+trajectories to match. If they do not, that is the finding — and it is
+the first thing that would explain the open tracking falloff below.
+
+Gates after every step: `src/tests/sim` and `src/tests/unit` green, and
+`build.py` producing a hex. Not one of these steps is verified on
+hardware by finishing it.
+
+## Open question for the bench
+
+**Open-loop velocity tracking falls off with speed and does not
+converge.** On `tovez_nocal` (the no-calibration profile: `wheel_gain`
+identity, every `wheel_control` gain 0, so there is no feedback at all)
+commanded vs measured settles at +0.3% at 90 mm/s, **−11% at 150 mm/s
+and −20% at 250 mm/s**, still −18% after 290 cycles. Implied plant duty
+at 250 mm/s is 39% where the open-loop map asks for 50%. Since that
+profile ships zero feedback this may be honest open-loop map error
+rather than a kernel defect — but it is unexplained, and P10 is the
+step most likely to attribute it. Do not trust a velocity number out of
+this tree until it is measured against master.
