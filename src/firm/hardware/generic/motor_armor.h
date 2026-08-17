@@ -71,6 +71,10 @@ class MotorArmor : public Hal::Motor {
   void requestSample() override { inner_.requestSample(); }
   void setDuty(float duty) override { inner_.setDuty(duty); }
   void setNeutral(Hal::Neutral mode) override { inner_.setNeutral(mode); }
+  // Straight through, never policed: the armor's job is to constrain
+  // COMMANDED motion, and an emergency zero is the one command it must
+  // never delay, dwell-gate or veto.
+  void emergencyStop() override { inner_.emergencyStop(); }
   // applyTravelCalib() is DELETED (counts-native leaf, 2026-08-15 --
   // motor.h's own header) -- Hal::Motor no longer declares it, so this
   // override has nothing left to override. Removed here as a required

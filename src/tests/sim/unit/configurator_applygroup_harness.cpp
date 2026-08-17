@@ -198,6 +198,11 @@ class RecordingMotor : public Hal::Motor {
   void requestSample() override {}
   void setDuty(float duty) override { lastDuty = duty; }
   void setNeutral(Hal::Neutral) override {}
+  // Records the emergency zero so a test can assert it actually
+  // happened -- a mock that silently swallowed it would make the
+  // sentinel's whole point untestable.
+  void emergencyStop() override { ++emergencyStopCount; }
+  int emergencyStopCount = 0;
   [[nodiscard]] bool reconfigure(const Hal::MotorConfig&) override { return true; }
   void tick(uint64_t) override {}
 

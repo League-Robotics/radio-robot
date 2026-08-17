@@ -110,6 +110,10 @@ struct RobotState {
     uint32_t commsMalformedCount = 0;
     uint32_t commandsDroppedCount = 0;
     bool wedgeLatch = false;
+    // Sticky: the wheel kernel's heartbeat stalled while motion was
+    // commanded and RobotLoop's sentinel force-stopped the motors. Never
+    // cleared within a session -- see kFlagFaultKernelStalled.
+    bool kernelStalled = false;
     // moveTimeout/shapingDisabled -- DELETED. Both were written only by
     // Core::RobotLoop::publishMoveResult()/publishGotoResult(), which fed
     // Motion::Planner/Motion::Navigator fault state that no longer

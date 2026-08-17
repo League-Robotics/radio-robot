@@ -96,7 +96,8 @@ int main() {
   // them.
   static Platform::MicroBitFiberRunner driveFiberRunner;
   graph.drive().begin();
-  graph.drive().start(driveFiberRunner);
+  // start() is DELIBERATELY NOT here -- it moved below
+  // loadPersistedTuning(). See its new call site for why.
 
   // 132-015 (trap 1, the-configuration-object.md): loadPersistedTuning()
   // MUST run AFTER boot(), not before -- the pre-132-015 order here. Every
@@ -120,6 +121,19 @@ int main() {
   // down here with loadPersistedTuning() rather than staying split apart.
   graph.loadPersistedTuning();
   graph.robotLoop().markConfigured();
+
+  // start() the kernel fiber LAST, once the object is fully configured
+  // (baked config at compose, begin() above, persisted tuning just now).
+  //
+  // It used to run immediately after begin(), which meant the fiber
+  // executed several cycles against the pre-persisted config before the
+  // stored tuning landed. Config is snapshotted per cycle so the values
+  // did eventually take, but the robot spent its first moments driving
+  // on gains nobody chose -- and if those first cycles included motion,
+  // that is exactly when a bad gain does damage. Nothing needs the fiber
+  // running before this point: begin() already did the boot zero-write,
+  // which is the only time-critical part of bring-up.
+  graph.drive().start(driveFiberRunner);
 
   // Boot is done and the first control cycle is next: give the LED matrix's
   // refresh timer back to the loop. Everything from here runs to the

@@ -279,6 +279,20 @@ class DifferentialDrive {
   void neutral();        // commanded stop through the full stop path
   void estop();          // latch: zero NOW; holds until estopClear()
   void estopClear();
+  // emergencyStopMotors() -- write zero to BOTH motors NOW, from the
+  // CALLER's fiber, bypassing the kernel entirely.
+  //
+  // This exists for exactly one caller: RobotLoop's heartbeat sentinel,
+  // for the case where this kernel's own fiber has died and can therefore
+  // never execute a staged stop. estop() alone is not enough there -- it
+  // only sets a latch that the kernel fiber is supposed to act on.
+  //
+  // It lives HERE rather than in RobotLoop so that the motors stay owned
+  // by one class and the "kernel fiber is the only 0x10 client" rule has
+  // its single sanctioned exception in the same file that states it.
+  // Emergency only: it can land between a 0x46 select and its read and
+  // destroy that pending encoder sample.
+  void emergencyStopMotors();
   // Clear the kernel's stall self-halt latch (the application decided the
   // jam is resolved). A fresh drive()/driveDuty() is still required.
   void clearStallLatch();

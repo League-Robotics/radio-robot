@@ -93,6 +93,12 @@ class NezhaMotor : public Hal::Motor {
 
   // --- Primitive setters — stage the command; tick() executes it. ---
   void setDuty(float duty) override;           // [-1, 1] raw duty target
+  // Immediate, unstaged zero straight through writeShapedDuty() -- which
+  // short-circuits dwell/throttle/slew/dedupe for zero anyway, so this is
+  // the SAME never-shaped stop path a commanded stop takes, just without
+  // waiting for a tick() that may never come. See Hal::Motor's own
+  // declaration for why setDuty(0) cannot substitute.
+  void emergencyStop() override;
   void setNeutral(Hal::Neutral mode) override;      // coast / brake — Nezha maps both to the same 0x60 speed-0 write (no distinct brake register)
 
   // --- Resets (bare-motor semantics — see motor.h): resetPosition() acts

@@ -458,6 +458,15 @@ void DifferentialDrive::estopClear() {
   estopLatch_ = false;
 }
 
+void DifferentialDrive::emergencyStopMotors() {
+  // Latch estop FIRST, so that if the kernel fiber is merely wedged
+  // rather than dead and later wakes up, it resumes into a stopped state
+  // instead of re-applying the pre-emergency command.
+  estopLatch_ = 1;
+  left_.emergencyStop();
+  right_.emergencyStop();
+}
+
 void DifferentialDrive::clearStallLatch() {
   ++clearStallReq_;
 }

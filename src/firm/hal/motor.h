@@ -56,6 +56,28 @@ class Motor {
   virtual void setDuty(float duty) = 0;           // [-1, 1] raw duty
   virtual void setNeutral(Neutral mode) = 0;
 
+  // emergencyStop() — write zero to the device NOW, unstaged.
+  //
+  // This is the ONE method on this interface that both stages AND
+  // executes. setDuty(0) would not do: it only STAGES, and the thing that
+  // executes a stage is tick(), which is called by the kernel fiber — so
+  // if the kernel fiber is the thing that died, a staged zero is never
+  // written and the brick keeps its last latched speed forever (the
+  // measured 936 mm runaway class; the Nezha brick does not even reset on
+  // an nRF52 reset).
+  //
+  // Zero is never shaped anyway — it already short-circuits reversal
+  // dwell, the write throttle, slew and the dedupe cache — so this adds
+  // no new bypass, it only removes the dependency on a healthy tick().
+  //
+  // EMERGENCY ONLY. It is the single sanctioned exception to "the kernel
+  // fiber is the only 0x10 client": called from the main fiber, it can
+  // land between a 0x46 select and its read and destroy that pending
+  // encoder sample. That is the right trade when the alternative is a
+  // robot driving with nobody in control, and it is safe to interleave
+  // because CODAL I2C transactions are fiber-atomic.
+  virtual void emergencyStop() = 0;
+
   // applyTravelCalib() is DELETED (counts-native leaf — this file's own
   // header). No Config::Robot-consuming configure() on THIS interface
   // either (132-007, the-configuration-object.md): the devices isolation

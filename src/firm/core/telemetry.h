@@ -57,6 +57,13 @@ constexpr uint32_t kFlagColorFresh = 1u << 23;  // see kFlagLineFresh (bit 5)
 constexpr uint32_t kFlagFaultStallLeft = 1u << 24;
 constexpr uint32_t kFlagFaultStallRight = 1u << 25;
 
+// The kernel fiber stopped advancing its heartbeat while motion was
+// commanded, and RobotLoop's sentinel force-stopped both motors. STICKY
+// for the rest of the session: a kernel that died once is not to be
+// trusted again without a reboot, and a bit that cleared itself would let
+// the event scroll past unseen in a telemetry log.
+constexpr uint32_t kFlagFaultKernelStalled = 1u << 26;
+
 // [ms] primary-frame emit floor, deliberately BELOW Core::RobotLoop::kCycle
 // (32) so every cycle clears it and telemetry stays ONE FRAME PER CYCLE
 // (~31 fps). It was 40 against the old 50 ms kCycle for exactly the same

@@ -37,6 +37,22 @@ void MotorDriverChannel::setNeutral(Hal::Neutral) {
   driver_.stageSpeed(channel_, 0.0f);
 }
 
+void MotorDriverChannel::emergencyStop() {
+  // Hal::MotorDriver is a STAGE-then-exchange interface: stageSpeed()
+  // only records the command, and exchange() is what actually puts it on
+  // the bus. So staging zero is not enough here -- exchange() is normally
+  // driven by tick(), and tick() is called by the kernel fiber, which in
+  // an emergency is exactly the thing that may never run again.
+  //
+  // Stage the zero and force the exchange immediately, from the caller's
+  // fiber. nullptr totals: this exchange is being performed for its WRITE
+  // side, and its read side would land outside the normal sample schedule
+  // anyway (the interface documents totalsOut as nullable).
+  driver_.stageSpeed(channel_, 0.0f);
+  driver_.exchange(nullptr);
+  appliedDuty_ = 0.0f;
+}
+
 bool MotorDriverChannel::reconfigure(const Hal::MotorConfig& config) {
   // Guard per the interface contract: refuse when genuinely in motion.
   // COUNTS REBAKE (kernel rework): was 5.0 mm/s. This leaf reports

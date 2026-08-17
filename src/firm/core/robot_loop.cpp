@@ -468,6 +468,65 @@ void RobotLoop::publishHealth() {
   state_.health.commandsDroppedCount = comms_.commandsDroppedCount();
 }
 
+// checkKernelHeartbeat() -- RobotLoop's ONE remaining safety job.
+//
+// The wheel kernel runs on its own fiber and is the only thing that
+// writes the motors. If that fiber dies, exits, or logic-stalls, nothing
+// else notices: the Nezha brick physically latches its last commanded
+// speed and does not reset on an nRF52 reset, so a robot whose kernel
+// stopped keeps driving at whatever it was last told, indefinitely. That
+// is the measured 936 mm-and-still-going runaway class.
+//
+// So: watch Output::cycleCount advance. If it stalls for more than
+// kSentinelPeriods kernel cycles WHILE motion was commanded, raise a
+// sticky telemetry fault and force both motors to zero through
+// Hal::Motor::emergencyStop() -- which writes immediately rather than
+// staging, precisely because the thing that executes stages (the kernel's
+// tick()) is what just died.
+//
+// SCOPE, honestly: this covers failures where the MAIN loop still runs --
+// kernel fiber crashed, exited, or logic-stalled while the bus is alive.
+// It CANNOT cover the dead-bus busy-wait (lesson 17): CODAL I2C
+// transactions never yield, so waitForStop() freezes every fiber
+// including this one. In that failure the bus that would have carried the
+// zero write is itself the thing that died. Only the deferred hardware
+// WDT closes that gap; this narrows it, it does not shut it.
+void RobotLoop::checkKernelHeartbeat() {
+  const uint32_t beat = drive_.output().cycleCount;
+
+  // "Motion was commanded" is inferred from applied duty rather than from
+  // the mailbox (which is private to the kernel by design). A stalled
+  // kernel keeps publishing its LAST Output, so a nonzero appliedDuty in
+  // that frozen snapshot is exactly the dangerous case: duty on the wire,
+  // nobody left to take it off.
+  const Control::DifferentialDrive::Output out = drive_.output();
+  const bool motionCommanded =
+      out.appliedDutyLeft != 0.0f || out.appliedDutyRight != 0.0f;
+
+  if (beat != lastKernelBeat_) {
+    lastKernelBeat_ = beat;
+    kernelStallCycles_ = 0;
+    return;
+  }
+  if (!motionCommanded) {
+    // A parked robot whose kernel is idle is not a fault. Do not
+    // accumulate against it, or a long stop would eventually trip.
+    kernelStallCycles_ = 0;
+    return;
+  }
+  if (++kernelStallCycles_ < kSentinelPeriods) return;
+
+  // Fire. Sticky: a kernel that died once is not to be trusted again
+  // without a reboot, and a self-clearing bit would let the event scroll
+  // past unseen in a telemetry log. Re-asserted every cycle while the
+  // condition holds -- one lost zero write is permanent on this brick
+  // (stopNotTaken, lesson 3), so repetition is the point.
+  state_.health.kernelStalled = true;
+  // Latches estop AND writes both motors immediately, from THIS fiber --
+  // the kernel's own fiber is the thing that is not running.
+  drive_.emergencyStopMotors();
+}
+
 void RobotLoop::publishTiming(uint64_t cycleStartUs) {
   state_.time.cycleBusy = static_cast<uint32_t>(clock_.nowMicros() - cycleStartUs);  // [us]
   state_.time.cyclePeriod =
@@ -495,6 +554,7 @@ void RobotLoop::cycle() {
     uint64_t nowUs = clock_.nowMicros();
 
     publishWheels();  // reads drive_.output() -- the kernel's own snapshot
+    checkKernelHeartbeat();
     otos_.tick(nowUs);
     publishOtos();
     publishLineColor(tickLineColor(nowUs));

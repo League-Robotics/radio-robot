@@ -167,6 +167,10 @@ class RobotLoop {
 
   // Publish one wheel's state section (rebaseline/clamp/read), after its
   // collect. `clamped` reports the defensive wire-bound clamp.
+  // RobotLoop's ONE safety job -- see the definition's own comment for
+  // what it covers and, importantly, what it cannot.
+  void checkKernelHeartbeat();
+
   void publishWheel(float rawPosition, float rawVelocity, uint32_t rawSampleTimeUs,
                     bool connected, uint32_t positionEpoch,
                     Types::RobotState::Wheel& wheel, bool& clamped);  // [counts] [counts/s] [us]
@@ -232,6 +236,16 @@ class RobotLoop {
   // position it describes actually moved.
 
   uint32_t cycleCount_ = 0;
+
+  // --- kernel heartbeat sentinel (checkKernelHeartbeat) ----------------
+  // How many CONSECUTIVE main-loop cycles the kernel's heartbeat may sit
+  // still, while duty is on the wire, before the sentinel force-stops.
+  // The main loop and the kernel run at comparable but independent
+  // cadences, so a margin of several cycles keeps a merely-late kernel
+  // from being treated as a dead one.
+  static constexpr uint32_t kSentinelPeriods = 5;
+  uint32_t lastKernelBeat_ = 0;
+  uint32_t kernelStallCycles_ = 0;
 
   uint64_t previousCycleStartUs_ = 0;  // [us]
   bool everCycled_ = false;

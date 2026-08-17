@@ -109,6 +109,11 @@ class MockMotor : public Hal::Motor {
   void requestSample() override {}
   void setDuty(float duty) override { lastDutyCmd = duty; }
   void setNeutral(Hal::Neutral) override {}
+  // Records the emergency zero so a test can assert it actually
+  // happened -- a mock that silently swallowed it would make the
+  // sentinel's whole point untestable.
+  void emergencyStop() override { ++emergencyStopCount; }
+  int emergencyStopCount = 0;
   // REVISION 1 (114-001, motor.h): trivial always-succeeds stand-in --
   // MockMotor has no boot-identity config of its own to actually reassign,
   // it only needs to satisfy the new pure virtual and let scenarios assert

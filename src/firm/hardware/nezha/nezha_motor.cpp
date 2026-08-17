@@ -105,6 +105,21 @@ float NezhaMotor::appliedDuty() const
     return static_cast<float>(lastWrittenPct_) / 100.0f;
 }
 
+void NezhaMotor::emergencyStop()
+{
+    // Clear the STAGED target too, so a tick() that does arrive later
+    // cannot re-apply the pre-emergency duty behind the sentinel's back.
+    dutyTarget_ = 0.0f;
+    mode_ = Mode::Active;
+    // Straight down the never-shaped stop path: writeShapedDuty()
+    // short-circuits dwell/throttle/slew/dedupe for an exact zero anyway
+    // (and discards the crawl sigma-delta carry), so this is the SAME
+    // write a commanded stop makes -- it just does not wait for a tick()
+    // that may never come. lastTickUs_ is the freshest timestamp this leaf
+    // has; the value only feeds the dwell timer, which zero bypasses.
+    writeShapedDuty(0.0f, static_cast<uint32_t>(lastTickUs_ / 1000));
+}
+
 void NezhaMotor::tick(uint64_t nowUs)
 {
     uint32_t nowMs = static_cast<uint32_t>(nowUs / 1000);

@@ -32,6 +32,9 @@ class MotorDriverChannel : public Hal::Motor {
   void requestSample() override {}  // no split-phase latch on these boards
   void setDuty(float duty) override;  // [-1, 1] -> driver speed command
   void setNeutral(Hal::Neutral) override;
+  // Immediate unstaged zero -- see Hal::Motor's own declaration. These
+  // boards run their own closed loop, so a zero speed command IS the stop.
+  void emergencyStop() override;
   // applyTravelCalib() is GONE from Hal::Motor with the counts-native leaf
   // (DifferentialDrive kernel rework): travel calibration belongs to the
   // application now, and no mm value exists at or below this layer.

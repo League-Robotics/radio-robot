@@ -93,6 +93,7 @@ void Telemetry::update(const Types::RobotState& state, const Control::Differenti
   setFlag(kFlagConnRight, state.wheelRight.connected);
   setFlag(kFlagFaultI2CSafetyNet, state.health.i2cSafetyNetCount > 0);
   setFlag(kFlagFaultWedgeLatch, state.health.wedgeLatch);
+  setFlag(kFlagFaultKernelStalled, state.health.kernelStalled);
   setFlag(kFlagFaultCommsMalformed, state.health.commsMalformedCount > 0);
   setFlag(kFlagFaultCommandsDropped, state.health.commandsDroppedCount > 0);
   setFlag(kFlagOtosPresent, state.otos.present);
