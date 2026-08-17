@@ -39,7 +39,14 @@ void MotorDriverChannel::setNeutral(Hal::Neutral) {
 
 bool MotorDriverChannel::reconfigure(const Hal::MotorConfig& config) {
   // Guard per the interface contract: refuse when genuinely in motion.
-  if (commanded_ && std::fabs(velocity_) > 5.0f) return false;  // [mm/s]
+  // COUNTS REBAKE (kernel rework): was 5.0 mm/s. This leaf reports
+  // counts/s now, so a bare 5.0 would be a ~14x tighter guard than
+  // intended and would refuse reconfigure() on a robot that is
+  // effectively at rest. NOT WIRED IN: no board-specific counts/mm
+  // measurement exists for this driver yet, so this uses the Nezha-order
+  // rebake as a placeholder and must be re-measured when the class is
+  // actually constructed (see the header's own counts note).
+  if (commanded_ && std::fabs(velocity_) > 70.0f) return false;  // [counts/s]
   config_ = config;
   return true;
 }
@@ -55,7 +62,7 @@ void MotorDriverChannel::tick(uint64_t nowUs) {
     zeroPending_ = false;
     lastCounts_ = counts;
   }
-  position_ = countsToMm(counts - offset_);
+  position_ = signedCounts(counts - offset_);
 
   // ---- velocity: tick-attributed, not clock-divided (doc s1.5) ----
   const int32_t delta = counts - lastCounts_;
@@ -76,7 +83,7 @@ void MotorDriverChannel::tick(uint64_t nowUs) {
                           static_cast<float>(mag) >
                               kDoubleRatio * static_cast<float>(median);
     const float ticks = isDouble ? 2.0f : 1.0f;
-    velocity_ = countsToMm(delta) / (ticks * driver_.encoderTick());
+    velocity_ = signedCounts(delta) / (ticks * driver_.encoderTick());
     // The ring stores the PER-TICK magnitude, so a split double does
     // not drag the median it will be compared against next time.
     deltaRing_[deltaRingN_ % kDeltaRing] =
@@ -87,7 +94,7 @@ void MotorDriverChannel::tick(uint64_t nowUs) {
     // No fresh counts and nothing commanded: decay toward stopped
     // rather than latching the last moving estimate forever.
     velocity_ *= 0.5f;
-    if (std::fabs(velocity_) < 1.0f) velocity_ = 0.0f;  // [mm/s]
+    if (std::fabs(velocity_) < 14.0f) velocity_ = 0.0f;  // [counts/s] (was 1.0 mm/s)
   }
 }
 
