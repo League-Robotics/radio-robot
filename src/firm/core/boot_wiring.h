@@ -18,7 +18,7 @@
 // drive_.start() itself: begin() must run AFTER Preamble::done() (the
 // bus power-settle discipline Preamble's own header documents), and
 // start() launches the kernel's fiber, which only an ARM caller with a
-// real Hal::FiberRunner ever does. Both are the COMPOSITION ROOT'S own
+// real Hal::FiberLauncher ever does. Both are the COMPOSITION ROOT'S own
 // job, one level up (main.cpp / SimHarness::boot()) -- see this header's
 // "Lifecycle, one level up" note below.
 //
@@ -66,6 +66,7 @@
 #include "config/boot_config.h"
 #include "config/persisted_tuning.h"
 #include "hal/clock.h"
+#include "hal/fiber.h"
 #include "hardware/planetx/color_sensor.h"
 #include "hal/device_config.h"
 #include "hal/i2c_bus.h"
@@ -103,6 +104,7 @@ class RobotGraph {
   // SimHarness: TestSim::SimPlant + fakes) -- this is the ONLY seam
   // between an ARM build and a sim build.
   RobotGraph(Hal::I2CBus& bus, const Hal::Clock& clock, Hal::Sleeper& sleeper,
+             Hal::FiberLauncher& launcher,
              Hal::Transport& serialTransport, Hal::Transport& radioTransport,
              Config::TuningStore* tuningStore, const char* banner, const char* idLine,
              const BootOverrides& overrides = {});
@@ -199,6 +201,7 @@ class RobotGraph {
 // wrapper so both call sites read the same way; RobotGraph's own
 // constructor does the real work.
 RobotGraph composeRobot(Hal::I2CBus& bus, const Hal::Clock& clock, Hal::Sleeper& sleeper,
+                        Hal::FiberLauncher& launcher,
                         Hal::Transport& serialTransport, Hal::Transport& radioTransport,
                         Config::TuningStore* tuningStore, const char* banner, const char* idLine,
                         const BootOverrides& overrides = {});

@@ -202,8 +202,14 @@ class DifferentialDrive {
     uint32_t i2cFaultCount = 0;
   };
 
+  // The launcher is injected HERE, at construction, alongside the other
+  // seams -- not handed to start(). Every collaborator this class needs
+  // arrives the same way, and "who can start a fiber" becomes a property
+  // of how the object was composed rather than of who happens to call
+  // start().
   DifferentialDrive(Hal::Motor& left, Hal::Motor& right,
-                    const Hal::Clock& clock, Hal::Sleeper& sleeper);
+                    const Hal::Clock& clock, Hal::Sleeper& sleeper,
+                    Hal::FiberLauncher& launcher);
 
   // ---- config surface 1: chainable single-field setters -------------
   // Construct empty, chain setters. Live: the fiber snapshots the staged
@@ -258,15 +264,16 @@ class DifferentialDrive {
   // FREEZES cyclePeriod. Returns kRefusedUnconfigured if the config still
   // has no authority (maxDuty == 0).
   Status begin();
-  // start(): launch the kernel fiber (idempotent). The runner is passed
-  // here, not stored from construction — a host-test harness never calls
-  // start() and drives step() directly instead.
+  // start(): launch the kernel fiber, via the launcher injected at
+  // construction (idempotent). A host-test harness never calls this at
+  // all -- it drives step() directly -- and the host launcher fails hard
+  // if it somehow is called.
   //
   // start() does NOT gate command acceptance: readiness is begin()'s to
   // grant. Gating on start() would make the golden-trace host harness
   // impossible to write, since it steps the kernel without ever launching
   // a fiber.
-  Status start(Hal::FiberRunner& runner);
+  Status start();
   bool running() const { return running_; }
 
   // ---- commands; lease is a DURATION [ms] from now — expiry stops ----
@@ -393,6 +400,7 @@ class DifferentialDrive {
   Hal::Motor& right_;
   const Hal::Clock& clock_;
   Hal::Sleeper& sleeper_;
+  Hal::FiberLauncher& launcher_;
 
   // ---- config: staged (main-fiber writer) + active (kernel copy) -----
   Config staged_;

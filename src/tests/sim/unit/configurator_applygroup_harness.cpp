@@ -99,6 +99,7 @@
 #include "control/differential_drive.h"
 #include "config/boot_config.h"
 #include "config/robot.h"
+#include "host_fiber.h"
 #include "hal/clock.h"
 #include "hal/motor.h"
 #include "hardware/generic/real_otos.h"
@@ -280,7 +281,11 @@ int main() {
   RecordingOtos otos;
   StubClock clock;
   StubSleeper sleeper;
-  Control::DifferentialDrive drive(motorL, motorR, clock, sleeper);
+  // The kernel takes its launcher at construction now. This harness
+  // never calls start() -- FailingFiberLauncher aborts if it ever
+  // does, which is the point: no fibers in a host test.
+  TestSim::FailingFiberLauncher fiberLauncher;
+  Control::DifferentialDrive drive(motorL, motorR, clock, sleeper, fiberLauncher);
   Core::Configurator configurator(drive, motorL, motorR, otos, /*tuningStore=*/nullptr);
 
   // config_ starts default-constructed (all-zero) -- applyGroup() is

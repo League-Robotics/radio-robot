@@ -46,8 +46,10 @@ bool allFinite(const Control::DifferentialDrive::Config& c) {
 
 DifferentialDrive::DifferentialDrive(Hal::Motor& left, Hal::Motor& right,
                                      const Hal::Clock& clock,
-                                     Hal::Sleeper& sleeper)
-    : left_(left), right_(right), clock_(clock), sleeper_(sleeper) {}
+                                     Hal::Sleeper& sleeper,
+                                     Hal::FiberLauncher& launcher)
+    : left_(left), right_(right), clock_(clock), sleeper_(sleeper),
+      launcher_(launcher) {}
 
 // ---------------------------------------------------------------------------
 // Config surface 1: chainable setters (main-fiber writers of staged_; the
@@ -333,14 +335,14 @@ DifferentialDrive::Status DifferentialDrive::begin() {
   return Status::kOk;
 }
 
-DifferentialDrive::Status DifferentialDrive::start(Hal::FiberRunner& runner) {
+DifferentialDrive::Status DifferentialDrive::start() {
   if (!begun_) {
     noteRefusal(Status::kRefusedNotBegun);
     return Status::kRefusedNotBegun;
   }
   if (running_) return Status::kOk;  // idempotent
   running_ = true;
-  runner.createFiber(&DifferentialDrive::fiberEntry, this);
+  launcher_.launch(&DifferentialDrive::fiberEntry, this);
   return Status::kOk;
 }
 

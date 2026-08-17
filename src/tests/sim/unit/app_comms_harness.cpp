@@ -33,6 +33,7 @@
 #include "core/comms.h"
 #include "control/differential_drive.h"
 #include "core/telemetry.h"
+#include "host_fiber.h"
 #include "hal/clock.h"
 #include "hal/motor.h"
 #include "firm/types/robot_state.h"
@@ -87,7 +88,11 @@ Control::DifferentialDrive& testDrive() {
   static StubMotor right;
   static StubClock clock;
   static StubSleeper sleeper;
-  static Control::DifferentialDrive drive(left, right, clock, sleeper);
+  // The kernel takes its launcher at construction now. This harness
+  // never calls start() -- FailingFiberLauncher aborts if it ever
+  // does, which is the point: no fibers in a host test.
+  static TestSim::FailingFiberLauncher fiberLauncher;
+  static Control::DifferentialDrive drive(left, right, clock, sleeper, fiberLauncher);
   return drive;
 }
 

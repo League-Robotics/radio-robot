@@ -62,6 +62,8 @@ def _build(tmp_path):
             "-I", str(_SOURCE_DIR),
             "-I", str(_REPO_ROOT / "src"),
             "-I", str(_FIDELITY_DIR),
+            # for host_fiber.h (the fail-if-invoked launcher)
+            "-I", str(_SOURCE_DIR / "platform" / "host"),
             *[str(s) for s in _SOURCES],
             "-o", str(binary),
         ],

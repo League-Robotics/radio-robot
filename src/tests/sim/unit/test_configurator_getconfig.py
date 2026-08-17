@@ -115,6 +115,8 @@ def test_configurator_getconfig(tmp_path):
             "-I",
             str(_SOURCE_DIR),
             "-I",
+            str(_SOURCE_DIR / "platform" / "host"),  # host_fiber.h
+            "-I",
             str(_REPO_ROOT / "src"),
             "-o",
             str(binary),

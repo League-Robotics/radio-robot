@@ -35,6 +35,7 @@ RobotGraph::BootValues RobotGraph::bakeBootValues(const BootOverrides& overrides
 }
 
 RobotGraph::RobotGraph(Hal::I2CBus& bus, const Hal::Clock& clock, Hal::Sleeper& sleeper,
+                       Hal::FiberLauncher& launcher,
                        Hal::Transport& serialTransport, Hal::Transport& radioTransport,
                        Config::TuningStore* tuningStore, const char* banner, const char* idLine,
                        const BootOverrides& overrides)
@@ -48,7 +49,7 @@ RobotGraph::RobotGraph(Hal::I2CBus& bus, const Hal::Clock& clock, Hal::Sleeper& 
       line_(bus, bootValues_.lineConfig),
       comms_(serialTransport, radioTransport, banner, idLine),
       tlm_(comms_),
-      drive_(armorL_, armorR_, clock, sleeper),
+      drive_(armorL_, armorR_, clock, sleeper, launcher),
       otos_(realOtos_),
       preamble_(otos_, color_, line_, clock),
       configurator_(drive_, armorL_, armorR_, otos_, tuningStore),
@@ -87,10 +88,11 @@ void RobotGraph::loadPersistedTuning() {
 }
 
 RobotGraph composeRobot(Hal::I2CBus& bus, const Hal::Clock& clock, Hal::Sleeper& sleeper,
+                        Hal::FiberLauncher& launcher,
                         Hal::Transport& serialTransport, Hal::Transport& radioTransport,
                         Config::TuningStore* tuningStore, const char* banner, const char* idLine,
                         const BootOverrides& overrides) {
-  return RobotGraph(bus, clock, sleeper, serialTransport, radioTransport, tuningStore, banner,
+  return RobotGraph(bus, clock, sleeper, launcher, serialTransport, radioTransport, tuningStore, banner,
                     idLine, overrides);
 }
 

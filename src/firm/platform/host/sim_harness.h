@@ -47,6 +47,7 @@
 #include "core/robot_loop.h"
 #include "hal/device_config.h"
 #include "fake_transport.h"
+#include "host_fiber.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
 #include "wire_test_codec.h"
@@ -95,7 +96,8 @@ class SimHarness {
         //   - wheelCorrection (kIdentityWheelCorrection, below):
         //     TestSim::WheelPlant is linear, so identity is the only
         //     correct Stage A correction here.
-        graph_(Core::composeRobot(plant_, clock_, sleeper_, serialLink_, radioLink_,
+        graph_(Core::composeRobot(plant_, clock_, sleeper_, fiberLauncher_,
+                                 serialLink_, radioLink_,
                                  tuningStore, "DEVICE:NEZHA2:sim:sim_harness:1",
                                  "ID:unknown",
                                  Core::BootOverrides{&kIdentityOtosConfig,
@@ -139,7 +141,7 @@ class SimHarness {
   // zero-write, mirroring main.cpp's own post-boot() sequencing exactly
   // (core/boot_wiring.h's "Lifecycle, one level up" note). Deliberately
   // does NOT call drive_.start() -- a host harness has no real
-  // Hal::FiberRunner and drives the kernel's step() itself instead
+  // Hal::FiberLauncher and drives the kernel's step() itself instead
   // (see step() below). Idempotent -- a second call is a no-op (booted_
   // already true).
   void boot() {
@@ -467,6 +469,7 @@ class SimHarness {
   }
 
   SimPlant plant_;
+  TestSim::FailingFiberLauncher fiberLauncher_;
   TestSim::SimClock clock_;
   TestSim::SimSleeper sleeper_;
   TestSupport::FakeTransport serialLink_;

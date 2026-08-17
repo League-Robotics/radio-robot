@@ -36,6 +36,7 @@
 
 #include "control/differential_drive.h"
 #include "golden_ref_drive.h"
+#include "host_fiber.h"
 #include "hal/clock.h"
 #include "hal/motor.h"
 
@@ -238,7 +239,11 @@ std::vector<TraceRow> runComparison(const SharedGains& g,
   ProbeMotor newMotorR(newPlantR, /*countsNative=*/true);
   ProbeClock clock;
   ProbeSleeper sleeper(clock);
-  Control::DifferentialDrive kernel(newMotorL, newMotorR, clock, sleeper);
+  // The kernel takes its launcher at construction now. This harness
+  // never calls start() -- FailingFiberLauncher aborts if it ever
+  // does, which is the point: no fibers in a host test.
+  TestSim::FailingFiberLauncher fiberLauncher;
+  Control::DifferentialDrive kernel(newMotorL, newMotorR, clock, sleeper, fiberLauncher);
   // fullDutyVelocity is the counts/s the wheel reaches at 100% duty --
   // the exact inverse of the reference's duty-per-speed, rebaked.
   kernel.setMaxDuty(100.0f)

@@ -78,8 +78,14 @@ int main() {
   static Platform::MicroBitClock clock;
   static Platform::MicroBitSleeper sleeper;
   static Config::MicroBitTuningStore tuningStore(uBit.storage);
+  // Constructed BEFORE composeRobot(): the kernel takes its launcher at
+  // construction now, so the graph cannot be composed without one -- which
+  // is the point. "Who may start the fiber" is a property of how the
+  // object was composed, not of who happens to call start().
+  static Platform::MicroBitFiberLauncher driveFiberLauncher;
 
-  static Core::RobotGraph graph = Core::composeRobot(bus, clock, sleeper, serial, radio,
+  static Core::RobotGraph graph = Core::composeRobot(bus, clock, sleeper, driveFiberLauncher,
+                                                   serial, radio,
                                                    &tuningStore, banner, idLine);
 
   // RobotLoop::run() is boot() followed by cycle() forever; it is spelled
@@ -91,10 +97,9 @@ int main() {
   // Preamble::done(), never before (see boot_wiring.h's "Lifecycle, one
   // level up" note) -- followed immediately by start(), which launches
   // the kernel's own cooperative fiber on a real Platform::
-  // MicroBitFiberRunner. From this point on the kernel's fiber is the
+  // MicroBitFiberLauncher. From this point on the kernel's fiber is the
   // ONLY writer of the motors; RobotLoop::cycle() below never touches
   // them.
-  static Platform::MicroBitFiberRunner driveFiberRunner;
   graph.drive().begin();
   // start() is DELIBERATELY NOT here -- it moved below
   // loadPersistedTuning(). See its new call site for why.
@@ -133,7 +138,7 @@ int main() {
   // that is exactly when a bad gain does damage. Nothing needs the fiber
   // running before this point: begin() already did the boot zero-write,
   // which is the only time-critical part of bring-up.
-  graph.drive().start(driveFiberRunner);
+  graph.drive().start();
 
   // Boot is done and the first control cycle is next: give the LED matrix's
   // refresh timer back to the loop. Everything from here runs to the
