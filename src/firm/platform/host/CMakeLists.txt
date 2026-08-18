@@ -124,7 +124,7 @@ set(APP_SOURCES
     # new control/ layer"): Control::DifferentialDrive, relocated verbatim
     # out of core/ -- the control law itself unchanged, only its namespace
     # and directory.
-    "${SOURCE_DIR}/control/differential_drive.cpp"
+    "${SOURCE_DIR}/diffdrive/differential_drive.cpp"
     "${SOURCE_DIR}/core/preamble.cpp"
     "${SOURCE_DIR}/core/robot_loop.cpp"
     "${SOURCE_DIR}/core/telemetry.cpp"

@@ -179,12 +179,22 @@ class RobotGraph {
 
   Comms comms_;
   Telemetry tlm_;
-  // The wheel KERNEL -- owns both motors (via armorL_/armorR_), the
-  // encoder split-phase schedule, the (velocity, twist) control law, and
-  // its own fiber (started one level up -- see this file's own "Lifecycle"
-  // note). Constructed here, BEFORE otos_/preamble_/configurator_/
-  // robotLoop_, matching every other member's own "constructed before its
-  // dependents" ordering.
+  // Package-port adapters (control/differential_drive.h): the kernel is
+  // the DiffDrive PACKAGE and speaks its own ports, not Hal::* -- these
+  // four/five forwarders are the entire coupling between the firmware's
+  // Hal seams and the package. Constructed before drive_, which holds
+  // references into them.
+  Control::MotorPort motorPortL_;
+  Control::MotorPort motorPortR_;
+  Control::ClockPort clockPort_;
+  Control::SleeperPort sleeperPort_;
+  Control::LauncherPort launcherPort_;
+  // The wheel KERNEL -- owns both motors (via the ports over
+  // armorL_/armorR_), the encoder split-phase schedule, the (velocity,
+  // twist) control law, and its own fiber (started one level up -- see
+  // this file's own "Lifecycle" note). Constructed here, BEFORE
+  // otos_/preamble_/configurator_/robotLoop_, matching every other
+  // member's own "constructed before its dependents" ordering.
   Control::DifferentialDrive drive_;
 
   // otos_ binds unconditionally to realOtos_.

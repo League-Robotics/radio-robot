@@ -49,7 +49,7 @@ _APP_SOURCES = [
     _SOURCE_DIR / "core" / "debug.cpp",
     _SOURCE_DIR / "core" / "configurator.cpp",
     _SOURCE_DIR / "core" / "telemetry.cpp",
-    _SOURCE_DIR / "control" / "differential_drive.cpp",
+    _SOURCE_DIR / "diffdrive" / "differential_drive.cpp",
     _SOURCE_DIR / "core" / "preamble.cpp",
     # The shared composition root (Core::composeRobot()/RobotGraph)
     # sim_harness.h boots through, plus its Config::boot_config-reading

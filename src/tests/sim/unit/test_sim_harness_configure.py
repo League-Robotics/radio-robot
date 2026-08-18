@@ -65,7 +65,7 @@ _APP_SOURCES = [
     # src/firm/motion/ (planner/navigator/odometry) is GONE -- the
     # exploratory-kernel rewrite (2026-08-15) folded the wheel control it
     # fed into Control::DifferentialDrive, one class + fiber.
-    _SOURCE_DIR / "control" / "differential_drive.cpp",
+    _SOURCE_DIR / "diffdrive" / "differential_drive.cpp",
     _SOURCE_DIR / "core" / "preamble.cpp",
     # 130-002 -- the shared composition root (Core::composeRobot()/
     # RobotGraph) sim_harness.h now boots through, plus its

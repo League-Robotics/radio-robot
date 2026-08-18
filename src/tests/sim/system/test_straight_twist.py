@@ -63,7 +63,7 @@ _APP_SOURCES = [
     # Planner integration (2026-07-26): the on-robot Motion::Planner now
     # drives the loop -- its library core joins every RobotLoop-linking
     # dependency graph.
-    _SOURCE_DIR / "control" / "differential_drive.cpp",
+    _SOURCE_DIR / "diffdrive" / "differential_drive.cpp",
     _SOURCE_DIR / "core" / "preamble.cpp",
     # 130-002 -- the shared composition root (Core::composeRobot()/
     # RobotGraph) sim_harness.h now boots through, plus its

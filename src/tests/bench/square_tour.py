@@ -330,8 +330,23 @@ def segments() -> "list[tuple[float, float, float, int]]":
     turnMs = durationFor(TURN_ARC, TURN_SPEED, reversal=True) * 1000.0
     legL = CRUISE / CAL["L"]
     legR = CRUISE / CAL["R"]
+    # The REVERSING wheel (left: + -> -, sign flip) spends the armor
+    # reversal DWELL held at zero; the non-reversing wheel runs the WHOLE
+    # window. At equal commanded speeds the non-reversing wheel therefore
+    # delivers extra arc during the dwell -- the exploration record's
+    # known ~+3 deg/turn open-loop residual (heading 372.4/360, closure
+    # 73 mm). The dwell sits at the START of the window, where the
+    # non-reversing wheel is itself still ramping (~half steady speed on
+    # average over DWELL ~ TAU), so the imbalance is ~v * DWELL/2, not
+    # v * DWELL -- a full-dwell scale overshoots to heading 344.7
+    # (measured both ways, 2026-08-18; half-dwell interpolates to the
+    # measured imbalance within 0.2 deg/turn). Scale the non-reversing
+    # wheel down by that half-dwell arc so both wheels deliver the same.
+    turnS = turnMs / 1000.0  # [s]
+    window = meanFactor(turnS) * turnS  # [s] transient-corrected window
+    nonReversingScale = (window - 0.5 * DWELL) / window
     turnL = -TURN_SPEED / CAL["L"]
-    turnR = TURN_SPEED / CAL["R"]
+    turnR = TURN_SPEED * nonReversingScale / CAL["R"]
     out = []
     for i in range(4):
         out.append((legL, legR, legMs, _ID_BASE + 1 + 2 * i))

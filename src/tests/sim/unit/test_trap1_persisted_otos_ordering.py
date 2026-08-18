@@ -46,7 +46,7 @@ _APP_SOURCES = [
     # src/firm/motion/ (planner/navigator/odometry) is GONE -- the
     # exploratory-kernel rewrite (2026-08-15) folded the wheel control it
     # fed into Control::DifferentialDrive, one class + fiber.
-    _SOURCE_DIR / "control" / "differential_drive.cpp",
+    _SOURCE_DIR / "diffdrive" / "differential_drive.cpp",
     _SOURCE_DIR / "core" / "preamble.cpp",
     _SOURCE_DIR / "core" / "boot_wiring.cpp",
     _SOURCE_DIR / "core" / "boot_calibration.cpp",

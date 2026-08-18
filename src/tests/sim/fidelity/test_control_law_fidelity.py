@@ -48,7 +48,7 @@ _HARNESS = _FIDELITY_DIR / "golden_trace_harness.cpp"
 _SOURCES = [
     _HARNESS,
     _FIDELITY_DIR / "golden_ref_drive.cpp",
-    _SOURCE_DIR / "control" / "differential_drive.cpp",
+    _SOURCE_DIR / "diffdrive" / "differential_drive.cpp",
 ]
 
 

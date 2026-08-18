@@ -248,7 +248,15 @@ int main() {
   // never calls start() -- FailingFiberLauncher aborts if it ever
   // does, which is the point: no fibers in a host test.
   TestSim::FailingFiberLauncher fiberLauncher;
-  Control::DifferentialDrive drive(motorL, motorR, clock, sleeper, fiberLauncher);
+  // Hal -> package-port adapters (control/differential_drive.h): the
+  // kernel is the DiffDrive package and speaks its own ports.
+  Control::MotorPort portLeft(motorL);
+  Control::MotorPort portRight(motorR);
+  Control::ClockPort portClock(clock);
+  Control::SleeperPort portSleeper(sleeper);
+  Control::LauncherPort portLauncher(fiberLauncher);
+  Control::DifferentialDrive drive(portLeft, portRight, portClock,
+                                   portSleeper, portLauncher);
   Core::Configurator configurator(drive, motorL, motorR, otos, /*tuningStore=*/nullptr);
 
   // --- 1. Before loadBaked(): UNSPECIFIED, which is the honest answer ----

@@ -35,7 +35,7 @@ _HARNESS_SRC = _UNIT_DIR / "configurator_applyfield_harness.cpp"
 
 _APP_SOURCES = [
     _SOURCE_DIR / "core" / "configurator.cpp",
-    _SOURCE_DIR / "control" / "differential_drive.cpp",
+    _SOURCE_DIR / "diffdrive" / "differential_drive.cpp",
     _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
 # _MOTION_SOURCES -- DELETED (exploratory-kernel rewrite, 2026-08-15):

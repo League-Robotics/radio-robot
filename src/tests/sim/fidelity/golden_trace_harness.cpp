@@ -248,7 +248,15 @@ std::vector<TraceRow> runComparison(const SharedGains& g,
   // never calls start() -- FailingFiberLauncher aborts if it ever
   // does, which is the point: no fibers in a host test.
   TestSim::FailingFiberLauncher fiberLauncher;
-  Control::DifferentialDrive kernel(newMotorL, newMotorR, clock, sleeper, fiberLauncher);
+  // Hal -> package-port adapters (control/differential_drive.h): the
+  // kernel is the DiffDrive package and speaks its own ports.
+  Control::MotorPort portLeft(newMotorL);
+  Control::MotorPort portRight(newMotorR);
+  Control::ClockPort portClock(clock);
+  Control::SleeperPort portSleeper(sleeper);
+  Control::LauncherPort portLauncher(fiberLauncher);
+  Control::DifferentialDrive kernel(portLeft, portRight, portClock,
+                                    portSleeper, portLauncher);
   // fullDutyVelocity is the counts/s the wheel reaches at 100% duty --
   // the exact inverse of the reference's duty-per-speed, rebaked.
   kernel.setMaxDuty(100.0f)

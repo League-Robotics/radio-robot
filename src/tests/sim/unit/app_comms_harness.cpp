@@ -92,7 +92,15 @@ Control::DifferentialDrive& testDrive() {
   // never calls start() -- FailingFiberLauncher aborts if it ever
   // does, which is the point: no fibers in a host test.
   static TestSim::FailingFiberLauncher fiberLauncher;
-  static Control::DifferentialDrive drive(left, right, clock, sleeper, fiberLauncher);
+  // Hal -> package-port adapters (control/differential_drive.h): the
+  // kernel is the DiffDrive package and speaks its own ports.
+  static Control::MotorPort portLeft(left);
+  static Control::MotorPort portRight(right);
+  static Control::ClockPort portClock(clock);
+  static Control::SleeperPort portSleeper(sleeper);
+  static Control::LauncherPort portLauncher(fiberLauncher);
+  static Control::DifferentialDrive drive(portLeft, portRight, portClock,
+                                          portSleeper, portLauncher);
   return drive;
 }
 
