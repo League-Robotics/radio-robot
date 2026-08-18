@@ -47,8 +47,7 @@
 #include "core/robot_loop.h"
 #include "hal/device_config.h"
 #include "fake_transport.h"
-#include "motion/odometry.h"
-#include "motion/planner/planner.h"
+#include "host_fiber.h"
 #include "sim_clock.h"
 #include "sim_plant.h"
 #include "wire_test_codec.h"
@@ -73,101 +72,41 @@ class SimHarness {
   explicit SimHarness(float trackWidth = kDefaultTrackWidth,
                       Config::TuningStore* tuningStore = nullptr)
       : plant_(trackWidth),
-        // PARITY (130-002): composeRobot() is the SAME function
-        // src/firm/main.cpp calls -- the only leaf substituted here is the
-        // bus (plant_, a TestSim::SimPlant, in main.cpp's
-        // Platform::MicroBitI2CBus slot) and the transports (FakeTransport
-        // in main.cpp's real Platform::MicroBitSerialPort/MicroBitRadioLink
-        // slots -- both, like FakeTransport, implement Hal::Transport
-        // directly; 136-005 deleted the Core::SerialTransport/RadioTransport
-        // adapter pair that used to sit between them).
+        // PARITY: composeRobot() is the SAME function src/firm/main.cpp
+        // calls -- the only leaf substituted here is the bus (plant_, a
+        // TestSim::SimPlant, in main.cpp's Platform::MicroBitI2CBus slot)
+        // and the transports (FakeTransport in main.cpp's real
+        // Platform::MicroBitSerialPort/MicroBitRadioLink slots).
         //
-        // THREE deliberate, explicit overrides (BootOverrides -- see its
-        // own doc comment, app/boot_wiring.h, for the full rationale each):
-        //   - trackWidth: this constructor's own fixture parameter, a
-        //     property of the calling test's scenario, not a hardware
-        //     calibration fact.
-        //   - controlPeriod/actuationDelay (kSimControlPeriod, below): the
-        //     sim's own step() advances virtual time by EXACTLY
-        //     Core::RobotLoop::kCycle every call, with none of a real
-        //     board's vendor-bus-clearance overrun the robot JSON's own
-        //     baked value used to account for (PlannerBootConfig::
-        //     controlPeriod's own doc comment) -- 130-007 raised kCycle
-        //     40 -> 50 so the pacer now paces exactly on budget, meaning
-        //     hardware's baked default (50ms) and this override (also
-        //     50ms, derived from the SAME kCycle) are numerically
-        //     identical today; the override stays explicit rather than
-        //     removed, since the two values remain independently
-        //     overridable by construction. Deriving both the override value AND
-        //     kCycleDtUs (below) from the SAME Core::RobotLoop::kCycle
-        //     constant is what closes 130-002's own acceptance criterion
-        //     ("the sim's step dt and the planner's controlPeriod/
-        //     actuationDelay derive from the SAME constant").
+        // EXPLORATORY-KERNEL REWRITE (2026-08-15): trackWidth/
+        // controlPeriod/actuationDelay/navigatorYawSign are GONE from
+        // BootOverrides -- Control::DifferentialDrive's kernel takes no
+        // trackWidth parameter at all, and controlPeriod/actuationDelay/
+        // navigatorYawSign fed Motion::PlannerLimits/Motion::
+        // NavigatorLimits, both deleted with src/firm/motion/. `trackWidth`
+        // (this constructor's own fixture parameter) now feeds ONLY
+        // plant_'s own OtosPlant construction above -- it is not part of
+        // the firmware graph any more.
+        //
+        // TWO deliberate, explicit overrides remain (BootOverrides -- see
+        // its own doc comment, core/boot_wiring.h, for the full rationale
+        // each):
         //   - otosConfig (kIdentityOtosConfig, below): TestSim::SimPlant's
-        //     OtosPlant is already a perfect, zero-mounting-error sensor by
-        //     construction -- the robot JSON's OtosConfig corrects a REAL
-        //     chip's measured lever-arm/scale error, which has no
-        //     counterpart to correct here (found empirically: applying it
-        //     unconditionally put a 2s/150mm/s straight run's otos reading
-        //     55.8mm off true ground truth in a test that explicitly zeroes
-        //     every OTHER simulated OTOS fault knob).
-        //   - wheelCorrection (kIdentityWheelCorrection, below): Core::
-        //     Drive's Stage A commanded->actual correction linearizes a
-        //     REAL gearbox; TestSim::WheelPlant is already linear, so
-        //     identity is the only correct value here. This used to rely
-        //     on the bake happening to hold identity and it stopped being
-        //     true -- see BootOverrides::wheelCorrection's own doc comment
-        //     (app/boot_wiring.h) for the measured regression that made it
-        //     an explicit override (133-005).
-        //   - navigatorYawSign (kIdentityNavigatorYawSign, below, 135-004):
-        //     Motion::NavigatorLimits::yawSign relates commanded Move::
-        //     omega to true-world CCW -- a REAL drivetrain quirk baked
-        //     per-robot (tovez.json bakes -1.0). TestSim::SimPlant/
-        //     WheelPlant reads commanded wheel velocities directly as its
-        //     own ground truth, with no independent reference to disagree
-        //     with, so it cannot represent this quirk at all -- baking a
-        //     nonzero-sign correction against it makes the closed loop
-        //     diverge instead of converge (measured directly deriving this
-        //     fix -- see BootOverrides::navigatorYawSign's own doc comment,
-        //     app/boot_wiring.h).
-        graph_(Core::composeRobot(plant_, clock_, sleeper_, serialLink_, radioLink_,
+        //     OtosPlant is already a perfect, zero-mounting-error sensor.
+        //   - wheelCorrection (kIdentityWheelCorrection, below):
+        //     TestSim::WheelPlant is linear, so identity is the only
+        //     correct Stage A correction here.
+        graph_(Core::composeRobot(plant_, clock_, sleeper_, fiberLauncher_,
+                                 serialLink_, radioLink_,
                                  tuningStore, "DEVICE:NEZHA2:sim:sim_harness:1",
                                  "ID:unknown",
-                                 Core::BootOverrides{&trackWidth, &kSimControlPeriod,
-                                                    &kSimControlPeriod, &kIdentityOtosConfig,
-                                                    &kIdentityWheelCorrection,
-                                                    &kIdentityNavigatorYawSign})) {
-    // SIM OVERRIDE: composeRobot() already installed Control::DifferentialDrive's
-    // calibration via Configurator::loadBaked()+install() (boot through
-    // the SAME path main.cpp uses), baking config_.drive.duty_per_speed_
-    // left/right -- the active robot JSON's own measured plant constant
-    // (132-009: Configurator::install() now reads this from the JSON
-    // rather than a hardcoded Control::DifferentialDrive::kDutyPerSpeed C++ literal, but
-    // it is still a REAL-HARDWARE gearbox measurement). That is wrong for
-    // THIS plant:
-    // TestSim::WheelPlant is a fixed synthetic plant (velocity
-    // kDefaultDutyVelMax at |duty| == 1), so its exact inverse is a fact
-    // about the sim, not a per-robot measurement -- there is no robot JSON
-    // to validate against. Override it here, explicitly, rather than
-    // silently keeping the hardware value. Callers that DO have a robot
-    // config still override this AGAIN: SimLoop.configure_from_robot()
-    // pushes the JSON's own control.duty_per_speed_left/right through
-    // sim_configure_drive(), the same values main.cpp installs on
-    // hardware.
-    //
-    // The wheel correction -- Drive's OTHER hardware-measured Stage A
-    // input -- needs the same treatment for the same reason, and gets it
-    // one layer earlier: via BootOverrides::wheelCorrection in the
-    // composeRobot() call above, not a post-construction setter here.
-    // (It USED to be handled by a comment in this very spot asserting
-    // that composeRobot() installs identity "from the baked
-    // DriveBootConfig defaults." That was true when written and false
-    // from 132-019 onward, and nothing failed when it stopped being true
-    // -- see BootOverrides::wheelCorrection's own doc comment for the
-    // measured cost. An override applied at bake time cannot go stale the
-    // same way: it does not describe what the bake happens to contain, it
-    // decides it.)
-    graph_.drive().setDutyPerSpeed(1.0f / kDefaultDutyVelMax, 1.0f / kDefaultDutyVelMax);
+                                 Core::BootOverrides{&kIdentityOtosConfig,
+                                                    &kIdentityWheelCorrection})) {
+    // THE PLANT OBEYS THE CONFIG -- the one invariant that keeps this sim
+    // honest, learned twice over (see syncPlantToConfig() below). Applied
+    // here for the BAKED config; re-applied every step() so live wire
+    // pushes keep it true.
+    syncPlantToConfig();
 
     // No further self-configuration -- motorL_/motorR_ stay at their default
     // Hal::MotorConfig{} (all-zero), matching a real, not-yet-booted
@@ -179,23 +118,45 @@ class SimHarness {
     // caller's job, mirroring main.cpp's own construct-then-boot split.
   }
 
-  // Drives Core::Preamble to done(), then calls the real robotLoop_.boot()
-  // (see this file's own header for why). Idempotent -- a second call is a
-  // no-op (booted_ already true).
+  // Drives Core::Preamble to done(), then calls the real robotLoop_.boot(),
+  // then drive_.begin() -- priming both encoders + arming the boot
+  // zero-write, mirroring main.cpp's own post-boot() sequencing exactly
+  // (core/boot_wiring.h's "Lifecycle, one level up" note). Deliberately
+  // does NOT call drive_.start() -- a host harness has no real
+  // Hal::FiberLauncher and drives the kernel's step() itself instead
+  // (see step() below). Idempotent -- a second call is a no-op (booted_
+  // already true).
   void boot() {
     if (booted_) return;
     driveBootToDone();
     graph_.robotLoop().boot();
+    graph_.drive().begin();
     booted_ = true;
   }
 
   // Advances the sim `cycles` times: plant_.tick(dt) THEN clock_.
-  // advanceMicros(kCycleDtUs) THEN robotLoop_.cycle() -- see this file's
-  // own header for the ordering invariant. Call boot() first.
+  // advanceMicros(kCycleDtUs) THEN drive_.step() THEN robotLoop_.
+  // cycle() -- see this file's own header for the plant-before-loop
+  // ordering invariant. Call boot() first.
+  //
+  // drive_.step() runs ONCE per outer step here, not on its own
+  // kKernelCyclePeriod cadence (the kernel has no fiber in a host
+  // harness -- there is nothing else to pace it). This is a known
+  // simplification: the kernel's own internal dt terms read ~kCycleDtUs
+  // per step instead of the real fiber's ~24ms, which is fine for the
+  // sim's deterministic dt-parametric math (every stage takes dt
+  // explicitly) but does NOT reproduce the kernel's real multi-rate
+  // relationship to RobotLoop -- a host-build harness for the kernel's
+  // OWN control math (stepped against the plant directly, matching this
+  // file's own header note on a `src/tests/sim/plant/`-precedent harness)
+  // is the right tool for characterizing that, not this composition-level
+  // harness.
   void step(int cycles = 1) {
     for (int i = 0; i < cycles; ++i) {
+      syncPlantToConfig();
       plant_.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s]
       clock_.advanceMicros(kCycleDtUs);
+      graph_.drive().step();
       graph_.robotLoop().cycle();
       ++cycleCount_;
     }
@@ -257,9 +218,32 @@ class SimHarness {
     injectCommand(TestSupport::armorWheelsCommand(vLeft, vRight, duration, id, corrId));
   }
 
-  // injectGoto() -- 135-004: arms Motion::Navigator via Core::RobotLoop::
-  // handleGoto(). `frame`: 0 = WORLD (OTOS/SEED frame), 1 = ROBOT.
-  // `speed`/`arrive` <= 0 fall open to the config default.
+  // injectBodyTwist() -- a body twist (v_x, omega) expressed as the WHEELS
+  // command, which is the only motion arm left: MOVE and GO_TO are both
+  // DEREGISTERED in this tree (handleMoveOrGoto() acks ERR_UNIMPLEMENTED),
+  // so every harness that used to say injectMove(v_x, 0, omega, ...) says
+  // this instead.
+  //
+  // The differential inverse-kinematics done here is deliberately NOT in
+  // the kernel: Control::DifferentialDrive is counts-native and knows no
+  // chassis geometry at all. Resolving a body twist into per-wheel speeds
+  // is the APPLICATION's job now, and a test harness is an application.
+  // Reads the SAME baked trackwidth the firmware does, so a harness and the
+  // robot cannot disagree about what "omega" meant.
+  //
+  //   vLeft  = v_x - omega * b/2
+  //   vRight = v_x + omega * b/2      (REP-103: +omega is CCW)
+  void injectBodyTwist(float v_x, float omega, float duration,  // [mm/s] [rad/s] [ms]
+                       uint32_t id = 0, uint32_t corrId = 0) {
+    const float trackwidth = graph_.configurator().config().geometry.trackwidth;  // [mm]
+    const float halfTrack = 0.5f * trackwidth;
+    injectWheels(v_x - omega * halfTrack, v_x + omega * halfTrack, duration, id, corrId);
+  }
+
+  // injectGoto() -- GO_TO is DEREGISTERED in this tree (ERR_UNIMPLEMENTED);
+  // kept only so the protocol-level "a deregistered arm still acks, and acks
+  // an ERROR" coverage can still send one. Not a motion primitive any more.
+  // `frame`: 0 = WORLD (OTOS/SEED frame), 1 = ROBOT.
   void injectGoto(float x, float y, uint32_t frame, float speed, float arrive,  // [mm] [mm] [] [mm/s] [mm]
                   float timeout, uint32_t id = 0, uint32_t corrId = 0) {  // [ms]
     injectCommand(TestSupport::armorGotoCommand(x, y, frame, speed, arrive, timeout, id, corrId));
@@ -302,19 +286,15 @@ class SimHarness {
     maybeMarkConfigured();
   }
 
-  // Test-only accessors exposing the STAGED target velocity Drive last
-  // received via setDuty() (125-003: NOT a live Hal::Motor::
-  // velocityTarget() read -- that accessor is gone, since NezhaMotor no
-  // longer tracks a velocity target at all; Drive's own vLeft_/vRight_ is
-  // now the one place "what was commanded" lives), NOT the measured/decoded
-  // telemetry velocity -- used to measure the post-completion "shelf" a
-  // stale nonzero COMMAND can leave.
-  // Planner integration (2026-07-26): the staged wheel-velocity target
-  // lives on the planner now (Drive carries duty in raw mode).
   Core::RobotLoop& robotLoop() { return graph_.robotLoop(); }
 
-  float driveTargetVelLeft() const { return graph_.robotLoop().state().wheelLeft.cmdVelocity; }    // [mm/s] signed
-  float driveTargetVelRight() const { return graph_.robotLoop().state().wheelRight.cmdVelocity; }  // [mm/s] signed
+  // driveTargetVelLeft()/driveTargetVelRight() -- DELETED (exploratory-
+  // kernel rewrite): read Types::RobotState::Wheel::cmdVelocity, which no
+  // longer exists (the kernel's own Command mailbox is the one place
+  // "what was commanded" lives now, and it is private). A caller that
+  // needs the CURRENTLY-COMMANDED (velocity, twist) pair has no
+  // replacement accessor on this class -- only the MEASURED
+  // drive().output().velocityLeft/Right survive on the public interface.
 
   // Decodes and returns every outbound line captured on the serial
   // FakeTransport since the last call (serial and radio receive an
@@ -385,36 +365,30 @@ class SimHarness {
   float trueY() const { return plant_.otosPlant().y(); }              // [mm]
   float trueHeading() const { return plant_.otosPlant().heading(); }  // [rad]
 
-  // Pose reset ("Set Robot @ 0,0"). Teleports the plant TRUTH AND resets
-  // firmware's own encoder-derived state, so telemetry pose/otos actually
-  // snap to (x,y,heading), not just the avatar.
+  // Pose reset ("Set Robot @ 0,0"). Teleports the plant TRUTH and resets
+  // both motor leaves' own encoder position via begin() (the leaf's own
+  // hardReset() re-prime), so the wire-visible position starts at 0
+  // matching the teleport. The encoder-odometry half this used to also
+  // reset (Motion::Odometry::reset()) is GONE with motion/ -- pose is
+  // OTOS-only now, and plant_.setTruePose() above already snapped the
+  // OtosPlant ground truth, which is what state_.otos/state_.pose read.
   void setTruePose(float x, float y, float heading) {  // [mm] [mm] [rad]
     plant_.setTruePose(x, y, heading);
     graph_.motorLeft().begin();
     graph_.motorRight().begin();
-    // 122-002: Motion::Odometry::reset() takes the CURRENT leaf positions
-    // explicitly (both leaves already reset to 0 by begin() above, same
-    // values the pre-122-002 reset() read internally at this exact point).
-    graph_.odometry().reset(x, y, heading, graph_.motorLeft().position(),
-                            graph_.motorRight().position());
   }
 
   Hardware::NezhaMotor& motorLeft() { return graph_.motorLeft(); }
   Hardware::NezhaMotor& motorRight() { return graph_.motorRight(); }
 
-  // drive -- Control::DifferentialDrive now holds the unified wheel-speed controller
-  // (drive.h's own header): setControlGains()/controlGains() (Stage B),
-  // setAdaptationBounds()/adaptationBounds() (Stage C) a test needs to
-  // push directly or read back -- the CONFIG-patch routing
-  // Configurator::applyMotorConfigPatch() implements (130-005).
+  // drive -- Control::DifferentialDrive is the whole wheel kernel now
+  // (differential_drive.h's own header): config()/setConfig() (whole-block
+  // Stage A/B/C tuning) and output() (measured snapshot) a test needs to
+  // push directly or read back. planner()/navigator() accessors are GONE
+  // -- Motion::Planner/Motion::Navigator no longer exist.
   Control::DifferentialDrive& drive() { return graph_.drive(); }
-  Motion::Planner& planner() { return graph_.planner(); }
-  // navigator -- 135-004: Motion::Navigator's own observability
-  // (active()/replaceCount()/tickCount()), exposed the same way planner()
-  // already is.
-  Motion::Navigator& navigator() { return graph_.navigator(); }
 
-  // configurator -- 132-006: Core::Configurator now owns the one
+  // configurator -- Core::Configurator owns the one
   // Config::Robot instance (config()/loadBaked()/install(), configurator.h)
   // -- exposed the same way drive()/planner() already are, so a test can
   // read back what composeRobot() baked without reaching into graph_
@@ -432,27 +406,17 @@ class SimHarness {
   TestSim::SimSleeper& sleeper() { return sleeper_; }
 
   // [us] fixed per-cycle virtual-time advance step() applies before every
-  // robotLoop_.cycle() call -- DERIVED from Core::RobotLoop::kCycle, never
-  // hardcoded (sim's step period must equal firmware's real control period
-  // exactly, or every sim-tuned finding is measured on a materially
-  // different control period than what ships). Pre-118 history (a
-  // hand-picked 50ms that never was a deliberate fidelity choice):
-  // src/firm/platform/host/DESIGN.md. 130-002: kSimControlPeriod (the PlannerLimits
-  // controlPeriod/actuationDelay override passed to composeRobot(), this
-  // file's own constructor) derives from the SAME Core::RobotLoop::kCycle
-  // constant as this -- one source, not two hand-kept literals that can
-  // drift apart silently.
+  // robotLoop_.cycle() call. NOTE (exploratory-kernel rewrite): this no
+  // longer has a Motion::PlannerLimits controlPeriod/actuationDelay
+  // override to stay derived-together with -- both are gone with
+  // motion/. It remains derived from Core::RobotLoop::kCycle because
+  // that is still the right cadence for stepping RobotLoop itself; the
+  // kernel's own cadence (kKernelCyclePeriod, boot_calibration.h) is a
+  // separate, un-synced constant now -- see step()'s own doc comment for
+  // the resulting simplification.
   static constexpr uint32_t kCycleDtUs = Core::RobotLoop::kCycle * 1000;  // [us]
-  static_assert(kCycleDtUs == Core::RobotLoop::kCycle * 1000,
-                "SimHarness::kCycleDtUs must equal firmware's own Core::RobotLoop::kCycle "
-                "(converted ms->us) -- derive it, never hardcode a second matching literal "
-                "that can drift apart silently (118 ticket 003)");
 
  private:
-  // See this constructor's own composeRobot() call comment above -- the
-  // sim's genuinely-justified controlPeriod/actuationDelay override.
-  static constexpr float kSimControlPeriod = static_cast<float>(Core::RobotLoop::kCycle);  // [ms]
-
   // See this constructor's own composeRobot() call comment above -- the
   // sim's genuinely-justified otosConfig override. Hal::OtosConfig's
   // own default member initializers (device_config.h) ARE identity (zero
@@ -461,21 +425,11 @@ class SimHarness {
   static constexpr Hal::OtosConfig kIdentityOtosConfig{};
 
   // See this constructor's own composeRobot() call comment above -- the
-  // sim's genuinely-justified wheelCorrection override (133-005).
+  // sim's genuinely-justified wheelCorrection override.
   // Config::WheelCorrection's own default member initializers
   // (config/boot_config.h) ARE identity (gain 1, intercept 0), so a plain
-  // default-constructed instance is exactly the value this override needs
-  // -- and, unlike the pre-133-005 arrangement, it stays identity no
-  // matter what any robot JSON's wheel_gain_* is re-fitted to next.
+  // default-constructed instance is exactly the value this override needs.
   static constexpr Config::WheelCorrection kIdentityWheelCorrection{};
-
-  // See this constructor's own composeRobot() call comment above -- the
-  // sim's genuinely-justified navigatorYawSign override (135-004).
-  // Motion::NavigatorLimits::yawSign's own default member initializer
-  // (arc_solver.h) IS identity (+1.0, "no correction"), so a plain literal
-  // is exactly the value this override needs -- and it stays identity no
-  // matter what any robot JSON's yaw_sign is measured/baked to next.
-  static constexpr float kIdentityNavigatorYawSign = 1.0f;
 
   // Drives Core::Preamble to done() via preamble_.step() calls issued
   // OURSELVES, advancing the fake Clock between each one -- a single
@@ -497,13 +451,68 @@ class SimHarness {
     }
   }
 
+  // syncPlantToConfig() -- make the synthetic plant BE the robot the LIVE
+  // config describes, per wheel:
+  //
+  //     plant gain     = 1 / duty_per_speed   [mm/s at full duty]
+  //     encoder scale  = 1 / travel_calib     [counts emitted per mm]
+  //
+  // With those two identities the open-loop velocity map and the
+  // perception chain are EXACT for any robot JSON, by construction:
+  // commanded v -> counts (x10/tc) -> duty (/fdv, where baked fdv is
+  // 10/(tc*dps)) -> duty = v*dps -> plant velocity = duty/dps = v. The
+  // config file stops being a description that can disagree with the
+  // plant and becomes the plant's own parameters.
+  //
+  // WHY LIVE, EVERY CYCLE, and not once at construction: both halves of
+  // this invariant have been broken by construction-time-only derivation.
+  // First the encoder scale was a hardcoded literal that drifted from the
+  // baked travel_calib (11.2% perception error, a 704 mm square-tour
+  // closure miss). Then the constructor-time fullDutyVelocity override
+  // was silently clobbered by configure_from_robot()'s wire pushes
+  // (open-loop map 0.66x, integrator railed at iMax, wheels 17% slow with
+  // every subsystem testing clean in isolation). A per-cycle re-sync from
+  // the configurator's live config is a few float writes and makes the
+  // whole drift class structurally impossible.
+  //
+  // Port mapping follows the config's own left_port/right_port (tovez is
+  // wired port 1 = RIGHT), defaulting 1/2 when unset -- the same rule
+  // gen_boot_config.py bakes with.
+  //
+  // Deliberately NOT emulated: Stage A wheel_gain/intercept nonlinearity
+  // (this harness pins identity via kIdentityWheelCorrection); a config
+  // whose gains are non-identity describes a nonlinear plant this linear
+  // WheelPlant cannot be. All shipped sim profiles carry identity gains.
+  void syncPlantToConfig() {
+    const Config::Robot& cfg = graph_.configurator().config();
+    const uint32_t leftPort = cfg.motors.left_port != 0 ? cfg.motors.left_port : 1u;
+    const uint32_t rightPort = cfg.motors.right_port != 0 ? cfg.motors.right_port : 2u;
+    if (cfg.motors.travel_calib_left > 0.0f) {
+      plant_.setEncoderCountsPerMm(static_cast<int>(leftPort),
+                                   1.0f / cfg.motors.travel_calib_left);
+    }
+    if (cfg.motors.travel_calib_right > 0.0f) {
+      plant_.setEncoderCountsPerMm(static_cast<int>(rightPort),
+                                   1.0f / cfg.motors.travel_calib_right);
+    }
+    if (cfg.drive.duty_per_speed_left > 0.0f) {
+      plant_.setDutyVelMax(static_cast<int>(leftPort),
+                           1.0f / cfg.drive.duty_per_speed_left);
+    }
+    if (cfg.drive.duty_per_speed_right > 0.0f) {
+      plant_.setDutyVelMax(static_cast<int>(rightPort),
+                           1.0f / cfg.drive.duty_per_speed_right);
+    }
+  }
+
   SimPlant plant_;
+  TestSim::FailingFiberLauncher fiberLauncher_;
   TestSim::SimClock clock_;
   TestSim::SimSleeper sleeper_;
   TestSupport::FakeTransport serialLink_;
   TestSupport::FakeTransport radioLink_;
 
-  // The WHOLE Core::/Motion:: graph -- see this file's own header and this
+  // The WHOLE Core:: graph -- see this file's own header and this
   // constructor's own comment for why this is the SAME composeRobot() call
   // src/firm/main.cpp makes, substituting only plant_/serialLink_/
   // radioLink_ for main.cpp's real hardware leaves.

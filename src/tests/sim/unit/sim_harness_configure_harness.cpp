@@ -89,9 +89,9 @@ int main() {
     TestSim::SimHarness sim;
     sim.boot();
 
-    checkFloatEq(sim.motorConfig(1).wheelTravelCalib, 0.0f,
+    checkFloatEq(sim.motorConfig(1).slewRate, 0.0f,
                  "left motorConfig starts at Hal::MotorConfig{}'s zero default");
-    checkFloatEq(sim.motorConfig(2).wheelTravelCalib, 0.0f,
+    checkFloatEq(sim.motorConfig(2).slewRate, 0.0f,
                  "right motorConfig starts at Hal::MotorConfig{}'s zero default");
     checkFalse(sim.isConfigured(), "isConfigured() is false before any configureMotor() call");
   }
@@ -104,30 +104,31 @@ int main() {
     TestSim::SimHarness sim;
     sim.boot();
 
-    // 125-003: velFiltAlpha is deleted from Hal::MotorConfig -- this
-    // scenario now discriminates on wheelTravelCalib instead (any other
-    // still-live nonzero field would do equally well; this one was already
-    // in scope here via fwdSign's own neighbor field).
+    // 125-003 discriminated on wheelTravelCalib; that field is DELETED with
+    // the counts-native leaf (the kernel rework), so this scenario now
+    // discriminates on slewRate. Any still-live nonzero field does equally
+    // well -- the scenario is about per-port propagation, not about which
+    // field carries it.
     Hal::MotorConfig cfgL;
     cfgL.port = 1;
     cfgL.fwdSign = -1;
-    cfgL.wheelTravelCalib = 0.87f;
+    cfgL.slewRate = 0.87f;
     sim.configureMotor(1, cfgL);
 
-    checkFloatEq(sim.motorConfig(1).wheelTravelCalib, 0.87f, "left wheelTravelCalib took effect");
+    checkFloatEq(sim.motorConfig(1).slewRate, 0.87f, "left slewRate took effect");
     checkTrue(sim.motorConfig(1).fwdSign == -1, "left fwdSign took effect");
-    checkFloatEq(sim.motorConfig(2).wheelTravelCalib, 0.0f,
+    checkFloatEq(sim.motorConfig(2).slewRate, 0.0f,
                  "right motorConfig unaffected by configureMotor(1, ...)");
 
     Hal::MotorConfig cfgR;
     cfgR.port = 2;
     cfgR.fwdSign = 1;
-    cfgR.wheelTravelCalib = 0.42f;
+    cfgR.slewRate = 0.42f;
     sim.configureMotor(2, cfgR);
 
-    checkFloatEq(sim.motorConfig(2).wheelTravelCalib, 0.42f, "right wheelTravelCalib took effect");
+    checkFloatEq(sim.motorConfig(2).slewRate, 0.42f, "right slewRate took effect");
     checkTrue(sim.motorConfig(2).fwdSign == 1, "right fwdSign took effect");
-    checkFloatEq(sim.motorConfig(1).wheelTravelCalib, 0.87f,
+    checkFloatEq(sim.motorConfig(1).slewRate, 0.87f,
                  "left motorConfig unaffected by configureMotor(2, ...)");
   }
 

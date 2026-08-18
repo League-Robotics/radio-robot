@@ -30,17 +30,12 @@ _HARNESS_SRC = _UNIT_DIR / "configurator_provenance_harness.cpp"
 
 _APP_SOURCES = [
     _SOURCE_DIR / "core" / "configurator.cpp",
-    _SOURCE_DIR / "control" / "differential_drive.cpp",
+    _SOURCE_DIR / "diffdrive" / "differential_drive.cpp",
     _SOURCE_DIR / "core" / "boot_calibration.cpp",
 ]
-_MOTION_SOURCES = [
-    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "profile.cpp",
-    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "estimation.cpp",
-    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "shape.cpp",
-    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "planner.cpp",
-    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
-    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
-]
+# _MOTION_SOURCES -- DELETED (exploratory-kernel rewrite, 2026-08-15):
+# src/firm/motion/ no longer exists.
+_MOTION_SOURCES = []
 _CONFIG_SOURCES = [
     # Config::default*Group() -- loadBaked() reads every one of them.
     _SOURCE_DIR / "config" / "boot_config.cpp",
@@ -105,9 +100,9 @@ def test_configurator_provenance(tmp_path):
             "-I",
             str(_SOURCE_DIR),
             "-I",
-            str(_REPO_ROOT / "src"),
+            str(_SOURCE_DIR / "platform" / "host"),  # host_fiber.h
             "-I",
-            str(_REPO_ROOT / "src" / "firm" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
+            str(_REPO_ROOT / "src"),
             "-o",
             str(binary),
             *[str(src) for src in sources],

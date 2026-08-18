@@ -138,6 +138,14 @@ class WheelPlant {
   // position integrates velocity forward by the same dt (position += v*dt).
   void step(float appliedDuty, float dt);   // [-1,1] [s]
 
+  // The plant's own steady-state gain. Settable so the sim can BECOME the
+  // robot its config file describes (dutyVelMax == 1/duty_per_speed) --
+  // see SimHarness::syncPlantToConfig() for the invariant this serves.
+  void setDutyVelMax(float dutyVelMax) {  // [mm/s] at |duty|==1
+    if (dutyVelMax > 0.0f) dutyVelMax_ = dutyVelMax;
+  }
+  float dutyVelMax() const { return dutyVelMax_; }  // [mm/s]
+
   float velocity() const { return velocity_; }   // [mm/s] signed
   float position() const { return position_; }   // [mm]
 

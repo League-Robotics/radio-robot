@@ -1,42 +1,14 @@
+// golden_ref_drive.cpp -- FROZEN COPY of the pre-rework control law
+// (commit ab43963c). See golden_ref_drive.h for why. NO MATH TOUCHED.
 #include <algorithm>
 #include <cmath>
 
-#include "control/differential_drive.h"
+#include "golden_ref_drive.h"
 
-namespace Control {
+namespace GoldenRef {
 
 DifferentialDrive::DifferentialDrive(Hal::Motor& left, Hal::Motor& right, float trackWidth)
     : left_(left), right_(right), trackWidth_(trackWidth) {}
-
-void DifferentialDrive::configure(const Config::Robot& config) {
-  setWheelCorrection(
-      config.drive.wheel_gain_left_accel, config.drive.wheel_intercept_left_accel,
-      config.drive.wheel_gain_left_decel, config.drive.wheel_intercept_left_decel,
-      config.drive.wheel_gain_right_accel, config.drive.wheel_intercept_right_accel,
-      config.drive.wheel_gain_right_decel, config.drive.wheel_intercept_right_decel);
-  setCrawlPulse(config.drive.crawl_pulse);
-
-  ControlGains gains;
-  gains.kp = config.wheelControl.pid_kp;
-  gains.ki = config.wheelControl.pid_ki;
-  gains.iMax = config.wheelControl.pid_i_max;
-  gains.kaff = config.wheelControl.pid_kaff;
-  gains.pidMax = config.wheelControl.pid_max;
-  setControlGains(gains);
-
-  AdaptationBounds bounds;
-  bounds.vMin = config.wheelControl.v_min;
-  bounds.biasMax = config.wheelControl.bias_max;
-  bounds.tauAdapt = config.wheelControl.tau_adapt;
-  bounds.aSteady = config.wheelControl.a_steady;
-  bounds.posErrMax = config.wheelControl.pos_err_max;
-  bounds.deficitThreshold = config.wheelControl.deficit_threshold;
-  bounds.deficitWindow = config.wheelControl.deficit_window;
-  bounds.stallSpeed = config.wheelControl.stall_speed;
-  bounds.stallDemand = config.wheelControl.stall_demand;
-  bounds.stallWindow = config.wheelControl.stall_window;
-  setAdaptationBounds(bounds);
-}
 
 void DifferentialDrive::command(float vLeft, float vRight, float duration,
                     uint32_t moveId, uint32_t now) {
@@ -80,7 +52,7 @@ bool DifferentialDrive::takeCompletion(uint32_t* moveId) {
   return true;
 }
 
-void DifferentialDrive::update(Types::RobotState& state, uint32_t now) {
+void DifferentialDrive::update(GoldenRef::RobotState& state, uint32_t now) {
   const bool owned = commandActive_;
 
   if (commandActive_ && static_cast<int32_t>(now - commandDeadline_) >= 0) {
@@ -109,7 +81,7 @@ void DifferentialDrive::update(Types::RobotState& state, uint32_t now) {
   state.wheelRight.cmdAccel = cmdAccelRight_;
 
   state.command.moveActive = commandActive_;
-  state.command.mode = commandActive_ ? Types::Mode::Velocity : Types::Mode::Idle;
+  state.command.mode = commandActive_ ? GoldenRef::Mode::Velocity : GoldenRef::Mode::Idle;
   state.command.v_x = 0.5f * (targetLeft_ + targetRight_);
   state.command.omega = (targetRight_ - targetLeft_) / trackWidth_;
 }
@@ -181,7 +153,7 @@ float DifferentialDrive::fastPid(float posError, float err, float aCmd) const {
   return pid;
 }
 
-float DifferentialDrive::positionError(float speed, const Types::RobotState::Wheel& wheel,
+float DifferentialDrive::positionError(float speed, const GoldenRef::RobotState::Wheel& wheel,
                            PositionRef& ref, float dt) const {
   if (speed == 0.0f || dt <= 0.0f || !wheel.connected ||
       wheel.positionEpoch != ref.epoch || !ref.armed) {
@@ -246,7 +218,7 @@ uint32_t DifferentialDrive::sampleAge(uint32_t now, uint32_t sampleTime) const {
   return (now < sampleTime) ? 0u : (now - sampleTime);
 }
 
-void DifferentialDrive::tick(const Types::RobotState& state) {
+void DifferentialDrive::tick(const GoldenRef::RobotState& state) {
   if (!calibrated_) return;
 
   float speedLeft, speedRight;  // [mm/s] x2, post-floor
@@ -400,4 +372,4 @@ void DifferentialDrive::tick(const Types::RobotState& state) {
   writtenRight_ = dutyRight;
 }
 
-}  // namespace Control
+}  // namespace GoldenRef

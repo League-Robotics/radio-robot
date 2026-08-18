@@ -109,7 +109,11 @@ class MockMotor : public Hal::Motor {
   void requestSample() override {}
   void setDuty(float duty) override { lastDutyCmd = duty; }
   void setNeutral(Hal::Neutral) override {}
-  void applyTravelCalib(float) override {}
+  // Records the emergency zero so a test can assert it actually
+  // happened -- a mock that silently swallowed it would make the
+  // sentinel's whole point untestable.
+  void emergencyStop() override { ++emergencyStopCount; }
+  int emergencyStopCount = 0;
   // REVISION 1 (114-001, motor.h): trivial always-succeeds stand-in --
   // MockMotor has no boot-identity config of its own to actually reassign,
   // it only needs to satisfy the new pure virtual and let scenarios assert
@@ -429,11 +433,11 @@ void scenarioWedgeLatchAndSuspectDeriveAsBefore() {
 
 // --- Hardware::NezhaMotor scenarios (real leaf, scripted Platform::I2CBus) ---
 
-// Packs positionMm into the little-endian int32 tenths-of-degree raw
-// encoder reading NezhaMotor::collectEncoder() decodes (mirrors
-// motor_policy_harness.cpp's scriptNezhaEncoderReading() convention).
-// wheelTravelCalib=1.0, fwdSign=+1 in every scenario below, so raw ==
-// positionMm*10 exactly (no rounding drift).
+// Packs position [counts] into the little-endian int32 raw encoder
+// reading NezhaMotor::collectEncoder() decodes. The leaf is COUNTS-NATIVE
+// (1 count = 0.1 deg, the register's own unit; the old mm decode is
+// deleted), and fwdSign=+1 in every scenario below, so raw == position
+// exactly (no scaling, no rounding drift).
 //
 // Scripts TWO writes, not one: requestEncoder() (phase 1) always issues one
 // 0x46 register-select write, but tick()'s own dispatch (phase 2, same
@@ -444,11 +448,11 @@ void scenarioWedgeLatchAndSuspectDeriveAsBefore() {
 // one slack entry per cycle is always sufficient and harmless when the duty
 // write doesn't land that cycle (write-on-change/throttle skip).
 void scriptEncoderRequestCollect(TestSim::ScriptedI2CHook& bus, uint16_t wireAddr,
-                                  float positionMm) {
+                                  float position) {  // [counts]
   bus.queueWrite(wireAddr, /*status=*/0);   // requestEncoder()'s 0x46 write
   bus.queueWrite(wireAddr, /*status=*/0);   // slack: a possible same-cycle duty write (0x60)
 
-  int32_t raw = static_cast<int32_t>(std::lround(positionMm * 10.0f));
+  int32_t raw = static_cast<int32_t>(std::lround(position));
   uint8_t data[4] = {
       static_cast<uint8_t>(raw & 0xFF),
       static_cast<uint8_t>((raw >> 8) & 0xFF),
@@ -462,7 +466,6 @@ Hal::MotorConfig baseNezhaConfig() {
   Hal::MotorConfig cfg;
   cfg.port = 1;
   cfg.fwdSign = 1;
-  cfg.wheelTravelCalib = 1.0f;
   // Write-shaping — sprint 114 ticket 003: reversalDwell/outputDeadband are
   // now plain required floats (no more NezhaMotor ctor ship-default
   // substitution), so this harness sets the historical ship-default values
@@ -712,10 +715,10 @@ void scenarioDroppedStopWriteReassertsZeroWhileVelocityNonzero() {
   cfg.slewRate = 100.0f;   // no slew clamping -- isolates the write-on-change behavior
   Hardware::NezhaMotor motor(plant, cfg);
 
-  // kStopConfirmVelocity (nezha_motor.h) == 8.0 mm/s -- 500 mm/s (25mm every
-  // 50ms tick) is comfortably above it, with margin for any measurement
-  // slop.
-  const float kStepPosition = 25.0f;  // [mm] per 50ms tick == 500 mm/s
+  // kStopConfirmVelocity (nezha_motor.h) == 100 counts/s (the counts
+  // rebake of the old 8 mm/s) -- 500 counts/s (25 counts every 50ms tick)
+  // is comfortably above it, with margin for any measurement slop.
+  const float kStepPosition = 25.0f;  // [counts] per 50ms tick == 500 counts/s
   uint64_t nowUs = 0;
   float pos = 0.0f;
 
@@ -723,9 +726,9 @@ void scenarioDroppedStopWriteReassertsZeroWhileVelocityNonzero() {
   // 4-byte read), no speculative slack -- see this scenario's own header for
   // why. `expectDutyWrite` additionally queues exactly one MORE write slot
   // for a duty write this tick is expected to actually attempt.
-  auto scriptCycle = [&](float positionMm, bool expectDutyWrite) {
+  auto scriptCycle = [&](float position, bool expectDutyWrite) {  // [counts]
     bus.queueWrite(wireAddr, /*status=*/0);   // requestEncoder()'s 0x46 write
-    int32_t raw = static_cast<int32_t>(std::lround(positionMm * 10.0f));
+    int32_t raw = static_cast<int32_t>(std::lround(position));
     uint8_t data[4] = {
         static_cast<uint8_t>(raw & 0xFF),
         static_cast<uint8_t>((raw >> 8) & 0xFF),
@@ -795,51 +798,15 @@ void scenarioDroppedStopWriteReassertsZeroWhileVelocityNonzero() {
               "already claimed 0 was sent");
 }
 
-// 8. applyTravelCalib() (125-003: narrowed from the pre-125-003
-//    applyGains(Gains, Opt<float>) -- see motor.h's own header) takes
-//    effect on the SAME instance, same boot, no reflash: a raw step
-//    scripted under wheelTravelCalib=1.0 decodes to double the mm once
-//    applyTravelCalib(2.0) has been called.
-void scenarioApplyTravelCalibTakesEffectSameBootNoReflash() {
-  beginScenario("applyTravelCalib() changes subsequent position() decode on the same boot, no reflash");
-  TestSim::SimPlant plant;
-  TestSim::ScriptedI2CHook bus(plant);
-  const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
-
-  Hal::MotorConfig cfg = baseNezhaConfig();   // wheelTravelCalib = 1.0, fwdSign = 1
-  Hardware::NezhaMotor motor(plant, cfg);
-
-  // Prime cycle: anchor at raw=0.
-  scriptEncoderRequestCollect(bus, wireAddr, 0.0f);
-  motor.requestSample();
-  motor.tick(0);
-
-  scriptEncoderRequestCollect(bus, wireAddr, 10.0f);   // raw=100 -- at calib=1.0 decodes to 10.0mm
-  motor.requestSample();
-  motor.tick(20000);
-  checkFloatEq(motor.position(), 10.0f, "position decodes at the constructed wheelTravelCalib (1.0)");
-
-  // Live apply, no reconstruction -- the SAME motor instance.
-  motor.applyTravelCalib(2.0f);
-
-  // The SAME raw register value (this helper's own positionMm*10 raw
-  // convention, still assuming calib=1.0 to construct the raw bytes) now
-  // decodes to DOUBLE the mm, proving the change landed live, same boot.
-  scriptEncoderRequestCollect(bus, wireAddr, 15.0f);   // raw=150 -- at calib=2.0 this decodes to 30.0mm
-  motor.requestSample();
-  motor.tick(40000);
-  checkFloatEq(motor.position(), 30.0f,
-               "travelCalib=2.0 doubles the SAME raw-derived reading into mm -- confirms the applied change");
-
-  checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0, "no script under-run across the travelCalib sequence");
-}
+// (Scenario 8, applyTravelCalib(), is DELETED with the method itself —
+// the leaf is counts-native and the mm decode no longer exists.)
 
 // 9. reconfigure() -- REVISION 1 (114-001, motor.h): guarded, whole-config
-//    replacement. Succeeds and fully replaces config_ (fwdSign/
-//    wheelTravelCalib -- NOT just the narrow applyTravelCalib() surface)
-//    when the motor has never been commanded (mode_ == Mode::None); fails
-//    and leaves config_ UNCHANGED when the motor is actively driving and
-//    not at rest; succeeds again once the motor returns to rest.
+//    replacement, proven through fwdSign (the one decode-visible field
+//    with no other post-construction setter). Succeeds when the motor has
+//    never been commanded (mode_ == Mode::None); fails and leaves config_
+//    UNCHANGED when the motor is actively driving and not at rest;
+//    succeeds again once the motor returns to rest.
 void scenarioReconfigureGuardedWholeConfigReplacement() {
   beginScenario("reconfigure(): succeeds pre-command (whole config_ replace), fails while driving "
                 "and not at rest, succeeds again once at rest");
@@ -847,30 +814,27 @@ void scenarioReconfigureGuardedWholeConfigReplacement() {
   TestSim::ScriptedI2CHook bus(plant);
   const uint16_t wireAddr = static_cast<uint16_t>(Hardware::kNezhaDeviceAddr << 1);
 
-  Hal::MotorConfig cfg = baseNezhaConfig();   // port=1, fwdSign=1, wheelTravelCalib=1.0
+  Hal::MotorConfig cfg = baseNezhaConfig();   // port=1, fwdSign=1
   Hardware::NezhaMotor motor(plant, cfg);
 
   // --- Step 1: never commanded (mode_ == Mode::None) -- reconfigure()
-  //     succeeds and replaces config_ WHOLESALE (fwdSign/wheelTravelCalib
-  //     have no other runtime setter besides applyTravelCalib(), which only
-  //     touches wheelTravelCalib -- this is the ONLY path that can change
-  //     fwdSign post-construction). ---
+  //     succeeds and replaces config_ WHOLESALE (fwdSign has no other
+  //     post-construction setter -- this is the ONLY path that can change
+  //     it). ---
   Hal::MotorConfig cfgA = baseNezhaConfig();
   cfgA.fwdSign = -1;
-  cfgA.wheelTravelCalib = 2.0f;
   bool ok1 = motor.reconfigure(cfgA);
   checkTrue(ok1, "reconfigure() succeeds on a never-yet-commanded motor (mode_ == Mode::None)");
 
-  // raw = positionMm*10 (the helper's own convention, see scriptEncoderRequestCollect()'s
-  // header) -- at fwdSign=-1/wheelTravelCalib=2.0, positionMm=10.0 (raw=100) decodes to
-  // (100/10)*2.0*(-1) = -20.0mm, distinct from what the OLD config (fwdSign=1/calib=1.0)
-  // would have produced (10.0mm) -- an unambiguous proof both fields actually landed.
+  // raw == position (counts-native helper convention) -- at fwdSign=-1,
+  // position=10 (raw=10) decodes to -10 counts, distinct from what the OLD
+  // config (fwdSign=1) would have produced (+10) -- unambiguous proof the
+  // replacement actually landed.
   scriptEncoderRequestCollect(bus, wireAddr, 10.0f);
   motor.requestSample();
   motor.tick(0);
-  checkFloatEq(motor.position(), -20.0f,
-               "fwdSign=-1 AND wheelTravelCalib=2.0 both took effect (whole-config replace, "
-               "not a partial merge)");
+  checkFloatEq(motor.position(), -10.0f,
+               "fwdSign=-1 took effect (whole-config replace, not a partial merge)");
 
   // --- Step 2: drive the motor (setDuty() + a real landed write) --
   //     mode_ != Mode::None and appliedDuty() != 0 -- NOT at rest.
@@ -883,7 +847,6 @@ void scenarioReconfigureGuardedWholeConfigReplacement() {
 
   Hal::MotorConfig cfgB = baseNezhaConfig();
   cfgB.fwdSign = 1;
-  cfgB.wheelTravelCalib = 1.0f;
   bool ok2 = motor.reconfigure(cfgB);
   checkTrue(!ok2, "reconfigure() refuses while the motor is actively driving and not at rest");
 
@@ -900,13 +863,13 @@ void scenarioReconfigureGuardedWholeConfigReplacement() {
   checkTrue(ok3, "reconfigure() succeeds again once the motor has returned to rest");
 
   // A FRESH scripted sample (a genuinely new raw value) now decodes under
-  // cfgB's fwdSign=1/wheelTravelCalib=1.0, not cfgA's (-1/2.0) -- the
-  // recovery reconfigure() genuinely took effect.
-  scriptEncoderRequestCollect(bus, wireAddr, 15.0f);   // raw=150
+  // cfgB's fwdSign=1, not cfgA's -1 -- the recovery reconfigure()
+  // genuinely took effect.
+  scriptEncoderRequestCollect(bus, wireAddr, 15.0f);   // raw=15
   motor.requestSample();
   motor.tick(150000);
   checkFloatEq(motor.position(), 15.0f,
-               "position now decodes under cfgB's fwdSign=1/wheelTravelCalib=1.0 -- the recovery "
+               "position now decodes under cfgB's fwdSign=1 -- the recovery "
                "reconfigure() genuinely took effect");
 
   checkUintEq(bus.errCount(Hardware::kNezhaDeviceAddr), 0, "no script under-run across the reconfigure() sequence");
@@ -1231,7 +1194,6 @@ int main() {
   scenarioSetDutyTickWritesExactlyTheGivenDutyThroughShaping();
   scenarioNakedStopWriteIsRetriedNextTickNotLatched();
   scenarioDroppedStopWriteReassertsZeroWhileVelocityNonzero();
-  scenarioApplyTravelCalibTakesEffectSameBootNoReflash();
   scenarioReconfigureGuardedWholeConfigReplacement();
   scenarioExplicitZeroWriteShapingIsPassThrough();
   scenarioSigmaDeltaRepresentsSubCountDutyAndDropsCarryOnStop();

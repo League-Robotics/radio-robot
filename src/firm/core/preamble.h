@@ -1,8 +1,16 @@
 // preamble.h -- Core::Preamble: the boot-time device-detection driver. A
 // flat sequencer over each bare leaf's OWN already-existing detection
-// entry point (NezhaMotor::begin(), Otos::begin(),
-// ColorSensorLeaf::beginStep(nowUs), LineSensorLeaf::beginStep(nowUs)) to a
-// done() terminal signal.
+// entry point (Otos::begin(), ColorSensorLeaf::beginStep(nowUs),
+// LineSensorLeaf::beginStep(nowUs)) to a done() terminal signal.
+//
+// EXPLORATORY-KERNEL REWRITE (2026-08-15,
+// clasi/issues/differentialdrive-one-class-one-fiber-exploratory-worktree.md):
+// the two drive motors LEFT this probe sequence. Control::
+// DifferentialDrive::begin() now primes both encoders itself (called by
+// the composition root AFTER Preamble::done(), see boot_wiring.h's own
+// "Lifecycle, one level up" note) -- Preamble has no motor slot, no
+// leftConnected()/rightConnected() accessor, and no Hal::Motor
+// dependency at all any more.
 //
 // Boundary: inside -- calling order (begin()/beginStep(nowUs) at most once
 // per step()) and a done() terminal signal; outside -- each leaf's own
@@ -14,60 +22,33 @@
 //     tlm.emit();        // boot frames: device detection status, faults
 //     uBit.sleep(kPreamblePace);   // the BOOT LOOP owns this sleep, never Preamble
 //   }
-// Telemetry flows from power-on (frames report per-device status, via this
-// class's own accessors below); commands are not consumed until the main
-// loop starts. Wiring Preamble's accessors into a boot-time
-// Types::RobotState/Telemetry::update() call (RobotLoop::boot()'s own job,
-// robot_loop.cpp) is main.cpp's construction job -- this class only
-// builds the driver and its read-only status surface.
 //
 // --- step()'s contract: ONE bounded probe action per call, never sleeps ---
 // Each call to step() advances AT MOST ONE not-yet-resolved device's own
 // detection entry point by exactly one call. Pacing between retries
 // (OTOS, color, line) is expressed as "not due yet, do nothing this call,
 // try the next unresolved device instead" -- step() itself never sleeps;
-// the BOOT LOOP above owns the real gap between calls. No leaf's own retry
-// loop is reimplemented here, only sequenced/called -- see probeSlot()'s
-// own per-device comments for the one exception (OTOS) and why it is not a
-// counterexample.
+// the BOOT LOOP above owns the real gap between calls.
 //
 // --- Time seam ---
-// Preamble takes a `const Hal::Clock&` (the same fiber-level time seam
-// NezhaMotor/Otos/Deadman already read "now" through) and reads
-// clock_.nowMicros() internally at the top of every step() call, rather
-// than taking a nowUs parameter -- matching the boot loop's own bare
-// `preamble.step();` call site and Deadman's identical precedent.
+// Preamble takes a `const Hal::Clock&` and reads clock_.nowMicros()
+// internally at the top of every step() call, rather than taking a nowUs
+// parameter -- matching the boot loop's own bare `preamble.step();` call
+// site.
 //
 // --- Decision: KEEP the boot power-settle wait ---
 // An explicit power-settle wait (kPowerSettle, below) is kept rather than
-// relying on each leaf's own retry pacing alone: it is cheap (step()
-// simply does nothing until it elapses, no leaf touched, no bus traffic),
-// it is a bench-tuned value already proven on real hardware, and dropping
-// it would let the FIRST probe (motor1's begin(), first in sequence) race
-// the rails on every boot -- motor begin() has no retry pacing of its own
-// to lean on (NezhaMotor::begin() is a single hardReset() call, not a
-// paced retry loop), so "rely on each leaf's own pacing instead" is not
-// actually available for the very first device probed.
-//
-// color_sensor.h's kMaxAltAttempts/kAltRetryPeriod and line_sensor.h's
-// kMaxAttempts/kRetryPeriod are NOT re-ported here -- they already live on
-// the leaves themselves, and Preamble calls beginStep() without
-// re-implementing their own internal pacing (see step()'s contract above).
+// relying on each leaf's own retry pacing alone: it is cheap, it is a
+// bench-tuned value already proven on real hardware, and dropping it
+// would let the FIRST probe race the rails on every boot.
 //
 // --- Defensive bound ---
 // kMaxPreamble (below) is a wall-clock safety net, not the primary
-// termination mechanism: every slot already self-bounds (motor: one call;
-// OTOS: Preamble's own kOtosBeginAttempts counter; color/line: each leaf's
-// own kMaxAltAttempts/kMaxAttempts internal bound) PROVIDED step() is
-// called often enough with real elapsed time between calls (the boot
-// loop's job). kMaxPreamble exists only to guard against a future leaf
-// regression (e.g. a detectDone() that never returns true) turning this
-// into a real infinite loop, expressed as an elapsed-wall-time bound
-// instead of a step()-call count, since step()'s own call cadence is the
-// boot loop's choice, not a fixed pacing internal to this class. Sized
-// generously above the natural worst case (OTOS-bound:
-// 20 * 100ms = 2000ms; color/line: ~21 * 50ms = 1050ms and 20 * 50ms =
-// 1000ms respectively; plus the 50ms power-settle wait).
+// termination mechanism: every slot already self-bounds (OTOS: Preamble's
+// own kOtosBeginAttempts counter; color/line: each leaf's own
+// kMaxAltAttempts/kMaxAttempts internal bound) PROVIDED step() is called
+// often enough with real elapsed time between calls (the boot loop's
+// job).
 #pragma once
 
 #include <cstdint>
@@ -75,19 +56,13 @@
 #include "hal/clock.h"
 #include "hal/color_sensor.h"
 #include "hal/line_sensor.h"
-#include "hal/motor.h"
 #include "hardware/generic/real_otos.h"
 
 namespace Core {
 
 class Preamble {
  public:
-  // left/right -- the two drive-wheel NezhaMotor leaves, same L/R
-  // convention as Drive (which slot is "left" vs "right" is main.cpp's own
-  // construction-time wiring -- Preamble does not care which physical
-  // wheel each is, only that begin() is called on each).
-  Preamble(Hal::Motor& left, Hal::Motor& right,
-           Hal::Otos& otos, Hal::ColorSensor& color,
+  Preamble(Hal::Otos& otos, Hal::ColorSensor& color,
            Hal::LineSensor& line, const Hal::Clock& clock);
 
   // Advances AT MOST ONE not-yet-resolved device's own detection entry
@@ -99,21 +74,10 @@ class Preamble {
 
   // True once every device has reached a terminal state: present-and-ready,
   // OR confirmed-absent after exhausting its own (or Preamble's, for OTOS)
-  // retry budget. An absent sensor cannot hang this forever -- see
-  // kMaxPreamble's own comment.
+  // retry budget.
   bool done() const;
 
-  // --- Per-device status accessors -- boot telemetry. RobotLoop::boot()
-  // wires these into a throwaway Types::RobotState's
-  // wheelLeft/wheelRight/otos.connected fields (tlm_.update(bootState))
-  // while polling done(); once done() goes true, boot()'s own tail
-  // (sendBanner()/sendReady()) announces completion in cleartext -- there
-  // is no boot-ready telemetry bit (see telemetry.h's flags-layout
-  // comment, bit 11 RESERVED). Each accessor below is a cheap forwarding
-  // call to the leaf's own existing status method -- Preamble holds no
-  // separate copy of this state. ---
-  bool leftConnected() const { return left_.connected(); }
-  bool rightConnected() const { return right_.connected(); }
+  // --- Per-device status accessors -- boot telemetry. ---
   bool otosPresent() const { return otos_.present(); }
   bool otosConnected() const { return otos_.connected(); }
   bool colorPresent() const { return color_.present(); }
@@ -122,33 +86,26 @@ class Preamble {
  private:
   // Round-robin device slots -- step() visits at most one unresolved slot
   // per call, cursor_ remembering where the NEXT call should resume so
-  // every slot gets a fair turn (a slot not yet due -- OTOS's own pacing --
-  // is skipped in favor of the next unresolved slot, not spun on).
-  enum class Slot : uint8_t { Left, Right, Otos, Color, Line, kCount };
+  // every slot gets a fair turn.
+  enum class Slot : uint8_t { Otos, Color, Line, kCount };
   static constexpr uint8_t kSlotCount = static_cast<uint8_t>(Slot::kCount);
 
-  // Boot power-settle wait, ported from device_bus.h's kPowerSettleMs (50)
-  // -- see this file's header "Decision: KEEP the boot power-settle wait"
-  // comment.
+  // Boot power-settle wait, ported from device_bus.h's kPowerSettleMs (50).
   static constexpr uint64_t kPowerSettle = 50000;  // [us]
 
   // OTOS product-ID probe retry -- Otos::begin() is a single probe with no
-  // retry of its own (otos.h), so Preamble owns this pacing (not a "leaf's
-  // own retry loop" being reimplemented -- there is none to duplicate;
-  // Preamble supplies one where the leaf has none).
+  // retry of its own (otos.h), so Preamble owns this pacing.
   static constexpr int kOtosBeginAttempts = 20;
   static constexpr uint64_t kOtosBeginRetryPeriod = 100000;  // [us]
 
   // Defensive wall-clock bound -- see this file's header "Defensive bound"
-  // comment for the derivation (~2s natural worst case + margin).
+  // comment.
   static constexpr uint64_t kMaxPreamble = 5000000;  // [us]
 
   bool dueSlot(Slot slot, uint64_t nowUs) const;
   void probeSlot(Slot slot, uint64_t nowUs);
   void forceResolveAll();
 
-  Hal::Motor& left_;
-  Hal::Motor& right_;
   Hal::Otos& otos_;
   Hal::ColorSensor& color_;
   Hal::LineSensor& line_;
