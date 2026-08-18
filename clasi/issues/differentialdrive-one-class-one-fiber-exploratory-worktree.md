@@ -1180,3 +1180,78 @@ as C13 and should go with it.
 The entire Verification list stands owed, and the two findings — the
 integral-path divergence and the tracking falloff — are exactly the kind
 of thing the bench exists to settle.
+
+## Square tour: one bug fixed, one still open (2026-08-18)
+
+### FIXED — the sim plant's encoder scale (this was the "-20%")
+
+`sim_plant.cpp` hardcoded `kEncoderCountsPerMm = 1.4187` (== 1/0.704871),
+while the active robot decodes counts with `travel_calib` 0.7837. Every
+distance and velocity the firmware PERCEIVED read 11.2% high, so a closed
+loop settled 11% short of where it believed it was.
+
+Measured at commanded 400 mm/s, before the fix:
+
+| quantity | value |
+|---|---|
+| `appliedDuty` | 0.72 (correct for what the loop believed) |
+| plant's true velocity | 359.47 mm/s |
+| kernel's own reading | 399.20 mm/s |
+| ratio | 1.1105 |
+| predicted (0.7837/0.704871) | 1.1118 — 0.12% apart |
+
+After deriving the plant's scale from the baked `travel_calib`, applied
+duty equals expected duty at 0.18/0.30/0.50/0.80 and plant truth equals
+commanded to within 0.3%.
+
+Cause was mine: `bench_test_config.cpp` used to pin `wheelTravelCalib` to
+0.704871 with a comment saying it MUST be the reciprocal of the plant's
+constant. The counts-native leaf deleted that field, correctly, and the
+synchronisation went with it. Now derived, so it cannot drift again.
+
+### STILL OPEN — the tour's legs land ~70% with exact velocity
+
+Fixing the above did NOT fix the tour, and made the number worse:
+
+| run | path | heading | closure |
+|---|---|---|---|
+| before the fix | 1588/2000 (79%) | 308.9/360 | 704 mm |
+| after the fix | 1460/2000 (73%) | 269.5/360 | 794 mm |
+| after, `--leg 2000` | 5583/8000 (70%) | 345.6/360 | 5209 mm |
+
+Consistent, not contradictory: the 11.2% over-read was partially
+CANCELLING this second error. Removing it exposed more of the other one.
+
+**Ruled out, with evidence — do not re-investigate these:**
+
+- *Velocity/duty scale.* Provably exact after the fix: commanded 150 →
+  plant truth 150.00; commanded 400 → 399.57.
+- *The plant model.* `WheelPlant::step()` is `target = dutyVelMax *
+  appliedDuty` with a first-order lag. Linear, no saturation.
+- *A dropped segment.* All 8 segments enqueue and ack; no warnings.
+- *A fixed per-segment loss* (ramp, dwell, coast). The shortfall gets
+  WORSE with longer legs (73% → 70%), so it scales; a fixed loss would
+  shrink as a fraction.
+- *Host/firmware cycle-period disagreement.* `sim_loop.py` reads the
+  compiled `kCycle` rather than assuming it.
+- *Clock running ahead of physics via the kernel's settle sleeps.*
+  `TestSim::SimSleeper` holds no clock reference — it records requests
+  and advances nothing.
+- *Stage A / λ / gains.* Measured live from the kernel: `wheelGain`
+  identity, `lambdaEnabled=0`, `lambda=1.000`, `maxDuty=100`.
+- *The tour pre-compensating gains.* `CAL["L"]=CAL["R"]=1.0`; the
+  stationary prelude does not scale commands.
+
+**The lead worth chasing next.** Velocity is exact and distance is short,
+so the commanded WINDOW must be short. In `SimHarness` the kernel's
+`step()` is called once per `robotLoop_.cycle()`, i.e. once per
+`kCycleDtUs` = `RobotLoop::kCycle` = **32 ms** — while the kernel's own
+cadence, `kKernelCyclePeriod`, is **24 ms**. On hardware the kernel's
+fiber runs at 24 ms INDEPENDENTLY of RobotLoop's 32 ms; in the sim the
+two are welded 1:1. That is a genuine sim-fidelity gap whether or not it
+is the whole cause — the simulated control loop runs 25% slower relative
+to physics than the real one does, and every lease and duration is
+evaluated against it. Start there.
+
+This is host/sim-harness territory, NOT the kernel. It does not affect
+`src/firm/diffdrive/` and does not block the package extraction.
