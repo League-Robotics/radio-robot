@@ -96,6 +96,17 @@ class Configurator {
   // loadBaked()/applyGroup() last wrote.
   const Config::Robot& config() const { return config_; }
 
+  // mutableConfig() -- HOST-BUILD SIM PLUMBING ONLY. sim_ctypes.cpp's
+  // sim_configure_drive() writes pushed duty_per_speed values into the
+  // live config so SimHarness::syncPlantToConfig() (which derives the
+  // synthetic plant's own gain from it) and the kernel never describe two
+  // different robots. Production code changes config exclusively through
+  // applyGroup()/applyField()/loadBaked(); nothing on the ARM target may
+  // call this.
+#ifdef HOST_BUILD
+  Config::Robot& mutableConfig() { return config_; }
+#endif
+
   // loadBaked() -- populates config_ from the generated, robot-JSON-baked
   // Config::default*Group() functions -- one assignment per
   // msg::ConfigGroupTarget, no derivation of its own. Idempotent.

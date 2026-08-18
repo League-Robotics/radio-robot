@@ -187,7 +187,8 @@ int SimPlant::handleMotorRead(uint8_t* data, int len) {
   if (len != 4) return kNakStatus;
   WheelPlant& plant = mutableWheelPlant(selectedPort_);
   if (plant.disconnected()) return kNakStatus;
-  writeLeInt32(data, lroundToTenthsMm(plant.reportedPosition() * encoderCountsPerMm_));
+  writeLeInt32(data, lroundToTenthsMm(plant.reportedPosition() *
+                                      encoderCountsPerMm_[selectedPort_ == 2 ? 2 : 1]));
   return kOk;
 }
 
@@ -326,8 +327,13 @@ void SimPlant::setEncoderJitter(bool enabled) {
   right_.setEncoderJitter(enabled);
 }
 
-void SimPlant::setEncoderCountsPerMm(float countsPerMm) {
-  if (countsPerMm > 0.0f) encoderCountsPerMm_ = countsPerMm;
+void SimPlant::setEncoderCountsPerMm(int port, float countsPerMm) {
+  if (countsPerMm <= 0.0f) return;
+  encoderCountsPerMm_[port == 2 ? 2 : 1] = countsPerMm;
+}
+
+void SimPlant::setDutyVelMax(int port, float dutyVelMax) {
+  mutableWheelPlant(port).setDutyVelMax(dutyVelMax);
 }
 
 void SimPlant::setOtosDrift(float xDrift, float yDrift, float headingDrift) {

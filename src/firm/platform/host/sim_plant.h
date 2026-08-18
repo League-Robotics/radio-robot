@@ -154,7 +154,14 @@ class SimPlant : public Hal::I2CBus {
   // and a square tour misses closure by hundreds of mm with every
   // individual subsystem testing clean. That happened -- 0.7837 vs
   // 0.704871, an 11.2% over-read, 704 mm of closure error.
-  void setEncoderCountsPerMm(float countsPerMm);
+  // Per-PORT now: the two wheels legitimately carry different
+  // travel_calib values, so one shared scale cannot represent a live
+  // config faithfully.
+  void setEncoderCountsPerMm(int port, float countsPerMm);
+  // Per-port steady-state plant gain [mm/s at full duty] -- forwarded to
+  // that port's WheelPlant. Together with the encoder scale above this is
+  // what lets the plant BE the robot the active config describes.
+  void setDutyVelMax(int port, float dutyVelMax);
 
   // OTOS drift/bias -- deterministic, per OtosPlant::setDrift()'s own
   // comment (no RNG anywhere in either plant).
@@ -221,8 +228,9 @@ class SimPlant : public Hal::I2CBus {
   // Wire-parsed duty, off the 0x60 frame only -- NEVER read back from
   // Hardware::NezhaMotor::appliedDuty() (no back-channel of any kind, per
   // this ticket's own acceptance criteria).
-  // [counts/mm] wire encoding scale -- see setEncoderCountsPerMm().
-  float encoderCountsPerMm_ = 1.4187f;
+  // [counts/mm] wire encoding scale, PER PORT (index 1/2; 0 unused) --
+  // see setEncoderCountsPerMm().
+  float encoderCountsPerMm_[3] = {1.4187f, 1.4187f, 1.4187f};
   float leftDuty_ = 0.0f;   // [-1,1]
   float rightDuty_ = 0.0f;  // [-1,1]
 

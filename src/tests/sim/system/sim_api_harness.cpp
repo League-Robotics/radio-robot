@@ -481,6 +481,17 @@ void scenarioBiasPersistsAcrossChainedMoveLegs() {
   // config snapshot). biasMax rebaked mm/s -> counts/s.
   sim.drive()
       .setSpeedFloor(0.0f)
+      // Stage B OFF for this scenario. The baked profile ships ki=6, and a
+      // live velocity loop closes most of the deliberate mis-calibration
+      // error before Stage C ever sees it -- the bias then converges to a
+      // small residual and the persistence thresholds below lose their
+      // meaning. (This was masked for a while by a sim perception bug that
+      // manufactured a persistent error no PID could close; with perception
+      // exact, the scenario must make its own error persistent, by running
+      // pure feedforward + adaptation.)
+      .setKp(0.0f)
+      .setKi(0.0f)
+      .setIMax(0.0f)
       .setAdaptation(/*biasMax=*/80.0f * 10.0f / travelCalibMean,  // [counts/s] (== 80 mm/s)
                      /*tauAdapt=*/1.0f,     // [s] converges within a few seconds of cruise
                      /*aSteady=*/1.0e6f);   // effectively always "steady" outside the ramp instant

@@ -658,6 +658,17 @@ void sim_configure_drive(SimHandle h, float dutyPerSpeedLeft, float dutyPerSpeed
                          float crawlPulse) {
   TestSim::SimHarness* harness = asHarness(h);
   Control::DifferentialDrive& drive = harness->drive();
+  // Write the pushed values INTO the live config first: SimHarness::
+  // syncPlantToConfig() derives the plant's own gain from
+  // config_.drive.duty_per_speed_*, so a push that only set the kernel's
+  // fullDutyVelocity would leave the plant describing one robot and the
+  // kernel another -- the exact split-source drift this file's own history
+  // keeps re-learning. One source of truth: the config.
+  {
+    Config::Robot& mutableCfg = harness->configurator().mutableConfig();
+    if (dutyPerSpeedLeft > 0.0f) mutableCfg.drive.duty_per_speed_left = dutyPerSpeedLeft;
+    if (dutyPerSpeedRight > 0.0f) mutableCfg.drive.duty_per_speed_right = dutyPerSpeedRight;
+  }
   const Config::Robot& cfg = harness->configurator().config();
   const float travelCalibMean =
       0.5f * (cfg.motors.travel_calib_left + cfg.motors.travel_calib_right);
@@ -666,6 +677,27 @@ void sim_configure_drive(SimHandle h, float dutyPerSpeedLeft, float dutyPerSpeed
     drive.setFullDutyVelocity(10.0f / (dutyPerSpeedMean * travelCalibMean));
   }
   drive.setCrawlPulse(crawlPulse);
+}
+
+// sim_debug_drive_state -- read-only diagnostic dump of the live
+// calibration chain, for probes chasing perception/actuation scale bugs.
+// out[0]=fullDutyVelocity [counts/s], out[1]=travel_calib_left,
+// out[2]=travel_calib_right [mm/deg], out[3]=duty_per_speed_left
+// [duty/(mm/s)], out[4]=appliedDutyLeft [-1,1], out[5]=maxDuty [%],
+// out[6]=vMin [counts/s]. Exists because this exact chain silently broke
+// TWICE (encoder scale, then the tour's velocity map) with every
+// individual piece looking plausible in isolation.
+void sim_debug_drive_state(SimHandle h, float* out) {
+  TestSim::SimHarness* harness = asHarness(h);
+  const Control::DifferentialDrive::Config dcfg = harness->drive().config();
+  const Config::Robot& rc = harness->configurator().config();
+  out[0] = dcfg.fullDutyVelocity;
+  out[1] = rc.motors.travel_calib_left;
+  out[2] = rc.motors.travel_calib_right;
+  out[3] = rc.drive.duty_per_speed_left;
+  out[4] = harness->drive().output().appliedDutyLeft / 100.0f;
+  out[5] = dcfg.maxDuty;
+  out[6] = dcfg.vMin;
 }
 
 // ---- Hook surface ----

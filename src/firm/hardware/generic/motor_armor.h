@@ -207,7 +207,7 @@ class MotorArmor : public Hal::Motor {
   // counts/s at tovez's 0.7837 mm/deg; rounded to 60. An un-rebaked value
   // would have made the at-rest gate 10x tighter and near-unreachable,
   // starving the staged hard-reset path.
-  static constexpr float kRestVelocity = 60.0f;        // [counts/s]
+  static constexpr float kRestVelocity = 64.0f;        // [counts/s] (5 mm/s faithful rebake -- must clear the 62.5 counts/s at-rest dither; see nezha_motor.h)
   static constexpr uint8_t kRestTicksRequired = 5;
 
   // Consecutive-identical-reading threshold for the wedge latch.

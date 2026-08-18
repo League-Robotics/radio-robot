@@ -1,6 +1,7 @@
 #include "hardware/nezha/nezha_motor.h"
 
 #include <cmath>
+#include <cstdio>
 #ifdef HOST_BUILD
 #include <iostream>
 #endif

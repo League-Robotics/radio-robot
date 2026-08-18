@@ -102,57 +102,11 @@ class SimHarness {
                                  "ID:unknown",
                                  Core::BootOverrides{&kIdentityOtosConfig,
                                                     &kIdentityWheelCorrection})) {
-    // SIM OVERRIDE: composeRobot() already installed the kernel's boot
-    // Config via Configurator::loadBaked()+install() (boot through the
-    // SAME path main.cpp uses), which builds fullDutyVelocity from the
-    // active robot JSON's duty_per_speed_left/right AND travel_calib_
-    // left/right -- a REAL-HARDWARE gearbox + wheel-geometry measurement.
-    // That is wrong for THIS plant: TestSim::WheelPlant is a fixed
-    // synthetic plant (velocity kDefaultDutyVelMax at |duty| == 1), so its
-    // exact inverse -- expressed in the KERNEL's own counts/s domain via
-    // whatever travel_calib the bake landed -- is a fact about the sim
-    // plumbing, not a per-robot measurement. Recomputed here from the
-    // JUST-BAKED travel_calib (not a second hardcoded magic number
-    // duplicating sim_plant.cpp's own kEncoderCountsPerMm -- that wire
-    // constant is ITSELF picked to match the same baked travel_calib, by
-    // that file's own doc comment) so this override stays correct no
-    // matter which robot JSON happens to be active at build time.
-    {
-      const Config::Robot& cfg = graph_.configurator().config();
-      const float travelCalibMean =
-          0.5f * (cfg.motors.travel_calib_left + cfg.motors.travel_calib_right);
-      if (travelCalibMean > 0.0f) {
-        graph_.drive().setFullDutyVelocity(kDefaultDutyVelMax * 10.0f / travelCalibMean);
-
-        // AND the plant's encoder wire scale, from the SAME baked value.
-        //
-        // This is not optional bookkeeping. The plant emits counts; the
-        // firmware decodes them with travel_calib. If the two disagree the
-        // robot silently perceives every distance and velocity off by the
-        // ratio -- a closed loop then settles short of where it believes
-        // it is, and NOTHING fails: each subsystem tests clean, telemetry
-        // looks plausible, and only a closed-loop tour reveals it.
-        //
-        // It has already happened once. bench_test_config.cpp used to pin
-        // Hal::MotorConfig::wheelTravelCalib to 0.704871 with a comment
-        // saying it MUST be the reciprocal of the plant's hardcoded
-        // constant. The counts-native leaf deleted that field, correctly,
-        // and the synchronisation went with it -- leaving the plant on
-        // 0.704871 while the firmware decoded with tovez's 0.7837. An
-        // 11.2% over-read; the square tour missed closure by 704 mm.
-        //
-        // Derived, never hardcoded, so the two cannot drift again.
-        //
-        // NOTE THE SCALE: handleMotorRead() passes this through
-        // lroundToTenthsMm(), which itself applies the x10 that turns
-        // degrees into the wire's tenth-degree counts. So the value here is
-        // counts per mm BEFORE that x10 -- i.e. 1/travel_calib, not
-        // 10/travel_calib. The historical constant 1.4187 is exactly
-        // 1/0.704871, which is the check: pass 10/tc and every reading
-        // comes out 10x, which is how this comment came to be written.
-        plant_.setEncoderCountsPerMm(1.0f / travelCalibMean);
-      }
-    }
+    // THE PLANT OBEYS THE CONFIG -- the one invariant that keeps this sim
+    // honest, learned twice over (see syncPlantToConfig() below). Applied
+    // here for the BAKED config; re-applied every step() so live wire
+    // pushes keep it true.
+    syncPlantToConfig();
 
     // No further self-configuration -- motorL_/motorR_ stay at their default
     // Hal::MotorConfig{} (all-zero), matching a real, not-yet-booted
@@ -199,6 +153,7 @@ class SimHarness {
   // harness.
   void step(int cycles = 1) {
     for (int i = 0; i < cycles; ++i) {
+      syncPlantToConfig();
       plant_.tick(static_cast<float>(kCycleDtUs) / 1e6f);  // [s]
       clock_.advanceMicros(kCycleDtUs);
       graph_.drive().step();
@@ -493,6 +448,60 @@ class SimHarness {
     for (int i = 0; i < 200 && !graph_.preamble().done(); ++i) {
       graph_.preamble().step();
       clock_.advanceMicros(50000);
+    }
+  }
+
+  // syncPlantToConfig() -- make the synthetic plant BE the robot the LIVE
+  // config describes, per wheel:
+  //
+  //     plant gain     = 1 / duty_per_speed   [mm/s at full duty]
+  //     encoder scale  = 1 / travel_calib     [counts emitted per mm]
+  //
+  // With those two identities the open-loop velocity map and the
+  // perception chain are EXACT for any robot JSON, by construction:
+  // commanded v -> counts (x10/tc) -> duty (/fdv, where baked fdv is
+  // 10/(tc*dps)) -> duty = v*dps -> plant velocity = duty/dps = v. The
+  // config file stops being a description that can disagree with the
+  // plant and becomes the plant's own parameters.
+  //
+  // WHY LIVE, EVERY CYCLE, and not once at construction: both halves of
+  // this invariant have been broken by construction-time-only derivation.
+  // First the encoder scale was a hardcoded literal that drifted from the
+  // baked travel_calib (11.2% perception error, a 704 mm square-tour
+  // closure miss). Then the constructor-time fullDutyVelocity override
+  // was silently clobbered by configure_from_robot()'s wire pushes
+  // (open-loop map 0.66x, integrator railed at iMax, wheels 17% slow with
+  // every subsystem testing clean in isolation). A per-cycle re-sync from
+  // the configurator's live config is a few float writes and makes the
+  // whole drift class structurally impossible.
+  //
+  // Port mapping follows the config's own left_port/right_port (tovez is
+  // wired port 1 = RIGHT), defaulting 1/2 when unset -- the same rule
+  // gen_boot_config.py bakes with.
+  //
+  // Deliberately NOT emulated: Stage A wheel_gain/intercept nonlinearity
+  // (this harness pins identity via kIdentityWheelCorrection); a config
+  // whose gains are non-identity describes a nonlinear plant this linear
+  // WheelPlant cannot be. All shipped sim profiles carry identity gains.
+  void syncPlantToConfig() {
+    const Config::Robot& cfg = graph_.configurator().config();
+    const uint32_t leftPort = cfg.motors.left_port != 0 ? cfg.motors.left_port : 1u;
+    const uint32_t rightPort = cfg.motors.right_port != 0 ? cfg.motors.right_port : 2u;
+    if (cfg.motors.travel_calib_left > 0.0f) {
+      plant_.setEncoderCountsPerMm(static_cast<int>(leftPort),
+                                   1.0f / cfg.motors.travel_calib_left);
+    }
+    if (cfg.motors.travel_calib_right > 0.0f) {
+      plant_.setEncoderCountsPerMm(static_cast<int>(rightPort),
+                                   1.0f / cfg.motors.travel_calib_right);
+    }
+    if (cfg.drive.duty_per_speed_left > 0.0f) {
+      plant_.setDutyVelMax(static_cast<int>(leftPort),
+                           1.0f / cfg.drive.duty_per_speed_left);
+    }
+    if (cfg.drive.duty_per_speed_right > 0.0f) {
+      plant_.setDutyVelMax(static_cast<int>(rightPort),
+                           1.0f / cfg.drive.duty_per_speed_right);
     }
   }
 

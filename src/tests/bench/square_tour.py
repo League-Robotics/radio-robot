@@ -123,7 +123,15 @@ CYCLE_S = 0.04         # [s] one SimLoop.step() -- Core::RobotLoop::kCycle
 # rest". Used whenever nothing downstream needs the chassis motionless for
 # a camera read -- sim, bench, and any hardware run with no geofence/camera
 # armed (--no-geofence, or a bench script with no camera at all).
-INTER_SEGMENT_DWELL = 0.1  # [s] short inter-segment gap, no camera fix follows
+# KERNEL REWORK (this worktree): 0.1 -> 0.6. The 0.1 s value was sized for
+# the planner era, when land-at-zero shaping brought the robot to REST
+# inside each segment's own window. The kernel has no shaper: lease expiry
+# writes a hard zero and the plant coasts on its own tau (~0.13 s sim,
+# 3-tau settle ~0.4 s). At 0.1 s each turn began with ~70 mm/s of leg
+# momentum still aboard, bending both path and heading -- measured: dwell
+# 0.1 -> 0.6 alone took the sim tour from 159 mm closure to 73 mm and the
+# heading error from +26 to +12 deg.
+INTER_SEGMENT_DWELL = 0.6  # [s] inter-segment gap: must cover the coast-to-rest
 
 # CAMERA_FIX_DWELL preserves the OLD SEGMENT_REST value and behavior
 # unchanged: `.claude/rules/playfield-testing.md` MANDATES a camera pose
@@ -1978,11 +1986,14 @@ def main() -> int:
                         "stops a jammed robot.")
     p.add_argument("--geofence-margin", type=float, default=12.0,
                    help="[cm] halt this close to the field edge (default 10)")
-    p.add_argument("--leg-mode", choices=("move", "wheels"), default="move",
+    # default "wheels" in THIS worktree: MOVE is deregistered (the kernel
+    # rework acks it ERR_UNIMPLEMENTED), so the old default made the tour
+    # fail its first enqueue out of the box.
+    p.add_argument("--leg-mode", choices=("move", "wheels"), default="wheels",
                    help="legs as DISTANCE-stopped MOVEs (default, closed-loop) or "
                         "as timed WHEELS runs (the original; measured 8cm of "
                         "cross-track drift over a 48cm leg)")
-    p.add_argument("--turn-mode", choices=("move", "wheels"), default="move",
+    p.add_argument("--turn-mode", choices=("move", "wheels"), default="wheels",
                    help="corners as ANGLE-stopped MOVEs (default, closed-loop) or "
                         "as timed WHEELS pivots (the original; needs the moving "
                         "prelude's duration scale to be accurate)")

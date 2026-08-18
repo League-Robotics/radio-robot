@@ -42,14 +42,6 @@ from robot_radio.testgui.transport import _sim_lib_path
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _ROBOTS_DIR = _REPO_ROOT / "data" / "robots"
 
-_XFAIL_BAKE = pytest.mark.xfail(
-    strict=True,
-    reason="baked per-robot geometry drifted from plant constants after the "
-           "2026-08-14 wheel re-measurement (trackwidth 128->115 etc.); the "
-           "sim binary bakes tovez.json while this test models tovez_nocal "
-           "-- clasi/issues/sim-accuracy-tests-couple-plant-to-baked-per-"
-           "robot-geometry.md")
-
 TRACK_WIDTH = 128.0    # [mm]
 TICKS_PER_MM = 1.4187  # tovez wheels.ticks_per_mm
 DEADMAN_MS = 300.0     # twist lease, re-armed every cycle to keep motors on
@@ -213,7 +205,11 @@ def main() -> None:
 # leaving WheelPlant's own physics and the wire-level encoder-read path
 # unchanged -- see sim_plant.h's setFwdSign() comment for the full fix.
 
-@_XFAIL_BAKE
+# XFAIL LIFTED (2026-08-18, plant-obeys-config): the sim plant now derives
+# its encoder scale and gain from the LIVE robot config instead of
+# hardcoding one robot's constants, so the baked-geometry drift this xfail
+# documented cannot exist any more -- the plant and the firmware read the
+# same file. Distance now lands exact, like heading before it.
 def test_distance_encoder_and_otos_match_truth():
     d = distance_probe(150.0, 2.0)
     assert abs(d["enc"] - d["true_x"]) < 2.0, d

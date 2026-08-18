@@ -249,7 +249,14 @@ class NezhaMotor : public Hal::Motor {
   // 60. Left in the OLD unit this threshold would have meant 0.5 deg/s --
   // a 10x-tighter guard that near-never passes; the silent-unit-drift
   // trap this comment exists to flag.
-  static constexpr float kReconfigureRestVelocity = 60.0f;  // [counts/s]
+  static constexpr float kReconfigureRestVelocity = 64.0f;  // [counts/s]
+  // 64, NOT 60: the faithful rebake of the original 5 mm/s is
+  // 5 x 10 / 0.7837 = 63.8. An earlier pass rounded to 60 -- which sits
+  // BELOW the encoder's own at-rest 1-LSB dither (2 counts per 32 ms
+  // cycle = 62.5 counts/s), so a genuinely parked motor read as "moving"
+  // and reconfigure() refused forever. Lesson 7 in its purest form: the
+  // threshold's entire margin over the dither was 2%, and a friendly
+  // rounding consumed all of it.
 
   // writeRawDuty()'s stopNotTaken threshold (129-001, issue 07 -- see that
   // file's own doc comment below). lastWrittenPct_ records the WRITE
@@ -266,7 +273,7 @@ class NezhaMotor : public Hal::Motor {
   // 0.7837 mm/deg; rounded to 100. This threshold arms the stopNotTaken
   // safety net -- an un-rebaked value would have quietly disarmed it
   // (see kReconfigureRestVelocity's own rebake note above).
-  static constexpr float kStopConfirmVelocity = 100.0f;  // [counts/s]
+  static constexpr float kStopConfirmVelocity = 102.0f;  // [counts/s] (8 mm/s faithful rebake; see kReconfigureRestVelocity's rounding note)
 
   // ---- Private helpers: write path ----
   // Returns the CODAL status from bus_.write() (0/kOk == success):
