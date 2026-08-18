@@ -387,6 +387,10 @@ class Planner {
     // |residual| the last nudge was fired at, so the next measurement can
     // tell "this nudge helped / did nothing / made it worse" apart.
     float residualBefore = -1.0f;  // [rad] magnitude; <0 = no nudge yet
+    // sign of that same residual (+1/-1), so a nudge that OVERSHOT the
+    // target -- residual flipped sign -- is distinguishable from one that
+    // helped or did nothing. Only meaningful while residualBefore >= 0.
+    float residualSignBefore = 0.0f;  // [1]
     int32_t nudges = 0;        // corrective pivots spent so far
     uint32_t restTicks = 0;    // consecutive command-quiet ticks
     bool nudging = false;      // driving a nudge (else settling to measure)

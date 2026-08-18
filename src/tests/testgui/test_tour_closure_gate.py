@@ -766,20 +766,21 @@ _XFAIL_REASON_REALISTIC = (
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "136-002: real, previously-flagged, unresolved firmware behavior "
-        "(decelLatched/shaping-band and cumulative-baseline-ledger "
-        "territory -- sprint 131 ticket 006's own Completion Notes "
-        "attribute the actual observed mechanism to Planner::tick()'s "
-        "Distance-leg baseline carry not folding in the leg's own heading "
-        "drift before the following turn reads it). Out of Scope for "
-        "sprint 136 per sprint.md -- formally accepted, not fixed. "
-        "Tracked: clasi/issues/later/"
-        "A-tour2-146-degree-turn-still-undershoots-after-130-010.md."
-    ),
-)
+# xfail (strict, "136-002 ... decelLatched/shaping-band and cumulative-
+# baseline-ledger territory ... A-tour2-146-degree-turn-still-undershoots-
+# after-130-010.md") LIFTED 2026-08-18 by the align-phase sign-flip abort
+# (planner.cpp alignStep(): a corrective nudge whose residual FLIPS SIGN
+# outside alignTol proves the nudge quantum is coarser than the remaining
+# residual, so the trim completes instead of ping-ponging its whole budget
+# across the target) plus the SimConfigConn.poll_ack() manual-stepping fix
+# (sim_config.py) that lets configure_from_robot() actually land. Measured
+# at the lift: worst |turn error| 3.9deg across TOUR_1/TOUR_2 x ideal/
+# realistic (was running to ~22deg), all inside the 8deg shaped band.
+# CAUTION: worst straight-leg cruise |delta| measured 5.45-5.50deg against
+# the 5.5deg ideal tolerance -- margin is now razor-thin; if this flakes,
+# re-measure and re-margin the cruise tolerance rather than re-adding this
+# xfail. The ORIGINAL 109-009 aspirational bars (<0.05deg ideal / <1.0deg
+# realistic) remain their own xfailed gates below, still not achieved.
 def test_tour_1_and_tour_2_ninety_degree_turns_land_within_the_shaped_band():
     from robot_radio.planner.tour import TOUR_1, TOUR_2
 

@@ -102,6 +102,24 @@ constexpr float kAlignSettleAllowance = 500.0f;  // [ms]
 // schedule -- profileStep() plans the actual command against the measured
 // residual, so a sub-degree trim never approaches it.
 constexpr float kAlignNudgeOmegaFraction = 0.15f;  // [1]
+//
+// kAlignNudgeCoastAllowance -- how far past its commanded threshold a
+// nudge is expected to DELIVER, subtracted from the residual when the
+// nudge's threshold is sized (startAlignNudge()) and used as the "can a
+// nudge even help?" floor (alignStep()). Measured 2026-08-18 on the sim
+// probe: a ~2.2 deg residual nudge delivered ~4.0 deg, and the extra
+// ~1.7 deg was INDEPENDENT of both the nudge's cruise omega (0.45 vs
+// 0.21 rad/s: identical landing) and its decel ceiling (halved: 0.2 deg
+// change) -- because the terminal approach crawls at the Drive actuation
+// floor (~5 mm/s wheel speed here, the shaped-duty minimum) and then
+// coasts through the stop latency, a FIXED rotation quantum no profile
+// shaping can shrink. Report §3's hardware measurement is the same
+// number seen from the other side: 1.72 deg median delivery against a
+// 1.0 deg ask. Aiming short by the quantum makes the delivery land ON
+// the target instead of past it; a residual at or under the quantum
+// cannot be improved by a nudge at all (any nudge that breaks away
+// delivers at least the quantum), so the trim completes instead.
+constexpr float kAlignNudgeCoastAllowance = 0.030f;  // [rad] ~1.7 deg
 
 // Arrival gates (settleReached(), used directly by tick()'s `arrived`
 // event -- 130-008 deleted the settle-confirm DEFER path that used to sit
@@ -1324,6 +1342,15 @@ bool Planner::alignStep(uint32_t now, float dt, const Measurement& measured) {
   if (std::fabs(residual) <= limits_.landing.alignTol) return true;
   if (align_.nudges >= limits_.landing.alignMaxNudges) return true;
 
+  // A residual at or under the delivery quantum cannot be nudged closer:
+  // any nudge that breaks away delivers AT LEAST the quantum
+  // (kAlignNudgeCoastAllowance's own comment -- the actuation-floor
+  // coast is the minimum rotation a pivot ships), so firing one from
+  // here can only land farther out the other side. Complete where we
+  // stand; the residual is absorbed by the next chained Move through the
+  // cumulative baseline ledger, same as every other completion path.
+  if (std::fabs(residual) <= kAlignNudgeCoastAllowance) return true;
+
   // STOP IF THE LAST NUDGE MADE IT WORSE. The corrective pivot has a
   // coarse quantum of its own -- report §3 measured a median 1.72 deg
   // delivery against a 1.0 deg tolerance -- so a plant whose nudges
@@ -1345,6 +1372,24 @@ bool Planner::alignStep(uint32_t now, float dt, const Measurement& measured) {
     return true;
   }
 
+  // STOP IF THE LAST NUDGE OVERSHOT PAST THE TARGET. A residual that
+  // changed SIGN while remaining outside alignTol (the in-tol case already
+  // returned above) proves the nudge's delivery quantum is coarser than
+  // the residual it was fired at -- the next full-residual nudge can only
+  // flip it back, and the loop ping-pongs across the target at
+  // near-constant magnitude until the budget is spent, ending no better
+  // than it started (measured 2026-08-18 on the sim square tour: +2.0 ->
+  // -1.7 -> +1.7 -> -1.6 -> +1.1 deg, all 6 nudges burned, ~4 s of
+  // post-turn hunting per corner -- the "oscillate across it" failure the
+  // worse-guard comment above describes but its growth-only test cannot
+  // catch, because an oscillation holds magnitude instead of growing it).
+  // The 26% no-breakaway retry case is unaffected: a nudge that delivered
+  // nothing leaves the sign unchanged.
+  if (align_.residualBefore >= 0.0f &&
+      sign(residual) != align_.residualSignBefore) {
+    return true;
+  }
+
   startAlignNudge(now, residual);
   // Re-measure: startAlignNudge() just rewrote the Move's threshold and
   // baseline, and `measured` was taken against the previous pair.
@@ -1357,6 +1402,7 @@ void Planner::startAlignNudge(uint32_t now, float residual) {  // [ms] [rad]
   align_.nudging = true;
   align_.nudgeStart = now;
   align_.residualBefore = std::fabs(residual);
+  align_.residualSignBefore = sign(residual);
 
   // Re-arm the ACTIVE Move as a bounded low-speed pivot of exactly the
   // residual and let it flow through planActive()/planWheels() like any
@@ -1372,7 +1418,14 @@ void Planner::startAlignNudge(uint32_t now, float residual) {  // [ms] [rad]
   const float magnitude = std::fabs(residual);
   const float omega = alignNudgeOmega();  // [rad/s] magnitude
   Move& move = active_.move;
-  move.threshold = magnitude;
+  // AIM SHORT by the delivery quantum (kAlignNudgeCoastAllowance's own
+  // comment): a nudge delivers its threshold PLUS the fixed
+  // actuation-floor coast, so commanding the full residual lands past
+  // the target by the quantum -- the ping-pong the sign-flip abort ends.
+  // Commanding (residual - quantum) makes the DELIVERY land on the
+  // target. alignStep()'s own gate guarantees magnitude exceeds the
+  // allowance before a nudge is fired at all.
+  move.threshold = magnitude - kAlignNudgeCoastAllowance;
   // A PURE pivot, even when the Move being aligned was an arc: v_x/v_y are
   // zeroed so a heading trim can never add path length to a leg it has no
   // business touching. requestedThreshold is deliberately left alone -- the
