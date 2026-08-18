@@ -112,13 +112,15 @@ def _make_loop():
     return loop
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="firmware bakes tovez's bench-fitted ASYMMETRIC wheel gains "
-           "(L 0.8 / R 0.9567, 2026-08-14 re-fit); the sim plant is "
-           "symmetric, so the real-robot correction CAUSES the crab here -- "
-           "clasi/issues/sim-accuracy-tests-couple-plant-to-baked-per-robot-"
-           "geometry.md")
+# xfail (strict, "firmware bakes tovez's bench-fitted ASYMMETRIC wheel
+# gains ... the sim plant is symmetric, so the real-robot correction CAUSES
+# the crab here") LIFTED 2026-08-18: SimConfigConn.poll_ack() now advances
+# a manually-stepped sim (sim_config.py), so this test's pushed
+# tovez_nocal config (symmetric gains) actually lands and overrides the
+# tovez.json bake -- measured max|cruise heading| back to 0.0000deg and the
+# test went XPASS(strict). The bake-vs-plant coupling issue
+# (sim-accuracy-tests-couple-plant-to-baked-per-robot-geometry.md) remains
+# open for paths that never push a config.
 def test_straight_700mm_leg_at_150mms_ideal_chip_does_not_crab():
     """Permanent regression test for 118-001's straight-leg crab (119
     ticket 005) -- straight_drift_repro.py's own exact scenario, with

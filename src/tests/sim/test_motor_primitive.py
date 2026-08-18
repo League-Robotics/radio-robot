@@ -42,13 +42,15 @@ from robot_radio.testgui.transport import _sim_lib_path
 _REPO_ROOT = pathlib.Path(__file__).resolve().parents[3]
 _ROBOTS_DIR = _REPO_ROOT / "data" / "robots"
 
-_XFAIL_BAKE = pytest.mark.xfail(
-    strict=True,
-    reason="baked per-robot geometry drifted from plant constants after the "
-           "2026-08-14 wheel re-measurement (trackwidth 128->115 etc.); the "
-           "sim binary bakes tovez.json while this test models tovez_nocal "
-           "-- clasi/issues/sim-accuracy-tests-couple-plant-to-baked-per-"
-           "robot-geometry.md")
+# _XFAIL_BAKE (strict, "baked per-robot geometry drifted from plant
+# constants...") LIFTED 2026-08-18: SimConfigConn.poll_ack() now advances a
+# manually-stepped sim (sim_config.py), so configure_from_robot()'s pushed
+# tovez_nocal geometry actually LANDS instead of timing out on its first
+# key -- the runtime push overrides the tovez.json bake, plant and firmware
+# read the same numbers again, and both marked tests went XPASS(strict).
+# The underlying bake-vs-plant coupling issue (clasi/issues/sim-accuracy-
+# tests-couple-plant-to-baked-per-robot-geometry.md) is still real for any
+# path that does NOT push a config; these tests always push one.
 
 TRACK_WIDTH = 128.0    # [mm]
 TICKS_PER_MM = 1.4187  # tovez wheels.ticks_per_mm
@@ -213,14 +215,12 @@ def main() -> None:
 # leaving WheelPlant's own physics and the wire-level encoder-read path
 # unchanged -- see sim_plant.h's setFwdSign() comment for the full fix.
 
-@_XFAIL_BAKE
 def test_distance_encoder_and_otos_match_truth():
     d = distance_probe(150.0, 2.0)
     assert abs(d["enc"] - d["true_x"]) < 2.0, d
     assert abs(d["otos_x"] - d["true_x"]) < 2.0, d
 
 
-@_XFAIL_BAKE
 def test_heading_encoder_and_otos_match_truth():
     h = heading_probe(1.0, 2.0)
 

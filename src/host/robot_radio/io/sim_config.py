@@ -188,6 +188,49 @@ class SimConfigConn:
         124-008 deleted the single "freshest ack" scalar slot/``TLMFrame.
         ack`` this method used to scan; ring membership alone now means
         "really acked")."""
+        # THE POLL MUST ADVANCE SIM TIME. With no tick thread running (the
+        # square tour, every deterministic harness), sim time only moves
+        # when somebody calls step() -- and this loop used to sleep on the
+        # WALL clock instead. Frozen sim time meant: the just-injected
+        # SET_FIELD was never processed, no cycle ran, no telemetry frame
+        # (which is the only vehicle an ack has) could ever be emitted, and
+        # after 500 wall-ms this returned None with the command still
+        # sitting in the ring. set_config() then aborted its remaining
+        # keys, and the orphaned command landed whenever the CALLER next
+        # stepped -- which is exactly how configure_from_robot() ended up
+        # applying travel_calib to ONE wheel and none of the pid zeros
+        # (found 2026-08-18 chasing the square tour; the sim twin of the
+        # bench lesson "polling telemetry during a move stops the robot" --
+        # here, polling without stepping stops TIME).
+        #
+        # Manual mode: step one cycle per iteration, so the timeout budget
+        # is SIM milliseconds. Tick-thread mode: the thread advances time
+        # on its own; wall-clock sleeping remains correct there (stepping
+        # from this thread would race it).
+        manual = self._loop._thread is None or not self._loop._thread.is_alive()
+        if manual:
+            # drain_pending_tlm(), NOT read_pending_binary_tlm_frames():
+            # the latter reads a Python-side queue that ONLY the tick
+            # thread ever fills, so on a manually-stepped loop it is
+            # eternally empty and every ack ever emitted lands in a C
+            # buffer nobody reads. This was invisible for a long time
+            # because ack REPEATS (kAckRepeats) let motion-heavy callers
+            # catch a later copy through other drains -- a parked robot
+            # doing pure config pushes had no such luck, which is how
+            # configure_from_robot() silently delivered only its first
+            # key for an entire era.
+            cycles = max(1, int((timeout / 1000.0) / self._loop._cycle_duration_s))
+            for _ in range(cycles):
+                for frame in self._loop.drain_pending_tlm():
+                    for entry in frame.acks:
+                        if entry.corr_id == corr_id:
+                            return entry
+                self._loop.step(1)
+            for frame in self._loop.drain_pending_tlm():
+                for entry in frame.acks:
+                    if entry.corr_id == corr_id:
+                        return entry
+            return None
         deadline = time.monotonic() + (timeout / 1000.0)
         while True:
             for frame in self._loop.read_pending_binary_tlm_frames():
