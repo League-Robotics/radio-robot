@@ -172,9 +172,8 @@ void scenarioEncoderWedgeSetsFaultBitAndClearsOnRelease() {
   // 116-006 (MOVE protocol cutover): bare TWIST/injectTwist() is gone --
   // a TIME-stop MOVE with a stop value/timeout far longer than this run
   // is the equivalent "hold this twist indefinitely" injection.
-  sim.injectMove(/*v_x=*/1000.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
-                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/11,
-                 /*corrId=*/11);
+  sim.injectBodyTwist(/*v_x=*/1000.0f, /*omega=*/0.0f,
+                      /*duration=*/100000.0f, /*id=*/11, /*corrId=*/11);
   sim.step(5);  // ramp a bit -- appliedDuty() is genuinely nonzero once frozen
   (void)sim.drainTelemetry();
 
@@ -239,9 +238,8 @@ void scenarioWheelFrozenGatedFlagSetsOnlyAfterThresholdLeftOnly() {
   sim.step(3);  // settle
   (void)sim.drainTelemetry();
 
-  sim.injectMove(/*v_x=*/1000.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
-                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/31,
-                 /*corrId=*/31);
+  sim.injectBodyTwist(/*v_x=*/1000.0f, /*omega=*/0.0f,
+                      /*duration=*/100000.0f, /*id=*/31, /*corrId=*/31);
   sim.step(5);  // ramp a bit -- appliedDuty() is genuinely nonzero before freezing
 
   std::vector<DecodedLine> driving = onlyTelemetry(sim.drainTelemetry());
@@ -332,10 +330,8 @@ void scenarioWedgeWhileDrivingStopsTheRobot() {
 
   // Hold a twist indefinitely: a TIME stop far past the end of this run, so
   // nothing but the safety path can end it.
-  sim.injectMove(/*v_x=*/1000.0f, /*v_y=*/0.0f, /*omega=*/0.0f,
-                 TestSupport::MoveStopKind::kTime,
-                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f,
-                 /*replace=*/true, /*id=*/21, /*corrId=*/21);
+  sim.injectBodyTwist(/*v_x=*/1000.0f, /*omega=*/0.0f,
+                      /*duration=*/100000.0f, /*id=*/21, /*corrId=*/21);
   sim.step(6);  // get the duty genuinely nonzero before freezing
 
   std::vector<DecodedLine> driving = onlyTelemetry(sim.drainTelemetry());
@@ -414,9 +410,8 @@ void scenarioEncoderDropoutStaysSaneUnderModerateLoss() {
   // 116-006 (MOVE protocol cutover): bare TWIST/injectTwist() is gone --
   // a TIME-stop MOVE with a stop value/timeout far longer than this run
   // is the equivalent "hold this twist indefinitely" injection.
-  sim.injectMove(/*v_x=*/1000.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
-                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/22,
-                 /*corrId=*/22);
+  sim.injectBodyTwist(/*v_x=*/1000.0f, /*omega=*/0.0f,
+                      /*duration=*/100000.0f, /*id=*/22, /*corrId=*/22);
   sim.step(15);  // ramp to steady state BEFORE dropout starts -- matches sim_api_harness.cpp's
                  // own scenarioTwistDrivesRealPlantRamp() timing (>=300mm/s within 15 cycles)
   (void)sim.drainTelemetry();

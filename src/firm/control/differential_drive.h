@@ -1,204 +1,525 @@
+// differential_drive.h — Control::DifferentialDrive: the whole wheel
+// kernel in ONE class (this header + differential_drive.cpp — two files,
+// nothing else). Owns both motors, the encoder split-phase schedule, the
+// (velocity, twist) control law, and its own cooperative fiber. The rest
+// of the system talks to it ONLY through this program interface: command
+// methods in, an Output snapshot out. Program interface, not a wire ABI —
+// nothing in this header is serialized.
+//
+// NATIVE UNITS: 1 count = 0.1 deg of shaft rotation (the Nezha 0x46
+// register's own unit); rates are counts/s. No millimeter exists at or
+// below this class — the counts-per-body-radian and counts-per-mm
+// constants belong to the APPLICATION layer above it.
+//
+// TWIST CONVENTION: twist is the half-differential wheel rate —
+//   left = velocity − twist,  right = velocity + twist — CCW-positive
+// (REP-103 consistent; per-wheel fwdSign is the motor leaf's job).
+//
+// LEASE: every motion command carries a lease DURATION [ms]. The kernel
+// computes the absolute expiry against its own clock; on expiry it zeroes
+// through the full stop path, consulting nobody. This is the
+// zeroUnownedMotion monotone contract ("may only ever write zero")
+// restated as a timestamp, and it is the ONLY runaway backstop this
+// architecture has — the per-command timeouts of the old planner stack
+// are gone. Refreshing the command IS feeding the watchdog.
+//
+// STALL is encoder/duty-based only in here ("position unchanged while
+// duty applied") and therefore CANNOT catch a slipping-wheel jam
+// (measured 2026-08-08: 239/222 counts of wheel rotation while the robot
+// sat pinned against the playfield rail). The richer body-motion stall
+// check (OTOS speed magnitude + |omega|·halfTrack pivot term) belongs to
+// the application observer, which commands stop through this interface.
+//
+// TWIST-INTEGRAL HOLD (ratio maintenance, NOT a heading feature): the
+// kernel tracks the integral of commanded twist against the measured
+// differential position and trims so they match, clamped to duty
+// headroom. Commanded twist = 0 → equal accumulated counts (straight, as
+// far as wheels can know). Heading itself — sensors, observers, targets —
+// lives entirely in the application.
+//
+// Concurrency: cooperative CODAL fibers on one core. Command/config
+// blocks are written by the main fiber (the public methods), the Output
+// block by the kernel fiber; each block is single-writer and
+// seq-committed, and readers copy under a seq re-check. Aligned 32-bit
+// stores are atomic on Cortex-M4, and neither side yields mid-block, so
+// the seq discipline is cheap insurance rather than a live lock.
+//
+// Design/rationale: the exploratory-kernel issue
+// (clasi/issues/differentialdrive-one-class-one-fiber-exploratory-
+// worktree.md) — including the 21-item hard-lessons ledger this
+// implementation is bound by.
 #pragma once
 
 #include <cstdint>
 
-#include "config/robot.h"
+#include "hal/clock.h"
+#include "hal/fiber.h"
 #include "hal/motor.h"
-#include "firm/types/robot_state.h"
 
 namespace Control {
 
 class DifferentialDrive {
  public:
-  DifferentialDrive(Hal::Motor& left, Hal::Motor& right, float trackWidth);
+  // Command modes (Command::mode). Not an enum class: the value crosses
+  // the mailbox as a uint8_t and the names read better unscoped here.
+  static constexpr uint8_t kModeNeutral = 0;
+  static constexpr uint8_t kModeVelocity = 1;
+  static constexpr uint8_t kModeRawDuty = 2;
 
-  static constexpr float kDutyPerSpeed = 0.001182f;  // [duty/(mm/s)]
-
-  void setDutyPerSpeed(float left, float right) {  // [duty/(mm/s)] x2
-    dutyPerSpeedLeft_ = left;
-    dutyPerSpeedRight_ = right;
-    calibrated_ = left != 0.0f && right != 0.0f;
-  }
-
-  float dutyPerSpeedLeft() const { return dutyPerSpeedLeft_; }    // [duty/(mm/s)]
-  float dutyPerSpeedRight() const { return dutyPerSpeedRight_; }  // [duty/(mm/s)]
-
-  void setWheelCorrection(float gainLeftAccel, float interceptLeftAccel,
-                          float gainLeftDecel, float interceptLeftDecel,
-                          float gainRightAccel, float interceptRightAccel,
-                          float gainRightDecel, float interceptRightDecel);
-
-  void setCrawlPulse(float crawlPulse) { crawlPulse_ = crawlPulse; }
-
-  struct ControlGains {
-    float kp = 0.0f;      // [1] dimensionless: mm/s of PID output per mm/s of error
-    float ki = 0.0f;      // [1/s]
-    float iMax = 0.0f;    // [mm/s] I-term output clamp; 0 disables the I term
-    float kaff = 0.0f;    // [s] accel feedforward ~= the plant time constant
-    float pidMax = 0.0f;  // [mm/s]
+  // Status — every refusal visible AT THE CALLSITE, not only as a bit in
+  // the next published Output. The old silent no-write return is the
+  // failure mode this exists to remove: a command that does nothing and
+  // says nothing is indistinguishable from one that worked.
+  enum class Status : uint8_t {
+    kOk = 0,
+    kRefusedUnconfigured,  // maxDuty == 0; or VELOCITY with fullDutyVelocity == 0
+    kRefusedNotBegun,      // command before begin(). NOT before start(): the
+                           //   host harness commands and step()s WITHOUT ever
+                           //   launching the fiber, so readiness is begin()'s
+                           //   to grant, not start()'s
+    kRefusedEstopped,
+    kRefusedNonFinite,
+    kCadencePreserved,     // post-begin setConfig with a differing cyclePeriod:
+                           //   block applied, frozen cadence kept
   };
-  void setControlGains(const ControlGains& gains) { gains_ = gains; }
-  const ControlGains& controlGains() const { return gains_; }
 
-  struct AdaptationBounds {
-    float vMin = 0.0f;              // [mm/s] speed floor (Open Question 2)
-    float biasMax = 0.0f;           // [mm/s] Stage C trim authority clamp
-    float tauAdapt = 0.0f;          // [s] Stage C adaptation time constant; <=0 disables
-    float aSteady = 0.0f;           // [mm/s^2] |a_cmd| below this counts as steady
-    float posErrMax = 0.0f;         // [mm] Stage B position-error clamp; 0 = unclamped
-    float deficitThreshold = 0.0f;  // [mm/s] sustained error magnitude that flags a deficit
-    float deficitWindow = 0.0f;     // [ms] how long the deficit condition must sustain
-    float stallSpeed = 0.0f;   // [mm/s] measured speed at or below this is not turning
-    float stallDemand = 0.0f;  // [mm/s] commanded speed above this is asking for motion
-    float stallWindow = 0.0f;  // [ms] sustain time before a stall latches; 0 = off
+  // Lease ceiling. Far below INT32_MAX ms so the wrap-safe signed compare
+  // against Command::validUntil is never ambiguous.
+  static constexpr uint32_t kLeaseMax = 3600000u;  // [ms]
+
+  // Config — value type; fetch/replace by copy. All speeds counts/s.
+  //
+  // EVERY DEFAULT IS FAIL-CLOSED. A default-constructed Config refuses
+  // BOTH modes: maxDuty == 0 means no authority at all, and
+  // fullDutyVelocity == 0 additionally refuses VELOCITY. Nothing moves
+  // until something configures it. This is deliberate and load-bearing —
+  // an unconfigured robot that silently drives is the failure this whole
+  // class of default exists to prevent.
+  struct Config {
+    // Authority / plant gain.
+    float maxDuty = 0.0f;            // [%] authority rail (lambda scales to
+                                     //   this); 0 = ALL modes refused
+    float fullDutyVelocity = 0.0f;   // [counts/s] wheel rate at 100% duty;
+                                     //   0 = uncalibrated → VELOCITY refused
+    // Velocity PID (Stage B). tovez ships pure-I: kp=0, ki on the clamped
+    // position error, kaff=0.
+    float kp = 0.0f;                 // [1]
+    float ki = 0.0f;                 // [1/s] on clamped position error
+    float iMax = 0.0f;               // [counts/s] I-term clamp; 0 disables I
+    float kaff = 0.0f;               // [s] accel feedforward
+    float pidMax = 0.0f;             // [counts/s] whole-PID output clamp
+    // Cross-wheel coupling.
+    float twistHoldGain = 0.0f;      // [1/s] twist-integral ratio hold; 0 = off
+    // Stage A wheel correction: [wheel 0=left,1=right][0=accel,1=decel].
+    float wheelGain[2][2] = {{1.0f, 1.0f}, {1.0f, 1.0f}};       // [1]
+    float wheelIntercept[2][2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};  // [counts/s]
+    // Stage C adaptation + Stage B bounds.
+    float vMin = 0.0f;               // [counts/s] speed floor; 0 = off
+    float posErrMax = 0.0f;          // [counts] position-error clamp; 0 = unclamped
+    float biasMax = 0.0f;            // [counts/s] Stage C trim clamp; 0 disables
+    float tauAdapt = 0.0f;           // [s] Stage C time constant; <=0 disables
+    float aSteady = 0.0f;            // [counts/s^2] |aCmd| below this is steady
+    // Observability latches.
+    float deficitThreshold = 0.0f;   // [counts/s] 0 = detector off
+    float deficitWindow = 0.0f;      // [ms]
+    float stallSpeed = 0.0f;         // [counts/s]
+    float stallDemand = 0.0f;        // [counts/s] 0 = detector off
+    float stallWindow = 0.0f;        // [ms]
+    // Authority-headroom scaling. Ships OFF so the first bench pass and
+    // the golden-trace fidelity gate both run the PURE port of the old
+    // pipeline -- λ is a stage the old control law never had, and leaving
+    // it on from the start would make any discrepancy unattributable.
+    bool lambdaEnabled = false;
+    // Output shaping.
+    float crawlPulse = 0.0f;         // [-1, 1] sub-breakaway pulse amplitude; 0 = off
+    // Kernel cadence.
+    uint32_t cyclePeriod = 24;       // [ms] fiber cadence (>= 2*kSettle + margin)
   };
-  void setAdaptationBounds(const AdaptationBounds& bounds) { bounds_ = bounds; }
-  const AdaptationBounds& adaptationBounds() const { return bounds_; }
 
-  void configure(const Config::Robot& config);
+  // Output — value type; output() returns a seq-consistent copy of the
+  // block the kernel fiber publishes every cycle.
+  struct Output {
+    uint32_t now = 0;               // [ms] kernel clock at publish
+    uint32_t nowFine = 0;           // [us] same instant — age-math base.
+                                    //   No unit in the name (the [us] tag
+                                    //   rules); named apart from now [ms].
+    uint32_t cycleCount = 0;        // heartbeat — the RobotLoop sentinel
+                                    //   watches THIS for advance
+    uint32_t cyclePeriodMeasured = 0;  // [us] measured (feeds all dt terms).
+                                    //   Named apart from Config::cyclePeriod
+                                    //   [ms] so the two units cannot be
+                                    //   confused at a call site.
+    uint32_t cycleBusy = 0;         // [us]
+    uint32_t cycleOverrunCount = 0;  // cycles that missed their absolute
+                                    //   deadline — the observability half of
+                                    //   lesson 17
+    // Measurement timestamps: stamped at collect SUCCESS only (the
+    // 131-002 rule) — a failed collect HOLDS the stamp, so age grows
+    // honestly. Right is deterministically ~one settle window younger
+    // than left (sequential split-phase). Age = (int32)(nowFine − t).
+    uint32_t sampleTimeLeft = 0;    // [us]
+    uint32_t sampleTimeRight = 0;   // [us]
+    // Per-wheel software-rebaseline epoch. Bumped when THAT wheel's
+    // accumulated position is rebaselined — never a device reset. Feeds
+    // the telemetry encoder reading's own position_epoch so a host can
+    // tell "the robot moved backwards" from "the origin moved".
+    uint32_t positionEpochLeft = 0;
+    uint32_t positionEpochRight = 0;
+    float positionLeft = 0.0f;      // [counts] accumulated, never device-reset
+    float positionRight = 0.0f;     // [counts]
+    // Per-wheel velocity over the GENUINE inter-sample interval (computed
+    // across successful collects only — a dead bus reads STALE here, not
+    // zero; see the staleness flags below).
+    float velocityLeft = 0.0f;      // [counts/s]
+    float velocityRight = 0.0f;     // [counts/s]
+    float velocity = 0.0f;          // [counts/s] measured mean
+    float twist = 0.0f;             // [counts/s] measured half-differential, CCW+
+    float appliedDutyLeft = 0.0f;   // [%]
+    float appliedDutyRight = 0.0f;  // [%]
+    float lambda = 1.0f;            // [1] authority scale currently applied
+    // Stage C's adapted trim, published for the same reason lambda is: it is
+    // the pipeline's one slow-moving LEARNED parameter, so "did adaptation
+    // converge, and did it survive the last command?" is otherwise
+    // unanswerable from outside. Bench-visible by design.
+    float biasLeft = 0.0f;          // [counts/s]
+    float biasRight = 0.0f;         // [counts/s]
+    bool ready = false;             // begun + calibrated (velocity mode usable)
+    bool estopped = false;
+    bool leaseExpired = false;
+    bool stallHalted = false;       // kernel self-halted on the stall latch
+    bool satLeft = false, satRight = false;      // duty demand beyond the rail
+    bool stallLeft = false, stallRight = false;
+    bool wedgeLeft = false, wedgeRight = false;
+    bool wedgeSuspectLeft = false, wedgeSuspectRight = false;
+    bool deficitLeft = false, deficitRight = false;
+    bool connectedLeft = false, connectedRight = false;
+    uint32_t leaseExpiryCount = 0;  // sticky diagnostics
+    // Failed-collect cycles, derived from sample-stamp NON-ADVANCE: the
+    // leaf's requestSample()/tick() return void, so sampleTime() not
+    // moving across a cycle is the only observable "that collect did not
+    // land". Sticky, never reset — a climbing count under load is the
+    // bus-health signal.
+    uint32_t i2cFaultCount = 0;
+  };
 
-  float biasLeft() const { return biasLeft_; }      // [mm/s] Stage C's adapted parameter
-  float biasRight() const { return biasRight_; }    // [mm/s]
-  float pidLeft() const { return lastPidLeft_; }    // [mm/s] last-computed Stage B output
-  float pidRight() const { return lastPidRight_; }  // [mm/s]
-  bool deficitLeft() const { return deficitLeft_; }
-  bool deficitRight() const { return deficitRight_; }
+  // The launcher is injected HERE, at construction, alongside the other
+  // seams -- not handed to start(). Every collaborator this class needs
+  // arrives the same way, and "who can start a fiber" becomes a property
+  // of how the object was composed rather than of who happens to call
+  // start().
+  DifferentialDrive(Hal::Motor& left, Hal::Motor& right,
+                    const Hal::Clock& clock, Hal::Sleeper& sleeper,
+                    Hal::FiberLauncher& launcher);
 
-  // A stall is the drivetrain being ASKED to move and not moving -- the robot
-  // is jammed against something. Unlike deficit() (the wheel turns, just too
-  // slowly) this is a HALT condition: Core::RobotLoop stops the robot on it.
-  // See robot_config.proto's WheelControl for the three-way distinction
-  // against deficit and wheelFrozen.
-  bool stallLeft() const { return stallLeft_; }
-  bool stallRight() const { return stallRight_; }
+  // ---- config surface 1: chainable single-field setters -------------
+  // Construct empty, chain setters. Live: the fiber snapshots the staged
+  // config at each cycle start, so these work mid-run (bench tuning).
+  DifferentialDrive& setMaxDuty(float maxDuty);            // [%]
+  DifferentialDrive& setFullDutyVelocity(float velocity);  // [counts/s]
+  DifferentialDrive& setKp(float kp);                      // [1]
+  DifferentialDrive& setKi(float ki);                      // [1/s]
+  DifferentialDrive& setIMax(float iMax);                  // [counts/s]
+  DifferentialDrive& setKaff(float kaff);                  // [s]
+  DifferentialDrive& setPidMax(float pidMax);              // [counts/s]
+  DifferentialDrive& setTwistHoldGain(float gain);         // [1/s]
+  DifferentialDrive& setWheelCorrection(
+      float gainLeftAccel, float interceptLeftAccel,
+      float gainLeftDecel, float interceptLeftDecel,
+      float gainRightAccel, float interceptRightAccel,
+      float gainRightDecel, float interceptRightDecel);    // [1]/[counts/s] x4
+  DifferentialDrive& setSpeedFloor(float vMin);            // [counts/s]
+  DifferentialDrive& setPositionErrorMax(float posErrMax); // [counts]
+  DifferentialDrive& setAdaptation(float biasMax, float tauAdapt,
+                                   float aSteady);  // [counts/s] [s] [counts/s^2]
+  DifferentialDrive& setDeficit(float threshold, float window);  // [counts/s] [ms]
+  DifferentialDrive& setStall(float speed, float demand,
+                              float window);  // [counts/s] [counts/s] [ms]
+  DifferentialDrive& setLambdaEnabled(bool enabled);
+  DifferentialDrive& setCrawlPulse(float crawlPulse);      // [-1, 1]
+  DifferentialDrive& setCyclePeriod(uint32_t period);      // [ms]
 
-  bool calibrated() const { return calibrated_; }
+  // ---- config surfaces 2 + 3: whole-block replace / fetch (copies) ---
+  // setConfig(): post-begin, a block carrying a DIFFERENT cyclePeriod
+  // applies every other field and PRESERVES the frozen cadence, returning
+  // kCadencePreserved to say so.
+  Status setConfig(const Config& config);
+  Config config() const;
 
-  void command(float vLeft, float vRight, float duration, uint32_t moveId,
-               uint32_t now);  // [mm/s] [mm/s] [ms] -- now [ms]
+  // ---- how a REFUSED SETTER is observed ------------------------------
+  // The chainable setters above must return DifferentialDrive& to chain,
+  // so they cannot return Status. Without this pair, a rejected
+  // non-finite value or a post-begin() setCyclePeriod() would be refused
+  // SILENTLY — exactly the behaviour Status exists to remove, reintroduced
+  // across the whole config surface. Sticky: holds the FIRST refusal since
+  // the last clear, so a caller can run a long chain and check once at the
+  // end rather than after every call.
+  Status lastError() const { return lastError_; }
+  void clearLastError() { lastError_ = Status::kOk; }
 
-  void takeover();
+  // ---- lifecycle: start the object, then start the fiber -------------
+  // begin(): hardware init — primes both encoders (the 0x46 register sits
+  // frozen at 0 until its first atomic read) and arms the boot zero-write
+  // (the first cycles assert commanded zero — the Nezha brick latches its
+  // last speed across nRF resets, so boot ALWAYS re-asserts stop). Also
+  // FREEZES cyclePeriod. Returns kRefusedUnconfigured if the config still
+  // has no authority (maxDuty == 0).
+  Status begin();
+  // start(): launch the kernel fiber, via the launcher injected at
+  // construction (idempotent). A host-test harness never calls this at
+  // all -- it drives step() directly -- and the host launcher fails hard
+  // if it somehow is called.
+  //
+  // start() does NOT gate command acceptance: readiness is begin()'s to
+  // grant. Gating on start() would make the golden-trace host harness
+  // impossible to write, since it steps the kernel without ever launching
+  // a fiber.
+  Status start();
+  bool running() const { return running_; }
 
-  void estop();
+  // ---- commands; lease is a DURATION [ms] from now — expiry stops ----
+  // Lease is clamped to kLeaseMax. A refused command leaves current state
+  // untouched AND returns the reason.
+  Status drive(float velocity, float twist,
+               uint32_t lease);       // [counts/s] [counts/s] [ms]
+  Status driveDuty(float dutyLeft, float dutyRight,
+                   uint32_t lease);   // [%] [%] [ms]
+  void neutral();        // commanded stop through the full stop path
+  void estop();          // latch: zero NOW; holds until estopClear()
+  void estopClear();
+  // emergencyStopMotors() -- write zero to BOTH motors NOW, from the
+  // CALLER's fiber, bypassing the kernel entirely.
+  //
+  // This exists for exactly one caller: RobotLoop's heartbeat sentinel,
+  // for the case where this kernel's own fiber has died and can therefore
+  // never execute a staged stop. estop() alone is not enough there -- it
+  // only sets a latch that the kernel fiber is supposed to act on.
+  //
+  // It lives HERE rather than in RobotLoop so that the motors stay owned
+  // by one class and the "kernel fiber is the only 0x10 client" rule has
+  // its single sanctioned exception in the same file that states it.
+  // Emergency only: it can land between a 0x46 select and its read and
+  // destroy that pending encoder sample.
+  void emergencyStopMotors();
+  // Clear the kernel's stall self-halt latch (the application decided the
+  // jam is resolved). A fresh drive()/driveDuty() is still required.
+  void clearStallLatch();
+  // Software-rebaseline both encoders to ~0 at the next cycle (never a
+  // device reset — the leaf's positionEpoch discipline stands).
+  void rebasePosition();
 
-  bool owns() const { return commandActive_; }
+  // ---- output: seq-consistent COPY of the published block ------------
+  Output output() const;
 
-  bool takeCompletion(uint32_t* moveId);
-
-  void tick(const Types::RobotState& state);
-
-  void setPositionErrorMax(float posErrMax) {  // [mm]
-    bounds_.posErrMax = (posErrMax > 0.0f) ? posErrMax : 0.0f;
-  }
-
-  void setSpeedFloor(float vMin) {  // [mm/s]
-    bounds_.vMin = (vMin > 0.0f) ? vMin : 0.0f;
-  }
-
-  void setASteady(float aSteady) {  // [mm/s^2]
-    bounds_.aSteady = (aSteady > 0.0f) ? aSteady : 0.0f;
-  }
-
-  void update(Types::RobotState& state, uint32_t now);  // [ms]
-
-  float targetLeft() const { return targetLeft_; }    // [mm/s] signed
-  float targetRight() const { return targetRight_; }  // [mm/s] signed
-
-  float trackWidth() const { return trackWidth_; }  // [mm]
+  // ---- host-harness entry -------------------------------------------
+  // One full kernel cycle, inline in the caller's context: snapshot →
+  // safety gates → control step → encoder split-phase (sleeps via the
+  // injected Sleeper) → publish. The fiber body is a loop over this plus
+  // absolute-deadline pacing. Public FOR THE HOST TEST HARNESS (which has
+  // no fiber); production code never calls it — start() is the one
+  // production entry. Never called while the fiber is running.
+  void step();
 
  private:
-  float correctedCommand(float desired, float previous, bool leftWheel,
-                         float bias) const;
+  // ---- mailbox / published blocks (see file header for the
+  //      concurrency contract) ----------------------------------------
+  struct Command {
+    uint8_t mode = kModeNeutral;
+    float velocity = 0.0f;     // [counts/s]
+    float twist = 0.0f;        // [counts/s]
+    float dutyLeft = 0.0f;     // [%]
+    float dutyRight = 0.0f;    // [%]
+    uint32_t validUntil = 0;   // [ms] absolute kernel clock; computed in drive()
+  };
 
-  float corrGain_[2][2] = {{1.0f, 1.0f}, {1.0f, 1.0f}};
-  float corrIntercept_[2][2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
-  float lastSpeedLeft_ = 0.0f;   // [mm/s]
-  float lastSpeedRight_ = 0.0f;  // [mm/s]
+  // Cached per-wheel sample state (the kernel's view of each motor,
+  // refreshed after each collect; feeds NEXT cycle's control step — the
+  // same one-cycle actuation latency the old loop had, by design).
+  struct WheelSample {
+    float position = 0.0f;       // [counts]
+    float velocity = 0.0f;       // [counts/s] successful-collect quotient
+    uint64_t sampleTime = 0;     // [us] last SUCCESSFUL collect
+    bool connected = false;
+    bool everSampled = false;
+  };
 
-  static constexpr float kAccelSmoothing = 0.35f;  // [1] first-order weight, per cycle
-  float previousTargetLeft_ = 0.0f;   // [mm/s] last cycle's published target
-  float previousTargetRight_ = 0.0f;  // [mm/s]
-  float cmdAccelLeft_ = 0.0f;         // [mm/s^2] smoothed
-  float cmdAccelRight_ = 0.0f;        // [mm/s^2]
-
-  float crawlDuty(float duty, float& carry) const;
-
+  // Stage B position reference — the integral-of-command integrator.
   struct PositionRef {
-    float reference = 0.0f;  // [mm] integral of commanded speed since the anchor
-    float origin = 0.0f;     // [mm] Wheel::position when anchored
-    uint8_t epoch = 0;       // Wheel::positionEpoch when anchored
+    float reference = 0.0f;  // [counts] integral of commanded speed since anchor
+    float origin = 0.0f;     // [counts] wheel position when anchored
+    uint8_t epoch = 0;       // kernel epoch when anchored (bumped on rebase)
     bool armed = false;
   };
 
-  float fastPid(float posError, float err, float aCmd) const;  // [mm] [mm/s] [mm/s^2]
+  // Twist-integral hold reference (ratio maintenance).
+  struct TwistRef {
+    float reference = 0.0f;   // [counts] integral of commanded twist since anchor
+    float originLeft = 0.0f;  // [counts]
+    float originRight = 0.0f; // [counts]
+    uint8_t epoch = 0;
+    bool armed = false;
+  };
 
-  float positionError(float speed, const Types::RobotState::Wheel& wheel,
-                      PositionRef& ref, float dt) const;  // [mm/s] [s] -> [mm]
+  // ---- fiber ---------------------------------------------------------
+  static void fiberEntry(void* self);
+  void run();  // the kernel fiber body: step() + absolute-deadline pace
 
+  // ---- cycle internals ----------------------------------------------
+  // Shared refusal gate for drive()/driveDuty(). A refused command leaves
+  // the mailbox UNTOUCHED, so whatever was already commanded keeps running
+  // under its own lease rather than being replaced by a rejected command.
+  Status checkCommandable(bool needsVelocityCalibration) const;
+
+  void snapshotConfig();
+  Command snapshotCommand() const;
+  void controlStep(const Command& cmd, uint8_t effectiveMode, float dt,
+                   uint32_t nowMs);  // [s] [ms]
+  void stageStop();
+  void stageDuty(float dutyLeft, float dutyRight);  // [-1,1] x2, write-gated
+  void refreshSample(Hal::Motor& motor, WheelSample& sample);
+  void resetAdaptiveState();
+  void publishOutput(uint32_t nowMs, uint64_t cycleStartUs, uint64_t busyEndUs,
+                     uint32_t measuredPeriod, bool leaseExpired);  // [us] x2 [us]
+
+  // ---- ported pipeline (unit-parametric; semantics per the hard-lessons
+  //      ledger — stop is stop, never flip direction, fail closed) ------
+  float correctedCommand(float desired, float previous, bool leftWheel,
+                         float bias) const;
+  float fastPid(float posError, float err, float aCmd) const;  // [counts] [counts/s] [counts/s^2]
+  float positionError(float speed, const WheelSample& wheel, PositionRef& ref,
+                      float dt);  // [counts/s] [s] -> [counts]
   void adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
-                bool fresh, float dt) const;
-
+                 bool fresh, float dt) const;
+  float crawlDuty(float duty, float& carry) const;
   void applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
                        float& speedRight) const;
+  void updateLatch(bool conditionNow, float window, uint32_t now,
+                   uint32_t& since, bool& latched) const;  // [ms]
 
-  void updateStall(bool conditionNow, uint32_t now, uint32_t& since,
-                   bool& latched) const;
-  void updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
-                     bool& latched) const;
-
-  uint32_t sampleAge(uint32_t now, uint32_t sampleTime) const;
-
-  ControlGains gains_;
-  AdaptationBounds bounds_;
-
-  mutable PositionRef posRefLeft_;
-  mutable PositionRef posRefRight_;
-  float lastPidLeft_ = 0.0f;       // [mm/s] observability: last-computed Stage B output
-  float lastPidRight_ = 0.0f;      // [mm/s]
-
-  float biasLeft_ = 0.0f;   // [mm/s] Stage C's ONE adapted parameter, per wheel
-  float biasRight_ = 0.0f;  // [mm/s]
-
-  uint32_t deficitSinceLeft_ = 0;   // [ms]
-  uint32_t deficitSinceRight_ = 0;  // [ms]
-  bool deficitLeft_ = false;
-  bool deficitRight_ = false;
-  uint32_t stallSinceLeft_ = 0;   // [ms] when the stall condition first held
-  uint32_t stallSinceRight_ = 0;  // [ms]
-  bool stallLeft_ = false;
-  bool stallRight_ = false;
-
-  static constexpr uint32_t kMaxSampleAge = 200;  // [ms]
-
+  // ---- wiring --------------------------------------------------------
   Hal::Motor& left_;
   Hal::Motor& right_;
-  float trackWidth_;  // [mm]
+  const Hal::Clock& clock_;
+  Hal::Sleeper& sleeper_;
+  Hal::FiberLauncher& launcher_;
 
-  float targetLeft_ = 0.0f;   // [mm/s]
-  float targetRight_ = 0.0f;  // [mm/s]
+  // ---- config: staged (main-fiber writer) + active (kernel copy) -----
+  Config staged_;
+  Config active_;
+  volatile uint32_t cfgSeq_ = 0;
+  uint32_t activeCfgSeq_ = 0;
 
-  bool commandActive_ = false;
-  uint32_t commandDeadline_ = 0;  // [ms]
-  uint32_t commandMoveId_ = 0;
-  bool completionPending_ = false;
-  uint32_t completedMoveId_ = 0;
+  // ---- command mailbox (main-fiber writer) ---------------------------
+  Command command_;
+  volatile uint32_t cmdSeq_ = 0;
+  uint32_t seenCmdSeq_ = 0;
 
-  float dutyPerSpeedLeft_ = 0.0f;   // [duty/(mm/s)]
-  float dutyPerSpeedRight_ = 0.0f;  // [duty/(mm/s)]
-  bool calibrated_ = false;
+  // ---- latches OUTSIDE the seq handshake (single aligned stores) -----
+  volatile bool estopLatch_ = false;
 
-  float crawlPulse_ = 0.0f;  // [-1, 1] pulse amplitude; 0 = off
-  float crawlCarryLeft_ = 0.0f;   // Bresenham accumulators
+  // One-shot request counters (main-fiber writers; the kernel consumes by
+  // tracking the last-seen count). Counters, not mailbox flags: a flag
+  // inside Command could be lost to a concurrent drive() overwrite.
+  volatile uint32_t clearStallReq_ = 0;
+  volatile uint32_t rebaseReq_ = 0;
+  uint32_t seenClearStallReq_ = 0;
+  uint32_t seenRebaseReq_ = 0;
+
+  // Sticky first-refusal, for the chainable setters that cannot return a
+  // Status. Written from the caller's fiber only (the kernel fiber never
+  // touches it), so it needs no seq protection.
+  Status lastError_ = Status::kOk;
+  void noteRefusal(Status status) {
+    if (lastError_ == Status::kOk) lastError_ = status;
+  }
+
+  // ---- kernel-fiber state --------------------------------------------
+  bool begun_ = false;
+  volatile bool running_ = false;
+  uint8_t epoch_ = 0;              // bumped on rebasePosition
+  bool stallHalted_ = false;
+  bool wasForcedStop_ = false;     // edge detector for adaptive reset
+  bool leaseWasLive_ = false;      // edge detector for leaseExpiryCount
+
+  WheelSample sampleLeft_;
+  WheelSample sampleRight_;
+
+  PositionRef posRefLeft_;
+  PositionRef posRefRight_;
+  TwistRef twistRef_;
+
+  // Per-wheel rebaseline epochs published on Output. Separate from
+  // epoch_ (which is the INTEGRATOR re-anchor generation, bumped on the
+  // same event but consumed internally): the published epochs are a
+  // host-facing contract, and keeping them apart means a future
+  // single-wheel rebaseline does not have to re-anchor both integrators.
+  uint32_t positionEpochLeft_ = 0;
+  uint32_t positionEpochRight_ = 0;
+  uint32_t i2cFaultCount_ = 0;     // failed-collect cycles, sticky
+  uint32_t cycleOverrunCount_ = 0;  // missed absolute deadlines, sticky
+
+  float biasLeft_ = 0.0f;          // [counts/s] Stage C's adapted parameter
+  float biasRight_ = 0.0f;         // [counts/s]
+  float lastSpeedLeft_ = 0.0f;     // [counts/s] Stage A direction-of-change memory
+  float lastSpeedRight_ = 0.0f;    // [counts/s]
+  float lastPidLeft_ = 0.0f;       // [counts/s]
+  float lastPidRight_ = 0.0f;      // [counts/s]
+  float crawlCarryLeft_ = 0.0f;    // Bresenham accumulators
   float crawlCarryRight_ = 0.0f;
+  // Commanded-accel EMA (kaff feedforward + the aSteady adaptation gate).
+  float previousTargetLeft_ = 0.0f;   // [counts/s]
+  float previousTargetRight_ = 0.0f;  // [counts/s]
+  float cmdAccelLeft_ = 0.0f;         // [counts/s^2] smoothed
+  float cmdAccelRight_ = 0.0f;        // [counts/s^2]
+  bool satLeft_ = false;              // duty demand beyond the rail
+  bool satRight_ = false;
+  uint32_t leaseExpiryCount_ = 0;     // sticky diagnostics
 
-  float writtenLeft_ = 0.0f;   // [-1, 1]
-  float writtenRight_ = 0.0f;  // [-1, 1]
+  // Authority feedback: last cycle's PRE-CLAMP duty demands feed this
+  // cycle's lambda (1-tick lag, same philosophy Stage C already uses).
+  float dutyDemandLeft_ = 0.0f;    // [-1,1] fraction, unclamped magnitude kept
+  float dutyDemandRight_ = 0.0f;   // [-1,1]
+  float lambda_ = 1.0f;            // [1] filtered authority scale
 
+  uint32_t deficitSinceLeft_ = 0;  // [ms]
+  uint32_t deficitSinceRight_ = 0; // [ms]
+  bool deficitLeft_ = false;
+  bool deficitRight_ = false;
+  uint32_t stallSince_ = 0;        // [ms] one condition, both wheels latch
+  bool stallLatched_ = false;
+
+  // Stop-enforce machinery (ported): a commanded stop is re-written for
+  // kStopEnforceTicks after the transition, and unconditionally while the
+  // encoders still read motion.
+  float writtenLeft_ = 0.0f;       // [-1, 1]
+  float writtenRight_ = 0.0f;      // [-1, 1]
   uint8_t stopEnforceCountdown_ = 0;
 
-  static constexpr uint8_t kStopEnforceTicks = 30;
+  // ---- published output ---------------------------------------------
+  Output out_;
+  volatile uint32_t outSeq_ = 0;
 
-  static constexpr float kRestVelocity = 8.0f;  // [mm/s]
+  // ---- cycle timing --------------------------------------------------
+  uint64_t previousCycleStartUs_ = 0;  // [us]
+  bool everCycled_ = false;
+  uint32_t cycleCount_ = 0;
+
+  // ---- constants -----------------------------------------------------
+  // The brick's mandatory encoder select→read settle, one window per
+  // motor. NOT optional: Hal::I2CBus's clearance timers enforce the same
+  // wait from requestSample()'s postClear — sleeping it here spends the
+  // wait as a fiber yield (the main fiber's comms pump runs in it).
+  static constexpr uint32_t kSettle = 4;          // [ms]
+  static constexpr uint8_t kStopEnforceTicks = 30;
+  // Rest threshold for the stop-enforce gate. COUNTS REBAKE: was 8 mm/s
+  // (~102 counts/s at tovez's 0.7837 mm/deg); rounded to 100.
+  static constexpr float kRestVelocity = 100.0f;  // [counts/s]
+  static constexpr float kMaxSampleAge = 200000.0f;  // [us] freshness gate
+  static constexpr float kAccelSmoothing = 0.35f;    // [1] cmdAccel EMA weight
+  // Lambda filter: fast attack (immediate min), slow release.
+  static constexpr float kLambdaReleaseTau = 0.3f;   // [s]
+  // adaptBias is gated off while authority-limited (learning under a
+  // saturated rail adapts garbage).
+  static constexpr float kLambdaAdaptFloor = 0.95f;  // [1]
 };
 
 }  // namespace Control

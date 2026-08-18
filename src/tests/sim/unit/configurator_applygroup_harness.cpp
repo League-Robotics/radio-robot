@@ -99,15 +99,14 @@
 #include "control/differential_drive.h"
 #include "config/boot_config.h"
 #include "config/robot.h"
+#include "host_fiber.h"
+#include "hal/clock.h"
 #include "hal/motor.h"
 #include "hardware/generic/real_otos.h"
 #include "firm/types/robot_state.h"
 #include "messages/envelope.h"
 #include "messages/robot_config.h"
 #include "messages/wire_runtime.h"
-#include "motion/navigator/arc_solver.h"
-#include "motion/planner/planner.h"
-#include "motion/planner/planner_types.h"
 
 namespace {
 
@@ -200,7 +199,11 @@ class RecordingMotor : public Hal::Motor {
   void requestSample() override {}
   void setDuty(float duty) override { lastDuty = duty; }
   void setNeutral(Hal::Neutral) override {}
-  void applyTravelCalib(float travelCalib) override { lastTravelCalib = travelCalib; }
+  // Records the emergency zero so a test can assert it actually
+  // happened -- a mock that silently swallowed it would make the
+  // sentinel's whole point untestable.
+  void emergencyStop() override { ++emergencyStopCount; }
+  int emergencyStopCount = 0;
   [[nodiscard]] bool reconfigure(const Hal::MotorConfig&) override { return true; }
   void tick(uint64_t) override {}
 
@@ -219,7 +222,22 @@ class RecordingMotor : public Hal::Motor {
 
   // --- recorded outputs ---
   float lastDuty = 0.0f;
-  float lastTravelCalib = -1.0f;  // sentinel: configureMotor() must overwrite this to pass
+  // lastTravelCalib -- DELETED (exploratory-kernel rewrite, 2026-08-15):
+  // applyTravelCalib() no longer exists on Hal::Motor -- MOTORS travel_calib
+  // now feeds Core::buildDriveKernelConfig() (boot_calibration.h), never
+  // the motor leaf directly. See this file's own MOTORS scenario below for
+  // the new assertion shape (config().motors.travel_calib_left/right).
+};
+
+class StubClock : public Hal::Clock {
+ public:
+  uint64_t nowMicros() const override { return 0; }
+};
+
+class StubSleeper : public Hal::Sleeper {
+ public:
+  void sleepMillis(uint32_t) override {}
+  void yield() override {}
 };
 
 class RecordingOtos : public Hal::Otos {
@@ -261,11 +279,14 @@ int main() {
 
   RecordingMotor motorL, motorR;
   RecordingOtos otos;
-  Control::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/128.0f);
-  Motion::PlannerLimits limits;
-  Motion::Planner planner(limits);
-  Motion::NavigatorLimits navigatorLimits;
-  Core::Configurator configurator(drive, motorL, motorR, otos, planner, navigatorLimits, /*tuningStore=*/nullptr);
+  StubClock clock;
+  StubSleeper sleeper;
+  // The kernel takes its launcher at construction now. This harness
+  // never calls start() -- FailingFiberLauncher aborts if it ever
+  // does, which is the point: no fibers in a host test.
+  TestSim::FailingFiberLauncher fiberLauncher;
+  Control::DifferentialDrive drive(motorL, motorR, clock, sleeper, fiberLauncher);
+  Core::Configurator configurator(drive, motorL, motorR, otos, /*tuningStore=*/nullptr);
 
   // config_ starts default-constructed (all-zero) -- applyGroup() is
   // exercised directly, without loadBaked(), so every scenario's
@@ -349,29 +370,25 @@ int main() {
     checkEq(result, msg::ErrCode::ERR_NONE, "applyGroup(DRIVE) result");
     checkFloatEq(configurator.config().drive.wheel_gain_left_accel, 2.0f,
                 "config().drive.wheel_gain_left_accel reflects the push");
-
-    // Isolate Stage A: zero wheelControl (Stage B/C inert) and set
-    // dutyPerSpeed=1 so tick()'s written duty is exactly
-    // correctedCommand() -- Drive::configure() does not touch dutyPerSpeed
-    // itself (Drive::kDutyPerSpeed is a MEASURED, boot-baked constant, not
-    // a live field -- drive.h's own doc comment; ticket 009's own call on
-    // whether that reverses).
-    drive.setDutyPerSpeed(1.0f, 1.0f);
-
-    Types::RobotState state;
-    state.wheelLeft.cmdVelocity = 200.0f;  // [mm/s]
-    state.wheelRight.cmdVelocity = 0.0f;
-    state.time.cyclePeriod = 50000;  // [us]
-    drive.tick(state);
-    checkFloatEq(motorL.lastDuty, 100.0f,
-                "tick() duty reflects the pushed wheel_gain_left_accel=2.0 (200/2.0)");
+    // EXPLORATORY-KERNEL REWRITE (2026-08-15): the deeper verification this
+    // scenario used to run (drive.tick(state) against Types::RobotState::
+    // Wheel::cmdVelocity, checking the written duty) is GONE -- the kernel
+    // has no tick(state)/cmdVelocity surface any more (its own fiber owns
+    // the whole control step; commands arrive via drive(velocity, twist,
+    // lease) and gains via setConfig()). config().drive reflecting the
+    // push (above) plus wheelGain[0][0] landing in the kernel's OWN config
+    // (below) is the level this harness can still verify without
+    // simulating a full kernel cycle.
+    checkFloatEq(drive.config().wheelGain[0][0], 2.0f,
+                "drive.config().wheelGain[0][0] reflects the push via "
+                "Core::buildDriveKernelConfig()");
   }
 
-  // --- WHEEL_CONTROL: decode + Drive::configure() (Stage B/C) -------------
+  // --- WHEEL_CONTROL: decode + installDriveKernelConfig() (Stage B/C) -----
 
   beginScenario(
-      "WHEEL_CONTROL push decodes into config_ and reaches Drive::configure() -- "
-      "controlGains()/adaptationBounds() reflect the push");
+      "WHEEL_CONTROL push decodes into config_ and reaches the kernel's own "
+      "config() via Core::buildDriveKernelConfig()");
   {
     uint8_t buf[128];
     size_t pos = 0;
@@ -401,31 +418,38 @@ int main() {
     checkFloatEq(configurator.config().wheelControl.pos_err_max, 12.0f,
                 "config().wheelControl.pos_err_max reflects the push");
 
-    const Control::DifferentialDrive::ControlGains& gains = drive.controlGains();
-    checkFloatEq(gains.kp, 0.11f, "controlGains().kp");
-    checkFloatEq(gains.ki, 0.22f, "controlGains().ki");
-    checkFloatEq(gains.iMax, 0.33f, "controlGains().iMax");
-    checkFloatEq(gains.kaff, 0.44f, "controlGains().kaff");
-    checkFloatEq(gains.pidMax, 0.55f, "controlGains().pidMax");
-
-    const Control::DifferentialDrive::AdaptationBounds& bounds = drive.adaptationBounds();
-    checkFloatEq(bounds.vMin, 66.0f, "adaptationBounds().vMin");
-    checkFloatEq(bounds.biasMax, 77.0f, "adaptationBounds().biasMax");
-    // The two clamps arrive over the wire INDEPENDENTLY and land in
-    // different places: pos_err_max [mm] on AdaptationBounds (Stage B's
-    // input), pid_i_max [mm/s] on ControlGains (its output). A reading of
-    // "posErrMax replaces iMax" would break exactly this pair.
-    checkFloatEq(bounds.posErrMax, 12.0f,
-                "adaptationBounds().posErrMax -- the live wire path reaches Stage B's mm-domain "
-                "clamp, distinct from controlGains().iMax's mm/s-domain clamp above");
+    // EXPLORATORY-KERNEL REWRITE (2026-08-15): ControlGains/AdaptationBounds
+    // are GONE -- the kernel's Config is one flat struct now. kp/ki/kaff
+    // copy through Core::buildDriveKernelConfig() unconverted (dimensionless/
+    // [1/s]/[s]); iMax/pidMax/vMin/biasMax/posErrMax convert mm-domain ->
+    // counts-domain via MOTORS.travel_calib_left/right, which this harness
+    // never pushes (config_.motors stays all-zero, the "uncalibrated"
+    // sentinel) -- those five fields are NOT independently verifiable here
+    // without also exercising the MOTORS push below first, so only the
+    // unconverted three are checked.
+    const Control::DifferentialDrive::Config& kernelCfg = drive.config();
+    checkFloatEq(kernelCfg.kp, 0.11f, "drive.config().kp");
+    checkFloatEq(kernelCfg.ki, 0.22f, "drive.config().ki");
+    checkFloatEq(kernelCfg.kaff, 0.44f, "drive.config().kaff");
   }
 
-  // --- MOTORS: guarded, per side -------------------------------------------
+  // --- MOTORS: no motion guard any more -------------------------------------
+  //
+  // EXPLORATORY-KERNEL REWRITE (2026-08-15): MOTORS no longer applies
+  // travel_calib onto the motor leaf (Hal::Motor::applyTravelCalib() is
+  // deleted -- the leaf is counts-native) -- it feeds
+  // Core::buildDriveKernelConfig()'s mm<->counts conversion instead, via
+  // the SAME installDriveKernelConfig() call DRIVE/WHEEL_CONTROL use. That
+  // rebuild-and-setConfig() push is exactly as live-safe as those two
+  // pushes already were (the kernel's own fiber snapshots config at each
+  // cycle start), so the per-side "refuses while moving" ERR_BUSY guard
+  // (Core::configureMotor(), 132-007) has no motion-safety reason to exist
+  // any more -- install(MOTORS) now always returns ERR_NONE, moving or not.
 
-  beginScenario("MOTORS push at rest applies travel_calib to both sides, ERR_NONE");
+  beginScenario("MOTORS push applies travel_calib to config_, ERR_NONE, regardless of motion");
   {
-    motorL.stagedVelocity = 0.0f;
-    motorL.stagedAppliedDuty = 0.0f;
+    motorL.stagedVelocity = 100.0f;  // [mm/s] -- deliberately IN MOTION; no guard reads this any more
+    motorL.stagedAppliedDuty = 0.3f;
     motorR.stagedVelocity = 0.0f;
     motorR.stagedAppliedDuty = 0.0f;
 
@@ -437,40 +461,20 @@ int main() {
     checkTrue(encodeInt32Field(4, -1, buf, sizeof(buf), &pos), "encode fwd_sign_right");
 
     const msg::ErrCode result = configurator.applyGroup(msg::ConfigGroupTarget::MOTORS, buf, pos);
-    checkEq(result, msg::ErrCode::ERR_NONE, "applyGroup(MOTORS) result, both sides at rest");
+    checkEq(result, msg::ErrCode::ERR_NONE,
+           "applyGroup(MOTORS) result -- ERR_NONE even with motorL in motion, no guard left to trip");
     checkFloatEq(configurator.config().motors.travel_calib_left, 0.71f,
                 "config().motors.travel_calib_left reflects the push");
-    checkFloatEq(motorL.lastTravelCalib, 0.71f, "motorL applyTravelCalib() argument");
-    checkFloatEq(motorR.lastTravelCalib, 0.70f, "motorR applyTravelCalib() argument");
-  }
-
-  beginScenario(
-      "MOTORS push while one side is in motion returns ERR_BUSY (surfaced, not "
-      "swallowed) -- the OTHER, at-rest side still applies (per-side guard, "
-      "Core::configureMotor(), 132-007)");
-  {
-    motorL.stagedVelocity = 100.0f;  // [mm/s], well above the rest threshold
-    motorL.stagedAppliedDuty = 0.3f;
-    motorL.lastTravelCalib = -1.0f;  // reset sentinel
-    motorR.stagedVelocity = 0.0f;
-    motorR.stagedAppliedDuty = 0.0f;
-    motorR.lastTravelCalib = -1.0f;  // reset sentinel
-
-    uint8_t buf[128];
-    size_t pos = 0;
-    checkTrue(encodeFloatField(1, 0.81f, buf, sizeof(buf), &pos), "encode travel_calib_left");
-    checkTrue(encodeFloatField(2, 0.80f, buf, sizeof(buf), &pos), "encode travel_calib_right");
-
-    const msg::ErrCode result = configurator.applyGroup(msg::ConfigGroupTarget::MOTORS, buf, pos);
-    checkEq(result, msg::ErrCode::ERR_BUSY, "applyGroup(MOTORS) result, left side in motion");
-    checkFloatEq(motorL.lastTravelCalib, -1.0f,
-                "motorL applyTravelCalib() must NOT be called while moving");
-    checkFloatEq(motorR.lastTravelCalib, 0.80f,
-                "motorR (at rest) still gets its travel_calib applied");
-    // config_ itself still reflects the decode -- only install()'s FAN-OUT
-    // is refused for the busy side, not the decode-into-config_ step.
-    checkFloatEq(configurator.config().motors.travel_calib_left, 0.81f,
-                "config().motors.travel_calib_left still reflects the decode");
+    checkFloatEq(configurator.config().motors.travel_calib_right, 0.70f,
+                "config().motors.travel_calib_right reflects the push");
+    // Feeds installDriveKernelConfig() -- fullDutyVelocity/wheelIntercept/
+    // etc. all rebuild from the NEW travel_calib. duty_per_speed_left/right
+    // are still config_.drive's own all-zero default here (never pushed in
+    // this scenario), so fullDutyVelocity itself stays 0 -- this only
+    // confirms the MOTORS push reached the rebuild, not any one derived
+    // value.
+    checkFloatEq(drive.config().fullDutyVelocity, 0.0f,
+                "drive.config().fullDutyVelocity rebuilt (still 0 -- duty_per_speed never pushed)");
   }
 
   // --- OTOS: decode + configureOtos() (trap 3 CLOSED, 132-010) -------------
@@ -646,27 +650,31 @@ int main() {
     configurator.loadBaked();
     configurator.install();
 
+    // EXPLORATORY-KERNEL REWRITE (2026-08-15): dutyPerSpeedLeft()/
+    // dutyPerSpeedRight()/calibrated() are GONE -- the kernel has ONE
+    // kernel-wide fullDutyVelocity (counts/s), built by Core::
+    // buildDriveKernelConfig() from duty_per_speed_left/right AND
+    // MOTORS.travel_calib_left/right together (not from duty_per_speed
+    // alone), and "calibrated" is now `output().ready`, which requires
+    // begin() (never called by this lightweight, no-I2C-bus harness) to
+    // have run -- there is no clean equivalent check here without also
+    // exercising the kernel's own lifecycle, which is out of this
+    // harness's scope (it verifies Configurator's fan-out, not the
+    // kernel's own begin()/ready state machine).
     const msg::Drive hwDrive = Config::defaultDriveGroup();
-    checkFloatEq(drive.dutyPerSpeedLeft(), hwDrive.duty_per_speed_left,
-                "drive.dutyPerSpeedLeft() reflects the baked JSON value, "
-                "not a hardcoded constant");
-    checkFloatEq(drive.dutyPerSpeedRight(), hwDrive.duty_per_speed_right,
-                "drive.dutyPerSpeedRight() reflects the baked JSON value, "
-                "not a hardcoded constant");
-    checkTrue(drive.calibrated(),
-              "drive.calibrated() is true after boot install() -- tick() "
-              "will actually write duty");
 
     // The SAME boot install() call also retargets DRIVE/WHEEL_CONTROL onto
-    // Drive::configure(config_) (132-009) instead of re-deriving Stage
-    // A/B/C inline a second time -- confirm the fan-out still landed.
+    // installDriveKernelConfig() instead of re-deriving Stage A/B/C inline
+    // a second time -- confirm the fan-out still landed, both at the
+    // config_ level and at the kernel's own config() level.
     checkFloatEq(configurator.config().drive.wheel_gain_left_accel,
                 hwDrive.wheel_gain_left_accel,
                 "config().drive.wheel_gain_left_accel reflects loadBaked()");
-    const Control::DifferentialDrive::ControlGains& bootGains = drive.controlGains();
+    checkFloatEq(drive.config().wheelGain[0][0], hwDrive.wheel_gain_left_accel,
+                "drive.config().wheelGain[0][0] reflects the boot install() fan-out");
     const msg::WheelControl hwWheelControl = Config::defaultWheelControlGroup();
-    checkFloatEq(bootGains.kp, hwWheelControl.pid_kp,
-                "controlGains().kp reflects the boot install() fan-out");
+    checkFloatEq(drive.config().kp, hwWheelControl.pid_kp,
+                "drive.config().kp reflects the boot install() fan-out");
   }
 
   std::printf("\n");

@@ -222,9 +222,24 @@ int main() {
     checkTrue(!sim.isConfigured(), "isConfigured() stays false after boot() + a few cycles (boot never configures)");
   }
 
-  // --- Scenario 2: MOVE refused while unconfigured -------------------------
+  // --- Scenario 2: WHEELS refused while unconfigured -----------------------
+  //
+  // Was a MOVE scenario before the DifferentialDrive kernel rework. MOVE is
+  // DEREGISTERED in this tree (handleMoveOrGoto() acks ERR_UNIMPLEMENTED
+  // unconditionally, ahead of any gate), so it can no longer exercise the
+  // config gate at all -- an ERR_UNIMPLEMENTED ack would pass a naive
+  // "refused" assertion while proving nothing about configured_. WHEELS is
+  // the surviving motion arm and carries the SAME gate, checked first in
+  // handleWheels(), so the scenario moves there intact.
+  //
+  // The two driveTargetVelLeft()/Right() blackboard checks are replaced by
+  // the kernel's own published Output: RobotState::Wheel::cmdVelocity is
+  // deleted (the actuation boundary moved inside the class), so "the drive
+  // was never commanded" is now observed as zero APPLIED DUTY rather than a
+  // zero staged target. That is strictly closer to the wire, and the
+  // write-hook check below still backstops it independently.
   {
-    beginScenario("MOVE against an unconfigured harness: ERR_NOT_CONFIGURED, drive_ untouched, no real duty write");
+    beginScenario("WHEELS against an unconfigured harness: ERR_NOT_CONFIGURED, kernel untouched, no real duty write");
     TestSim::SimHarness sim;
     sim.boot();
     sim.step(3);
@@ -238,10 +253,9 @@ int main() {
       return sim.plant().defaultWrite(address, data, len);
     });
 
-    checkTrue(!sim.isConfigured(), "setup: still unconfigured before the move");
-    sim.injectMove(/*v_x=*/1000.0f, /*v_y=*/0.0f, /*omega=*/0.0f, TestSupport::MoveStopKind::kTime,
-                    /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/501,
-                    /*corrId=*/501);
+    checkTrue(!sim.isConfigured(), "setup: still unconfigured before the wheels command");
+    sim.injectWheels(/*vLeft=*/1000.0f, /*vRight=*/1000.0f, /*duration=*/100000.0f,
+                     /*id=*/501, /*corrId=*/501);
     sim.step(10);
 
     sim.plant().clearWriteHook();
@@ -252,12 +266,13 @@ int main() {
     checkTrue(errCode == static_cast<uint32_t>(msg::ErrCode::ERR_NOT_CONFIGURED),
               "the err_code is ERR_NOT_CONFIGURED");
 
-    checkFloatEq(sim.driveTargetVelLeft(), 0.0f,
-                 "drive_'s own staged left target stays 0 -- handleMove() never called drive_.setTwist()");
-    checkFloatEq(sim.driveTargetVelRight(), 0.0f,
-                 "drive_'s own staged right target stays 0 -- handleMove() never called drive_.setTwist()");
+    const Control::DifferentialDrive::Output out = sim.drive().output();
+    checkFloatEq(out.appliedDutyLeft, 0.0f,
+                 "the kernel's applied left duty stays 0 -- handleWheels() never reached drive_.drive()");
+    checkFloatEq(out.appliedDutyRight, 0.0f,
+                 "the kernel's applied right duty stays 0 -- handleWheels() never reached drive_.drive()");
     checkTrue(maxSpeedSeen == 0,
-              "no nonzero-speed 0x60 duty byte ever reached the bus during the refused move's window "
+              "no nonzero-speed 0x60 duty byte ever reached the bus during the refused command's window "
               "(plant write-hook duty-history check)");
   }
 
@@ -307,8 +322,8 @@ int main() {
     // MotorConfigPatch.kp/the MOTOR arm; now it is WheelControl.pid_kp/the
     // WHEEL_CONTROL group, applyGroup()'s whole-group push replacing the
     // deleted merge-patch, same live-apply-while-unconfigured property.
-    checkFloatEq(sim.drive().controlGains().kp, 0.05f,
-                 "the pushed group's pid_kp actually landed live on Drive's controller -- "
+    checkFloatEq(sim.drive().config().kp, 0.05f,
+                 "the pushed group's pid_kp actually landed live on the kernel's Config -- "
                  "CONFIG ran, unaffected by the gate");
   }
 
@@ -317,7 +332,7 @@ int main() {
   //     a "configured" motor that was still functionally dead) ------------
   {
     beginScenario("both configureMotor() calls: isConfigured() becomes true, a subsequent "
-                  "MOVE is accepted and produces real, nonzero measured wheel motion on BOTH motors, "
+                  "WHEELS is accepted and produces real, nonzero measured wheel motion on BOTH motors, "
                   "each port driving its own distinct simulated wheel");
     TestSim::SimHarness sim;
     sim.boot();
@@ -330,17 +345,19 @@ int main() {
 
     (void)sim.drainTelemetry();
 
-    // Pure rotation (v_x=0, omega!=0): a correctly-ported drivetrain drives
-    // the left and right wheels in OPPOSITE directions. If configureMotor()
-    // had failed to propagate `port` (the exact aliasing bug Revision 1
-    // fixed -- both motors constructed with Hal::MotorConfig{}'s
-    // port=0, never corrected), both simulated writes would land on the
-    // SAME WheelPlant and the other port's own plant would stay stone dead
-    // at velocity 0 for the whole run -- impossible to produce opposite-sign
+    // Pure rotation, expressed directly as opposed wheel velocities now that
+    // MOVE is deregistered: the adapter maps (v_left, v_right) to
+    // velocity = (l+r)/2 == 0 and twist = (r-l)/2 != 0, which is exactly the
+    // pure-rotation twist the old omega=1.5 MOVE resolved to. A correctly-
+    // ported drivetrain drives the two wheels in OPPOSITE directions. If
+    // configureMotor() had failed to propagate `port` (the exact aliasing bug
+    // Revision 1 fixed -- both motors constructed with Hal::MotorConfig{}'s
+    // port=0, never corrected), both simulated writes would land on the SAME
+    // WheelPlant and the other port's own plant would stay stone dead at
+    // velocity 0 for the whole run -- impossible to produce opposite-sign
     // motion on BOTH plants simultaneously.
-    sim.injectMove(/*v_x=*/0.0f, /*v_y=*/0.0f, /*omega=*/1.5f, TestSupport::MoveStopKind::kTime,
-                    /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/505,
-                    /*corrId=*/505);
+    sim.injectWheels(/*vLeft=*/-150.0f, /*vRight=*/150.0f, /*duration=*/100000.0f,
+                     /*id=*/505, /*corrId=*/505);
 
     std::vector<TestSupport::DecodedLine> lines;
     uint32_t errCode = 1;  // any nonzero sentinel -- overwritten by findAck() on a match
@@ -361,7 +378,9 @@ int main() {
 
     float velLeft = sim.motorLeft().velocity();
     float velRight = sim.motorRight().velocity();
-    std::printf("  velLeft=%.3f velRight=%.3f (mm/s, measured via Hardware::NezhaMotor::velocity())\n",
+    // [counts/s], not mm/s: the leaf went counts-native with the kernel
+    // rework (travel_calib left the motor entirely).
+    std::printf("  velLeft=%.3f velRight=%.3f (counts/s, measured via Hardware::NezhaMotor::velocity())\n",
                 static_cast<double>(velLeft), static_cast<double>(velRight));
     checkTrue(std::fabs(velLeft) > 5.0f,
               "left wheel measured velocity is genuinely nonzero -- NOT frozen at 0.00 (the original "

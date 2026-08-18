@@ -1,8 +1,21 @@
+// golden_ref_state.h -- FROZEN COPY of src/firm/types/robot_state.h as of
+// commit ab43963c, i.e. immediately BEFORE the DifferentialDrive kernel
+// rework. Namespace changed Types -> GoldenRef; NOTHING ELSE EDITED.
+//
+// WHY THIS EXISTS: the golden-trace fidelity gate has to compare the new
+// kernel against the control law it replaced, and the rework replaced
+// that law IN PLACE and made the leaf counts-native -- so the reference
+// no longer exists anywhere in the tree. This is that reference,
+// reconstructed from git and pinned.
+//
+// DO NOT "fix", modernise, or re-unit this file. Its whole value is that
+// it is not the current code. If it drifts toward the current code the
+// gate silently stops testing anything.
 #pragma once
 
 #include <cstdint>
 
-namespace Types {
+namespace GoldenRef {
 
 // Mirrors telemetry.proto's DriveMode value set (kept dependency-free of
 // the generated message headers on purpose, per this header's own
@@ -26,29 +39,16 @@ struct RobotState {
     uint32_t cyclePeriod = 0;  // [us] this cycleStart minus the previous cycle's cycleStart
   } time;
 
-  // Wheel -- MEASURED state only, published once per cycle from
-  // Control::DifferentialDrive::output() (the wheel kernel now owns both
-  // motors on its own fiber; RobotLoop never touches them directly -- see
-  // core/robot_loop.h's own header). position/velocity are in MILLIMETRES
-  // here, converted per wheel by RobotLoop::publishWheels() from the
-  // kernel's counts using the robot JSON's two travel calibrations -- the
-  // same pair the inbound WHEELS adapter uses. The KERNEL is counts-native
-  // end to end and never sees mm; this blackboard is on the application
-  // side of that boundary, and it feeds the telemetry encoder reading,
-  // whose wire unit is [mm]/[mm/s] and whose host-side readers
-  // (protocol.py, the bench scripts) were never migrated. Publishing
-  // counts here changes that field's meaning ~14x under an unchanged
-  // frame shape -- see robot_loop.cpp's own kPositionWireBound comment.
-  //
-  // cmdVelocity/cmdAccel are GONE: the commanded target lives inside the
-  // kernel's own Command mailbox, not here -- there is no cross-cycle
-  // "what did we ask for" field on this side of the interface any more.
   struct Wheel {
-    float position = 0.0f;  // [mm] from Control::DifferentialDrive::Output::positionLeft/Right
-    float velocity = 0.0f;  // [mm/s] signed
-    uint32_t sampleTime = 0;  // [ms] this reading's own genuine collect time
+    float position = 0.0f;  // [mm] Hal::Motor::position()
+    float velocity = 0.0f;  // [mm/s] signed, Hal::Motor::velocity()
+    uint32_t sampleTime = 0;  // [ms] this reading's own genuine collect time --
     bool connected = false;
-    uint8_t positionEpoch = 0;  // bumped only when RobotLoop triggers drive_.rebasePosition()
+    uint8_t positionEpoch = 0;
+
+    float cmdVelocity = 0.0f;  // [mm/s] signed, this cycle's commanded target for this wheel
+
+    float cmdAccel = 0.0f;  // [mm/s^2] signed, this cycle's commanded accel for this wheel
   };
   Wheel wheelLeft;
   Wheel wheelRight;
@@ -91,18 +91,39 @@ struct RobotState {
     float omega = 0.0f;  // [rad/s] signed
   } pose;
 
-  // Estimate (WheelEstimate/BodyEstimate/Innovations) -- DELETED. Fed the
-  // now-long-gone Core::StateEstimator (deleted sprint 128 ticket 016);
-  // nothing has written or read this block since -- confirmed by grep
-  // before removing it (zero consumers anywhere in src/firm).
+  struct WheelEstimate {
+    float distance = 0.0f;  // [mm] traveled distance at basisTime (matches Wheel::position)
+    float velocity = 0.0f;  // [mm/s] signed, held constant across ZOH extrapolation
+    uint32_t basisTime = 0;  // [ms]
+    bool valid = false;
+  };
+  struct BodyEstimate {
+    float x = 0.0f;  // [mm]
+    float y = 0.0f;  // [mm]
+    float heading = 0.0f;  // [rad] v1 complementary blend vs OTOS heading when fresh
+    float v_x = 0.0f;  // [mm/s] body-frame, signed
+    float v_y = 0.0f;  // [mm/s] body-frame, signed
+    float omega = 0.0f;  // [rad/s] signed, v1 complementary blend vs OTOS omega when fresh
+    uint32_t basisTime = 0;  // [ms]
+    bool valid = false;
+  };
+  struct Innovations {
+    float heading = 0.0f;  // [rad] OTOS heading minus predicted heading, at last blend
+    float omega = 0.0f;  // [rad/s] OTOS omega minus predicted omega, at last blend
+    bool valid = false;
+  };
+  struct Estimate {
+    WheelEstimate wheelLeft;
+    WheelEstimate wheelRight;
+    BodyEstimate body;
+    Innovations innovations;
+  } estimate;
 
-  // Command -- v_x/omega DELETED (nothing read them; the kernel's own
-  // Command mailbox is the one place "what is currently commanded" lives
-  // now, and it is not exposed on this blackboard). mode/moveActive stay:
-  // Telemetry::update() and Comms::updateStatus() both still read them.
   struct Command {
     Mode mode = Mode::Idle;
     bool moveActive = false;
+    float v_x = 0.0f;  // [mm/s] signed, current commanded body-frame forward velocity
+    float omega = 0.0f;  // [rad/s] signed, current commanded yaw rate
   } command;
 
   struct Health {
@@ -110,18 +131,8 @@ struct RobotState {
     uint32_t commsMalformedCount = 0;
     uint32_t commandsDroppedCount = 0;
     bool wedgeLatch = false;
-    // Sticky: the wheel kernel's heartbeat stalled while motion was
-    // commanded and RobotLoop's sentinel force-stopped the motors. Never
-    // cleared within a session -- see kFlagFaultKernelStalled.
-    bool kernelStalled = false;
-    // moveTimeout/shapingDisabled -- DELETED. Both were written only by
-    // Core::RobotLoop::publishMoveResult()/publishGotoResult(), which fed
-    // Motion::Planner/Motion::Navigator fault state that no longer
-    // exists; Telemetry::update() never read either field directly (the
-    // wire flag bits it fed, kFlagFaultMoveTimeout/kFlagFaultShapingDisabled,
-    // were set straight from RobotLoop via tlm_.setLiveFlag(), bypassing
-    // this struct). Those two wire bits now simply stay clear -- a
-    // documented narrowing of the exploratory tree, not a silent drop.
+    bool moveTimeout = false;
+    bool shapingDisabled = false;
     bool positionClamped = false;
     bool wheelFrozenLeft = false;
     bool wheelFrozenRight = false;

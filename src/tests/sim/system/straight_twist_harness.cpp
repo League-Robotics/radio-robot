@@ -161,12 +161,13 @@ int main() {
   sim.step(3);  // settle: both leaves' own one-time zero-duty activation writes land
 
   beginScenario("straight twist: v_x=150mm/s, omega=0, held for a tour-leg-scale run");
-  // 116-006 (MOVE protocol cutover): bare TWIST/injectTwist() is gone --
-  // a TIME-stop MOVE with a stop value/timeout far longer than this run
-  // is the equivalent "hold this twist indefinitely" injection.
-  sim.injectMove(kCruiseVx, /*v_y=*/0.0f, kOmega, TestSupport::MoveStopKind::kTime,
-                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/1,
-                 /*corrId=*/1);
+  // 116-006 replaced bare TWIST with a TIME-stop MOVE; the kernel rework
+  // deregisters MOVE outright, so the injection is now a WHEELS command
+  // carrying the same body twist (injectBodyTwist() does the differential
+  // inverse-kinematics against the SAME baked trackwidth the firmware
+  // uses). A long duration is the "hold this twist indefinitely"
+  // equivalent -- the lease, not a stop condition, is what bounds it now.
+  sim.injectBodyTwist(kCruiseVx, kOmega, /*duration=*/100000.0f, /*id=*/1, /*corrId=*/1);
 
   float maxAbsHeadingDeg = 0.0f;
   bool everFrozenOrDiverged = false;

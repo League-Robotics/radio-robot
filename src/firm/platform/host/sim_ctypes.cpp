@@ -297,18 +297,38 @@ const char* sim_firmware_version() { return FIRMWARE_VERSION_STR; }
 // per-instance state).
 int sim_cycle_dt_us() { return static_cast<int>(TestSim::SimHarness::kCycleDtUs); }
 
-// Commanded per-wheel velocity (the interim PID SETPOINT Control::DifferentialDrive stages
-// -- 125-003: read from Drive's own driveTargetVelLeft/Right() accessor now,
-// NOT Hal::Motor::velocityTarget(), which is deleted -- the velocity
-// PID moved off NezhaMotor entirely, see drive.h's own header). cmd_vel is
-// NOT on the wire at all (it never made it off TelemetrySecondary before
-// that message was deleted outright, 124-009 -- see Types::RobotState::
-// Wheel::cmdVelocity's own doc comment for the current, unwired state). The
-// sim can see this normally-invisible inner-loop command at full rate,
-// which is exactly what TestGUI's "commanded vs actual" wheel-speed graph
-// plots. Signed [mm/s].
-float sim_cmd_vel_left(SimHandle h) { return asHarness(h)->driveTargetVelLeft(); }
-float sim_cmd_vel_right(SimHandle h) { return asHarness(h)->driveTargetVelRight(); }
+// EXPLORATORY-KERNEL REWRITE (2026-08-15): SimHarness::driveTargetVelLeft/
+// Right() are DELETED -- they read Types::RobotState::Wheel::cmdVelocity,
+// which no longer exists (the commanded target lives inside the kernel's
+// own private Command mailbox now, not on any public accessor). There is
+// NO replacement for "the currently-commanded PID setpoint" on this ABI
+// any more -- these two exports fall back to the kernel's MEASURED
+// velocity (drive().output().velocityLeft/Right) instead, so a caller
+// (TestGUI's "commanded vs actual" wheel-speed graph) gets a real signal
+// rather than a broken build, but it is no longer the commanded value --
+// it is now numerically identical to whatever "actual" already plots.
+// Signed [mm/s], unchanged from before the rework. The kernel publishes
+// counts/s, so these convert per wheel using the robot config's own
+// travel_calib pair -- the SAME conversion RobotLoop::publishWheels() does
+// for telemetry, and for the same reason: this C ABI is the APPLICATION
+// boundary, and every caller of it (sim_loop.py's wheel-speed plumbing,
+// TestGUI's wheel-speed graph, test_sim_wire_loopback.py) reads mm/s and
+// was never migrated. Returning counts/s here silently rescales those
+// readings by ~14.19x under an unchanged signature.
+namespace {
+float countsToMm(SimHandle h, bool left) {  // [mm per count]
+  const Config::Robot& cfg = asHarness(h)->configurator().config();
+  const float calib = left ? cfg.motors.travel_calib_left : cfg.motors.travel_calib_right;
+  return (calib > 0.0f) ? calib * 0.1f : 0.0f;  // travel_calib [mm/deg], 1 count = 0.1 deg
+}
+}  // namespace
+
+float sim_cmd_vel_left(SimHandle h) {
+  return asHarness(h)->drive().output().velocityLeft * countsToMm(h, /*left=*/true);
+}
+float sim_cmd_vel_right(SimHandle h) {
+  return asHarness(h)->drive().output().velocityRight * countsToMm(h, /*left=*/false);
+}
 
 // Velocity-PID enable/disable (stakeholder 2026-07-18, TestGUI "PID"
 // checkbox next to the Test buttons) -- 125-003: NOW A NO-OP. The velocity
@@ -346,10 +366,19 @@ void sim_step(SimHandle h, int cycles) { asHarness(h)->step(cycles); }
 // deadman.h's own arm() doc comment). `corr` doubles as both the
 // enqueue-ack corr_id and the MOVE's own completion id -- this call site
 // never distinguished the two.
+// KERNEL REWORK: the ABI (name, signature, and what the caller means by it
+// -- a body twist held for `duration` ms) is UNCHANGED. What changed is the
+// wire command built underneath. MOVE is DEREGISTERED
+// (handleMoveOrGoto() acks ERR_UNIMPLEMENTED unconditionally), so building
+// a MOVE here acks an error and the plant never moves -- which is exactly
+// how this surfaced: SimLoop.twist() reported "accepted" and produced zero
+// motion. WHEELS is the surviving motion arm; injectBodyTwist() resolves
+// (v_x, omega) into per-wheel speeds against the same baked trackwidth the
+// firmware itself uses. `duration` is now the LEASE rather than a TIME stop
+// condition -- the same observable bound, enforced by the kernel instead of
+// by a planner stop condition.
 void sim_inject_twist(SimHandle h, float v_x, float omega, float duration, uint32_t corr) {
-  asHarness(h)->injectMove(v_x, /*v_y=*/0.0f, omega, TestSupport::MoveStopKind::kTime,
-                            /*stopValue=*/duration, /*timeout=*/duration, /*replace=*/true,
-                            /*id=*/corr, corr);
+  asHarness(h)->injectBodyTwist(v_x, omega, duration, /*id=*/corr, corr);
 }
 
 // sim_inject_stop -- retargeted at ESTOP (command-ingestion-ring-buffered-
@@ -612,13 +641,63 @@ void sim_configure_drivetrain(SimHandle h, float gainPos, float offsetPos,  // [
 // cost, and why main.cpp's third install (setWheelCorrection(), a
 // hardware-gearbox linearization) is deliberately NOT mirrored here.
 //
-// Pure passthrough: no unit conversion, no defaulting. `drive()` is already a
-// public accessor (sim_harness.h) -- no new SimHarness method needed.
+// EXPLORATORY-KERNEL REWRITE (2026-08-15): no longer a pure passthrough --
+// Control::DifferentialDrive::setDutyPerSpeed() is gone (the kernel has
+// ONE kernel-wide fullDutyVelocity in counts/s, not a settable left/right
+// mm-domain pair). This export keeps its OWN C ABI signature (host-side
+// callers still push dutyPerSpeedLeft/Right, matching the robot JSON's
+// own field names) and converts here, the SAME mm->counts formula
+// boot_calibration.cpp's buildDriveKernelConfig() uses:
+// fullDutyVelocity = 10 / (duty_per_speed * travel_calib), averaged
+// across the two sides via each side's own values first, then the
+// current CONFIG's travel_calib mean (whatever Configurator::loadBaked()
+// most recently landed -- a caller that also pushes MOTORS.travel_calib
+// via CONFIG should do so BEFORE this call for the conversion to use the
+// right value).
 void sim_configure_drive(SimHandle h, float dutyPerSpeedLeft, float dutyPerSpeedRight,
                          float crawlPulse) {
-  Control::DifferentialDrive& drive = asHarness(h)->drive();
-  drive.setDutyPerSpeed(dutyPerSpeedLeft, dutyPerSpeedRight);
+  TestSim::SimHarness* harness = asHarness(h);
+  Control::DifferentialDrive& drive = harness->drive();
+  // Write the pushed values INTO the live config first: SimHarness::
+  // syncPlantToConfig() derives the plant's own gain from
+  // config_.drive.duty_per_speed_*, so a push that only set the kernel's
+  // fullDutyVelocity would leave the plant describing one robot and the
+  // kernel another -- the exact split-source drift this file's own history
+  // keeps re-learning. One source of truth: the config.
+  {
+    Config::Robot& mutableCfg = harness->configurator().mutableConfig();
+    if (dutyPerSpeedLeft > 0.0f) mutableCfg.drive.duty_per_speed_left = dutyPerSpeedLeft;
+    if (dutyPerSpeedRight > 0.0f) mutableCfg.drive.duty_per_speed_right = dutyPerSpeedRight;
+  }
+  const Config::Robot& cfg = harness->configurator().config();
+  const float travelCalibMean =
+      0.5f * (cfg.motors.travel_calib_left + cfg.motors.travel_calib_right);
+  const float dutyPerSpeedMean = 0.5f * (dutyPerSpeedLeft + dutyPerSpeedRight);
+  if (dutyPerSpeedMean > 0.0f && travelCalibMean > 0.0f) {
+    drive.setFullDutyVelocity(10.0f / (dutyPerSpeedMean * travelCalibMean));
+  }
   drive.setCrawlPulse(crawlPulse);
+}
+
+// sim_debug_drive_state -- read-only diagnostic dump of the live
+// calibration chain, for probes chasing perception/actuation scale bugs.
+// out[0]=fullDutyVelocity [counts/s], out[1]=travel_calib_left,
+// out[2]=travel_calib_right [mm/deg], out[3]=duty_per_speed_left
+// [duty/(mm/s)], out[4]=appliedDutyLeft [-1,1], out[5]=maxDuty [%],
+// out[6]=vMin [counts/s]. Exists because this exact chain silently broke
+// TWICE (encoder scale, then the tour's velocity map) with every
+// individual piece looking plausible in isolation.
+void sim_debug_drive_state(SimHandle h, float* out) {
+  TestSim::SimHarness* harness = asHarness(h);
+  const Control::DifferentialDrive::Config dcfg = harness->drive().config();
+  const Config::Robot& rc = harness->configurator().config();
+  out[0] = dcfg.fullDutyVelocity;
+  out[1] = rc.motors.travel_calib_left;
+  out[2] = rc.motors.travel_calib_right;
+  out[3] = rc.drive.duty_per_speed_left;
+  out[4] = harness->drive().output().appliedDutyLeft / 100.0f;
+  out[5] = dcfg.maxDuty;
+  out[6] = dcfg.vMin;
 }
 
 // ---- Hook surface ----

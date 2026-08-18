@@ -75,6 +75,8 @@ def test_app_comms_harness_compiles_and_passes(tmp_path):
             "-DHOST_BUILD",
             "-I",
             str(_SOURCE_DIR),
+            "-I",
+            str(_SOURCE_DIR / "platform" / "host"),  # host_fiber.h
             # 128-012: comms.h now #includes "firm/types/robot_state.h"
             # (Comms::updateStatus()'s Types::RobotState& parameter) --
             # matches test_app_telemetry.py's own extra -I for the same

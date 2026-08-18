@@ -21,6 +21,7 @@
 #include "platform/microbit/microbit_banner.h"
 #include "platform/microbit/microbit_boot_identity.h"
 #include "platform/microbit/microbit_clock.h"
+#include "platform/microbit/microbit_fiber.h"
 #include "platform/microbit/microbit_i2c_bus.h"
 #include "platform/microbit/microbit_radio_link.h"
 #include "platform/microbit/microbit_serial_port.h"
@@ -77,13 +78,31 @@ int main() {
   static Platform::MicroBitClock clock;
   static Platform::MicroBitSleeper sleeper;
   static Config::MicroBitTuningStore tuningStore(uBit.storage);
+  // Constructed BEFORE composeRobot(): the kernel takes its launcher at
+  // construction now, so the graph cannot be composed without one -- which
+  // is the point. "Who may start the fiber" is a property of how the
+  // object was composed, not of who happens to call start().
+  static Platform::MicroBitFiberLauncher driveFiberLauncher;
 
-  static Core::RobotGraph graph = Core::composeRobot(bus, clock, sleeper, serial, radio,
+  static Core::RobotGraph graph = Core::composeRobot(bus, clock, sleeper, driveFiberLauncher,
+                                                   serial, radio,
                                                    &tuningStore, banner, idLine);
 
   // RobotLoop::run() is boot() followed by cycle() forever; it is spelled
   // out here instead so the display can be turned off in between.
   graph.robotLoop().boot();
+
+  // EXPLORATORY-KERNEL REWRITE (2026-08-15): the wheel kernel's begin()
+  // (prime both encoders, arm the boot zero-write) runs HERE -- after
+  // Preamble::done(), never before (see boot_wiring.h's "Lifecycle, one
+  // level up" note) -- followed immediately by start(), which launches
+  // the kernel's own cooperative fiber on a real Platform::
+  // MicroBitFiberLauncher. From this point on the kernel's fiber is the
+  // ONLY writer of the motors; RobotLoop::cycle() below never touches
+  // them.
+  graph.drive().begin();
+  // start() is DELIBERATELY NOT here -- it moved below
+  // loadPersistedTuning(). See its new call site for why.
 
   // 132-015 (trap 1, the-configuration-object.md): loadPersistedTuning()
   // MUST run AFTER boot(), not before -- the pre-132-015 order here. Every
@@ -107,6 +126,19 @@ int main() {
   // down here with loadPersistedTuning() rather than staying split apart.
   graph.loadPersistedTuning();
   graph.robotLoop().markConfigured();
+
+  // start() the kernel fiber LAST, once the object is fully configured
+  // (baked config at compose, begin() above, persisted tuning just now).
+  //
+  // It used to run immediately after begin(), which meant the fiber
+  // executed several cycles against the pre-persisted config before the
+  // stored tuning landed. Config is snapshotted per cycle so the values
+  // did eventually take, but the robot spent its first moments driving
+  // on gains nobody chose -- and if those first cycles included motion,
+  // that is exactly when a bad gain does damage. Nothing needs the fiber
+  // running before this point: begin() already did the boot zero-write,
+  // which is the only time-critical part of bring-up.
+  graph.drive().start();
 
   // Boot is done and the first control cycle is next: give the LED matrix's
   // refresh timer back to the loop. Everything from here runs to the

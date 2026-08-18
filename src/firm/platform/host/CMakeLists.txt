@@ -25,10 +25,10 @@ get_filename_component(REPO_ROOT "${CMAKE_SOURCE_DIR}/../../../.." ABSOLUTE)
 set(SOURCE_DIR "${REPO_ROOT}/src/firm")
 set(SUPPORT_DIR "${REPO_ROOT}/src/tests/sim/support")
 set(PLANT_DIR "${REPO_ROOT}/src/tests/sim/plant")
-# 122-001 (motion-library extraction): src/firm/motion is a SIBLING of src/firm,
-# not a child (sprint 122 architecture, Design Rationale Decision 3) --
-# MOTION_DIR is therefore its own path, not SOURCE_DIR-relative.
-set(MOTION_DIR "${REPO_ROOT}/src/firm/motion")
+# src/firm/motion/ is GONE (the DifferentialDrive-kernel exploratory
+# rewrite): planner/navigator/odometry/estimation folded into
+# Control::DifferentialDrive and the application layer -- there is no
+# MOTION_DIR/MOTION_SOURCES any more.
 
 # ---------------------------------------------------------------------------
 # Explicit source list -- no glob-then-filter. Mirrors
@@ -40,10 +40,16 @@ set(MOTION_DIR "${REPO_ROOT}/src/firm/motion")
 # surfaces as a link error (an unresolved symbol), not a silent omission.
 #
 # Present:
-#   app/*.cpp                 -- Comms/Drive/Odometry/Preamble/RobotLoop/
-#                                 Telemetry (the single-loop rebuild's
-#                                 whole Core:: graph)
-#   app/boot_wiring.cpp, app/boot_calibration.cpp
+#   core/*.cpp                -- Comms/Configurator/Preamble/RobotLoop/
+#                                 Telemetry (the Core:: graph)
+#   control/differential_drive.cpp
+#                              -- Control::DifferentialDrive, the wheel
+#                                 kernel: both motors, the encoder
+#                                 split-phase schedule, the (velocity,
+#                                 twist) control law, and its own fiber
+#                                 (exploratory worktree,
+#                                 differentialdrive-one-class-one-fiber).
+#   core/boot_wiring.cpp, core/boot_calibration.cpp
 #                              -- 130-002 (unify-sim-and-robot-composition-
 #                                 roots.md): the ONE shared composition
 #                                 root (Core::composeRobot()/RobotGraph) and
@@ -59,10 +65,11 @@ set(MOTION_DIR "${REPO_ROOT}/src/firm/motion")
 #                              -- the generated + hand-written codec
 #                                 primitives
 #   src/firm/kinematics/differential.cpp
-#                              -- pure math, no CODAL deps. Moved out of
-#                                 SOURCE_DIR/kinematics/ (122-001: that
-#                                 directory is retired, folded flat into
-#                                 src/firm/motion) -- under MOTION_DIR now.
+#                              -- pure math, no CODAL deps. Still its own
+#                                 subsystem (kinematics_harness.cpp/
+#                                 test_kinematics.py exercise it directly)
+#                                 even though RobotLoop no longer calls it
+#                                 (pose is OTOS-only post-motion-deletion).
 #   sim_ctypes.cpp             -- this ticket's C ABI (108-005)
 #   sim_plant.cpp               -- ticket 108-002's SimPlant (tests/_infra/sim/)
 #   sim_clock.cpp                -- ticket 108-010's TestSim::SimClock/
@@ -126,36 +133,6 @@ set(APP_SOURCES
     "${SOURCE_DIR}/core/boot_wiring.cpp"
     "${SOURCE_DIR}/core/boot_calibration.cpp"
 )
-# odometry.cpp (122-002, motion-library extraction ticket 2): lives under
-# MOTION_DIR (122-001: src/firm/motion, a sibling of src/firm), not
-# SOURCE_DIR. The OTOS-perception half odometry.cpp used to also define
-# (applyOtosSample()) is now a private RobotLoop method (robot_loop.cpp,
-# APP_SOURCES) -- Motion::Odometry may not depend on Devices::Otos/Core::
-# Telemetry::Frame.
-#
-# Sprint 128 ticket 014 deleted stop_condition.cpp/velocity_shaper.cpp/
-# move_queue.cpp outright (zero callers -- Motion::Planner already wrote
-# Types::RobotState::Wheel::cmdVelocity directly and RobotLoop::cycle()
-# already consumed it directly, so the WheelSink boundary interface those
-# three modules existed to drive was never actually used); ticket 016
-# deleted state_estimator.cpp outright too (Motion::StateEstimator
-# retired from the loop -- a per-cycle computation with no consumer);
-# none of the four are part of this list any more.
-set(MOTION_SOURCES
-    "${MOTION_DIR}/odometry.cpp"
-    # Planner integration (2026-07-26): the planner library core drives the
-    # loop now -- the same files the firmware image links.
-    "${MOTION_DIR}/planner/profile.cpp"
-    "${MOTION_DIR}/planner/shape.cpp"
-    "${MOTION_DIR}/planner/estimation.cpp"
-    "${MOTION_DIR}/planner/planner.cpp"
-    # Navigator integration (135-004): Core::RobotLoop now calls Motion::
-    # Navigator (135-003), which itself calls Motion::ArcSolver (135-002)
-    # -- both become part of the actual firmware/sim image for the first
-    # time in this ticket.
-    "${MOTION_DIR}/navigator/arc_solver.cpp"
-    "${MOTION_DIR}/navigator/navigator.cpp"
-)
 set(DEVICE_SOURCES
     "${SOURCE_DIR}/hardware/nezha/nezha_motor.cpp"
     "${SOURCE_DIR}/hardware/generic/real_otos.cpp"
@@ -209,7 +186,6 @@ set(SIM_SOURCES
 
 add_library(firmware_host SHARED
     ${APP_SOURCES}
-    ${MOTION_SOURCES}
     ${DEVICE_SOURCES}
     ${CONFIG_SOURCES}
     ${MESSAGE_SOURCES}
@@ -226,26 +202,13 @@ add_library(firmware_host SHARED
 # {wheel,otos}_plant.h, sim_plant.h/sim_harness.h) the way
 # test_straight_twist.py's three additional -I flags do.
 #
-# "${REPO_ROOT}/src" (122-001): src/firm/motion is now a SIBLING of src/firm, not
-# a child -- a qualified `#include "motion/odometry.h"` (the SAME text
-# these headers used when they lived under src/firm/motion/) resolves via
-# THIS root, since "motion" is a top-level dir under src/ now instead of a
-# child of SOURCE_DIR. Zero #include text churn in src/firm callers that
-# already said `#include "motion/...h"`.
+# "${REPO_ROOT}/src" stays on the include path for any header that resolves
+# via the repo's src/ root rather than SOURCE_DIR (src/firm) -- e.g. shared
+# blackboard headers under src/firm/types/ reached as "firm/types/...".
 target_include_directories(firmware_host PRIVATE
     "${SOURCE_DIR}"
     "${SUPPORT_DIR}"
     "${PLANT_DIR}"
     "${CMAKE_SOURCE_DIR}"
     "${REPO_ROOT}/src"
-    # "${MOTION_DIR}/planner" (135-004): navigator.h's own bare
-    # #include "planner.h" (matching planner.cpp's own sibling-file bare
-    # includes, e.g. "estimation.h"/"profile.h"/"shape.h", which resolve
-    # here for free via the compiler's implicit current-file-directory
-    # search -- planner.h does NOT get that for free from navigator.h,
-    # since the two files live in different directories) needs this
-    # directory ON the include path explicitly. Mirrors src/firm/motion/
-    # navigator/CMakeLists.txt's own motion_planner_lib target, which
-    # already adds this same directory for the identical reason.
-    "${MOTION_DIR}/planner"
 )

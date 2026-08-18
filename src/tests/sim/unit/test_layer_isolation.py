@@ -20,10 +20,20 @@ interfaces its per-target implementations bind to (136-004 moved
 `TestSim::SimClock`/`SimSleeper`/`SimPlant` now implement HAL interfaces
 from outside `hal/` -- the same "implementor reaches up to the interface
 it implements" shape `hardware/` already had). None of the three may reach
-`messages/`, `config/`, `com/`, `kinematics/`, `motion/`, or `app/` --
+`messages/`, `config/`, `com/`, `kinematics/`, `control/`, or `core/` --
 reaching the wire schema or generated boot config from a driver is what
 kills its reuse under ``-DHOST_BUILD``/sim, and reaching upward past `hal/`
 inverts the layering outright.
+
+``src/firm/motion/`` -- the planner/navigator/odometry tree this list used
+to also name -- was deleted outright by the DifferentialDrive-kernel
+exploratory rewrite (2026-08-15, differentialdrive-one-class-one-fiber-
+exploratory-worktree.md): motion queueing folded into
+``Control::DifferentialDrive`` (the wheel kernel, ``src/firm/control/``)
+and the application layer. It was never one of this test's own checked
+``_LAYERS`` entries (only named in this prose as a forbidden reach target
+for hal/platform/hardware) -- there is nothing left to update in the
+grep itself, only this comment.
 
 ``platform/host/`` is excluded: it is the host PLATFORM (the sim), whose
 whole job is to compose the firmware it substitutes primitives for, so it

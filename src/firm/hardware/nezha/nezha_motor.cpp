@@ -1,6 +1,7 @@
 #include "hardware/nezha/nezha_motor.h"
 
 #include <cmath>
+#include <cstdio>
 #ifdef HOST_BUILD
 #include <iostream>
 #endif
@@ -91,10 +92,9 @@ void NezhaMotor::setNeutral(Hal::Neutral mode)
     mode_ = Mode::Neutral;
 }
 
-void NezhaMotor::applyTravelCalib(float travelCalib)
-{
-    config_.wheelTravelCalib = travelCalib;
-}
+// applyTravelCalib is GONE — counts-native leaf (see nezha_motor.h's own
+// header): position()/velocity() report raw shaft counts; the mm
+// conversion belongs to the application layer.
 
 
 float NezhaMotor::position() const { return lastPosition_; }
@@ -106,13 +106,29 @@ float NezhaMotor::appliedDuty() const
     return static_cast<float>(lastWrittenPct_) / 100.0f;
 }
 
+void NezhaMotor::emergencyStop()
+{
+    // Clear the STAGED target too, so a tick() that does arrive later
+    // cannot re-apply the pre-emergency duty behind the sentinel's back.
+    dutyTarget_ = 0.0f;
+    mode_ = Mode::Active;
+    // Straight down the never-shaped stop path: writeShapedDuty()
+    // short-circuits dwell/throttle/slew/dedupe for an exact zero anyway
+    // (and discards the crawl sigma-delta carry), so this is the SAME
+    // write a commanded stop makes -- it just does not wait for a tick()
+    // that may never come. lastTickUs_ is the freshest timestamp this leaf
+    // has; the value only feeds the dwell timer, which zero bypasses.
+    writeShapedDuty(0.0f, static_cast<uint32_t>(lastTickUs_ / 1000));
+}
+
 void NezhaMotor::tick(uint64_t nowUs)
 {
     uint32_t nowMs = static_cast<uint32_t>(nowUs / 1000);
 
     int32_t raw = collectEncoder();
-    float pos = (static_cast<float>(raw) / 10.0f)
-              * config_.wheelTravelCalib * static_cast<float>(config_.fwdSign);
+    // [counts] the 0x46 register's own unit (tenths of a shaft degree) --
+    // sign-corrected only, no unit conversion (counts-native leaf).
+    float pos = static_cast<float>(raw) * static_cast<float>(config_.fwdSign);
 
     if (hasLastTick_) {
         float elapsedTime = static_cast<float>(nowUs - lastTickUs_) / 1e6f;  // [s]
@@ -221,15 +237,17 @@ void NezhaMotor::writeRawDuty(float duty)
         return;
     }
 
-    // [us] Core::RobotLoop::kCycle (32 ms) - 5 ms jitter margin. HAND-SYNCED:
-    // devices/ may not include app/ headers (src/firm/DESIGN.md's devices-
-    // isolation invariant), so this literal must be updated whenever kCycle
-    // is -- see kCycle's own doc comment, which lists this as one of the
-    // values that moves with it.
-    static constexpr uint64_t kMinWriteIntervalUs = 27000;
+    // Write throttle from config (config_.writeThrottle [us]) -- replaces
+    // the old hand-synced kMinWriteIntervalUs = 27000 literal, which
+    // encoded "loop period - 5 ms" and drifted silently whenever the loop
+    // period changed. The composition root derives the value from the
+    // kernel's configured cycle period; <= 0 disables the throttle
+    // (write-on-change + slew still bound the write rate). Stop writes
+    // always bypass it.
     bool stopping = (pct == 0);
     uint64_t now = lastTickUs_;  // [us] this tick's timestamp (see file-header note)
-    if (!stopping && (now - lastWriteTimeUs_) < kMinWriteIntervalUs) {
+    if (!stopping && config_.writeThrottle > 0.0f &&
+        (now - lastWriteTimeUs_) < static_cast<uint64_t>(config_.writeThrottle)) {
         return;
     }
 
@@ -357,8 +375,10 @@ void NezhaMotor::hardReset()
 
 void NezhaMotor::softRebaseline()
 {
-    if (config_.wheelTravelCalib != 0.0f) {
-        float rawDeltaF = (lastPosition_ / (config_.wheelTravelCalib * static_cast<float>(config_.fwdSign))) * 10.0f;
+    // lastPosition_ is already in raw register units ([counts], sign-
+    // corrected), so undoing the sign is the whole inverse conversion.
+    if (config_.fwdSign != 0) {
+        float rawDeltaF = lastPosition_ / static_cast<float>(config_.fwdSign);
         encOffset_ += static_cast<int32_t>(rawDeltaF);
     }
     lastPosition_ = 0.0f;

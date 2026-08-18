@@ -268,12 +268,14 @@ int main() {
   beginScenario("twist: injected command drives the REAL plant's velocity ramp");
   std::printf("  TWIST commanded: v_x=%.1f mm/s omega=%.1f rad/s (corrId=%u)\n", static_cast<double>(kCmdVx),
               static_cast<double>(kCmdOmega), kTwistCorrId);
-  // 116-006 (MOVE protocol cutover): bare TWIST/injectTwist() is gone --
-  // a TIME-stop MOVE with a stop value/timeout far longer than this run
-  // is the equivalent "hold this twist indefinitely" injection.
-  sim.injectMove(kCmdVx, /*v_y=*/0.0f, kCmdOmega, TestSupport::MoveStopKind::kTime,
-                 /*stopValue=*/100000.0f, /*timeout=*/100000.0f, /*replace=*/true, /*id=*/kTwistCorrId,
-                 kTwistCorrId);
+  // 116-006 replaced bare TWIST with a TIME-stop MOVE; the kernel rework
+  // deregisters MOVE outright, so the injection is now a WHEELS command
+  // carrying the same body twist (injectBodyTwist() resolves it against the
+  // SAME baked trackwidth the firmware uses). A long duration is the "hold
+  // this twist indefinitely" equivalent -- the lease, not a stop condition,
+  // is what bounds it now.
+  sim.injectBodyTwist(kCmdVx, kCmdOmega, /*duration=*/100000.0f, /*id=*/kTwistCorrId,
+                      kTwistCorrId);
 
   printTraceHeader();
   bool twistAcked = false;
@@ -310,8 +312,14 @@ int main() {
 
   checkTrue(twistAcked, "the twist's corrId was acked OK");
   checkTrue(sawRampData, "at least one frame carried vel/enc data during the ramp");
-  checkFloatGe(peakVelLeft, 300.0f, "velLeft ramped well above its starting value toward the plant's ceiling");
-  checkFloatGe(peakVelRight, 300.0f, "velRight ramped well above its starting value toward the plant's ceiling");
+  // [mm/s]: these velocities come off DECODED TELEMETRY, and the telemetry
+  // encoder reading is millimetre-domain -- RobotLoop::publishWheels()
+  // converts the kernel's counts per wheel before staging the frame. Only
+  // readings taken straight off the LEAF (Hardware::NezhaMotor::velocity())
+  // are counts/s.
+  constexpr float kRampedWell = 300.0f;  // [mm/s]
+  checkFloatGe(peakVelLeft, kRampedWell, "velLeft ramped well above its starting value toward the plant's ceiling");
+  checkFloatGe(peakVelRight, kRampedWell, "velRight ramped well above its starting value toward the plant's ceiling");
   checkTrue(peakVelLeft > firstVelLeft, "velLeft increased over the ramp (the commanded direction)");
   checkTrue(lastEncLeft > firstEncLeft, "encLeft advanced over the ramp (real encoder movement)");
   std::printf("  RAMP OK: velLeft/velRight reached ~%.0f/%.0f mm/s (plant ceiling 500mm/s)\n\n",
@@ -343,6 +351,7 @@ int main() {
   // controller actively braking to a small residual any more. The bound
   // is what a ~0.23 s plant genuinely decays to across this window from
   // the ramp's peak, not a controller-quality figure.
+  // [mm/s] -- telemetry-sourced, so millimetre-domain (see kRampedWell).
   constexpr float kConvergedVelocity = 30.0f;  // [mm/s]
 
   beginScenario("stop: STOP acks OK, active clears, velocity converges to (approximately) zero");

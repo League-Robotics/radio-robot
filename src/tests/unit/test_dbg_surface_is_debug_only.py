@@ -171,25 +171,36 @@ def test_robot_loop_tuning_baseline_members_cost_a_shipped_image_nothing(token):
 # ---------------------------------------------------------------------------
 
 def test_drive_setters_are_unguarded_on_purpose():
-    """`Drive::setSpeedFloor()`/`setASteady()`/`setPositionErrorMax()` are
-    ordinary public setters and stay compiled in every build.
+    """`DifferentialDrive::setSpeedFloor()`/`setAdaptation()`/
+    `setPositionErrorMax()` are ordinary public setters and stay compiled in
+    every build.
 
-    That is deliberate, not an oversight: they are plain assignments into
-    `AdaptationBounds` (which `Drive::configure()` writes at boot anyway),
-    they are what a future WHEEL_CONTROL wire push would call, and guarding
-    them would make `drive.h` read differently depending on a macro that has
-    nothing to do with Drive. What must be debug-only is the wire SURFACE
-    that reaches them -- which is what every test above holds. This test
-    exists so the distinction is recorded rather than rediscovered as a
-    suspected inconsistency.
+    That is deliberate, not an oversight: they are plain assignments into the
+    kernel's own `Config` (which `setConfig()` writes at boot anyway), they
+    are what a WHEEL_CONTROL wire push calls, and guarding them would make
+    the header read differently depending on a macro that has nothing to do
+    with the drive. What must be debug-only is the wire SURFACE that reaches
+    them -- which is what every test above holds. This test exists so the
+    distinction is recorded rather than rediscovered as a suspected
+    inconsistency.
+
+    SIGNATURES UPDATED for the DifferentialDrive kernel rework: the setters
+    are CHAINABLE now, so they return `DifferentialDrive&`, not `void`
+    (config surface 1 of 3: construct empty, chain setters). `setASteady()`
+    no longer exists on its own -- aSteady is one of the three Stage C
+    parameters folded into the grouped `setAdaptation(biasMax, tauAdapt,
+    aSteady)`, grouped precisely because they must move together against the
+    fiber's per-cycle config snapshot.
     """
     text = _DRIVE_H.read_text()
-    for setter in ("void setSpeedFloor(", "void setASteady(",
-                   "void setPositionErrorMax("):
-        assert setter in text, f"{setter} missing from drive.h"
+    for setter in ("DifferentialDrive& setSpeedFloor(",
+                   "DifferentialDrive& setAdaptation(",
+                   "DifferentialDrive& setPositionErrorMax("):
+        assert setter in text, f"{setter} missing from differential_drive.h"
     guarded = _lines_guarded_by(_DRIVE_H, "ROBOT_DEBUG")
     for number, line in enumerate(text.splitlines()):
-        if "void setSpeedFloor(" in line or "void setASteady(" in line:
+        if ("DifferentialDrive& setSpeedFloor(" in line
+                or "DifferentialDrive& setAdaptation(" in line):
             assert not guarded[number], (
-                "the Drive setters are intentionally unguarded -- see this "
+                "the DifferentialDrive setters are intentionally unguarded -- see this "
                 "test's own docstring before changing that")
