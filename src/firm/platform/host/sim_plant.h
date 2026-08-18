@@ -143,6 +143,19 @@ class SimPlant : public Hal::I2CBus {
   // this defaults OFF and who turns it on.
   void setEncoderJitter(bool enabled);
 
+  // setEncoderCountsPerMm() -- how many wire counts this synthetic plant
+  // emits per millimetre of travel.
+  //
+  // THIS MUST MATCH THE travel_calib THE FIRMWARE DECODES WITH, and it is
+  // settable precisely so it can be DERIVED from the active robot config
+  // rather than hardcoded next to it. When the two drift, nothing fails
+  // loudly: the firmware simply perceives every distance and velocity off
+  // by the ratio, a closed loop settles short of where it believes it is,
+  // and a square tour misses closure by hundreds of mm with every
+  // individual subsystem testing clean. That happened -- 0.7837 vs
+  // 0.704871, an 11.2% over-read, 704 mm of closure error.
+  void setEncoderCountsPerMm(float countsPerMm);
+
   // OTOS drift/bias -- deterministic, per OtosPlant::setDrift()'s own
   // comment (no RNG anywhere in either plant).
   void setOtosDrift(float xDrift, float yDrift, float headingDrift);  // [mm] [mm] [rad]
@@ -208,6 +221,8 @@ class SimPlant : public Hal::I2CBus {
   // Wire-parsed duty, off the 0x60 frame only -- NEVER read back from
   // Hardware::NezhaMotor::appliedDuty() (no back-channel of any kind, per
   // this ticket's own acceptance criteria).
+  // [counts/mm] wire encoding scale -- see setEncoderCountsPerMm().
+  float encoderCountsPerMm_ = 1.4187f;
   float leftDuty_ = 0.0f;   // [-1,1]
   float rightDuty_ = 0.0f;  // [-1,1]
 

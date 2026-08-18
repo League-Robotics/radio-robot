@@ -123,6 +123,34 @@ class SimHarness {
           0.5f * (cfg.motors.travel_calib_left + cfg.motors.travel_calib_right);
       if (travelCalibMean > 0.0f) {
         graph_.drive().setFullDutyVelocity(kDefaultDutyVelMax * 10.0f / travelCalibMean);
+
+        // AND the plant's encoder wire scale, from the SAME baked value.
+        //
+        // This is not optional bookkeeping. The plant emits counts; the
+        // firmware decodes them with travel_calib. If the two disagree the
+        // robot silently perceives every distance and velocity off by the
+        // ratio -- a closed loop then settles short of where it believes
+        // it is, and NOTHING fails: each subsystem tests clean, telemetry
+        // looks plausible, and only a closed-loop tour reveals it.
+        //
+        // It has already happened once. bench_test_config.cpp used to pin
+        // Hal::MotorConfig::wheelTravelCalib to 0.704871 with a comment
+        // saying it MUST be the reciprocal of the plant's hardcoded
+        // constant. The counts-native leaf deleted that field, correctly,
+        // and the synchronisation went with it -- leaving the plant on
+        // 0.704871 while the firmware decoded with tovez's 0.7837. An
+        // 11.2% over-read; the square tour missed closure by 704 mm.
+        //
+        // Derived, never hardcoded, so the two cannot drift again.
+        //
+        // NOTE THE SCALE: handleMotorRead() passes this through
+        // lroundToTenthsMm(), which itself applies the x10 that turns
+        // degrees into the wire's tenth-degree counts. So the value here is
+        // counts per mm BEFORE that x10 -- i.e. 1/travel_calib, not
+        // 10/travel_calib. The historical constant 1.4187 is exactly
+        // 1/0.704871, which is the check: pass 10/tc and every reading
+        // comes out 10x, which is how this comment came to be written.
+        plant_.setEncoderCountsPerMm(1.0f / travelCalibMean);
       }
     }
 

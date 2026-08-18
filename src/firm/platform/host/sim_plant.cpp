@@ -177,13 +177,17 @@ int SimPlant::handleMotorWrite(uint8_t* data, int len) {
 // (previously the plant packed mm, which only read true when travelCalib==1.0
 // and silently under-read by ~30% the moment the real ml/mr calibration was
 // pushed). counts = mm * 360/(pi*80.77) = mm * 1.4187 for the tovez wheel.
-constexpr float kEncoderCountsPerMm = 1.4187f;
+// DEFAULT ONLY -- the live value is SimPlant::encoderCountsPerMm_, which a
+// composition root should derive from the active robot's travel_calib (see
+// SimPlant::setEncoderCountsPerMm()). Kept as the historical tovez number so
+// a harness that never sets it behaves exactly as before.
+constexpr float kDefaultEncoderCountsPerMm = 1.4187f;
 
 int SimPlant::handleMotorRead(uint8_t* data, int len) {
   if (len != 4) return kNakStatus;
   WheelPlant& plant = mutableWheelPlant(selectedPort_);
   if (plant.disconnected()) return kNakStatus;
-  writeLeInt32(data, lroundToTenthsMm(plant.reportedPosition() * kEncoderCountsPerMm));
+  writeLeInt32(data, lroundToTenthsMm(plant.reportedPosition() * encoderCountsPerMm_));
   return kOk;
 }
 
@@ -320,6 +324,10 @@ void SimPlant::setEncSlip(int port, float rate, float magnitudeMm) {
 void SimPlant::setEncoderJitter(bool enabled) {
   left_.setEncoderJitter(enabled);
   right_.setEncoderJitter(enabled);
+}
+
+void SimPlant::setEncoderCountsPerMm(float countsPerMm) {
+  if (countsPerMm > 0.0f) encoderCountsPerMm_ = countsPerMm;
 }
 
 void SimPlant::setOtosDrift(float xDrift, float yDrift, float headingDrift) {

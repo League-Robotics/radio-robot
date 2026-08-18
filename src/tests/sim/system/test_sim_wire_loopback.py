@@ -375,7 +375,18 @@ def test_move_wheels_with_embedded_0x0a_byte_round_trips_through_real_codec():
         # settles slightly off. Measured at this test's own 90 mm/s operating
         # point after _DRIVE_SETTLE_CYCLES: left +0.32%, right +0.66%.
         #
-        # 2% still discriminates hard for what this test actually guards: a
+        # WIDENED 2% -> 10% when the sim plant's encoder scale was fixed to
+        # match the firmware's travel_calib. Before that fix the plant
+        # over-reported travel by 11.2%, which happened to CANCEL most of
+        # this profile's real open-loop shortfall and made the readback look
+        # tight. It was never tight; it was two errors in opposite
+        # directions. This test drives tovez_nocal -- the NO-CALIBRATION
+        # profile, every wheel_control gain 0, so there is no feedback to
+        # close any gap -- and a pure open-loop map genuinely lands several
+        # percent off. That is the profile's documented character, not a
+        # codec fault.
+        #
+        # 10% still discriminates hard for what this test actually guards: a
         # mis-decoded float32 (the 0x0A byte dropped, XORed wrong, or the
         # frame truncated at the delimiter) does not land 2.8% off -- it
         # lands orders of magnitude off, at zero, or fails to decode at all.
@@ -383,12 +394,12 @@ def test_move_wheels_with_embedded_0x0a_byte_round_trips_through_real_codec():
         # the encoder-advance checks below.
         cmd_vel_left = float(loop._lib.sim_cmd_vel_left(loop._handle))
         cmd_vel_right = float(loop._lib.sim_cmd_vel_right(loop._handle))
-        assert cmd_vel_left == pytest.approx(v, rel=0.02), (
-            f"left wheel measured velocity {cmd_vel_left} is not within 2% of commanded {v} -- "
+        assert cmd_vel_left == pytest.approx(v, rel=0.10), (
+            f"left wheel measured velocity {cmd_vel_left} is not within 10% of commanded {v} -- "
             "the embedded-0x0A velocity did not decode correctly"
         )
-        assert cmd_vel_right == pytest.approx(v, rel=0.02), (
-            f"right wheel measured velocity {cmd_vel_right} is not within 2% of commanded {v} -- "
+        assert cmd_vel_right == pytest.approx(v, rel=0.10), (
+            f"right wheel measured velocity {cmd_vel_right} is not within 10% of commanded {v} -- "
             "the embedded-0x0A velocity did not decode correctly"
         )
 
