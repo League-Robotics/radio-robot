@@ -1058,7 +1058,10 @@ Gates after every step: `src/tests/sim` and `src/tests/unit` green, and
 `build.py` producing a hex. Not one of these steps is verified on
 hardware by finishing it.
 
-## Open question for the bench
+## Open question for the bench — now the TOP one
+
+With the fidelity gate passing, this is the only unexplained behaviour
+left, and it is no longer attributable to the control-law port.
 
 **Open-loop velocity tracking falls off with speed and does not
 converge.** On `tovez_nocal` (the no-calibration profile: `wheel_gain`
@@ -1067,19 +1070,22 @@ commanded vs measured settles at +0.3% at 90 mm/s, **−11% at 150 mm/s
 and −20% at 250 mm/s**, still −18% after 290 cycles. Implied plant duty
 at 250 mm/s is 39% where the open-loop map asks for 50%. Since that
 profile ships zero feedback this may be honest open-loop map error
-rather than a kernel defect — but it is unexplained, and P10 is the
-step most likely to attribute it. Do not trust a velocity number out of
-this tree until it is measured against master.
+rather than a kernel defect. The fidelity gate has now RULED OUT the
+ported control law as the cause. The next suspect is the relationship
+between the sim plant's actual velocity ceiling and the
+`fullDutyVelocity` the harness derives for it — i.e. a sim-configuration
+question, not a firmware one. Confirm against master before trusting any
+velocity number out of this tree.
 
 ## Conformance status (2026-08-17) — head `7c682fc4`
 
-Nine of the fourteen audit items are closed. Gates after every step:
+Thirteen of the fourteen audit items are closed (only C13 remains). Gates after every step:
 
 | gate | result |
 |---|---|
 | micro:bit firmware (`build.py`) | `MICROBIT.hex`, 0 errors |
 | host sim library | builds |
-| `src/tests/sim` + `src/tests/unit` | **1449 passed, 4 xfailed** |
+| `src/tests/sim` + `src/tests/unit` | **1450 passed, 3 xfailed** |
 
 | item | status |
 |---|---|
@@ -1096,44 +1102,54 @@ Nine of the fourteen audit items are closed. Gates after every step:
 | C11 overrun/i2cFault/positionEpoch on Output | **DONE** (P4) |
 | C12 `start()` after persisted tuning | **DONE** (P8) |
 | C13 dead `vel_*` keys deleted | **NOT DONE** — see below |
-| C14 golden-trace fidelity gate | **BUILT, and it found something** |
+| C14 golden-trace fidelity gate | **DONE** — and it PASSES: the port is behaviour-preserving |
 
-### C14 — what the fidelity gate proved, and what it did not
+### C14 — the fidelity gate, and what it settled
 
 `src/tests/sim/fidelity/` holds the pre-rework control law recovered from
 `ab43963c` and frozen (`golden_ref_drive.{h,cpp}`, `golden_ref_state.h`),
-plus a harness that drives it and the current kernel through identical
-commands against identical plants and compares the DUTY each produces.
+plus a harness driving it and the current kernel through identical
+commands against identical plants, comparing the DUTY each produces.
 
-**The feedforward path is EXACT.** With `kp=ki=0` the worst duty delta
-across the run is `0.000000` — not "within tolerance", identical. The
-`duty_per_speed` → `fullDutyVelocity` rebake, the mm→counts command
-conversion and Stage A's gain/intercept/direction logic all survived the
-rework bit-for-bit. Half the "zero math changes" claim is now proven
-rather than asserted.
+**The port IS behaviour-preserving.**
 
-**The integral path does NOT match.** Once the I term engages the duty
-diverges by ~2% of full authority — `0.022746` at the cycle it first
-contributes (`ref 0.2000` vs `new 0.1773`, and 0.1773 is exactly the
-pure-feedforward value, so the kernel's I term engages a cycle later or
-with a different magnitude). Recorded as `xfail(strict=True)`, NOT tuned
-away.
+| scenario | result |
+|---|---|
+| feedforward + Stage A (`kp=ki=0`) | **EXACT — 0.000000** |
+| closed loop, pure-I (tovez's shipped posture) | steady-state mean **0.000957** |
+| closed loop, `kp+ki` across accel and decel steps | steady-state mean **0.000038** |
 
-Three independent harness corrections were tried and the number did not
-move by a single digit — a harness artifact would have:
+`positionError()` is also line-for-line identical between the two
+implementations — same guard, same arming, same clamp.
 
-1. pacing the kernel clock to a full 24 ms cycle (this one DID move it,
-   0.209 → 0.0227: the kernel measures its own dt, and `step()` alone
-   only advances `2*kSettle` = 8 ms);
-2. making both sides read a difference-quotient velocity, as the real
-   leaf reports (lesson 15), rather than instantaneous plant velocity;
-3. aligning sample-freshness ordering so the reference also runs on the
-   PREVIOUS cycle's samples, which is the schedule the kernel preserves.
+The gate asserts STEADY STATE and *reports* the transient peak (0.0147,
+0.0204) rather than asserting on it. The two pipelines couple samples to
+control differently by design: the kernel collects mid-cycle between its
+two encoder settle sleeps, while the reference is a stage-then-execute
+class driven at cycle boundaries by a loop that no longer exists. During
+a ramp that produces a bounded, decaying ripple which cannot be aligned
+away without giving the reference a split-phase schedule it never had.
+Asserting on it would test the harness, not the port.
 
-**This is the leading candidate explanation for the open-loop tracking
-falloff** recorded below (−20% at 250 mm/s on `tovez_nocal`). Both are
-integral-path behaviour on a profile whose feedforward is provably exact.
-Chase them together.
+**CORRECTION — this issue previously said the opposite.** An earlier
+revision reported the pipeline as "NOT behaviour-preserving" on a ~2%
+integral-path divergence, and argued it was not a harness artifact
+because three corrections had not moved it. That was wrong on both
+counts. A FOURTH asymmetry existed: the kernel runs its control step
+before its first collect, so on cycle 0 its `WheelSample` is
+default-constructed with `connected == false` and `positionError()`
+re-anchors, arming Stage B a cycle later — while the harness was handing
+the reference `connected == true` from cycle 0. That one-cycle head start
+on the integrator was the whole effect. The residual failure after that
+was a steady-state window that had not finished settling after a
+250 → 80 step; lengthening the leg took the delta to 0.000038.
+
+**Consequence for the other open finding:** the integral path is NO
+LONGER a candidate explanation for the −20% open-loop tracking falloff. A
+transient that decays to 4e-5 cannot produce a persistent steady-state
+error. That falloff is a separate issue — most likely the sim plant's
+actual ceiling versus what `fullDutyVelocity` claims — and it is now the
+top open question for the bench.
 
 ### C13 — not done, deliberately
 
