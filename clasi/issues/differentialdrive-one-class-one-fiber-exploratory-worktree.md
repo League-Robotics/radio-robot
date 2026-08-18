@@ -1242,16 +1242,54 @@ CANCELLING this second error. Removing it exposed more of the other one.
 - *The tour pre-compensating gains.* `CAL["L"]=CAL["R"]=1.0`; the
   stationary prelude does not scale commands.
 
-**The lead worth chasing next.** Velocity is exact and distance is short,
-so the commanded WINDOW must be short. In `SimHarness` the kernel's
-`step()` is called once per `robotLoop_.cycle()`, i.e. once per
-`kCycleDtUs` = `RobotLoop::kCycle` = **32 ms** — while the kernel's own
-cadence, `kKernelCyclePeriod`, is **24 ms**. On hardware the kernel's
-fiber runs at 24 ms INDEPENDENTLY of RobotLoop's 32 ms; in the sim the
-two are welded 1:1. That is a genuine sim-fidelity gap whether or not it
-is the whole cause — the simulated control loop runs 25% slower relative
-to physics than the real one does, and every lease and duration is
-evaluated against it. Start there.
+**RESOLVED (2026-08-18).** The 24/32 ms lead above was a red herring —
+the model cancels it. The real causes, found by cycle-level measurement
+and fixed:
 
-This is host/sim-harness territory, NOT the kernel. It does not affect
-`src/firm/diffdrive/` and does not block the package extraction.
+1. **`SimConfigConn` ack polling never advanced sim time, and drained
+   the wrong buffer.** `poll_ack()` slept on the WALL clock while the
+   sim (manually stepped) stood frozen — the injected SET_FIELD was
+   never processed and no frame could carry its ack; and it drained
+   `read_pending_binary_tlm_frames()`, a Python queue only the tick
+   thread ever fills. Net effect: on a manually-stepped loop, config
+   pushes timed out on their FIRST key, `set_config()` aborted the
+   rest, and the orphaned command applied whenever the caller next
+   stepped. `configure_from_robot()` therefore delivered travel_calib
+   to ONE wheel and none of the pid zeros — asymmetric calibration and
+   a live `ki=6` nobody asked for, invisible because ack REPEATS let
+   motion-heavy callers (the tour with its tick thread) catch later
+   copies. Fixed: manual-mode `poll_ack()` steps the sim and drains
+   `drain_pending_tlm()`.
+2. **The plant now OBEYS the live config.**
+   `SimHarness::syncPlantToConfig()`, every cycle: per-wheel plant gain
+   `= 1/duty_per_speed`, per-wheel encoder scale `= 1/travel_calib`,
+   ports from `left_port`/`right_port`. The config stops being a
+   description that can contradict the plant and becomes the plant's
+   own parameters — the whole class of "hardware JSON vs synthetic
+   plant" drift is structurally gone. (This also lifted
+   `test_motor_primitive`'s distance xfail: encoder distance is now
+   exact.)
+3. **A conformance-pass rounding bug of my own**: the three rebaked
+   leaf rest thresholds were written 100/60/60 instead of the faithful
+   102/64/64. The encoder's at-rest 1-LSB dither is 62.5 counts/s at
+   the sim cadence — the original 5 mm/s (=63.8) cleared it by 2%, and
+   my rounding-down crossed under it, so a parked motor read as
+   "moving" and `reconfigure()` refused forever. Would have bitten on
+   hardware too.
+4. **The tour's own constants**: `INTER_SEGMENT_DWELL` 0.1 s was sized
+   for the planner's land-at-zero shaping; the kernel coasts ~0.4 s
+   after lease expiry, so every turn began with ~70 mm/s of leg
+   momentum aboard. Raised to 0.6 s in this worktree; `--leg-mode`/
+   `--turn-mode` now default to `wheels` (MOVE is deregistered here).
+
+**Square tour now: closure 704 → 73 mm, heading error 90.5° → 12.4°,
+path 73% → 97.6%.** A single leg from rest lands 499.5/500. The
+remaining ~13 mm over the 60 mm bound is quantified open-loop transient
+modeling (the model does not subtract the ~+3°/turn the non-reversing
+wheel adds during the reversing wheel's 100 ms dwell, and budgets
+hardware-tau coast) — expected for a shaping-free kernel driven
+open-loop, not a defect. Suites: **1451 passed, 2 xfailed** (the
+distance xfail LIFTED).
+
+All host/sim-harness territory except item 3 (leaf constants — a
+genuine firmware fix). Does not block the package extraction.
