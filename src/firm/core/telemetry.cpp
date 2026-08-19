@@ -71,18 +71,29 @@ void Telemetry::update(const Types::RobotState& state, const Control::Differenti
   frame_.cycleBusy = state.time.cycleBusy;
   frame_.cyclePeriod = state.time.cyclePeriod;
 
-  frame_.dutyPerSpeedLeft = drive.dutyPerSpeedLeft();
-  frame_.dutyPerSpeedRight = drive.dutyPerSpeedRight();
-  frame_.biasLeft = drive.biasLeft();
-  frame_.biasRight = drive.biasRight();
-  frame_.pidLeft = drive.pidLeft();
-  frame_.pidRight = drive.pidRight();
+  // EXPLORATORY-KERNEL REWRITE (2026-08-15): dutyPerSpeedLeft/Right,
+  // biasLeft/Right, and pidLeft/Right were Stage A/B/C observability
+  // floats the OLD Control::DifferentialDrive exposed directly
+  // (dutyPerSpeedLeft()/biasLeft()/pidLeft() etc). The kernel does not
+  // expose them on its public interface at all (differential_drive.h's
+  // Output has no bias/pid fields, and fullDutyVelocity is ONE
+  // kernel-wide value, not a left/right pair) -- held at zero here. The
+  // wire FRAME SHAPE is unchanged (no protocol change); these six fields
+  // simply always read 0 now.
+  const Control::DifferentialDrive::Output out = drive.output();
+  frame_.dutyPerSpeedLeft = 0.0f;
+  frame_.dutyPerSpeedRight = 0.0f;
+  frame_.biasLeft = 0.0f;
+  frame_.biasRight = 0.0f;
+  frame_.pidLeft = 0.0f;
+  frame_.pidRight = 0.0f;
 
   setFlag(kFlagActive, state.command.moveActive);
   setFlag(kFlagConnLeft, state.wheelLeft.connected);
   setFlag(kFlagConnRight, state.wheelRight.connected);
   setFlag(kFlagFaultI2CSafetyNet, state.health.i2cSafetyNetCount > 0);
   setFlag(kFlagFaultWedgeLatch, state.health.wedgeLatch);
+  setFlag(kFlagFaultKernelStalled, state.health.kernelStalled);
   setFlag(kFlagFaultCommsMalformed, state.health.commsMalformedCount > 0);
   setFlag(kFlagFaultCommandsDropped, state.health.commandsDroppedCount > 0);
   setFlag(kFlagOtosPresent, state.otos.present);
@@ -94,8 +105,16 @@ void Telemetry::update(const Types::RobotState& state, const Control::Differenti
   setFlag(kFlagFaultPositionClamped, state.health.positionClamped);
   setFlag(kFlagFaultWheelFrozenLeft, state.health.wheelFrozenLeft);
   setFlag(kFlagFaultWheelFrozenRight, state.health.wheelFrozenRight);
-  setFlag(kFlagFaultWheelDeficitLeft, drive.deficitLeft());
-  setFlag(kFlagFaultWheelDeficitRight, drive.deficitRight());
+  // Deficit flags now come straight from the kernel's own Output (Stage
+  // B/C observability that survived the interface, unlike bias/pid
+  // above) -- the OLD drive.deficitLeft()/deficitRight() getters are
+  // gone with the old class.
+  setFlag(kFlagFaultWheelDeficitLeft, out.deficitLeft);
+  setFlag(kFlagFaultWheelDeficitRight, out.deficitRight);
+  // Stall flags: state.health.stallLeft/Right now mirror the kernel's OWN
+  // stall latch (RobotLoop::publishWheels() copies drive.output().
+  // stallLeft/Right every cycle -- the kernel halts and latches itself;
+  // RobotLoop no longer computes or re-latches this).
   setFlag(kFlagFaultStallLeft, state.health.stallLeft);
   setFlag(kFlagFaultStallRight, state.health.stallRight);
 

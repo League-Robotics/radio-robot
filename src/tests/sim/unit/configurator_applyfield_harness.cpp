@@ -55,14 +55,13 @@
 #include "control/differential_drive.h"
 #include "config/boot_config.h"
 #include "config/robot.h"
+#include "host_fiber.h"
+#include "hal/clock.h"
 #include "hal/motor.h"
 #include "hardware/generic/real_otos.h"
 #include "firm/types/robot_state.h"
 #include "messages/envelope.h"
 #include "messages/robot_config.h"
-#include "motion/navigator/arc_solver.h"
-#include "motion/planner/planner.h"
-#include "motion/planner/planner_types.h"
 
 namespace {
 
@@ -114,7 +113,11 @@ class RecordingMotor : public Hal::Motor {
   void requestSample() override {}
   void setDuty(float duty) override { lastDuty = duty; }
   void setNeutral(Hal::Neutral) override {}
-  void applyTravelCalib(float travelCalib) override { lastTravelCalib = travelCalib; }
+  // Records the emergency zero so a test can assert it actually
+  // happened -- a mock that silently swallowed it would make the
+  // sentinel's whole point untestable.
+  void emergencyStop() override { ++emergencyStopCount; }
+  int emergencyStopCount = 0;
   [[nodiscard]] bool reconfigure(const Hal::MotorConfig&) override { return true; }
   void tick(uint64_t) override {}
 
@@ -133,7 +136,19 @@ class RecordingMotor : public Hal::Motor {
 
   // --- recorded outputs ---
   float lastDuty = 0.0f;
-  float lastTravelCalib = -1.0f;  // sentinel: configureMotor() must overwrite this to pass
+  // lastTravelCalib -- DELETED (exploratory-kernel rewrite, 2026-08-15):
+  // applyTravelCalib() no longer exists on Hal::Motor.
+};
+
+class StubClock : public Hal::Clock {
+ public:
+  uint64_t nowMicros() const override { return 0; }
+};
+
+class StubSleeper : public Hal::Sleeper {
+ public:
+  void sleepMillis(uint32_t) override {}
+  void yield() override {}
 };
 
 class RecordingOtos : public Hal::Otos {
@@ -174,11 +189,22 @@ int main() {
 
   RecordingMotor motorL, motorR;
   RecordingOtos otos;
-  Control::DifferentialDrive drive(motorL, motorR, /*trackWidth=*/128.0f);
-  Motion::PlannerLimits limits;
-  Motion::Planner planner(limits);
-  Motion::NavigatorLimits navigatorLimits;
-  Core::Configurator configurator(drive, motorL, motorR, otos, planner, navigatorLimits, /*tuningStore=*/nullptr);
+  StubClock clock;
+  StubSleeper sleeper;
+  // The kernel takes its launcher at construction now. This harness
+  // never calls start() -- FailingFiberLauncher aborts if it ever
+  // does, which is the point: no fibers in a host test.
+  TestSim::FailingFiberLauncher fiberLauncher;
+  // Hal -> package-port adapters (control/differential_drive.h): the
+  // kernel is the DiffDrive package and speaks its own ports.
+  Control::MotorPort portLeft(motorL);
+  Control::MotorPort portRight(motorR);
+  Control::ClockPort portClock(clock);
+  Control::SleeperPort portSleeper(sleeper);
+  Control::LauncherPort portLauncher(fiberLauncher);
+  Control::DifferentialDrive drive(portLeft, portRight, portClock,
+                                   portSleeper, portLauncher);
+  Core::Configurator configurator(drive, motorL, motorR, otos, /*tuningStore=*/nullptr);
 
   // config_ starts default-constructed (all-zero) -- applyField() is
   // exercised directly, without loadBaked(), so every scenario's
@@ -289,26 +315,21 @@ int main() {
     checkFloatEq(configurator.config().drive.wheel_gain_right_accel, 0.0f,
                 "config().drive.wheel_gain_right_accel untouched by a wheel_gain_left_accel push");
 
-    // Isolate Stage A the same way configurator_applygroup_harness.cpp's own
-    // DRIVE scenario does: zero wheelControl (Stage B/C inert) and set
-    // dutyPerSpeed=1 so tick()'s written duty is exactly correctedCommand().
-    drive.setDutyPerSpeed(1.0f, 1.0f);
-
-    Types::RobotState state;
-    state.wheelLeft.cmdVelocity = 200.0f;  // [mm/s]
-    state.wheelRight.cmdVelocity = 0.0f;
-    state.time.cyclePeriod = 50000;  // [us]
-    drive.tick(state);
-    checkFloatEq(motorL.lastDuty, 50.0f,
-                "tick() duty reflects the pushed wheel_gain_left_accel=4.0 (200/4.0) -- "
-                "install(target) was actually reached, not just config_ written");
+    // EXPLORATORY-KERNEL REWRITE (2026-08-15): the deeper tick()-level
+    // verification this scenario used to run is GONE -- the kernel has no
+    // tick(state)/cmdVelocity/setDutyPerSpeed() surface any more. Verified
+    // instead at the kernel's own config() level, the same way
+    // configurator_applygroup_harness.cpp's DRIVE scenario now does.
+    checkFloatEq(drive.config().wheelGain[0][0], 4.0f,
+                "drive.config().wheelGain[0][0] reflects the push -- install(target) was "
+                "actually reached, not just config_ written");
   }
 
   beginScenario(
       "A valid WHEEL_CONTROL field push writes the CORRECT GROUP member "
-      "(not DRIVE's) and reaches Drive::configure() -- controlGains() "
-      "reflects the push, confirming applyField() indexes config_ by "
-      "target correctly across more than one group");
+      "(not DRIVE's) and reaches the kernel's own config() via "
+      "installDriveKernelConfig() -- confirms applyField() indexes config_ "
+      "by target correctly across more than one group");
   {
     const msg::ErrCode result =
         configurator.applyField(msg::ConfigGroupTarget::WHEEL_CONTROL, /*fieldNumber=*/7 /*pid_kp*/, 0.33f);
@@ -319,30 +340,37 @@ int main() {
                 "config().drive.wheel_gain_left_accel UNCHANGED by a WHEEL_CONTROL push -- "
                 "confirms the two groups are not aliased");
 
-    const Control::DifferentialDrive::ControlGains& gains = drive.controlGains();
-    checkFloatEq(gains.kp, 0.33f, "controlGains().kp reflects the WHEEL_CONTROL push via install(target)");
+    checkFloatEq(drive.config().kp, 0.33f,
+                "drive.config().kp reflects the WHEEL_CONTROL push via install(target)");
   }
 
   // --- install(target) reuse: same per-target effects applyGroup() has ----
+  //
+  // EXPLORATORY-KERNEL REWRITE (2026-08-15): MOTORS no longer applies
+  // travel_calib onto the motor leaf -- it feeds
+  // Core::buildDriveKernelConfig() instead, via the SAME
+  // installDriveKernelConfig() call DRIVE/WHEEL_CONTROL use, which is
+  // exactly as live-safe as those two already were. The per-side "refuses
+  // while moving" ERR_BUSY guard (Core::configureMotor(), 132-007) has no
+  // motion-safety reason to exist any more -- install(MOTORS) now always
+  // returns ERR_NONE, moving or not, through applyField() the same as
+  // through applyGroup().
 
   beginScenario(
-      "MOTORS field push while that side is in motion returns ERR_BUSY -- "
-      "install(target)'s existing per-side guard (Core::configureMotor(), "
-      "132-007) is reached the SAME way through applyField() as it is "
-      "through applyGroup()");
+      "MOTORS field push applies regardless of motion, ERR_NONE -- "
+      "install(target)'s per-side ERR_BUSY guard is GONE, reached the "
+      "SAME way through applyField() as it is through applyGroup()");
   {
-    motorL.stagedVelocity = 100.0f;  // [mm/s], well above the rest threshold
+    motorL.stagedVelocity = 100.0f;  // [mm/s] -- deliberately IN MOTION; no guard reads this any more
     motorL.stagedAppliedDuty = 0.3f;
-    motorL.lastTravelCalib = -1.0f;  // reset sentinel
 
     const msg::ErrCode result = configurator.applyField(
         msg::ConfigGroupTarget::MOTORS, /*fieldNumber=*/1 /*travel_calib_left*/, 0.81f);
-    checkEq(result, msg::ErrCode::ERR_BUSY, "applyField(MOTORS, travel_calib_left) result, left side in motion");
-    // config_ itself still reflects the write -- only install()'s FAN-OUT
-    // is refused for the busy side, matching applyGroup()'s own documented
-    // "decode succeeds, install() refuses" split.
+    checkEq(result, msg::ErrCode::ERR_NONE,
+           "applyField(MOTORS, travel_calib_left) result, left side in motion -- ERR_NONE, "
+           "no guard left to trip");
     checkFloatEq(configurator.config().motors.travel_calib_left, 0.81f,
-                "config().motors.travel_calib_left still reflects the write despite ERR_BUSY");
+                "config().motors.travel_calib_left reflects the write");
   }
 
   beginScenario(

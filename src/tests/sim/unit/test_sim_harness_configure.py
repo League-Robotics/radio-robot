@@ -62,17 +62,10 @@ _APP_SOURCES = [
     # reference to -- so this graph must link it.
     _SOURCE_DIR / "core" / "configurator.cpp",
     _SOURCE_DIR / "core" / "telemetry.cpp",
-    # Planner integration (2026-07-26): the on-robot Motion::Planner now
-    # drives the loop -- its library core joins every RobotLoop-linking
-    # dependency graph.
-    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "profile.cpp",
-    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "estimation.cpp",
-    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "shape.cpp",
-    _REPO_ROOT / "src" / "firm" / "motion" / "planner" / "planner.cpp",
-    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "arc_solver.cpp",  # 135-004
-    _REPO_ROOT / "src" / "firm" / "motion" / "navigator" / "navigator.cpp",  # 135-004
-    _SOURCE_DIR / "control" / "differential_drive.cpp",
-    _REPO_ROOT / "src" / "firm" / "motion" / "odometry.cpp",
+    # src/firm/motion/ (planner/navigator/odometry) is GONE -- the
+    # exploratory-kernel rewrite (2026-08-15) folded the wheel control it
+    # fed into Control::DifferentialDrive, one class + fiber.
+    _SOURCE_DIR / "diffdrive" / "differential_drive.cpp",
     _SOURCE_DIR / "core" / "preamble.cpp",
     # 130-002 -- the shared composition root (Core::composeRobot()/
     # RobotGraph) sim_harness.h now boots through, plus its
@@ -159,8 +152,6 @@ def test_sim_harness_configure_harness_compiles_and_passes(tmp_path):
             str(_SOURCE_DIR),
             "-I",
             str(_REPO_ROOT / "src"),
-            "-I",
-            str(_REPO_ROOT / "src" / "firm" / "motion" / "planner"),  # 135-004: navigator.h's bare #include "planner.h"
             "-I",
             str(_SUPPORT_DIR),
             "-I",

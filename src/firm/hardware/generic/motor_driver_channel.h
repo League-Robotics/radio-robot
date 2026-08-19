@@ -32,14 +32,17 @@ class MotorDriverChannel : public Hal::Motor {
   void requestSample() override {}  // no split-phase latch on these boards
   void setDuty(float duty) override;  // [-1, 1] -> driver speed command
   void setNeutral(Hal::Neutral) override;
-  void applyTravelCalib(float travelCalib) override {
-    config_.wheelTravelCalib = travelCalib;
-  }
+  // Immediate unstaged zero -- see Hal::Motor's own declaration. These
+  // boards run their own closed loop, so a zero speed command IS the stop.
+  void emergencyStop() override;
+  // applyTravelCalib() is GONE from Hal::Motor with the counts-native leaf
+  // (DifferentialDrive kernel rework): travel calibration belongs to the
+  // application now, and no mm value exists at or below this layer.
   [[nodiscard]] bool reconfigure(const Hal::MotorConfig& config) override;
   void tick(uint64_t nowUs) override;  // [us]
 
-  float position() const override { return position_; }   // [mm]
-  float velocity() const override { return velocity_; }   // [mm/s] signed
+  float position() const override { return position_; }   // [counts]
+  float velocity() const override { return velocity_; }   // [counts/s] signed
   float appliedDuty() const override { return appliedDuty_; }
   bool connected() const override { return driver_.connected(); }
   uint64_t sampleTime() const override { return driver_.sampleTime(); }
@@ -65,20 +68,29 @@ class MotorDriverChannel : public Hal::Motor {
   static constexpr float kDoubleRatio = 1.6f;
   static constexpr int32_t kDoubleFloor = 15;  // [counts]
 
-  float countsToMm(int32_t counts) const {
-    // wheelTravelCalib is [mm/count] on these boards. A Nezha-era
-    // mm/deg value in a robot JSON is the WRONG SCALE entirely and
-    // produces garbage positions until recalibrated (doc s3 item 4).
-    return static_cast<float>(counts) * config_.wheelTravelCalib *
-           static_cast<float>(config_.fwdSign);
+  // Counts-native leaf: the only thing left to apply here is the mirror-
+  // mount sign. The mm scale that used to be folded in (wheelTravelCalib,
+  // [mm/count] on these boards) is deleted from Hal::MotorConfig -- the
+  // application holds travel calibration now.
+  //
+  // NOTE for whoever finally wires this class up (nothing constructs it
+  // today): these boards count at a DIFFERENT resolution than the Nezha
+  // (whose count is 0.1 deg of shaft). The kernel's counts/s config --
+  // fullDutyVelocity, the PID gains, the stall/speed floors -- is all
+  // expressed in the leaf's own count unit, so it must be rebaked for
+  // this board, not copied from a Nezha robot JSON. The old comment here
+  // warned about exactly this hazard for the mm scale; it applies just as
+  // sharply now that counts go all the way up to the control law.
+  float signedCounts(int32_t counts) const {
+    return static_cast<float>(counts) * static_cast<float>(config_.fwdSign);
   }
 
   Hal::MotorDriver& driver_;
   int channel_;
   Hal::MotorConfig config_;
   int32_t offset_ = 0;      // [counts] software zero (resetPosition)
-  float position_ = 0.0f;   // [mm]
-  float velocity_ = 0.0f;   // [mm/s]
+  float position_ = 0.0f;   // [counts]
+  float velocity_ = 0.0f;   // [counts/s]
   float appliedDuty_ = 0.0f;
   bool commanded_ = false;  // reconfigure() guard: never-commanded is safe
   // begin() runs BEFORE the first bus exchange, so driver_.total() is

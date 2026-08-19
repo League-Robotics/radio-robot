@@ -301,9 +301,7 @@ list(APPEND SOURCE_FILES ${CC_FILES})
 # means the recursive glob above reaches it -- and it must not. Its sources
 # are the SIM plant/clock/ctypes bridge: host-only C++ (std::, dlopen-style
 # C ABI, no CODAL) the ARM toolchain cannot build, and sim_ctypes.cpp is a
-# shared-library entry point with no place in a firmware image. This is the
-# same shape of exclusion the motion planner/navigator trees already carry
-# below, for the same reason.
+# shared-library entry point with no place in a firmware image.
 #
 # The trailing "/" matters: it excludes the tree's CONTENTS without
 # depending on where the repo happens to be checked out. A nested CMake
@@ -320,39 +318,19 @@ list(FILTER INCLUDE_DIRS EXCLUDE REGEX "/platform/host(/|$)")
 # itself -- RECURSIVE_FIND_FILE above already covers everything remaining
 # under CODAL_APP_SOURCE_DIR (src/firm).
 
-# motion/ (moved back INTO src/firm by the platform/hardware/hal
-# reorganization, reversing sprint 122's sibling-tree split): the glob above
-# already reaches it, so the second MOTION_SOURCE_DIR glob that used to live
-# here is GONE. Re-adding one would double-list every motion source and link
-# each twice.
+# motion/ is GONE (the DifferentialDrive-kernel exploratory rewrite deleted
+# the whole tree -- planner/navigator/odometry/estimation folded into
+# Control::DifferentialDrive and the application layer) -- the
+# motion/(planner|navigator) exclusion regexes this comment used to document
+# have no matches left to exclude and were removed with it.
 #
-# What does NOT go away with it is the exclusion those globs carried, so it
-# moves up here and applies to SOURCE_FILES directly. motion/planner and
-# motion/navigator are each also a standalone host CMake project, with test
-# executables that each define their own main() and (planner only) a ctypes
-# shared-lib capi. None of either tree's tests/bench/py/build subtree may
-# link into the firmware image -- without this filter the glob pulls in
-# duplicate main() definitions and host-only code the ARM toolchain cannot
-# build. That is not hypothetical: sprint 135 ticket 006 hit exactly this
-# ("multiple definition of `main'") when navigator/tests/ was added without
-# the exclusion planner/tests/ already had.
-#
-# The planner LIBRARY CORE (profile/estimation/shape/planner.cpp) and the
-# navigator core (arc_solver/navigator.cpp) DO compile into the image --
-# only each standalone project's own subtrees are excluded.
-list(FILTER SOURCE_FILES EXCLUDE REGEX "/motion/(planner|navigator)/(tests|bench|py|build)/")
-list(FILTER SOURCE_FILES EXCLUDE REGEX "/motion/planner/capi\\.cpp")
-# ANY CMake build directory anywhere under src/firm (the standalone
-# motion_tests/planner_tests/navigator_tests builds all configure in-tree,
-# at both src/firm/motion/build and src/firm/motion/<sub>/build):
-# CMake's own generated feature-test sources (CompilerId*.cpp etc.) must
-# never be globbed into the firmware image.
+# ANY CMake build directory anywhere under src/firm: CMake's own generated
+# feature-test sources (CompilerId*.cpp etc.) must never be globbed into the
+# firmware image.
 list(FILTER SOURCE_FILES EXCLUDE REGEX "/build/")
-list(FILTER INCLUDE_DIRS EXCLUDE REGEX "/motion/(planner|navigator)/(tests|bench|py|build)")
 list(FILTER INCLUDE_DIRS EXCLUDE REGEX "/build(/|$)")
 # "${PROJECT_SOURCE_DIR}/src" stays on the include path: several headers say
-# `#include "firm/types/robot_state.h"` (the shared blackboard both src/firm
-# and the motion library stand on), which resolves through src/, not
+# `#include "firm/types/robot_state.h"`, which resolves through src/, not
 # src/firm.
 list(APPEND INCLUDE_DIRS "${PROJECT_SOURCE_DIR}/src")
 

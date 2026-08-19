@@ -1,15 +1,12 @@
 // preamble.cpp -- Core::Preamble implementation. See preamble.h's file
-// header for the module's full contract and the ported-constants table.
+// header for the module's full contract.
 #include "core/preamble.h"
 
 namespace Core {
 
-Preamble::Preamble(Hal::Motor& left, Hal::Motor& right,
-                    Hal::Otos& otos, Hal::ColorSensor& color,
+Preamble::Preamble(Hal::Otos& otos, Hal::ColorSensor& color,
                     Hal::LineSensor& line, const Hal::Clock& clock)
-    : left_(left),
-      right_(right),
-      otos_(otos),
+    : otos_(otos),
       color_(color),
       line_(line),
       clock_(clock) {}
@@ -33,22 +30,19 @@ void Preamble::step() {
                         // "no-op once done" contract on the leaves
 
   // Boot power-settle wait -- no leaf is touched at all until this
-  // elapses. Also satisfies "no I2C traffic before Preamble has begun
-  // probing" for the very first probe (there is no probe to issue yet).
+  // elapses.
   if (nowUs - startUs_ < kPowerSettle) return;
 
   // Defensive wall-clock bound (this file's header "Defensive bound"
-  // comment) -- never reached by a correctly-functioning leaf; forces
-  // every remaining slot terminal so done() cannot hang forever even if a
-  // leaf's own detectDone() has a latent bug.
+  // comment) -- forces every remaining slot terminal so done() cannot
+  // hang forever even if a leaf's own detectDone() has a latent bug.
   if (nowUs - startUs_ >= kMaxPreamble) {
     forceResolveAll();
     return;
   }
 
   // Round robin: at most ONE leaf's own detection entry point is called
-  // per step() -- one bounded probe action per pass (see this file's
-  // header comment, "The boot loop this drives").
+  // per step() call.
   for (uint8_t i = 0; i < kSlotCount; ++i) {
     Slot slot = static_cast<Slot>((cursor_ + i) % kSlotCount);
     uint8_t slotIndex = static_cast<uint8_t>(slot);
@@ -59,31 +53,20 @@ void Preamble::step() {
     cursor_ = static_cast<uint8_t>((slotIndex + 1) % kSlotCount);
     return;  // exactly one probe action this call
   }
-  // Nothing due this pass (every remaining slot is a paced retry not yet
-  // due) -- a true no-op; the BOOT LOOP's own sleep between step() calls
-  // is what advances time toward the next due attempt.
+  // Nothing due this pass -- a true no-op; the BOOT LOOP's own sleep
+  // between step() calls is what advances time toward the next due
+  // attempt.
 }
 
 bool Preamble::dueSlot(Slot slot, uint64_t nowUs) const {
   switch (slot) {
-    case Slot::Left:
-    case Slot::Right:
-      // One-shot terminal probe (NezhaMotor::begin() already runs its own
-      // internal median-of-3 + retry inside hardReset()) -- always due
-      // until resolved.
-      return true;
     case Slot::Otos:
       return otosAttempts_ == 0 ||
              (nowUs - otosLastAttemptUs_) >= kOtosBeginRetryPeriod;
     case Slot::Color:
     case Slot::Line:
       // The leaf's OWN beginStep(nowUs) already owns its internal retry
-      // pacing (color_sensor.h's kAltRetryPeriod / line_sensor.h's
-      // kRetryPeriod) -- always "due" from Preamble's point of view; a
-      // call that arrives before the leaf's own internal deadline is a
-      // harmless, bus-traffic-free no-op inside beginStep() itself.
-      // Preamble does not duplicate that pacing check -- this file's
-      // header "no leaf's own retry loop is reimplemented" contract.
+      // pacing -- always "due" from Preamble's point of view.
       return true;
     default:
       return false;
@@ -92,14 +75,6 @@ bool Preamble::dueSlot(Slot slot, uint64_t nowUs) const {
 
 void Preamble::probeSlot(Slot slot, uint64_t nowUs) {
   switch (slot) {
-    case Slot::Left:
-      left_.begin();
-      resolved_[static_cast<uint8_t>(Slot::Left)] = true;
-      break;
-    case Slot::Right:
-      right_.begin();
-      resolved_[static_cast<uint8_t>(Slot::Right)] = true;
-      break;
     case Slot::Otos:
       otos_.begin();
       ++otosAttempts_;

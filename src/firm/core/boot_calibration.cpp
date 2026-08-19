@@ -2,33 +2,10 @@
 // separate TU from boot_wiring.cpp.
 #include "core/boot_calibration.h"
 
-#include <cmath>
-
-// bootPlannerLimits() below reads Config::defaultPlannerLimits()/
-// Config::PlannerBootConfig directly -- 132-015 moved this include here
-// (from boot_calibration.h) since it is the only remaining use of
-// config/boot_config.h in this translation unit; the header itself no
-// longer names any boot_config.h type in its own declarations now that
-// DriveBootConfig/WheelControllerBootConfig are deleted.
-#include "config/boot_config.h"
-
 namespace Core {
-
-namespace {
-
-// kConfigureRestVelocity -- mirrors NezhaMotor::kReconfigureRestVelocity/
-// MotorArmor::kRestVelocity (both 5.0f, nezha_motor.h/motor_armor.h) --
-// a leaf/subsystem-local constant for a similar guard, deliberately NOT
-// shared with either (nezha_motor.h's own kReconfigureRestVelocity
-// comment establishes this project's precedent: each guard gets its own
-// named constant at its own layer).
-constexpr float kConfigureRestVelocity = 5.0f;  // [mm/s]
-
-}  // namespace
 
 Hal::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   Hal::MotorConfig cfg;
-  cfg.wheelTravelCalib = src.travel_calib;
   cfg.fwdSign = src.fwd_sign;
   cfg.slewRate = src.slew_rate;
   cfg.port = src.port;
@@ -41,115 +18,103 @@ Hal::MotorConfig toDeviceMotorConfig(const msg::MotorConfig& src) {
   cfg.reversalDwell = src.reversal_dwell.val;
   cfg.outputDeadband = src.output_deadband.val;
   cfg.polled = src.polled;
+  // writeThrottle -- config-derived (this file's own header, TRAP note):
+  // the kernel is the ONLY writer of duty now, and its own cycle period is
+  // kKernelCyclePeriod, never RobotLoop::kCycle (that constant no longer
+  // has anything to do with motor writes at all).
+  cfg.writeThrottle = static_cast<float>(kKernelCyclePeriod - 5) * 1000.0f;  // [us]
   return cfg;
 }
 
-float effectiveTrackWidth(const msg::DrivetrainConfig& drivetrainConfig) {
-  const float kScrub = drivetrainConfig.rotational_slip;
-  return (kScrub > 0.0f) ? (drivetrainConfig.trackwidth / kScrub)
-                        : drivetrainConfig.trackwidth;
+Control::DifferentialDrive::Config buildDriveKernelConfig(const Config::Robot& config) {
+  Control::DifferentialDrive::Config cfg;
+
+  const float travelCalibL = config.motors.travel_calib_left;    // [mm/deg]
+  const float travelCalibR = config.motors.travel_calib_right;   // [mm/deg]
+  const float travelCalibMean = 0.5f * (travelCalibL + travelCalibR);
+
+  // mm/s -> counts/s: 1 count = 0.1 deg, so counts = mm * 10 / travel_calib
+  // (travel_calib is [mm/deg]). Same factor for mm/s^2 -> counts/s^2 and
+  // mm -> counts (a pure unit-domain change, not a rate).
+  const float mmsToCounts = (travelCalibMean > 0.0f) ? (10.0f / travelCalibMean) : 0.0f;
+
+  // fullDutyVelocity: the ONE per-wheel conversion. duty_per_speed_left/
+  // right are already a single population-scale plant gain (configurator.
+  // cpp's own dutyPerSpeed doc comment -- deliberately never re-fit
+  // per-wheel); the per-wheel split here comes only from travel_calib_
+  // left/right's own asymmetry, then averaged into the kernel's one
+  // fullDutyVelocity slot (the kernel has no per-wheel plant-gain field).
+  const float fullDutyVelL =
+      (config.drive.duty_per_speed_left > 0.0f && travelCalibL > 0.0f)
+          ? 10.0f / (config.drive.duty_per_speed_left * travelCalibL)
+          : 0.0f;
+  const float fullDutyVelR =
+      (config.drive.duty_per_speed_right > 0.0f && travelCalibR > 0.0f)
+          ? 10.0f / (config.drive.duty_per_speed_right * travelCalibR)
+          : 0.0f;
+  cfg.fullDutyVelocity = 0.5f * (fullDutyVelL + fullDutyVelR);  // [counts/s]
+
+  // Stage A wheel correction: gains are dimensionless ratios (copy);
+  // intercepts are speeds (mm/s -> counts/s).
+  cfg.wheelGain[0][0] = config.drive.wheel_gain_left_accel;
+  cfg.wheelIntercept[0][0] = config.drive.wheel_intercept_left_accel * mmsToCounts;
+  cfg.wheelGain[0][1] = config.drive.wheel_gain_left_decel;
+  cfg.wheelIntercept[0][1] = config.drive.wheel_intercept_left_decel * mmsToCounts;
+  cfg.wheelGain[1][0] = config.drive.wheel_gain_right_accel;
+  cfg.wheelIntercept[1][0] = config.drive.wheel_intercept_right_accel * mmsToCounts;
+  cfg.wheelGain[1][1] = config.drive.wheel_gain_right_decel;
+  cfg.wheelIntercept[1][1] = config.drive.wheel_intercept_right_decel * mmsToCounts;
+
+  cfg.crawlPulse = config.drive.crawl_pulse;  // [-1,1] dimensionless, copy
+
+  // Stage B/C gains + bounds.
+  cfg.kp = config.wheelControl.pid_kp;                          // [1] copy
+  cfg.ki = config.wheelControl.pid_ki;                          // [1/s] copy
+  cfg.iMax = config.wheelControl.pid_i_max * mmsToCounts;       // [counts/s]
+  cfg.kaff = config.wheelControl.pid_kaff;                      // [s] copy
+  cfg.pidMax = config.wheelControl.pid_max * mmsToCounts;       // [counts/s]
+  cfg.vMin = config.wheelControl.v_min * mmsToCounts;           // [counts/s]
+  cfg.posErrMax = config.wheelControl.pos_err_max * mmsToCounts;  // [counts]
+  cfg.biasMax = config.wheelControl.bias_max * mmsToCounts;     // [counts/s]
+  cfg.tauAdapt = config.wheelControl.tau_adapt;                 // [s] copy
+  cfg.aSteady = config.wheelControl.a_steady * mmsToCounts;     // [counts/s^2]
+  cfg.deficitThreshold = config.wheelControl.deficit_threshold * mmsToCounts;  // [counts/s]
+  cfg.deficitWindow = config.wheelControl.deficit_window;       // [ms] copy
+  cfg.stallSpeed = config.wheelControl.stall_speed * mmsToCounts;    // [counts/s]
+  cfg.stallDemand = config.wheelControl.stall_demand * mmsToCounts;  // [counts/s]
+  cfg.stallWindow = config.wheelControl.stall_window;            // [ms] copy
+
+  // No robot-JSON key yet for either -- see this function's own header
+  // doc comment.
+  cfg.twistHoldGain = 0.0f;
+
+  // maxDuty: the kernel's Config default is FAIL-CLOSED now (0 = every
+  // mode refused), so the bake must grant authority EXPLICITLY. It can no
+  // longer ride a permissive class default -- that is the point of the
+  // change: an unconfigured kernel refuses rather than driving at full
+  // authority.
+  //
+  // CONFIGURATION-DISCIPLINE GAP, stated rather than hidden: this is a C++
+  // literal, not a value from the robot JSON, so it breaks invariant 1
+  // ("every value the robot uses comes from the file") the same way
+  // twistHoldGain above does. Not a regression -- the value was previously
+  // an even less visible class-member default -- but a debt:
+  // `drive.max_duty` needs a real key in robot_config.proto, the four
+  // robot JSONs and the schema, with this line then reading it. Tracked in
+  // the issue's conformance plan.
+  cfg.maxDuty = 100.0f;  // [%] full authority rail
+
+  cfg.cyclePeriod = kKernelCyclePeriod;
+
+  return cfg;
 }
 
-Motion::PlannerLimits bootPlannerLimits(const msg::DrivetrainConfig& drivetrainConfig,
-                                        float trackWidth) {
-  const Config::PlannerBootConfig src = Config::defaultPlannerLimits();
-
-  Motion::PlannerLimits out;
-  out.ceilings.vMax = src.vMax;
-  out.ceilings.aMax = src.aMax;
-  out.ceilings.aDecel = src.aDecel;
-  out.ceilings.omegaMax = src.omegaMax;
-  out.ceilings.alphaMax = src.alphaMax;
-  out.ceilings.alphaDecel = src.alphaDecel;
-  out.ceilings.jerkMax = src.jerkMax;
-  out.ceilings.yawJerkMax = src.yawJerkMax;
-
-  out.plant.controlPeriod = src.controlPeriod;
-  out.plant.actuationDelay = src.actuationDelay;
-
-  out.landing.settleRestVelocity = src.settleRestVelocity;
-  out.landing.settleRestOmega = src.settleRestOmega;
-  out.landing.settleEpsilonLinear = src.settleEpsilonLinear;
-  out.landing.settleEpsilonAngular = src.settleEpsilonAngular;
-  out.landing.decelPlanFraction = src.decelPlanFraction;
-  out.landing.alignTol = src.alignTol;
-  out.landing.alignMaxNudges = src.alignMaxNudges;
-
-  out.tracking.headingHoldGain = src.headingHoldGain;
-
-  // trackWidth/velocityFilterWeight are the two PlannerLimits fields NOT
-  // sourced from Config::PlannerBootConfig -- see that struct's own doc
-  // comment (config/boot_config.h). trackWidth is the caller's own
-  // (scrub-corrected, by default effectiveTrackWidth()'s) value;
-  // velocityFilterWeight mirrors the robot JSON's vel_filt_alpha EMA
-  // weight, with the same >0.05 sanity floor main.cpp always applied.
-  out.plant.trackWidth = trackWidth;
-  out.plant.velocityFilterWeight = drivetrainConfig.vel_filt_alpha > 0.05f
-                                        ? drivetrainConfig.vel_filt_alpha
-                                        : 1.0f;
-  return out;
-}
-
-// installShaperLimits/installRotationCalibration/installDriveCalibration/
-// installWheelController -- DELETED, 132-015 (dead-code sweep). All three
-// were confirmed by a fresh grep to have zero remaining call sites
-// (Configurator::install(), configurator.cpp, does this fan-out inline
-// now, reading Config::Robot directly -- see this file's own header for
-// how that ticket-006 retarget left these with "no callers left"); see
-// boot_config.h's own note on DriveBootConfig/WheelControllerBootConfig
-// (deleted the same ticket) for the struct-level half of this cleanup.
-// installRotationCalibration itself was already deleted earlier (132-007).
-
-// configurePlanner -- see boot_calibration.h's own doc comment.
-void configurePlanner(Motion::Planner& planner, const Config::Robot& config) {
-  // 132-017 split: the six shaper ceilings live on config.plannerShaper
-  // now (a LIVE ConfigGroupTarget), not config.planner (the boot-only
-  // remainder) -- see robot_config.proto's PlannerShaper header comment.
-  planner.applyShaperLimits(config.plannerShaper.a_max, config.plannerShaper.a_decel,
-                            config.plannerShaper.alpha_max, config.plannerShaper.alpha_decel,
-                            config.plannerShaper.jerk_max, config.plannerShaper.yaw_jerk_max);
-}
-
-// configureMotor -- see boot_calibration.h's own doc comment.
-bool configureMotor(Hal::Motor& motor, const Config::Robot& config, bool isLeft) {
-  const bool atRest =
-      std::fabs(motor.velocity()) < kConfigureRestVelocity && motor.appliedDuty() == 0.0f;
-  if (!atRest) return false;
-
-  motor.applyTravelCalib(isLeft ? config.motors.travel_calib_left
-                                : config.motors.travel_calib_right);
-  return true;
-}
-
-// configureOtos -- see boot_calibration.h's own doc comment. linear_scale/
-// angular_scale are converted through Hardware::scaleToRegister() (otos.h)
-// before reaching setLinearScalar()/setAngularScalar() -- those two setters
-// take the chip's raw int8 register domain directly, never the config
-// MULTIPLIER domain (1.0 = no correction) config.otos itself holds. This is
-// the SAME conversion RealOtos::begin() applies to the baked value at boot
-// (otos.cpp) -- 132-010 closes trap 3 (the-configuration-object.md) by
-// applying it here too, so a live OTOS push and a boot bake agree on what a
-// given multiplier means. setOffset()'s x/y/yaw are unaffected -- that
-// setter already takes the value directly, no domain conversion (otos.h's
-// own setOffset() doc comment spells out the distinction from the scale
-// registers).
+// configureOtos -- see boot_calibration.h's own doc comment. Ported
+// verbatim; unaffected by the exploratory-kernel rewrite.
 void configureOtos(Hal::Otos& otos, const Config::Robot& config) {
   otos.setLinearScalar(static_cast<float>(Hardware::scaleToRegister(config.otos.linear_scale)));
   otos.setAngularScalar(static_cast<float>(Hardware::scaleToRegister(config.otos.angular_scale)));
   otos.setOffset(config.otos.offset_x, config.otos.offset_y, config.otos.offset_yaw);
-}
-
-// configureNavigator -- see boot_calibration.h's own doc comment.
-void configureNavigator(Motion::NavigatorLimits& limits, const Config::Robot& config) {
-  limits.trackWidth = config.effectiveTrackWidth();  // [mm] scrub-corrected, matches Drive/Odometry/PlannerLimits
-  limits.speed = config.navigator.speed;
-  limits.maxWheelStep = config.navigator.max_wheel_step;
-  limits.behindAngle = config.navigator.behind_angle;
-  limits.turnFirstAngle = config.navigator.turn_first_angle;
-  limits.approachRadius = config.navigator.approach_radius;
-  limits.approachSpeed = config.navigator.approach_speed;
-  limits.defaultArrivalTolerance = config.navigator.default_arrival_tolerance;
-  limits.yawSign = config.navigator.yaw_sign;
 }
 
 }  // namespace Core

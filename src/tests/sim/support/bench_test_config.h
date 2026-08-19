@@ -49,23 +49,14 @@ class SimHarness;
 
 namespace TestSupport {
 
-// Gains -- a plain kff/kp/ki/iMax carrier for benchTestGains() below, local
-// to this test-tree-only header. 128-015: this used to be the motion
-// library's own Motion::Gains (wheel_velocity_pid.h, the interim closed-
-// loop velocity-PID class Core::DifferentialDrive briefly held) -- that class is deleted
-// outright (zero instantiations; Core::DifferentialDrive holds no controller of its own,
-// drive.h's own header), so this struct is redeclared here. 130-007: the
-// kp/ki/iMax fields' one-time destination, Motion::Planner::applyVelGains(),
-// is deleted with the M4 duty stage -- only kff (the duty-per-speed scale
-// consumed by configureSimForBenchTest() below) still has a live consumer;
-// kp/ki/iMax are dead but kept on the struct so a future controller can
-// reuse the shape without a rename.
-struct Gains {
-  float kff = 0.0f;
-  float kp = 0.0f;
-  float ki = 0.0f;
-  float iMax = 0.0f;
-};
+// Gains/benchTestGains() are DELETED (DifferentialDrive kernel rework).
+// kff's last live consumer was configureSimForBenchTest()'s
+// sim.drive().setDutyPerSpeed(kff, kff) call; the kernel replaced that whole
+// surface with a single fullDutyVelocity [counts/s] that TestSim::SimHarness
+// derives from the baked travel_calib at construction. kp/ki/iMax had been
+// dead since 130-007. With zero callers the struct goes rather than sit here
+// as a shape a future controller "could" reuse -- the kernel's own
+// Control::DifferentialDrive::Config is that shape now.
 
 // benchTestMotorConfig -- byte-for-byte the deleted
 // TestSim::SimHarness::makeMotorConfig(uint32_t port) body (see that
@@ -80,27 +71,16 @@ struct Gains {
 // codebase).
 //
 // 125-003: velFiltAlpha/velGains are DELETED from Hal::MotorConfig (the
-// velocity PID they fed relocated off the motor entirely) -- see
-// benchTestGains() below for the SAME kp/kff tuning (130-007: kff is now the
-// only field with a live consumer -- see Gains's own doc comment above).
+// velocity PID they fed relocated off the motor entirely). The kernel
+// rework additionally removed wheelTravelCalib -- the leaf is counts-native,
+// so there is no mm scale to push at it any more.
 Hal::MotorConfig benchTestMotorConfig(uint32_t port);
-
-// benchTestGains -- 125-003: the kp/kff half of the pre-125-003
-// benchTestMotorConfig()'s own velGains, relocated here as this header's own
-// Gains struct (see its doc comment for why it is declared here rather than
-// reused from the motion library). SAME values, SAME rationale (see
-// bench_test_config.cpp's own comment at this function's body) --
-// port-independent (both wheels share identical tuning in every pre-125-003
-// caller of this file).
-Gains benchTestGains();
 
 // configureSimForBenchTest -- convenience wrapper: pushes
 // benchTestMotorConfig(1)/benchTestMotorConfig(2) via sim.configureMotor()
-// for both ports, PLUS (125-003) benchTestGains().kff onto the sim plant's
-// duty-per-speed scale (115-006: the benchTestPlannerConfig()/
-// configurePlanner() half is gone; 130-007: the M4 duty-stage gains push is
-// gone too, with the stage itself -- see this file's own header and
-// bench_test_config.cpp's own removal note). This is the ONE call every
+// for both ports. The gains push and the shaper-ceiling override it used to
+// do are both gone with the motion stack (see bench_test_config.cpp's own
+// removal note). This is the ONE call every
 // pre-existing (and any new) src/tests/sim/** harness adds right after
 // constructing a bare TestSim::SimHarness and before its first
 // injectTwist()/step()/boot() call, to restore byte-for-byte the same

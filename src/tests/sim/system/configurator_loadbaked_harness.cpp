@@ -94,15 +94,23 @@ int main() {
   sim.boot();
   checkTrue(sim.booted(), "sim.booted() is true after boot()");
 
-  beginScenario("A basic WHEELS command still drives a nonzero commanded wheel target");
+  beginScenario("A basic WHEELS command still drives real duty onto both wheels");
   constexpr float kSpeed = 100.0f;    // [mm/s]
   constexpr float kDuration = 500.0f;  // [ms]
   sim.injectWheels(kSpeed, kSpeed, kDuration, /*id=*/1, /*corrId=*/1);
-  sim.step(3);
-  checkTrue(sim.driveTargetVelLeft() > 0.0f,
-            "left wheel target is nonzero after a WHEELS command");
-  checkTrue(sim.driveTargetVelRight() > 0.0f,
-            "right wheel target is nonzero after a WHEELS command");
+  sim.step(5);
+  // driveTargetVelLeft()/Right() are GONE with RobotState::Wheel::cmdVelocity
+  // -- the actuation boundary moved inside Control::DifferentialDrive, whose
+  // Command mailbox is private by design. The kernel's published Output is
+  // the observable now, and applied duty is a STRONGER assertion than the old
+  // staged target: it says the command survived the whole pipeline (lease,
+  // gates, Stage A, PID, shaping) and reached the wire, not merely that a
+  // blackboard field was written.
+  const Control::DifferentialDrive::Output out = sim.drive().output();
+  checkTrue(out.appliedDutyLeft > 0.0f,
+            "left wheel has nonzero applied duty after a WHEELS command");
+  checkTrue(out.appliedDutyRight > 0.0f,
+            "right wheel has nonzero applied duty after a WHEELS command");
 
   beginScenario(
       "Configurator::config() reflects the same baked values as the "

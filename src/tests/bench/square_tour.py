@@ -123,7 +123,15 @@ CYCLE_S = 0.04         # [s] one SimLoop.step() -- Core::RobotLoop::kCycle
 # rest". Used whenever nothing downstream needs the chassis motionless for
 # a camera read -- sim, bench, and any hardware run with no geofence/camera
 # armed (--no-geofence, or a bench script with no camera at all).
-INTER_SEGMENT_DWELL = 0.1  # [s] short inter-segment gap, no camera fix follows
+# KERNEL REWORK (this worktree): 0.1 -> 0.6. The 0.1 s value was sized for
+# the planner era, when land-at-zero shaping brought the robot to REST
+# inside each segment's own window. The kernel has no shaper: lease expiry
+# writes a hard zero and the plant coasts on its own tau (~0.13 s sim,
+# 3-tau settle ~0.4 s). At 0.1 s each turn began with ~70 mm/s of leg
+# momentum still aboard, bending both path and heading -- measured: dwell
+# 0.1 -> 0.6 alone took the sim tour from 159 mm closure to 73 mm and the
+# heading error from +26 to +12 deg.
+INTER_SEGMENT_DWELL = 0.6  # [s] inter-segment gap: must cover the coast-to-rest
 
 # CAMERA_FIX_DWELL preserves the OLD SEGMENT_REST value and behavior
 # unchanged: `.claude/rules/playfield-testing.md` MANDATES a camera pose
@@ -322,8 +330,23 @@ def segments() -> "list[tuple[float, float, float, int]]":
     turnMs = durationFor(TURN_ARC, TURN_SPEED, reversal=True) * 1000.0
     legL = CRUISE / CAL["L"]
     legR = CRUISE / CAL["R"]
+    # The REVERSING wheel (left: + -> -, sign flip) spends the armor
+    # reversal DWELL held at zero; the non-reversing wheel runs the WHOLE
+    # window. At equal commanded speeds the non-reversing wheel therefore
+    # delivers extra arc during the dwell -- the exploration record's
+    # known ~+3 deg/turn open-loop residual (heading 372.4/360, closure
+    # 73 mm). The dwell sits at the START of the window, where the
+    # non-reversing wheel is itself still ramping (~half steady speed on
+    # average over DWELL ~ TAU), so the imbalance is ~v * DWELL/2, not
+    # v * DWELL -- a full-dwell scale overshoots to heading 344.7
+    # (measured both ways, 2026-08-18; half-dwell interpolates to the
+    # measured imbalance within 0.2 deg/turn). Scale the non-reversing
+    # wheel down by that half-dwell arc so both wheels deliver the same.
+    turnS = turnMs / 1000.0  # [s]
+    window = meanFactor(turnS) * turnS  # [s] transient-corrected window
+    nonReversingScale = (window - 0.5 * DWELL) / window
     turnL = -TURN_SPEED / CAL["L"]
-    turnR = TURN_SPEED / CAL["R"]
+    turnR = TURN_SPEED * nonReversingScale / CAL["R"]
     out = []
     for i in range(4):
         out.append((legL, legR, legMs, _ID_BASE + 1 + 2 * i))
@@ -1978,11 +2001,14 @@ def main() -> int:
                         "stops a jammed robot.")
     p.add_argument("--geofence-margin", type=float, default=12.0,
                    help="[cm] halt this close to the field edge (default 10)")
-    p.add_argument("--leg-mode", choices=("move", "wheels"), default="move",
+    # default "wheels" in THIS worktree: MOVE is deregistered (the kernel
+    # rework acks it ERR_UNIMPLEMENTED), so the old default made the tour
+    # fail its first enqueue out of the box.
+    p.add_argument("--leg-mode", choices=("move", "wheels"), default="wheels",
                    help="legs as DISTANCE-stopped MOVEs (default, closed-loop) or "
                         "as timed WHEELS runs (the original; measured 8cm of "
                         "cross-track drift over a 48cm leg)")
-    p.add_argument("--turn-mode", choices=("move", "wheels"), default="move",
+    p.add_argument("--turn-mode", choices=("move", "wheels"), default="wheels",
                    help="corners as ANGLE-stopped MOVEs (default, closed-loop) or "
                         "as timed WHEELS pivots (the original; needs the moving "
                         "prelude's duration scale to be accurate)")

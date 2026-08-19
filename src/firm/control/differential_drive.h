@@ -1,204 +1,100 @@
+// differential_drive.h -- Control:: composes the DiffDrive kernel PACKAGE
+// (diffdrive/differential_drive.{h,cpp}) into this firmware. The package
+// is the SINGLE implementation of the wheel kernel -- the same two files
+// that lift into a MakeCode/PXT package or a MicroPython C module -- and
+// what used to be a full copy of it here is now only the glue its README
+// promises: one-line forwarding adapters from the firmware's Hal:: seams
+// onto the package's own ports, plus the alias that keeps every existing
+// Control::DifferentialDrive call site compiling unchanged.
+//
+// No logic lives in this header. If an adapter method ever grows past one
+// line, it is doing work that belongs in the kernel or in the leaf.
+//
+// Composition (Core::RobotGraph): the graph owns one port object per Hal
+// collaborator and hands the ports to the kernel --
+//
+//   Hal::Motor (MotorArmor) --> Control::MotorPort ---.
+//   Hal::Clock             --> Control::ClockPort  ---+--> DiffDrive::
+//   Hal::Sleeper           --> Control::SleeperPort---+    DifferentialDrive
+//   Hal::FiberLauncher     --> Control::LauncherPort-'
+//
+// Lifecycle is unchanged from the in-tree kernel it replaces: construct +
+// setConfig() at compose (data only), begin() after Preamble::done(),
+// start() last -- on the host, start() is never called and the harness
+// drives step() directly (Hal::FiberLauncher's host impl fails the test
+// if launch() is ever reached; the microbit impl wraps codal
+// create_fiber -- platform/microbit/microbit_fiber.h).
 #pragma once
 
 #include <cstdint>
 
-#include "config/robot.h"
+#include "diffdrive/differential_drive.h"
+#include "hal/clock.h"
+#include "hal/fiber.h"
 #include "hal/motor.h"
-#include "firm/types/robot_state.h"
 
 namespace Control {
 
-class DifferentialDrive {
+// The kernel, under the name the firmware has always used. Config /
+// Output / Status and every method come from the package; see
+// diffdrive/differential_drive.h for the full contract.
+using DifferentialDrive = DiffDrive::DifferentialDrive;
+
+// ---- Hal -> package-port forwarding adapters ------------------------
+
+class MotorPort final : public DiffDrive::Motor {
  public:
-  DifferentialDrive(Hal::Motor& left, Hal::Motor& right, float trackWidth);
+  explicit MotorPort(Hal::Motor& motor) : motor_(motor) {}
 
-  static constexpr float kDutyPerSpeed = 0.001182f;  // [duty/(mm/s)]
+  void begin() override { motor_.begin(); }
+  void requestSample() override { motor_.requestSample(); }
+  void setDuty(float duty) override { motor_.setDuty(duty); }
+  void emergencyStop() override { motor_.emergencyStop(); }
+  void tick(uint64_t nowUs) override { motor_.tick(nowUs); }  // [us]
 
-  void setDutyPerSpeed(float left, float right) {  // [duty/(mm/s)] x2
-    dutyPerSpeedLeft_ = left;
-    dutyPerSpeedRight_ = right;
-    calibrated_ = left != 0.0f && right != 0.0f;
-  }
-
-  float dutyPerSpeedLeft() const { return dutyPerSpeedLeft_; }    // [duty/(mm/s)]
-  float dutyPerSpeedRight() const { return dutyPerSpeedRight_; }  // [duty/(mm/s)]
-
-  void setWheelCorrection(float gainLeftAccel, float interceptLeftAccel,
-                          float gainLeftDecel, float interceptLeftDecel,
-                          float gainRightAccel, float interceptRightAccel,
-                          float gainRightDecel, float interceptRightDecel);
-
-  void setCrawlPulse(float crawlPulse) { crawlPulse_ = crawlPulse; }
-
-  struct ControlGains {
-    float kp = 0.0f;      // [1] dimensionless: mm/s of PID output per mm/s of error
-    float ki = 0.0f;      // [1/s]
-    float iMax = 0.0f;    // [mm/s] I-term output clamp; 0 disables the I term
-    float kaff = 0.0f;    // [s] accel feedforward ~= the plant time constant
-    float pidMax = 0.0f;  // [mm/s]
-  };
-  void setControlGains(const ControlGains& gains) { gains_ = gains; }
-  const ControlGains& controlGains() const { return gains_; }
-
-  struct AdaptationBounds {
-    float vMin = 0.0f;              // [mm/s] speed floor (Open Question 2)
-    float biasMax = 0.0f;           // [mm/s] Stage C trim authority clamp
-    float tauAdapt = 0.0f;          // [s] Stage C adaptation time constant; <=0 disables
-    float aSteady = 0.0f;           // [mm/s^2] |a_cmd| below this counts as steady
-    float posErrMax = 0.0f;         // [mm] Stage B position-error clamp; 0 = unclamped
-    float deficitThreshold = 0.0f;  // [mm/s] sustained error magnitude that flags a deficit
-    float deficitWindow = 0.0f;     // [ms] how long the deficit condition must sustain
-    float stallSpeed = 0.0f;   // [mm/s] measured speed at or below this is not turning
-    float stallDemand = 0.0f;  // [mm/s] commanded speed above this is asking for motion
-    float stallWindow = 0.0f;  // [ms] sustain time before a stall latches; 0 = off
-  };
-  void setAdaptationBounds(const AdaptationBounds& bounds) { bounds_ = bounds; }
-  const AdaptationBounds& adaptationBounds() const { return bounds_; }
-
-  void configure(const Config::Robot& config);
-
-  float biasLeft() const { return biasLeft_; }      // [mm/s] Stage C's adapted parameter
-  float biasRight() const { return biasRight_; }    // [mm/s]
-  float pidLeft() const { return lastPidLeft_; }    // [mm/s] last-computed Stage B output
-  float pidRight() const { return lastPidRight_; }  // [mm/s]
-  bool deficitLeft() const { return deficitLeft_; }
-  bool deficitRight() const { return deficitRight_; }
-
-  // A stall is the drivetrain being ASKED to move and not moving -- the robot
-  // is jammed against something. Unlike deficit() (the wheel turns, just too
-  // slowly) this is a HALT condition: Core::RobotLoop stops the robot on it.
-  // See robot_config.proto's WheelControl for the three-way distinction
-  // against deficit and wheelFrozen.
-  bool stallLeft() const { return stallLeft_; }
-  bool stallRight() const { return stallRight_; }
-
-  bool calibrated() const { return calibrated_; }
-
-  void command(float vLeft, float vRight, float duration, uint32_t moveId,
-               uint32_t now);  // [mm/s] [mm/s] [ms] -- now [ms]
-
-  void takeover();
-
-  void estop();
-
-  bool owns() const { return commandActive_; }
-
-  bool takeCompletion(uint32_t* moveId);
-
-  void tick(const Types::RobotState& state);
-
-  void setPositionErrorMax(float posErrMax) {  // [mm]
-    bounds_.posErrMax = (posErrMax > 0.0f) ? posErrMax : 0.0f;
-  }
-
-  void setSpeedFloor(float vMin) {  // [mm/s]
-    bounds_.vMin = (vMin > 0.0f) ? vMin : 0.0f;
-  }
-
-  void setASteady(float aSteady) {  // [mm/s^2]
-    bounds_.aSteady = (aSteady > 0.0f) ? aSteady : 0.0f;
-  }
-
-  void update(Types::RobotState& state, uint32_t now);  // [ms]
-
-  float targetLeft() const { return targetLeft_; }    // [mm/s] signed
-  float targetRight() const { return targetRight_; }  // [mm/s] signed
-
-  float trackWidth() const { return trackWidth_; }  // [mm]
+  float position() const override { return motor_.position(); }
+  float velocity() const override { return motor_.velocity(); }
+  float appliedDuty() const override { return motor_.appliedDuty(); }
+  bool connected() const override { return motor_.connected(); }
+  uint64_t sampleTime() const override { return motor_.sampleTime(); }
+  void rebaseline() override { motor_.rebaseline(); }
+  bool wedged() const override { return motor_.wedged(); }
+  bool wedgeSuspect() const override { return motor_.wedgeSuspect(); }
 
  private:
-  float correctedCommand(float desired, float previous, bool leftWheel,
-                         float bias) const;
+  Hal::Motor& motor_;
+};
 
-  float corrGain_[2][2] = {{1.0f, 1.0f}, {1.0f, 1.0f}};
-  float corrIntercept_[2][2] = {{0.0f, 0.0f}, {0.0f, 0.0f}};
-  float lastSpeedLeft_ = 0.0f;   // [mm/s]
-  float lastSpeedRight_ = 0.0f;  // [mm/s]
+class ClockPort final : public DiffDrive::Clock {
+ public:
+  explicit ClockPort(const Hal::Clock& clock) : clock_(clock) {}
+  uint64_t nowMicros() const override { return clock_.nowMicros(); }
 
-  static constexpr float kAccelSmoothing = 0.35f;  // [1] first-order weight, per cycle
-  float previousTargetLeft_ = 0.0f;   // [mm/s] last cycle's published target
-  float previousTargetRight_ = 0.0f;  // [mm/s]
-  float cmdAccelLeft_ = 0.0f;         // [mm/s^2] smoothed
-  float cmdAccelRight_ = 0.0f;        // [mm/s^2]
+ private:
+  const Hal::Clock& clock_;
+};
 
-  float crawlDuty(float duty, float& carry) const;
+class SleeperPort final : public DiffDrive::Sleeper {
+ public:
+  explicit SleeperPort(Hal::Sleeper& sleeper) : sleeper_(sleeper) {}
+  void sleepMillis(uint32_t duration) override {  // [ms]
+    sleeper_.sleepMillis(duration);
+  }
+  void yield() override { sleeper_.yield(); }
 
-  struct PositionRef {
-    float reference = 0.0f;  // [mm] integral of commanded speed since the anchor
-    float origin = 0.0f;     // [mm] Wheel::position when anchored
-    uint8_t epoch = 0;       // Wheel::positionEpoch when anchored
-    bool armed = false;
-  };
+ private:
+  Hal::Sleeper& sleeper_;
+};
 
-  float fastPid(float posError, float err, float aCmd) const;  // [mm] [mm/s] [mm/s^2]
+class LauncherPort final : public DiffDrive::FiberLauncher {
+ public:
+  explicit LauncherPort(Hal::FiberLauncher& launcher) : launcher_(launcher) {}
+  void launch(void (*entry)(void*), void* context) override {
+    launcher_.launch(entry, context);
+  }
 
-  float positionError(float speed, const Types::RobotState::Wheel& wheel,
-                      PositionRef& ref, float dt) const;  // [mm/s] [s] -> [mm]
-
-  void adaptBias(float& bias, float err, float aCmd, float vCmdMagnitude,
-                bool fresh, float dt) const;
-
-  void applySpeedFloor(float rawLeft, float rawRight, float& speedLeft,
-                       float& speedRight) const;
-
-  void updateStall(bool conditionNow, uint32_t now, uint32_t& since,
-                   bool& latched) const;
-  void updateDeficit(bool conditionNow, uint32_t now, uint32_t& since,
-                     bool& latched) const;
-
-  uint32_t sampleAge(uint32_t now, uint32_t sampleTime) const;
-
-  ControlGains gains_;
-  AdaptationBounds bounds_;
-
-  mutable PositionRef posRefLeft_;
-  mutable PositionRef posRefRight_;
-  float lastPidLeft_ = 0.0f;       // [mm/s] observability: last-computed Stage B output
-  float lastPidRight_ = 0.0f;      // [mm/s]
-
-  float biasLeft_ = 0.0f;   // [mm/s] Stage C's ONE adapted parameter, per wheel
-  float biasRight_ = 0.0f;  // [mm/s]
-
-  uint32_t deficitSinceLeft_ = 0;   // [ms]
-  uint32_t deficitSinceRight_ = 0;  // [ms]
-  bool deficitLeft_ = false;
-  bool deficitRight_ = false;
-  uint32_t stallSinceLeft_ = 0;   // [ms] when the stall condition first held
-  uint32_t stallSinceRight_ = 0;  // [ms]
-  bool stallLeft_ = false;
-  bool stallRight_ = false;
-
-  static constexpr uint32_t kMaxSampleAge = 200;  // [ms]
-
-  Hal::Motor& left_;
-  Hal::Motor& right_;
-  float trackWidth_;  // [mm]
-
-  float targetLeft_ = 0.0f;   // [mm/s]
-  float targetRight_ = 0.0f;  // [mm/s]
-
-  bool commandActive_ = false;
-  uint32_t commandDeadline_ = 0;  // [ms]
-  uint32_t commandMoveId_ = 0;
-  bool completionPending_ = false;
-  uint32_t completedMoveId_ = 0;
-
-  float dutyPerSpeedLeft_ = 0.0f;   // [duty/(mm/s)]
-  float dutyPerSpeedRight_ = 0.0f;  // [duty/(mm/s)]
-  bool calibrated_ = false;
-
-  float crawlPulse_ = 0.0f;  // [-1, 1] pulse amplitude; 0 = off
-  float crawlCarryLeft_ = 0.0f;   // Bresenham accumulators
-  float crawlCarryRight_ = 0.0f;
-
-  float writtenLeft_ = 0.0f;   // [-1, 1]
-  float writtenRight_ = 0.0f;  // [-1, 1]
-
-  uint8_t stopEnforceCountdown_ = 0;
-
-  static constexpr uint8_t kStopEnforceTicks = 30;
-
-  static constexpr float kRestVelocity = 8.0f;  // [mm/s]
+ private:
+  Hal::FiberLauncher& launcher_;
 };
 
 }  // namespace Control

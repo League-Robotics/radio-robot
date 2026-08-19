@@ -17,7 +17,11 @@ namespace Hal {
 // msg::MotorConfig (messages/motor.h) plus its two base-class-owned armor
 // fields.
 struct MotorConfig {
-  float wheelTravelCalib = 0.0f;  // [mm/deg] wheel linear travel per motor-shaft degree of rotation
+  // wheelTravelCalib is GONE (exploratory kernel, 2026-08-15): the leaf is
+  // counts-native now — position()/velocity() report shaft encoder counts
+  // (1 count = 0.1 deg, the Nezha 0x46 register's own unit). The mm
+  // conversion (`travel_calib` in the robot JSON) belongs to the
+  // APPLICATION layer; no mm value exists at or below this layer.
 
   // +1 or -1: corrects a mirror-mounted wheel's encoder/duty sign
   // (dimensionless — no unit tag).
@@ -34,6 +38,16 @@ struct MotorConfig {
 
   float reversalDwell = 0.0f;    // [ms]
   float outputDeadband = 0.0f;   // [-1, 1] fraction
+
+  // Minimum interval between non-stop duty writes. Replaces the leaf's
+  // old hand-synced kMinWriteIntervalUs = 27000 literal (which encoded
+  // "kCycle - 5 ms jitter margin" and silently drifted whenever the loop
+  // period changed — the devices-isolation invariant forbids the leaf
+  // reading the loop's own constant, so the value must ARRIVE via config).
+  // The composition root derives it from the kernel's cycle period at
+  // compose time. <= 0 disables the throttle (write-on-change + slew still
+  // apply). Stop writes always bypass it.
+  float writeThrottle = 0.0f;    // [us]
 
   bool polled = false;
 };

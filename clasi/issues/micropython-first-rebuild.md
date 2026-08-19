@@ -22,7 +22,7 @@ stays the C++ `src/firm/diffdrive/` package plus its Nezha motor leaf.
 | transports | **v5 on radio** (primary); **REPL on USB and WiFi**; WiFi also carries the UDP v5 plane (proven dual-plane) |
 | C++ payload | DiffDrive kernel + NezhaMotor leaf + minimal shims — nothing else |
 | old firmware | hard cutover: `src/firm` (minus `diffdrive/`) frozen |
-| location | new worktree off master; Python in `src/upy/`, C in `src/upy_native/`, build in `upy/` |
+| location | **its own repository** (stakeholder 2026-08-18, superseding the same-day worktree/`src/upy/` decision): `League-Robotics/nezha-upy` (created 2026-08-18), not a directory of radio-robot. The kernel + Nezha leaf are VENDORED into it by a sync script from radio-robot (the `sync_pxt.py` pattern the MakeCode extension already uses); radio-robot keeps the kernel SOURCE and its `src/tests/diffdrive/` gate, plus all host tooling (rogo, benches) unchanged |
 | first robot | gopiv (motors+encoders+OTOS+line re-fitted, WiFi module, ran the old MP image) |
 
 ## What exploration established
@@ -103,20 +103,41 @@ Load-bearing design points:
   module's `robotio.i2c_xfer()` so per-device `lastEnd/readyAt` timers
   and the TWIM-errata gap are shared with the kernel's 0x10 traffic.
 - **Codec generated, not hand-written**: extend
-  `src/scripts/gen_messages.py` with `--emit-upy` → `src/upy/msgs.py`
-  (third renderer over the same descriptor walk). One schema, three
-  targets.
-- The diffdrive package is compiled **in place** — `src/tests/diffdrive/`
-  keeps guarding the single copy.
+  `src/scripts/gen_messages.py` with `--emit-upy --out <path>` → the new
+  repo's `src/msgs.py` (third renderer over the same descriptor walk).
+  One schema, three targets; the generated file is committed in the new
+  repo and refreshed by the sync script.
+- **The kernel boundary across repos**: radio-robot stays the single
+  SOURCE of `diffdrive/` (guarded by `src/tests/diffdrive/`); a
+  `src/scripts/sync_upy.py` in radio-robot (sibling of `sync_pxt.py`)
+  copies the kernel pair + `nezha_motor.{h,cpp}` + the golden-vector
+  fixture into the new repo's `vendor/` and regenerates `msgs.py` —
+  run after any kernel/schema change, committed there. The new repo
+  never edits vendored files (a sync-diff check is its gate).
+
+### Repository layout (new repo)
+
+```
+build.sh  codal_overlay.json  patches/   (forked build machinery — was upy/)
+src/       comms.py wire.py msgs.py config.py telemetry.py motion.py
+           otos.py line.py wifi_at.py radio_shim.py     (was src/upy/)
+native/    moddiffdrive.cpp glue, i2c broker, UARTE1 pipe, watchdog
+                                                   (was src/upy_native/)
+vendor/    diffdrive.{h,cpp}, nezha_motor.{h,cpp}  (SYNCED, never edited)
+tests/     golden vectors copy, CPython loopback engine tests
+```
 
 ## Milestones (risk-ordered; each gate is a command)
 
-**M0 — worktree + image boots.** New worktree; fork the old `micropython/`
-machinery to `upy/` with all MUST-KEEP patches; **rescue the untracked**
+**M0 — new repo + image boots.** Populate `League-Robotics/nezha-upy`
+(repo created); fork the old `micropython/` machinery into its root with all
+MUST-KEEP patches; write radio-robot's `src/scripts/sync_upy.py` and run
+the first vendor sync; **rescue the untracked**
 `clasi/issues/micropython-full-firmware-in-the-image-gates-3-7.md` and
-`config/wifi_secrets.json` from the old worktree; strip the modrobot
+`config/wifi_secrets.json` from the old worktree (the issue doc stays in
+radio-robot; secrets go to the new repo, gitignored); strip the modrobot
 exploratory motion layer (dead by directive; keep as pattern reference).
-*Gate:* `cd upy && ./build.sh --clean` → hex; flash; USB REPL answers;
+*Gate:* `./build.sh --clean` → hex; flash; USB REPL answers;
 flash end < `_fs_start` (0x6D000).
 
 **M1 — moddiffdrive: wheels from the REPL.** `src/upy_native/`:
@@ -126,8 +147,9 @@ not re-derived); kernel leaves; i2c broker; boot zero-write before the
 VM starts; VM-hook watchdog; 5000 ms lease ceiling in the binding.
 Python API: `diffdrive.configure/begin/start/drive/driveDuty/neutral/
 estop/output/lastError`. Land gopiv's `left_port:2,right_port:1` wiring
-fix. *Gate:* (1) `uv run python -m pytest src/tests/diffdrive/` still
-green, untouched; (2) on gopiv: `drive()` with a 1000 ms lease → motion,
+fix. *Gate:* (1) radio-robot's `uv run python -m pytest
+src/tests/diffdrive/` still green and the vendored copy sync-diff
+clean; (2) on gopiv: `drive()` with a 1000 ms lease → motion,
 zero at expiry, counts advance with the right signs; (3) safety: `drive()`
 then `while True: pass` → watchdog zeroes ≤300 ms; reset mid-drive →
 boot zero-write silences. **Highest-risk milestone; nothing proceeds
@@ -182,7 +204,7 @@ over getez, per-robot JSON.
 |---|---|
 | C++ payload (in place) | `src/firm/diffdrive/differential_drive.{h,cpp}` + gate `src/tests/diffdrive/` |
 | build machinery to fork | `.worktrees/micropython-exploration-repl-commands/micropython/build.sh` (+`codal_overlay.json`, `patches/`) |
-| codec to port | `src/host/robot_radio/io/wire_codec.py` → `src/upy/wire.py`; fixture `src/tests/fixtures/wire_golden_vectors.txt` |
+| codec to port | `src/host/robot_radio/io/wire_codec.py` → new repo `src/wire.py`; fixture `src/tests/fixtures/wire_golden_vectors.txt` (synced copy in new repo `tests/`) |
 | dispatch/emit contract | `src/firm/core/comms.cpp`, `src/firm/core/telemetry.cpp` |
 | motor leaf to port | `src/firm/hardware/nezha/nezha_motor.{h,cpp}` |
 | AT-sequence oracle | old worktree `micropython/modrobot/wifi_stdio.cpp` |
@@ -211,8 +233,12 @@ over getez, per-robot JSON.
 2. gopiv bench-day check: master's `gopiv.json` still calls it a bench
    rig and lacks the port keys — physically confirm motors/OTOS/line
    before scoring M1 (the gates-3-7 doc carries the wiring fix).
-3. Process: run the worktree OOP (as the diffdrive exploration did),
-   converting to sprints on merge-back.
+3. Process: the new repo lives OUTSIDE CLASI entirely (plain GitHub
+   flow); radio-robot-side pieces (sync_upy.py, gen_messages --emit-upy)
+   are small OOP changes. Planning/issues for the rebuild stay in
+   radio-robot's clasi/ until the new repo grows its own convention.
+4. Repo name: DECIDED -- `League-Robotics/nezha-upy` (public), created
+   2026-08-18.
 
 ## Related
 
