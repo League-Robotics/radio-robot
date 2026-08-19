@@ -503,6 +503,7 @@ class HardwareBackend(_Backend):
         cfg = load_robot_config(active)
         print(f"hardware robot config: {cfg.robot_name} ({pathlib.Path(active).name})")
         _set_effective_track(cfg)
+        self.cfg = cfg
 
         self._conn = SerialConnection(port=port)
         self._conn.connect()
@@ -2001,6 +2002,14 @@ def main() -> int:
                         "stops a jammed robot.")
     p.add_argument("--geofence-margin", type=float, default=12.0,
                    help="[cm] halt this close to the field edge (default 10)")
+    p.add_argument("--geofence-lost-grace", type=float, default=0.5,
+                   help="[s] halt if the robot's tag isn't seen for this long "
+                        "(default 0.5, down from Geofence's own 1.5 default). "
+                        "MEASURED 2026-08-19: at 150 mm/s cruise a 1.5s grace let "
+                        "the robot drive off the table edge before the tag-loss "
+                        "halt fired -- a real detection dropout plus the grace "
+                        "window plus Nezha coast is a large blind-travel budget. "
+                        "0.4s tested clean at 100 mm/s over ~9.5 fps detection.")
     # default "wheels" in THIS worktree: MOVE is deregistered (the kernel
     # rework acks it ERR_UNIMPLEMENTED), so the old default made the tour
     # fail its first enqueue out of the box.
@@ -2061,9 +2070,12 @@ def main() -> int:
                              stall=not args.no_stall))
     if not args.sim and not args.no_geofence:
         checkPlayfieldLights()
-        backend.geofence = Geofence(backend.proto, margin=args.geofence_margin)
+        backend.geofence = Geofence(backend.proto, margin=args.geofence_margin,
+                                     robot_tag_id=backend.cfg.robot_tag_id,
+                                     lost_grace=args.geofence_lost_grace)
         print(f"geofence ARMED: stops the robot within "
-              f"{args.geofence_margin:.0f} cm of the field edge, and on tag loss")
+              f"{args.geofence_margin:.0f} cm of the field edge, and on "
+              f"{args.geofence_lost_grace:.1f}s of tag loss")
 
     if args.mode == "goto":
         try:

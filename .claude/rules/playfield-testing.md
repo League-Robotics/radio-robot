@@ -33,9 +33,15 @@ keeps no state across restarts, so do this every session. Field is
 **134.3 × 89.3 cm**, A1-centred (tag 1 = origin), so limits are
 **±67.15 / ±44.65 cm**.
 
-Tag **100** is registered via `register_mobile_tag` as the robot's **centre of
-rotation** — `world_xy` already reports the centre, not the raw tag. Tag 1 is
-fixed: if tag 1 is missing, the problem is the room, not the robot.
+A mobile tag is registered via `register_mobile_tag` as the robot's **centre of
+rotation** — `world_xy` already reports the centre, not the raw tag. **Do not
+hardcode the tag id** — it has already changed once (tovez: 100 → 52,
+2026-08-14, see `tovez.json`'s own `_tag_note`) and a stale id here is exactly
+what sent a session hunting a "lost" robot the camera could see fine. Read the
+live value from the active robot config (`geometry`/`vision.robot_tag_id`,
+whatever the loader exposes as `cfg.robot_tag_id`) or `list_mobile_tags()`,
+never from memory or an old doc. Tag 1 is fixed: if tag 1 is missing, the
+problem is the room, not the robot.
 
 ## Heading convention (measured, never assume)
 
@@ -141,3 +147,48 @@ Log them, and report per-segment truth alongside the odometry estimate.
 Close the loop on the camera, cap each positioning leg (~25 cm) and re-fix
 between hops, and check the fence INSIDE the move at ~10 Hz — not between
 segments, where it can only narrate a crash that already happened.
+
+## Pre-flight path check — compute before you command, every time
+
+**2026-08-19 incident.** After a real edge-out and a subsequent geofence-caught
+near-miss, the recovery pattern became "recenter the robot, then just launch
+the tour and see if the geofence catches it." It did — but only because the
+geofence is a backstop, and treating it as the *primary* check is the bug this
+section exists to kill. Concretely: robot measured at (15.9, 15.8) cm, heading
++131.2°. A single 500 mm forward leg at that heading projects to
+`(15.9 + 50·cos131.2°, 15.8 + 50·sin131.2°) ≈ (−17.0, 53.4)` cm — past the
+field's 44.65 cm physical half-height before the leg even finishes. Two lines
+of arithmetic would have shown this. None were done; the move was sent and the
+geofence caught it mid-leg instead.
+
+**The rule:** before sending ANY commanded motion on the playfield — a full
+script like `square_tour.py`, a hand-rolled `WHEELS` sequence, anything —
+compute the full projected path from a **measured** start pose (camera fix,
+not an assumption) through every planned leg and turn, and confirm every
+waypoint clears the geofence margin. If it doesn't, don't send the command:
+reposition, reorient, or shorten the leg first. A command is not "probably
+fine, the geofence will catch it" — it is verified safe before it is sent, and
+the geofence is what catches the *unexpected* drift on top of that, not the
+*expected* geometry.
+
+Minimal check, straight-line legs + in-place turns (covers `square_tour.py`'s
+own shape — adapt the loop for other paths):
+
+```python
+python3 -c "
+import math
+HALF_W, HALF_H, MARGIN = 67.15, 44.65, 12.0
+x, y, heading = 15.9, 15.8, math.radians(131.2)   # measured start (cm, deg)
+LEG, TURN = 50.0, math.radians(90.0)              # cm, rad -- match the planned path
+for i in range(4):
+    x += LEG * math.cos(heading)
+    y += LEG * math.sin(heading)
+    ok = abs(x) < HALF_W - MARGIN and abs(y) < HALF_H - MARGIN
+    print(f'leg {i+1}: ({x:+.1f}, {y:+.1f}) cm  {\"OK\" if ok else \"!! OUT OF BOUNDS\"}')
+    heading += TURN
+"
+```
+
+Run this (with the actual measured pose) and read every line before the first
+command goes out. If any leg prints "OUT OF BOUNDS," stop — do not launch the
+run and hope the geofence intervenes.

@@ -61,7 +61,8 @@ class Geofence:
     # total -- under 10 cm per side for margin + coast + tour error. 12 cm
     # keeps ~5 cm of real clearance after coast while still permitting a
     # correctly-driven 500 mm square.
-    def __init__(self, proto, margin: float = 12.0, lost_grace: float = 1.5):
+    def __init__(self, proto, margin: float = 12.0, lost_grace: float = 1.5,
+                 robot_tag_id: int = 100):
         from aprilcam.client.control import DaemonControl
         from aprilcam.config import Config
 
@@ -70,6 +71,7 @@ class Geofence:
         self._proto = proto
         self.margin = margin           # [cm] robot half-extent plus slack
         self._lost_grace = lost_grace  # [s] tolerate brief detection dropouts
+        self.robot_tag_id = robot_tag_id  # the active robot's mounted AprilTag id
         self._last_seen = time.monotonic()
         self.last = None
 
@@ -99,7 +101,7 @@ class Geofence:
 
     def check(self) -> None:
         for t in self._dc.get_tags(self._cam).tags:
-            if t.id == 100 and t.world_xy:
+            if t.id == self.robot_tag_id and t.world_xy:
                 x, y = t.world_xy
                 self.last = (x, y)
                 self._last_seen = time.monotonic()
@@ -109,19 +111,19 @@ class Geofence:
                                f"within {self.margin} cm of the field edge")
                 return
         if time.monotonic() - self._last_seen > self._lost_grace:
-            self._halt(f"geofence: tag 100 not seen for "
+            self._halt(f"geofence: tag {self.robot_tag_id} not seen for "
                        f"{time.monotonic()-self._last_seen:.1f}s -- "
                        f"position unknown, last {self.last}")
 
     def captureFix(self, label: str, samples: int = 7
                    ) -> "tuple[float, float, float] | None":
-        """Median-of-`samples` camera pose fix for tag 100: (x_cm, y_cm,
-        yaw_rad). Caller is responsible for having settled to REST first --
-        this does not wait. Returns None (never raises) if the tag was not
-        seen on ANY sample -- a missing fix degrades the tour's report, it
-        must not abort the tour (stakeholder mandate, 2026-07-29: a camera
-        fix at every segment boundary, per `.claude/rules/
-        playfield-testing.md`).
+        """Median-of-`samples` camera pose fix for the robot's tag
+        (`self.robot_tag_id`): (x_cm, y_cm, yaw_rad). Caller is responsible
+        for having settled to REST first -- this does not wait. Returns None
+        (never raises) if the tag was not seen on ANY sample -- a missing fix
+        degrades the tour's report, it must not abort the tour (stakeholder
+        mandate, 2026-07-29: a camera fix at every segment boundary, per
+        `.claude/rules/playfield-testing.md`).
 
         x/y use a per-axis median (unchanged). yaw uses the circular mean
         (atan2(mean(sin), mean(cos))), matching
@@ -132,14 +134,14 @@ class Geofence:
         yaws: "list[float]" = []
         for _ in range(samples):
             for t in self._dc.get_tags(self._cam).tags:
-                if t.id == 100 and t.world_xy is not None and t.yaw is not None:
+                if t.id == self.robot_tag_id and t.world_xy is not None and t.yaw is not None:
                     xs.append(t.world_xy[0])
                     ys.append(t.world_xy[1])
                     yaws.append(t.yaw)
                     break
             time.sleep(0.03)
         if not xs:
-            print(f"  camera fix '{label}': tag 100 not seen")
+            print(f"  camera fix '{label}': tag {self.robot_tag_id} not seen")
             return None
         xs.sort()
         ys.sort()
@@ -233,8 +235,8 @@ def _turnPlayfieldLightsOn() -> None:
 def captureFixWithRetry(geofence: "Geofence", label: str,
                         retrySeconds: float = 5.0) -> "tuple[float, float, float] | None":
     # [s]
-    """Like Geofence.captureFix(), but on losing tag 100 -- a dropout that
-    has repeatedly happened and self-recovered during bench sessions --
+    """Like Geofence.captureFix(), but on losing the robot's tag -- a dropout
+    that has repeatedly happened and self-recovered during bench sessions --
     checks whether the playfield Shelly lights have switched themselves off
     (a known, observed cause) and turns them back on, then RETRIES the fix
     for up to retrySeconds before giving up. Never masks a genuine, lasting
@@ -245,7 +247,7 @@ def captureFixWithRetry(geofence: "Geofence", label: str,
     if fix is not None:
         return fix
 
-    print(f"  '{label}': tag 100 lost -- checking playfield lights before retrying")
+    print(f"  '{label}': tag {geofence.robot_tag_id} lost -- checking playfield lights before retrying")
     lightsOn = _playfieldLightsOn()
     if lightsOn is False:
         print("  playfield lights are OFF -- turning them on (known dropout cause)")
@@ -259,8 +261,8 @@ def captureFixWithRetry(geofence: "Geofence", label: str,
         time.sleep(0.5)
         fix = geofence.captureFix(f"{label} (retry {attempt})")
         if fix is not None:
-            print(f"  '{label}': tag 100 recovered on retry {attempt}")
+            print(f"  '{label}': tag {geofence.robot_tag_id} recovered on retry {attempt}")
             return fix
-    print(f"  '{label}': tag 100 still not seen after {retrySeconds:.0f}s of retrying -- "
+    print(f"  '{label}': tag {geofence.robot_tag_id} still not seen after {retrySeconds:.0f}s of retrying -- "
           "giving up")
     return None
