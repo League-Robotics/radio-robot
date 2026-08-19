@@ -728,8 +728,26 @@ class Tour:
         second `wait_for_ack()` drain: on a single-consumer telemetry queue
         two readers starve each other, and on the sim nothing would be
         stepping the loop while `wait_for_ack()` slept.
+
+        Flushes pending frames immediately before each send: the ack ring
+        this checks (`self._seenAcks`, keyed by the wire envelope's small
+        per-connection `corr_id`) survives reconnects on the firmware side
+        (`.clasi` memory `move-id-dedup-and-28bit-wire-mask.md`), so a
+        backlog frame already sitting in the local receive queue can carry
+        a STALE ack for a numerically-identical corr_id from an earlier
+        connection, "confirming" a command that was never actually
+        received this session. 2026-08-19 hardware repro: four consecutive
+        segments in one tour enqueued clean (ack observed immediately, no
+        retry) yet never executed -- zero encoder motion, `active` never
+        rose. Flushing narrows but does not provably close the race (the
+        firmware keeps re-transmitting its ring's current contents every
+        frame regardless of host-side flushing).
         """
         for _ in range(4):
+            try:
+                self.proto.read_pending_binary_tlm_frames()
+            except AttributeError:
+                pass  # sim backend's connection has no wire-level frame queue to flush
             corr = self.proto.wheels(vL, vR, durationMs, move_id=moveId)
             waited = 0.0
             while waited < 0.5:  # [s] ack deadline per attempt
@@ -775,10 +793,20 @@ class Tour:
         produce equal actual speeds and nothing closes the loop. The same
         distance driven as a MOVE held ~1 cm of cross-track over 40 cm
         earlier today, and 99-100% of commanded distance over five legs.
+
+        Enqueues via `_enqueueMove()` (ack-verified, retried) rather than a
+        raw `move_twist()` call -- the sequential path (this one, used
+        whenever a camera/geofence is armed, i.e. every playfield run) had
+        NO enqueue verification at all until 2026-08-19, unlike the chained
+        path's `_enqueueMove()`, which already retried on a lost ack. That
+        asymmetry meant the riskier environment (playfield, always
+        sequential) ran the less-verified command path. `replace=True`:
+        the sequential loop never has a queued successor to preserve.
         """
         self.marks.append((self.elapsed, label))
         kwargs, timeout = self._legMoveArgs()
-        self.backend.proto.move_twist(timeout=timeout, move_id=moveId, **kwargs)
+        if not self._enqueueMove(kwargs, timeout, moveId, replace=True, label=label):
+            return False
         self._awaitMove(timeout, label, moveId)
         return True
 
@@ -797,23 +825,41 @@ class Tour:
         have completely different causes: the move never started
         (`active` never rose -- likely a lost command) vs. it started but
         never finished (`active` rose but never fell -- the move itself
-        stalled, or its completion frame was lost)."""
+        stalled, or its completion frame was lost).
+
+        Success requires a COMPLETION ack for THIS move's own `moveId` in
+        `self._seenAcks`, not just the raw `active` flag rising then
+        falling -- see the field's own docstring (line ~628): every frame's
+        completion ack is keyed by `Move.id` there for exactly this check.
+        A generic active-flag watch cannot tell "my move completed" from "a
+        neighboring move's active-flag transition happened to land in this
+        polling window" -- e.g. a stale/coalesced transition, or a
+        near-instantly-satisfied stop condition that toggled active without
+        the move actually doing anything. 2026-08-19 playfield incident:
+        a leg move between two turns recorded ZERO camera-measured travel
+        (turns immediately before and after it both landed correctly) with
+        no TIMEOUT ever printed -- i.e. the old active-flag-only check
+        reported success for a move that, by every other measurement,
+        never actually happened. Requiring the moveId-keyed ack closes
+        that gap: a repeat of the same failure now times out loudly instead
+        of silently reporting success."""
         seen = False
         start = time.monotonic()
         budget = timeout / 1000.0 + 2.0
         deadline = start + budget
         while time.monotonic() < deadline:
             frames = self.advance(0.1)
-            if frames:
-                if frames[-1].active:
-                    seen = True
-                elif seen:
-                    self.advance(self.restDwell())
-                    return
+            if frames and frames[-1].active:
+                seen = True
+            if moveId in self._seenAcks:
+                self.advance(self.restDwell())
+                return
         waited = time.monotonic() - start
-        reason = ("started but never completed -- 'active' rose but never "
-                  "dropped" if seen else
-                  "never started -- 'active' never rose (command likely lost)")
+        reason = ("active rose but no completion ack for this move was ever "
+                  "seen -- move started but its own completion was never "
+                  "confirmed" if seen else
+                  "never started -- 'active' never rose and no completion "
+                  "ack was seen (command likely lost)")
         print(f"TIMEOUT (hey jackass, it timed out): {label} (move {moveId}) "
               f"{reason}; waited {waited:.1f}s of a {budget:.1f}s budget")
         self.advance(self.restDwell())
@@ -832,10 +878,15 @@ class Tour:
         at 180.3 (sd 1.9) over six runs, and 15..180 deg across four rates
         held to mean +0.64 deg. No duration to guess and nothing to
         pre-measure, so the prelude does not have to move.
+
+        Enqueues via `_enqueueMove()` (ack-verified, retried) -- see
+        `runLegMove()`'s docstring for why the raw `move_twist()` call this
+        replaced was a real gap on exactly this (sequential/playfield) path.
         """
         self.marks.append((self.elapsed, label))
         kwargs, timeout = self._turnMoveArgs()
-        self.backend.proto.move_twist(timeout=timeout, move_id=moveId, **kwargs)
+        if not self._enqueueMove(kwargs, timeout, moveId, replace=True, label=label):
+            return False
         self._awaitMove(timeout, label, moveId)
         return True
 
@@ -906,8 +957,19 @@ class Tour:
         firmware's 16-slot accepted-id ring dedups a retried enqueue whose
         ack was lost (constraint 3) -- but every segment across the whole
         tour still gets its own unique id (segments()'s own _ID_BASE
-        scheme)."""
+        scheme).
+
+        Flushes pending frames immediately before each send -- see
+        `sendVerified()`'s docstring for why: the enqueue-ack check below
+        keys on the small per-connection `corr` (unlike `_awaitCompletion`,
+        which correctly keys on the large, session-unique `moveId`), so a
+        stale backlog ack can spuriously "confirm" a move that was never
+        actually accepted this session."""
         for attempt in range(6):
+            try:
+                self.backend.proto.read_pending_binary_tlm_frames()
+            except AttributeError:
+                pass  # sim backend's connection has no wire-level frame queue to flush
             corr = self.backend.proto.move_twist(
                 timeout=timeout, replace=replace, move_id=moveId, **kwargs)
             if self._awaitAck(corr, 0.5, label, "enqueue"):
@@ -2012,15 +2074,26 @@ def main() -> int:
                         "0.4s tested clean at 100 mm/s over ~9.5 fps detection.")
     # default "wheels" in THIS worktree: MOVE is deregistered (the kernel
     # rework acks it ERR_UNIMPLEMENTED), so the old default made the tour
-    # fail its first enqueue out of the box.
+    # fail its first enqueue out of the box. 2026-08-19: briefly changed this
+    # default to "move" on the mistaken belief the wheels/move mismatch
+    # against Tour.legMode's class-level default was an oversight -- it is
+    # not; this comment already said why. Reverted. The class-level default
+    # ('move') is aspirational, for whenever MOVE is re-registered; it is
+    # not what should run against the CURRENT firmware build.
     p.add_argument("--leg-mode", choices=("move", "wheels"), default="wheels",
-                   help="legs as DISTANCE-stopped MOVEs (default, closed-loop) or "
-                        "as timed WHEELS runs (the original; measured 8cm of "
-                        "cross-track drift over a 48cm leg)")
+                   help="legs as DISTANCE-stopped MOVEs (closed-loop, but "
+                        "currently ERR_UNIMPLEMENTED on this firmware build -- "
+                        "see the comment above) or as timed WHEELS runs "
+                        "(default; the original; measured 8cm of cross-track "
+                        "drift over a 48cm leg, but the only mode this "
+                        "firmware build actually accepts)")
     p.add_argument("--turn-mode", choices=("move", "wheels"), default="wheels",
-                   help="corners as ANGLE-stopped MOVEs (default, closed-loop) or "
-                        "as timed WHEELS pivots (the original; needs the moving "
-                        "prelude's duration scale to be accurate)")
+                   help="corners as ANGLE-stopped MOVEs (closed-loop, but "
+                        "currently ERR_UNIMPLEMENTED on this firmware build) "
+                        "or as timed WHEELS pivots (default; the original; "
+                        "needs the moving prelude's duration scale to be "
+                        "accurate, but the only mode this firmware build "
+                        "actually accepts)")
     p.add_argument("--moving-prelude", action="store_true",
                    help="use the ORIGINAL prelude, which drives ~39cm and pivots "
                         "to self-calibrate. Bench only -- it does not fit on the "

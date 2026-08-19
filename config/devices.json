@@ -28,17 +28,19 @@
     "device_id": 1468666101,
     "device_name": "zetuv",
     "enum": 2,
-    "port": "/dev/cu.usbmodem2121202",
+    "port": "/dev/cu.usbmodem2121402",
     "role": "NEZHA2",
     "serial": "1468666101",
     "uid": "9906360200052820312bde85515a72e6000000006e052820"
   },
   "9906360200052820a8fdb5e413abb276000000006e052820": {
     "announcement": "DEVICE:NEZHA2:robot:tovez:2314287040",
+    "board_name": "tovez",
     "common_name": "robot",
+    "device_id": 2314287040,
     "device_name": "tovez",
     "enum": 6,
-    "port": "/dev/cu.usbmodem2121302",
+    "port": "/dev/cu.usbmodem2121102",
     "role": "NEZHA2",
     "serial": "2314287040",
     "uid": "9906360200052820a8fdb5e413abb276000000006e052820"
@@ -55,10 +57,12 @@
   },
   "9906360200052820b8e12372c44f4f67000000006e052820": {
     "announcement": "DEVICE:NEZHA2:robot:vevov:1198504156",
+    "board_name": "vevov",
     "common_name": "robot",
+    "device_id": 1198504156,
     "device_name": "vevov",
     "enum": 5,
-    "port": "/dev/cu.usbmodem2121302",
+    "port": "/dev/cu.usbmodem2121202",
     "role": "NEZHA2",
     "serial": "1198504156",
     "uid": "9906360200052820b8e12372c44f4f67000000006e052820"

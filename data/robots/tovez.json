@@ -16,11 +16,11 @@
   "vision": {
     "robot_tag_id": 52,
     "camera_distance_scale": 1.0022,
-    "tag_offset_x": 50.2,
-    "tag_offset_y": -0.5,
+    "tag_offset_x": -41.0,
+    "tag_offset_y": 0.5,
     "tag_offset_z": 113.0,
     "tag_offset_yaw": 0.0,
-    "_tag_note": "2026-08-14: tovez re-tagged from 100 to 52, tag moved to the FRONT of the robot and 113 mm off the deck. offset MEASURED, not guessed: park the robot over tag 1, read the tag pose, rotate 180 deg in place, read again. The centre of rotation is the MIDPOINT of the two readings and the lever arm is half their separation, so the method calibrates itself and needs no ruler. Measured rotation 179.99 deg; centre landed at (+1.6,-1.3) mm i.e. on tag 1, confirming placement; lever arm 50.21 mm. Sign convention VERIFIED by A/B rather than assumed: with x_mm=+50.21 the reported centre moves 9.5 mm through a 180 deg reversal, with x_mm=-50.21 it moves 196.7 mm. tag_offset_x is the tag position relative to the centre of rotation, +x forward. NOTE the camera daemon keeps no mobile-tag state across restarts, so this must be re-registered each session (register_mobile_tag(52, x_mm, y_mm, z_cm, yaw_deg)) -- these fields are the source of truth for that call."
+    "_tag_note": "2026-08-19: tag 52 relocated further toward the REAR of the robot, same 113 mm deck height (unchanged, per the operator). Re-measured with the same self-calibrating rotation method as 2026-08-14, extended to THREE readings instead of two: at rest, read the tag pose; rotate in place; read again; rotate again; read a third time. Least-squares fit of all three (x,y,yaw) samples to tag_world = centre + R(yaw)*(dx,dy) gives dx=-41.0 mm, dy=+0.5 mm, with residuals under 0.3 mm on every point; a held-out check using only readings 1-2 predicted reading 3 to within 0.68 mm. Sign matches expectation: negative x = behind centre, y approx 0 = on the centreline, matching the same-position mount reasoning used for gopiv's tag placement. CORRECTION to the note this replaces: the mobile-tag registration for tag 52 (x_mm=50.2, y_mm=-0.5, the front-mount values) was still present in list_mobile_tags after a fresh rogo daemon session and an AprilCam camera/detection restart -- registrations DO persist across restarts in practice, contrary to what was written here 2026-08-14; re-register after any physical remount regardless, since a stale registration silently reports the wrong centre. Also observed this session: the `turn <deg>` MOVE verb enqueued (ack OK, corr_id assigned) twice but the robot never actuated and the completion wait timed out both times, encoders unchanged; raw `wheels <l> <r> <ms>` teleop drove normally and was used for all three rotations instead -- a `turn`/MOVE-completion regression worth a firmware look, not chased down here."
   },
   "geometry": {
     "trackwidth": 115,
