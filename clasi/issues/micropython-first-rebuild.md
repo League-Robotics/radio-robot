@@ -22,7 +22,7 @@ stays the C++ `src/firm/diffdrive/` package plus its Nezha motor leaf.
 | transports | **v5 on radio** (primary); **REPL on USB and WiFi**; WiFi also carries the UDP v5 plane (proven dual-plane) |
 | C++ payload | DiffDrive kernel + NezhaMotor leaf + minimal shims — nothing else |
 | old firmware | hard cutover: `src/firm` (minus `diffdrive/`) frozen |
-| location | **its own repository** (stakeholder 2026-08-18, superseding the same-day worktree/`src/upy/` decision): a new `League-Robotics/<name>` repo, not a directory of radio-robot. The kernel + Nezha leaf are VENDORED into it by a sync script from radio-robot (the `sync_pxt.py` pattern the MakeCode extension already uses); radio-robot keeps the kernel SOURCE and its `src/tests/diffdrive/` gate, plus all host tooling (rogo, benches) unchanged |
+| location | **its own repository** (stakeholder 2026-08-18, superseding the same-day worktree/`src/upy/` decision): `League-Robotics/nezha-upy` (created 2026-08-18), not a directory of radio-robot. The kernel + Nezha leaf are VENDORED into it by a sync script from radio-robot (the `sync_pxt.py` pattern the MakeCode extension already uses); radio-robot keeps the kernel SOURCE and its `src/tests/diffdrive/` gate, plus all host tooling (rogo, benches) unchanged |
 | first robot | gopiv (motors+encoders+OTOS+line re-fitted, WiFi module, ran the old MP image) |
 
 ## What exploration established
@@ -129,8 +129,8 @@ tests/     golden vectors copy, CPython loopback engine tests
 
 ## Milestones (risk-ordered; each gate is a command)
 
-**M0 — new repo + image boots.** Create the `League-Robotics/<name>`
-repo; fork the old `micropython/` machinery into its root with all
+**M0 — new repo + image boots.** Populate `League-Robotics/nezha-upy`
+(repo created); fork the old `micropython/` machinery into its root with all
 MUST-KEEP patches; write radio-robot's `src/scripts/sync_upy.py` and run
 the first vendor sync; **rescue the untracked**
 `clasi/issues/micropython-full-firmware-in-the-image-gates-3-7.md` and
@@ -237,8 +237,8 @@ over getez, per-robot JSON.
    flow); radio-robot-side pieces (sync_upy.py, gen_messages --emit-upy)
    are small OOP changes. Planning/issues for the rebuild stay in
    radio-robot's clasi/ until the new repo grows its own convention.
-4. Repo name: provisional `robot-upy` unless the stakeholder prefers
-   another (GitHub renames redirect, so this is cheap to revisit).
+4. Repo name: DECIDED -- `League-Robotics/nezha-upy` (public), created
+   2026-08-18.
 
 ## Related
 
