@@ -1,0 +1,1689 @@
+---
+root: ../../../docs/design/design.md
+---
+
+# Core — Orchestration: the Loop and the Robot Composition
+
+**Owner:** Eric Busboom · **Last reviewed:** 2026-08-09 · **Status:** in-flux
+
+---
+
+## 1. Purpose
+
+`core/` (was `app/`; namespace `Core::`, was `App::`) is the firmware's
+**orchestration layer**: the single cooperatively-timed control loop
+(`Core::RobotLoop`), the Robot composition root
+(`Core::composeRobot()`/`Core::RobotGraph`), and the BASE-side passive
+modules the loop owns:
+
+* `Comms` (wire framing — protocol v5's uniform packet grammar,
+  `<COMMAND>[':' <data>]'\n'`, dispatched by generated command-registry
+  lookup, 124-005; COBS+CRC binary frames demuxed from the HELLO/PING
+  text rump by a transport-level heuristic, 123-002, before that; base64
+  line-armor before that, see §4 below),
+* `Telemetry` (outbound frames, including the `cycle_busy`/`cycle_period`
+  loop-timing fields — now on the PRIMARY frame every cycle, 123-004;
+  landed on the secondary frame as an interim placement at 122-003, see §4
+  below),
+* `DifferentialDrive` (was `Drive`; current contract, 128 — see this section's own Drive bullet in
+  §5 Interfaces for the full two-lifecycle contract: a bounded WHEELS
+  command lifecycle, `command()`/`estop()`/`owns()`/`takeCompletion()`,
+  plus actuation, `tick()`/`update()`), and
+* `Preamble` (boot-time device detection).
+
+**`RobotLoop` also constructs and drives MOTION-LIBRARY objects**
+(sprint 122's two-layer base/motion split — `docs/design/design.md`
+§2/§5): `Motion::Planner` (125–128, the on-robot motion decider,
+superseding the deleted `Motion::MoveQueue` — every `Move` is
+self-bounding by construction, so there is no separate staleness gate),
+`Motion::Odometry` (dead reckoning, plus cumulative path length), and
+`Motion::StateEstimator` (117 — predict-to-now wheel/body peer estimates,
+zero-order-hold extrapolation, v1 complementary blend against OTOS).
+These live in `src/firm/motion/` (a sibling of `core/` under `src/firm`, moved back in from `src/motion` by the platform/hardware/hal reorganization) —
+`RobotLoop` holds them by reference exactly like its own base-side
+modules (constructed at the composition root, `main.cpp`/`SimHarness`)
+and calls into them at specific points in its own schedule, but they are
+motion-library types, not `app/`'s own. Planner and Drive write into the
+SAME `Types::RobotState::Wheel::cmdVelocity` field directly (128 — no
+boundary interface; see §5's Drive bullet and
+[`src/firm/types/DESIGN.md`](../types/DESIGN.md)), arbitrated purely by
+`RobotLoop`'s own call ordering. See this file's own "122
+(motion-library extraction)"/"125–128" notes at the end of this section
+for the full before/after, and
+[`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) for their current
+orientation and standalone test builds.
+
+This is the seam that owns the robot's *timing* — every I2C
+transaction, every wait, every cadence decision lives here or is called from
+here in visible order. It exists as its own subsystem because timing
+discipline on a shared single-master I2C bus, and cooperative yielding to the
+CODAL fiber scheduler, are the two hard realtime problems this firmware has;
+drawing the boundary around "the thing that owns the schedule" keeps that
+problem in one place instead of smeared across device leaves.
+
+**115-005 (gut S1) deletion note.** `Pilot` (109-003/109-005 — bridged
+`Motion::Executor` into the loop's cycle and computed the heading PD
+cascade on top of it) and `HeadingSource` (109-005 — decided which sensor
+was truth for heading) are DELETED wholesale, along with `Motion::Executor`/
+`Motion::JerkTrajectory`/`vendor/ruckig` (`motion/DESIGN.md` and its own
+Pilot/Executor/HeadingSource sections go with them — see that directory's
+own history if it still exists, or the git tag below if it does not). This
+sprint's own tag `pre-gut-motion-stack` preserves the full pre-deletion tree
+(files, DESIGN.md prose, tests) for recovery — deleting the DOCUMENTATION of
+a deleted subsystem here is not a loss of information, only a redirect to
+where the real historical record lives. `RobotLoop` lost the `Pilot&`
+constructor parameter, the MOVE dispatch case, and every `pilot_.*` call
+site; `Drive` lost its `configure(msg::PlannerConfig)`/acceleration-
+feedforward staging (112-002) entirely, since `msg::PlannerConfig` itself no
+longer exists. The command surface through this sprint (S1) is TWIST+STOP+
+CONFIG{motor,otos}+deadman only — S2 (sprint 116) replaces TWIST+deadman
+with the bounded MOVE protocol.
+
+**116-005/116-006 (S2, MOVE protocol cutover) — landed.** `Core::Deadman`
+(`app/deadman.{h,cpp}`, both test harnesses) is deleted in turn — the
+same wholesale-deletion treatment 115-005 gave `Pilot`/`HeadingSource`
+above. `RobotLoop::handleTwist()` is replaced by `handleMove()`; a new,
+small `Core::MoveQueue` (`app/move_queue.{h,cpp}`) owns the 1-active +
+4-pending queue and drives one `Motion::StopCondition`
+(`motion/stop_condition.{h,cpp}` — a fresh, much smaller `motion/`
+directory than the one S1 deleted, and NOT a revival of `Pilot`/
+`Motion::Executor`) per active `Move`. The command surface is now
+MOVE+STOP+CONFIG{motor,otos} — no deadman.
+
+**117 (predict-to-now estimator v1) — landed.** A new passive module,
+`Core::StateEstimator` (`app/state_estimator.{h,cpp}`), is added
+alongside `Odometry` — NOT a replacement for it: `Odometry`'s dead-
+reckoned `x_`/`y_`/`theta_` still feed `frame_.pose` exactly as before,
+and `StateEstimator` reads that same per-cycle `Frame` data as an
+independent, additive consumer, greenfield in the same sense
+`StateEstimator`'s own source issue used for the deleted `Pilot`/
+`HeadingSource` era: it does not yet drive motion (no consumer wires its
+output into `Drive`/`MoveQueue` this sprint — that is the later
+trajectory-controller sprint, gated on this one being bench-proven).
+`StateEstimator` holds per-wheel and body state as PEER estimates (each
+independently valid/stale), computes zero-order-hold "predict to now"
+extrapolation from the newest basis reading — generalizing the deleted
+`HeadingSource::headingLead()` equation (`heading = basis.heading +
+basis.omega × age`) to the full body pose (x, y, heading, v_x, v_y,
+omega) — and blends a v1 complementary weight against OTOS heading/omega
+whose weights are fail-closed baked config (`Config::
+defaultEstimatorConfig()`), defaulting to 0.0 (encoder-only output this
+sprint, per stakeholder decision) and live-tunable via a new
+`ConfigDelta.estimator` arm (the curated estimator live-tuning message)
+dispatched by `RobotLoop::handleConfig()`, mirroring the otos live-tuning
+message's existing merge-then-apply pattern — see §3/§4 below for the full
+detail (HISTORICAL as of 132-013, patch-surface retirement: `ConfigDelta`
+and every curated per-target live-tuning message it carried are deleted;
+`Core::StateEstimator` itself was already deleted as dead code, 128-016).
+Pure
+computation: never touches the I2C bus, never sleeps, no `Devices::
+Clock&` collaborator of its own (every query takes an explicit `now`/`t`
+argument, mirroring `Motion::StopCondition`'s "hand-fed readings, no
+owned collaborator" shape — see that module's own file-header precedent).
+
+**118 (loop schedule truth) — landed.** Restores `cycle()`'s schedule to
+what this file already claimed it was: `kSettle`/`kClear` back to their
+genuine 4ms vendor-settle/clearance budget (regressed to 0 by commit
+`5f5a2ba7`, which had been satisfying the vendor's mandatory settle as a
+*blocking* sleep hidden inside `motorL_.tick()`/`motorR_.tick()` instead —
+tripping the I2C clearance safety-net fault bit every cycle), `kCycle`
+40ms/~25Hz (was a fictional 20ms/~50Hz under the regression), and
+`Telemetry::kPrimaryPeriod` coupled back to `kCycle` (40). Two call-order
+changes ride along: `drive_.tick()` moves back inside the R-settle block
+(retiring the 112-005 "hoist `drive_.tick()` above both motor ticks"
+experiment, which had been tracked only in project memory, not in an
+issue — the interleaved order restored here is the one this file's §2/§4
+already described); and `moveQueue_.tick()` — the stop decision — moves
+from the R-settle block into the trailing pace block, evaluated AFTER
+`applyOtosSample()`/`odom_.integrate()`/`StateEstimator::update()` (the
+last of these deleted by 128 ticket 016, a per-cycle computation with no
+consumer — named here for its historical position in the schedule only)
+rather than before them, so a MOVE's completion decision reads odometry
+integrated in the SAME cycle, not the previous one (closes a full cycle
+of avoidable heading/distance staleness the `stop_lead_ms` anticipation
+constant had been partly compensating for — see the turn-execution review
+`docs/code_review/2026-07-22-turn-execution-review.md` D2/F3).
+
+**119 ticket 005 (straight-leg crab fix — corrects 118's own restore) —
+landed.** 118's restore above threw out the good half of the 112-005
+hoist along with the bad: `drive_.tick()` sitting BETWEEN `motorL_.tick()`
+and `motorR_.tick()` made L always write duty from a target staged ONE
+CYCLE OLDER than R's — a genuine per-cycle L/R actuation skew during
+every commanded ramp (measured +2.685° cruise yaw on a straight leg,
+exact match to the predicted `v_cruise·kCycle/trackWidth` transient;
+decel canceled it, so the net signature was lateral crab with ZERO final
+heading error — +32.5mm over a 700mm straight, endpoint-only heading
+checks provably blind to it). A second, independent defect compounded
+it: `updateTlm()`/`tlm_.emit()` ran in the kClear block (between L's
+collect and R's), pairing THIS cycle's fresh L against LAST cycle's stale
+R in every outbound frame — a pairing skew that numerically CANCELED the
+physical skew above, so every host-visible encoder view (`dL−dR`,
+`encpose`, `frame.twist`) reported a perfectly straight leg while the
+robot's true path crabbed. See
+`clasi/issues/straight-leg-crab-118-001-actuation-and-telemetry-pairing-skew.md`
+and `docs/code_review/2026-07-22-turn-execution-review.md` §9 for the
+full derivation and measured numbers.
+
+Both fixed together (fixing one without the other either leaves the crab
+in place while making it visible, or removes it while still hiding a real
+defect for any OTHER per-frame L/R consumer): `drive_.tick()` now runs at
+the very TOP of `cycle()`, before EITHER motor's own select — restoring
+the 112-005 hoist's one genuinely good half (same-generation actuation
+staging) WITHOUT reintroducing the select-ordering bug 118's restore was
+actually about (moving `drive_.tick()`'s position never touches select
+ordering — the two are orthogonal, see §2's own interleave description
+below). `updateTlm()`/`tlm_.emit()` moved to the START of the trailing
+pace block, immediately after `motorR_.tick()`'s own collect — every
+emitted frame now pairs same-generation L/R encoder samples. Measured
+post-fix (`straight_drift_repro.py`'s own scenario, isolated 700mm
+straight at 150mm/s, ideal chip): cruise heading 0.000° (was +2.685°),
+final y +0.0mm (was +32.5mm) — an exact zero, not merely "reduced."
+
+**Ack-latency consequence of the telemetry-emit move (documented, not
+accidental).** `updateTlm()`/`emit()` now runs AFTER `processMessage()`'s
+own command-dispatch call (R-settle block, still unchanged position) in
+the SAME cycle, where 118's kClear placement ran BEFORE it. An
+enqueue/command ack (CONFIG/MOVE-enqueue/STOP, staged via `tlm_.ack()`
+inside `processMessage()`'s own handlers) therefore now typically rides
+THIS SAME cycle's emitted frame instead of the next one — see §7.2 of
+`docs/protocol-v5.md` for the wire-level statement. The MOVE COMPLETION
+ack is UNAFFECTED: `moveQueue_.tick()` (the stop decision) still runs
+AFTER `updateTlm()`/`emit()`, later in the SAME pace block, so a
+completion ack staged there is still not visible until the NEXT cycle's
+own `emit()` call — "ack rides the next frame," unchanged from before
+this ticket.
+
+**Both `MoveQueue::landAtZero()` completion-margin constants re-swept
+(`move_queue.cpp`) — the actuation-staging fix shifts BOTH regimes, not
+just the already-known-narrow chain-advance one.** `drive_.tick()`'s new
+top-of-cycle position changes the plant's exact per-cycle response and
+the average commanded-to-duty latency (both leaves now lag their own
+freshly-staged target by 1 cycle, symmetric — was 0/1 split, averaging
+0.5), which shifts both of `landAtZero()`'s own margin factors:
+
+- `kStoppingMarginFactorChain` (`pendingCount() > 0`, 118 ticket 003's own
+  narrow-pocket constant) — the shipped 0.60 value re-measured 3.457°
+  worst-case at this schedule (TOUR_2/ideal turn 10,
+  `test_tour_closure_gate.py`), over its own 2.5° gate. A fresh 1-D sweep
+  at THIS schedule found a genuinely broad plateau (unlike 118-003's own
+  narrow-pocket finding) at `[0.40, 0.50]` — 0.48 ships as the new default
+  (worst=2.218°, 0.282° of margin).
+- `kStoppingMarginFactorFinal` (`pendingCount() == 0`) — NOT anticipated
+  by this ticket's own plan (118-003 had found this regime cadence-robust
+  and left it untouched at 1.00); only surfaced by re-running the FULL
+  gate set this ticket's own acceptance criteria require.
+  `test_gui_button_acceptance.py`'s own isolated ±90° managed-turn presets
+  (`test_managed_angle_preset`/`test_managed_seg_0_cdeg_turn`) went RED at
+  the old 1.00 value — a genuine 3.267°/3.178° UNDERSHOOT (settle-based),
+  over their own 3.0° gate. A fresh sweep found a broad plateau at
+  `[0.88, 0.96]` (worst=0.316° throughout, identical at every sampled
+  point in that range) — 0.92 ships as the new default, replacing 1.00.
+
+Full sweep data for both in `move_queue.cpp`'s own updated
+anonymous-namespace comments and ticket 119-005's own file.
+
+**118 ticket 004 (land-at-zero, pulled forward from sprint 119,
+2026-07-23) — landed.** Once the stop decision reads this-cycle odometry
+(above), the unchanged `stop_lead_ms=45` lead OVERcompensates — a 0-120ms
+sweep against the closure gate found no value with real margin (fresh
+data confirming the constant's own multi-retune history: no single value
+exists). Per the turn-execution review's own R6 rule, `stop_lead_ms` and
+the anticipation block are DELETED rather than re-tuned. `MoveQueue::tick()`
+gains a land-at-zero completion predicate instead — but NOT the static
+`remaining ≤ ε AND |ω_cmd| ≤ ε_ω` form this note originally described
+sketching: empirical tracing (printf-instrumented ticks against the sim
+tour-closure gate) showed a static `ε_ω` set near the deadband floor
+never binds before the raw backstop's own `remaining ≤ 0` already does —
+the jerk-limited taper's own commanded speed doesn't cross a fixed floor
+early enough to matter. What shipped instead is a DYNAMIC,
+self-referential stopping-distance check: `remaining ≤
+(commandedSpeed² / (2·decelCeiling)) · marginFactor` — "have we already
+entered our own braking envelope for our current commanded speed," the
+same closed-form the taper's own decel ceiling already uses. `marginFactor`
+takes one of two empirically-swept values, selected by `pendingCount() >
+0` (a chain-advance is already queued behind this MOVE — only the
+ack-instant reading matters, since `Drive::stop()` never runs) vs.
+`pendingCount() == 0` (this MOVE drains the queue to a genuine
+`Drive::stop()`, so the real post-stop motor/PID coast reaches the plant
+before it settles): this split was necessary because the sim
+tour-closure gate (ack-instant measurement) and
+`test_gui_button_acceptance.py` (settle/quiescence measurement) disagreed
+about which single scalar "worked" — no value in [0.20, 1.10] satisfied
+both until the predicate was made aware of which completion regime it was
+in. See `move_queue.cpp`'s own anonymous-namespace comment for the full
+sweep data (chain: 0.82-0.84 plateau, worst=2.398° against the gate's
+2.5° band; final: 0.90-1.10 plateau, worst=1.189° settle-based against
+the button-acceptance suite's 3.0° tolerance). The `StopCondition`
+threshold/timeout comparison remains the always-armed backstop
+(unchanged, and the ONLY completion path when shaping is off — an
+all-zero `ShaperLimits` makes `shapeAndStage()` early-return, so the
+commanded speed never bleeds and the land-at-zero gate never fires).
+Scope is TWIST Angle/Distance stops only; TIME/WHEELS moves are
+unaffected. `Core::StateEstimator`'s `bodyAt()` — the anticipation block's
+one call site — now has no firmware production consumer: the module,
+`update()`, and its tests are QUARANTINED (kept, not deleted) as the
+planned consumer for future fake-OTOS/fusion bench work, per the same
+"greenfield, not yet wired to motion" posture the 117 note above already
+established for the estimator as a whole.
+
+**121 ticket 003 (land at zero at orthogonal chain boundaries — landed;
+stakeholder decision, 2026-07-23) — splits the land-at-zero completion
+predicate above by AXIS RELATIONSHIP at a chain boundary, not merely by
+whether one is imminent.** With the 119-005 crab fix landed, TOUR_1/TOUR_2
+per-leg TRUE-heading measurement isolated the remaining tour error to
+chain-advance boundaries: every straight FOLLOWING a turn gained
++1.34–4.24° (mean ~+2.9°/boundary) because the ending turn completed on
+the CHAIN margin with residual ω that decays into the next `Move` (which
+does not command ω), arcing the straight's entry. `MoveQueue::
+landAtZero()`/`tick()` now classify every chain-advance boundary
+(`pendingCount_ > 0`) into one of two kinds via a new pure predicate,
+`MoveQueue::sameAxisCompatible(next)`: a **same-axis compatible** boundary
+(the incoming pending `Move` continues the ending `Move`'s own stop-kind
+axis — `v_x` for Distance, `ω` for Angle — in the SAME direction, e.g. two
+Distance legs both forward) keeps the existing CHAIN margin
+(`kStoppingMarginFactorChain`/`kDiscretizationCyclesChain`, UNCHANGED,
+sprint 122's own deferred velocity-carry scope); an **orthogonal**
+boundary (turn→straight, straight→turn — the incoming `Move` does NOT
+continue this axis) now lands the ending axis at zero via a THIRD,
+dedicated constant, `kStoppingMarginFactorOrthogonal`, structurally
+shaped like the drain-case FINAL branch (no discretization term) but NOT
+numerically equal to it: the plan's own default proposal — reuse
+`kStoppingMarginFactorFinal` (0.92) verbatim — was verified against the
+closure gate, not assumed, and measurably FAILED (worst |turn error|
+8.043°/7.863° ideal/realistic, against the shaped-band gate's 2.5°) —
+TOUR_1/TOUR_2 alternate Distance/Angle unconditionally, so EVERY boundary
+in both tours is orthogonal, and reusing the settle-based drain margin for
+an ack-instant, never-settles chain-advance recreates the exact
+measurement-convention mismatch that originally justified
+`kStoppingMarginFactorChain`'s own existence, one level down. A dedicated
+1-D sweep of `kStoppingMarginFactorOrthogonal` against the SAME gate found
+a genuinely broad plateau at [0.665, 0.674]; 0.67 (mid-plateau) ships.
+`kStoppingMarginFactorChain`/`kDiscretizationCyclesChain` now govern
+ONLY a same-axis-compatible chain boundary — decoupled from orthogonal
+accuracy, their remaining tuning is sprint 122's concern.
+
+**Honest residual (the issue's own "if a residual remains" clause).**
+Even at the shipped 0.67, the sprint's own aspirational SUC-074 targets —
+straight-following-turn gain ≤0.3°, turn |error| ≤0.5°, TOUR_1 net
+heading 540°±1° — are NOT met. Measured against `test_tour_closure_gate.py`
+at 0.67: turn |error| 2.314° (ideal, TOUR_1)/2.100° (realistic, TOUR_2);
+straight-leg cruise |delta| 4.104° (ideal)/9.852° (realistic); TOUR_1/ideal
+net heading closure residual ~+21° over the 540° commanded. This is
+COMPARABLE TO, not dramatically better than, the pre-ticket baseline
+(chain margin applied uniformly, since 100% of TOUR_1/TOUR_2 boundaries
+are orthogonal): turn 2.195°/2.218°, cruise 4.254°/9.307°, net closure
+~+17.9°/+34.2° — this ticket's margin-only mechanism avoids the
+disastrous naive-reuse regression and keeps every EXISTING hard gate
+(shaped-band 2.5°, cruise 5.5°/10.5°) passing with real margin, but does
+NOT deliver the hoped-for cruise/closure improvement. Root cause, and why
+no further margin sweep can fix it: the residual ω/`v_x` that "decays
+into the next Move" is the REAL PLANT's own post-reset momentum
+(`tick()`'s own unconditional `shaperOmega_.reset()`/`shaperVX_.reset()`
+zeroes the KINEMATIC shaper target instantly, but the physical
+wheel/velocity-PID plant that had been tracking the PREVIOUS nonzero
+target does not stop instantly) — a separate physical effect from "how
+much of the taper's own v²/(2·a) remaining distance is left," which is
+all a `marginFactor` scale on that formula can ever adjust. The full
+[0.00, 1.00] sweep confirms this structurally: low margins minimize
+cruise-leak but blow turn-error up via raw-backstop-driven OVERSHOOT;
+high margins minimize net-heading closure (crossing ~0 around 0.85–0.90)
+but blow turn-error up via a large systematic UNDERSHOOT that a following
+straight leg's own compensating overshoot happens to cancel — a
+two-wrongs-cancel artifact, rejected on that basis, not a genuine fix.
+Closing this residual properly needs the issue's own analytic
+`remaining ≤ |ω_measured|·(kCycle/2 + τ_plant)` form using an ACTUALLY
+MEASURED velocity (not this predicate's own kinematic `cmd`) and an
+independently-characterized `τ_plant` (measured via an isolated
+step-response test, not fitted against this same closure gate) — both
+are new capability beyond this ticket's authorized scope and are flagged
+for a follow-up ticket rather than rushed into a second fitted constant.
+Full sweep table and derivation in `move_queue.cpp`'s own
+anonymous-namespace comment.
+
+**120 (bench tour bring-up: ack ring + build-selectable fake OTOS + I2C
+safety-net diagnosis — all three tickets LANDED).** Three independent,
+phase-B bench-observability fixes. See "Telemetry's ack ring" (§4) for
+the ack-slot→ack-ring change and the `kFlagFaultI2CSafetyNet` paragraph
+(§4) for the bit-6 diagnosis (ticket 3, LANDED: diagnosis-only, no code
+fix — see that paragraph for the confirmed root cause and why no fix
+ships). The third change (ticket 2, LANDED): a compile-time `FAKE_OTOS` bench
+build variant that reports the dead-reckoned `Odometry` pose in place of a
+real OTOS burst read. **This mechanism was later reshaped by the
+otos-fake-seam refactor** (see §2's "Otos call site" and
+[`devices/DESIGN.md`](../hardware/DESIGN.md)): what shipped in 120-002 as a
+`Devices::Otos::feedSyntheticSample()` method + a per-cycle `#ifdef
+FAKE_OTOS` branch in `RobotLoop::cycle()` became `Devices::Otos` as an
+abstract interface with two implementations — `Devices::RealOtos` (the
+chip) and `Core::FakeOtos` (the synthesizer) — selected once at the
+`main.cpp` composition root. **136-003 removed `FakeOtos` and the
+`FAKE_OTOS` build variant entirely as dead code** (zero robot JSON, CI
+script, or justfile recipe ever enabled it); the interface seam itself
+stays, now with `Devices::RealOtos` as its one implementation — see §2's
+"Otos call site" for the current shape. The bench property this ticket
+established is unchanged in kind: it was the first FIRMWARE PRODUCTION
+CONSUMER of the "OTOS is present and reads a meaningful pose on a stand"
+property the previous paragraph's quarantine note anticipated — NOT yet a
+consumer of `StateEstimator::bodyAt()` itself (that stays quarantined; the
+fake fed `frame.otos` one layer below the estimator, and `StateEstimator`'s
+own OTOS-fusion weights stay 0.0/0.0 in `defaultEstimatorConfig()`).
+`odom_.integrate()`/`frame_.pose` staging still runs immediately BEFORE the
+Otos call site — no longer needed for a `FakeOtos` to report THIS cycle's
+fresh pose (that consumer is gone), but harmless and left as-is since
+`Odometry::integrate()` reads neither `otos_` nor any `state_.otos*` field
+and vice versa.
+
+**Hardware verification (2026-07-23, robot "tovez",
+`/dev/cu.usbmodem2121102`).** Flashed via `mbdeploy deploy <uid> --hex
+MICROBIT.hex` (built with `uv run python3 build.py --fw-only --fake-otos
+--clean`). Confirmed `frame.otos` tracks commanded motion exactly:
+forward drive (300mm/s, 2s) took `pose`/`otos` from `(0,0,0)` to
+`(555,-119,-22.9deg)` on BOTH fields identically; a 90° turn continued to
+`(548,-123,+67.2deg)` on both, again identically. A bench tour
+(`src/tests/bench/fake_otos_tour_bench.py`, TOUR_1, 13 legs, driven with
+bounded enqueue-ack retry over the known lossy link —
+`bench-move-commands-intermittently-never-reach-firmware.md` —
+independently confirmed still ~8-12% one-way loss even with ticket 1's
+ack ring proven solid) closed twice in a row (13/13 legs completed each
+run); `frame.otos` matched `frame.pose` on every one of 435-436 polled
+frames per run, 0.00mm/0.00deg deviation, `otos_present` true on 100% of
+frames. The real (table) build's own physical symptom is confirmed
+UNCHANGED (not just via code diff): the identical forward-drive command
+against the real build gave `pose=(569,-58,-12.3deg)` (encoders counting)
+against a near-static `otos=(47,-3,0.0deg)` — the exact "useless on a
+stand" behavior the source issue describes, proving the real
+`Devices::Otos::tick()`/`begin()` path is genuinely untouched, not merely
+textually unchanged. Full per-leg numbers and the retry mechanism's own
+design (including a real single-consumer-queue bug the bench script's
+first draft hit and fixed) are recorded in ticket 002's own file.
+
+**122 (motion-library extraction — landed, 2026-07-24, reconciled ticket
+004).** `Core::MoveQueue`/`Core::Odometry`/`Core::StateEstimator` — all
+three described above and throughout this file's history as `app/`'s own
+modules through sprint 121 — MOVE to `src/firm/motion/` (a new sibling tree of
+`src/firm`, not a child of it) and are renamed `Motion::MoveQueue`/
+`Motion::Odometry`/`Motion::StateEstimator`. `Core::DifferentialDrive` narrows to the
+wheel-target sink only (`setWheels()`/`stop()`/`tick()`), losing
+`setTwist()`/its `BodyKinematics` dependency to `Motion::MoveQueue`,
+which now calls `BodyKinematics::inverse()` itself and hands already-
+decomposed wheel targets down through a new boundary interface,
+`Motion::WheelSink` (`src/firm/motion/wheel_sink.h`) — `Drive` implements it;
+nothing else in `app/` does. `BodyKinematics` itself moves out of
+`src/firm/kinematics/` to `src/firm/motion/body_kinematics.{h,cpp}` (flat, no
+nested `kinematics/` under `src/firm/motion`) for the same reason. Every
+mention of `Core::MoveQueue`/`Core::Odometry`/`Core::StateEstimator`,
+`app/move_queue.*`/`app/odometry.*`/`app/state_estimator.*`, or
+`src/firm/motion/`/`src/firm/kinematics/` earlier in this file's own
+history (115-121) is an accurate PRE-122 record of where that code lived
+and what it was called AT THE TIME — not restated or renamed throughout
+this document — see [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) for
+the current orientation, module list, and boundary contract, and
+`docs/design/design.md` §2/§5 for the two-layer split at the system
+level. Zero behavior change (this was a pure mechanical move, sprint
+122's own refactor gate); `cycle_busy`/`cycle_period` (122-003, §4 below)
+is the one independent, additive change riding in the same sprint.
+`velocity_pid.*` and `Devices::NezhaMotor`'s PID ownership are UNCHANGED,
+still base-side (sprint 122 Design Rationale Decision 2 — the duty-sink
+rewrite that would move them is deferred to sprint 2).
+
+**123 (COBS+CRC binary framing + telemetry migration) — landed.**
+`Comms` (`comms.{h,cpp}`) and the two transports (`com/serial_port.*`,
+`com/radio.*`) cut over from `*B<base64>\r\n` line armor to a
+binary-clean byte stream that demuxes a `0x00`-delimited COBS+CRC frame
+from the `\r`?`\n`-terminated HELLO/PING text rump on the same stream
+(`Core::FrameKind`) — a flag-day cutover, no dual-stack, base64 armor
+call sites removed from `app/` entirely (`WireRuntime::base64Encode()`/
+`Decode()` themselves are retained only for an unrelated debug harness,
+see `messages/DESIGN.md` §3). `wire.h`'s envelope-size budget is
+recomputed from 186 to 240 bytes, restoring the primary frame's
+headroom; ticket 004 uses that headroom to migrate `cycle_busy`/
+`cycle_period` off `TelemetrySecondary` (where 122-003 landed them as an
+interim placement) onto the primary `Telemetry` frame every cycle. Zero
+schema change beyond that one field relocation and the two envelope-size
+constants — every `CommandEnvelope`/`ReplyEnvelope` field shape is
+otherwise untouched. See §4 below for the full technical detail and
+`docs/protocol-v5.md` §2/§8 for the wire-level reference (superseded — the
+COBS delimiter/CRC scope/reply grammar it describes were themselves
+replaced by sprint 124's protocol v5 cutover, see this section's own
+"124-005"/"AS OF 124" paragraphs below).
+
+**124-005 (protocol v5 Part A, "framing grammar cutover") — landed.**
+123's own `Core::FrameKind`-based transport-level demux (a heuristic
+guess, per completed line, about which of two incompatible framings it
+was — a `0x00`-delimited binary frame or a `\r`?`\n`-terminated cleartext
+line) is DELETED wholesale, not adapted — the same "supersedes, does not
+port" treatment 115-005 gave `Pilot`/`HeadingSource` and 116-005 gave
+`Core::Deadman`. In its place: ONE uniform packet grammar in both
+directions, `<COMMAND>[':' <data>]'\n'` (issue
+`protocol-v5-one-line-packets-command-prefix-and-newline-cobs.md` §1),
+made possible by 124-003's delimiter-parameterized COBS primitive now
+being called with `delimiter=0x0A` on the live wire (`Core::
+kCobsDelimiter`, `comms.h`) — a COBS-encoded binary body can never
+contain a literal `0x0A` by construction, so `\n` is a genuine,
+unconditional line terminator for BOTH transports (see
+`com/DESIGN.md` §2 — that file no longer exists, 136-005 dissolved `com/`;
+the same content now lives in
+[`platform/DESIGN.md`](../platform/DESIGN.md)'s "Transport invariants"
+section), and `Transport::readLine()`
+collapses from returning `FrameKind` to a plain `bool`. `Comms::
+dispatchLine()` parses the `<COMMAND>` prefix off the already-`\n`-
+delimited line the transport hands it, looks it up in the generated
+command registry (`messages/commands.h`'s `kVerbTable[]`, ticket
+124-001), and dispatches by that lookup's OWN `binary` flag — never by
+inspecting `<data>`'s own bytes — to either `decodeBinaryFrame()` (the
+existing COBS+CRC dearmor path, now handed the parsed command name as
+the CRC's scope-extension input, ticket 124-003's own primitive) or the
+new `dispatchCleartext()`. An unrecognized `<COMMAND>` increments
+`malformedCount_` exactly like a CRC/COBS failure already did — one
+fault-bit source, not two.
+
+**Relay control-plane sigil carve-out (124-010,
+relay-handshake-trips-comms-malformed.md).** `dispatchLine()` drops a
+line whose first byte is `#`/`!`/`?` — the radio-relay dongle's own
+control-plane sigils (a status/comment reply, a dongle command, or the
+dongle's config query, respectively) — BEFORE the registry lookup,
+uncounted (`isRelayControlPlaneLine()`, comms.cpp). This closes a
+one-shot-at-connect false trip of `kFaultCommsMalformed` over the radio
+relay path only (never direct USB, which never runs the dongle's
+`!ECHO OFF`/`!MODE RAW250`/`!GO` handshake at all): a fragment of that
+host↔dongle handshake traffic could reach the robot's `radioLink_`
+before/at the moment the dongle commits to transparent pass-through. No
+registered v5 verb starts with any of these three bytes, so the
+carve-out is narrow by construction and cannot mask a genuine malformed
+command — it mirrors a tolerance `host/robot_radio/io/serial_conn.py`'s
+own `_handle_wire_line()` already had for `#` lines, extended to the
+firmware side (which had none) and to the two other sigils the dongle's
+own handshake actually uses. The exact mechanism by which dongle
+control-plane bytes reach the robot's radio receiver is NOT confirmable
+further from this repository — the dongle ("gozop") is a separate,
+external firmware with no source in this tree; see the ticket's own
+completion notes for the full root-cause discussion and what a
+hardware-side wire capture would need to show to settle it definitively.
+
+`dispatchCleartext()` answers four verbs: `HELLO` → the existing
+`banner_` (`sendBanner()`'s own content, unchanged, issue §8 confirms
+`DEVICE:NEZHA2:...` already conforms to the grammar with no edit);
+`PING` → `PONG:t=<ms>` (replaces the pre-124-005 `"OK pong t=<ms>"`
+shape); `ID` → `idLine_`, a caller-owned string set once at construction
+(sprint 124 architecture Decision 4: CONFIGURED identity — drivetrain
+type + calibration-profile name — distinct from `banner_`'s hardware
+identity; `main.cpp` builds it from two new generated constants,
+`Config::kDrivetrainType`/`Config::kRobotProfileName`
+(`scripts/gen_boot_config.py`, baked from the robot JSON's own
+`identity.drivetrain_type`/filename stem — deliberately NOT derived from
+any wire-level `msg::DrivetrainConfig` field, since
+`defaultDrivetrainConfig()` never bakes `half_track`, which stays at its
+wire default `0.0f` for every profile); `VER` → `"VER:" +
+FIRMWARE_VERSION_STR`, reading the existing generated
+`version_generated.h` constant directly (Decision 4: zero new
+version-tracking infrastructure). All four reply via `sendReliable()`,
+matching the pre-124-005 HELLO/PING reply path's bounded-wait policy.
+
+`Comms::sendReply()`'s signature simplifies to take only the
+`ReplyEnvelope` — the outbound verb name (for both the wire line's own
+`<COMMAND>':'` prefix and the CRC's scope-extension input) is now derived
+INTERNALLY from `reply.body_kind` (`TLM`/`OK`/`ERR` map 1:1 onto
+`messages/commands.h`'s `Verb::TLM`/`OK`/`ERR`) rather than threaded in
+by the caller — see §5 below. **Superseded by 124-009**: at the time
+124-005 landed, `Telemetry::emitSecondary()` still existed and reused the
+same `TLM` verb/CRC-scope for `TelemetrySecondary`'s own independently-
+framed line (no registry entry existed for the secondary diagnostic frame,
+so the host structurally disambiguated the two shapes by trial-decode).
+124-009 deleted `TelemetrySecondary` — frame type, `emitSecondary()`, and
+the trial-decode disambiguation — outright (see this section's own
+"AS OF 124" paragraph below), so there is only ever one outbound `TLM`
+shape now and this consideration no longer applies. `kFramedMaxBytes`/
+`kMaxCrcPayloadBytes` (`comms.h`) are unchanged by this ticket (the
+command prefix lives OUTSIDE the COBS-encoded region); a new
+`kMaxLineBytes = kFramedMaxBytes + kMaxCommandPrefixBytes` constant
+replaces 123-002's `kArmoredBufSize` as the whole-line scratch-buffer
+size, `kMaxCommandPrefixBytes` itself derived at compile time from
+`messages/commands.h`'s own longest verb name rather than hand-picked.
+
+**125–127 (velocity-PID relocation + `Motion::Planner` integration) —
+landed.** 125-003 relocates the closed-loop velocity control law out of
+`Devices::NezhaMotor` into `src/firm/motion` as a standalone class — `Core::DifferentialDrive`
+held interim instances for its own WHEELS-teleop path for one sprint, until
+122-002/125-002 reshaped `Drive` into a bare duty sink with no controller of
+its own; the relocated class was left with zero instantiations and 128-015
+deleted it outright (see `src/firm/motion/DESIGN.md`'s "wheel control
+generations" note). `velocity_pid.{h,cpp}` (`src/firm/devices/`) is
+deleted. Separately,
+`Motion::Planner` (`src/firm/motion/planner/`) becomes the on-robot motion
+decider for `Move` dispatch, replacing `Motion::MoveQueue`:
+`RobotLoop` holds a `Motion::Planner&` in place of the `Motion::
+MoveQueue&` slot described throughout this file's own pre-125 history
+below, and `Motion::Planner::update()` writes `Types::RobotState::
+Wheel::cmdVelocity` directly rather than routing through `Motion::
+WheelSink`.
+
+**128 (complexity reduction: delete dead `WheelSink`/`MoveQueue`
+generation) — landed, SUC-002 Decision 1.** With `Motion::Planner::
+update()`/`Core::DifferentialDrive::update()` confirmed as the only two writers of
+`cmdVelocity` and `RobotLoop::cycle()` confirmed as its only reader,
+`Motion::WheelSink`, `Motion::MoveQueue`, `Motion::StopCondition`, and
+`Motion::VelocityShaper` (~1,500 lines, zero callers) are deleted
+outright, along with `Core::DifferentialDrive`'s own `WheelSink` overrides
+(`setDuty()`/`stop()` — narrowed to the current `command()`/`estop()`/
+`owns()`/`takeCompletion()`/`tick()`/`update()` contract, §5 below) and
+`main.cpp`'s `#include "motion/move_queue.h"`. Every mention of `Core::
+MoveQueue`/`Motion::MoveQueue`/`Motion::WheelSink`/`Motion::
+StopCondition`/`Motion::VelocityShaper` earlier in this file's own
+history (115–124) is an accurate record of where that code lived and
+what it did AT THE TIME — not restated or renamed throughout this
+document, matching this file's own established convention for the
+122 motion-library-extraction paragraph above. The land-at-zero
+completion predicate's own empirical derivation, previously living in
+`move_queue.cpp`'s anonymous-namespace comment and narrated in this
+file's own "Both `MoveQueue::landAtZero()`..."/"118 ticket 004"/
+"119-005"/"121-003" paragraphs above, is additionally preserved verbatim
+as dated design history:
+[`docs/design/history/land-at-zero-margin-derivation.md`](../../../docs/design/history/land-at-zero-margin-derivation.md).
+See [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) for the motion
+library's own current orientation and `robot_state.h`'s own `cmdVelocity`
+field comment for the boundary's current, exact writer/consumer
+contract.
+
+## 2. Orientation
+
+`RobotLoop` has two phases. `boot()` steps `Preamble` until every device
+leaf reaches a terminal state (present-and-ready or confirmed-absent),
+emitting a boot telemetry frame each pass; commands are not consumed during
+boot. `cycle()` is the steady-state loop body. It opens with `Drive::tick()`
+(119 ticket 005 — pure computation, before either motor's own select, so
+both leaves apply the SAME staged target this cycle — see §4's own
+"same-generation actuation staging" note), actuating whichever decider
+(`Motion::Planner` or `Drive` itself) staged `state_.wheelLeft/Right.
+cmdVelocity` the PREVIOUS cycle. It then interleaves per port (118 —
+select L → collect L → select R → collect R, the schedule this section
+always claimed for the request/collect halves): request/settle(borrow:
+`Comms::pump`)/collect/PID for the left motor, a post-duty clearance window
+(119 ticket 005: no borrowed work left here — see below), request/
+settle(borrow: command-ring drain/`routeCommand()`)/collect/PID for the
+right motor (immediately followed by the wheel section's own `state_`
+publish — 124-009, see below), then a trailing pace block that integrates
+odometry (`Odometry::integrate`), samples OTOS inline (uniform across
+builds; the sensor behind it is always `Devices::RealOtos`, the chip —
+the `FAKE_OTOS` bench alternative was removed as dead code, 136-003),
+polls line/color at a rate-limited, alternating cadence,
+refreshes `Motion::StateEstimator`'s predict-to-now estimates from that
+same cycle's published `state_` (117), and ONLY THEN calls
+`tlm_.update(state_)`/`tlm_.emit(now)` (124-009 — the one assembly point,
+LAST among the pace-block's own publishers so every section it projects
+is already coherent; superseding this paragraph's former "FIRST stages
+and emits telemetry" ordering, which predates the RobotState blackboard),
+then ticks BOTH motion deciders (128 — supersedes the `MoveQueue`
+unconditional-stop-decision shape this paragraph used to describe):
+`planner_.tick(state_)` (the profiling/shaping/completion-detection step,
+returning a `Motion::TickResult`), `planner_.update(state_)` (writes
+`cmdVelocity` unconditionally), then `drive_.update(state_, now)` LAST —
+so that while Drive owns motion, ITS targets are what's left on the
+blackboard for next cycle's `drive_.tick()`, not the planner's own
+drained-to-zero write (`robot_loop.cpp`'s own inline comment at this call
+site is the load-bearing ordering note). Both deciders tick AFTER
+`emit()`, so a completion ack rides the NEXT frame (protocol-v5 §7.2).
+`Drive`, `Odometry`, `Motion::Planner`, and `Motion::StateEstimator` are
+pure, bounded, non-bus-touching helpers that `RobotLoop` calls at
+specific points in its own schedule. See `robot_loop.cpp` for the exact
+call order — it is the schedule's single source of truth.
+
+**RobotState assembly + `Telemetry::update()`/`emit()` (124-009,
+robot-state-blackboard-...md, superseding the `updateTlm()`/scattered-
+`setFlag()`/secondary-tie-break shape this paragraph used to describe).**
+`RobotLoop` now owns a persistent `Types::RobotState state_` member (the
+blackboard, `src/firm/types/robot_state.h`, ticket 007) instead of a bare
+`Telemetry::Frame frame_`. Each section publishes into `state_` at its own
+earliest point of coherence: the wheel section (`state_.wheelLeft/Right`
+— position/velocity/`sampleTime()`/connected/positionEpoch/cmdVelocity,
+plus the position-rebaseline clamp) publishes immediately after
+`motorR_.tick()`'s own collect (same-generation L/R, unchanged reasoning
+from the 119-005 paragraph above); otos/perception/pose/command/health
+publish in dependency order inside the trailing `kPace` block (sensors →
+odom → estimate, matching `Motion::StateEstimator::update(state_, now)`'s
+own input needs — `state_` IS `Motion::StateEstimator::Input` now, ticket
+007's alias, so there is no more hand-copied `estimatorInput` local
+either). `tlm_.update(state_)` is the ONE call that projects the whole
+blackboard into the wire frame AND derives every flag (replacing both the
+old `updateTlm()`-style field staging and the ten scattered
+`tlm_.setFlag()` calls with one method) — `RobotLoop::cycle()` itself
+never calls `tlm_.setFlag()` at all any more (grep-enforceable:
+`grep setFlag src/firm/core/robot_loop.cpp` returns nothing).
+`kFlagFaultMoveTimeout`/`kFlagFaultShapingDisabled` are the one documented
+exception (their defining condition, `Motion::Planner::tick()`'s own
+outcome via `RobotLoop::publishMoveResult()`, isn't known until after
+`tlm_.update()`/`emit()` run) — `RobotLoop` sets
+those via `tlm_.setLiveFlag(bit, active)`, a narrow, deliberately
+NOT-named-`setFlag` escape hatch (telemetry.h's own doc comment).
+`Telemetry::emit(now)` sends the primary frame when its own cadence gate
+says it's due — there is no secondary frame or tie-break to arbitrate any
+more (`TelemetrySecondary` is deleted outright, not deprecated — see §5's
+own updated entry). `age` fields (`EncoderReading.age`/`OtosReading.age`,
+issue §B2/SUC-006) are computed inside `Telemetry::update()` as
+`(cycleStart + cycleBusy) - sampleTime`, genuinely independent per reading
+(`Devices::Motor::sampleTime()`/`Devices::Otos::sampleTime()`, ticket
+002) — not the shared, always-zero stand-in ticket 008 left in place.
+
+**TLM action application + STATUS projection now live in `Telemetry`/
+`Comms`, not the loop (128-012, `tlm-mode-switch-belongs-in-telemetry-
+not-the-loop.md` / `status-projection-belongs-in-comms-not-the-loop.md`).**
+Two adjacent blocks that used to be inlined in `RobotLoop::cycle()`
+right after `tlm_.update(state_)` moved out to the modules whose policy
+they actually are — the same "the loop says WHEN, the modules say WHAT"
+split every other section of this design doc already follows.
+`Telemetry::applyAction(Comms::TlmAction)` absorbs the mode-change switch
+(`kSetOff`/`kSetAuto`/`kSetOn` → `setMode()`) AND the "is this a
+force-a-frame request" answer (`kFrame` → returns `true`); `RobotLoop`
+passes its return value straight into `tlm_.emit(now, forceFrame)` — 
+`emit()`'s own `force` parameter is unchanged, only WHERE the decision is
+computed moved (telemetry.h's own doc comment on `applyAction()` records
+the dependency-direction choice: `Telemetry` takes `Comms::TlmAction` by
+value, since `comms.h` was already an unconditional dependency of
+`telemetry.h`). `Comms::updateStatus(state, tlm)` absorbs the 8-field
+`Comms::Status` projection RobotLoop used to hand-assemble field by
+field — the same "one struct, filled once" idiom `Telemetry::update()`
+already uses for its own wire frame, with the two Telemetry-sourced
+fields (`flags`/`tlmMode`) read straight off an explicit `const
+Telemetry&` parameter rather than a stored member (`comms.h` forward-
+declares `Telemetry` to avoid the include cycle `telemetry.h`'s own
+`#include "app/comms.h"` would otherwise create). `status.ready` — the
+one genuinely loop-owned fact ("past `boot()`") — moved onto
+`state_.health.ready`, set exactly once at the tail of `RobotLoop::
+boot()`, rather than hard-coded `true` at the old projection call site.
+Two orderings stay load-bearing and are still `RobotLoop::cycle()`'s own
+job to preserve (not something either new method can enforce on its
+own): `applyAction()` before `updateStatus()` (a same-cycle mode change
+must already be reflected in `tlm_.mode()` when STATUS is assembled),
+and `updateStatus()` before `comms_.sendTlmReply()` (the STATUS/HELP
+reply must report the mode just applied, not last cycle's).
+
+**Line/color polling (a plain inline block in `RobotLoop::cycle()`'s own
+trailing `kPace` block, 115-005; 124-009 folded the former
+`updateLineColor()` method into that block directly — no separate method
+exists any more).** Runs once per cycle. Ticks EXACTLY ONE of
+`Devices::LineSensorLeaf`/`Devices::ColorSensorLeaf` per call — never both —
+alternating which one on the NEXT call, so at most one of the two is even
+OFFERED a chance to check its own `readDue()` in any given cycle (the
+098-004 per-pass-read regression precedent: a per-cycle sensor read must
+never disrupt the motor request/collect cadence). Each leaf's own
+`tick()`/`readDue()` rate-limits the actual bus transaction further (the
+same `Otos::readDue()` pattern `Devices::Otos` already uses). A fresh
+reading packs into `state_.perception.line`/`.color` (4 raw grayscale
+bytes, ch1 low byte; RGBC scaled 16→8 bits, R low byte, via `packLine()`/
+`packColor()`, still file-local to `robot_loop.cpp`'s own anonymous
+namespace — `Types::RobotState` may only ever hold cstdint-level data, so
+the packing step cannot move into `Telemetry::update()`) and sets
+`state_.perception.lineFresh`/`.colorFresh` for THIS cycle only —
+`Telemetry::update()` derives the corresponding `flags` bit (13/14) from
+those, clearing the OTHER leaf's own bit the same cycle (it was not even
+touched), matching the wire spec's "line/color word fresh" (fresh THIS
+frame, not merely "known at
+some point") semantics.
+
+**Otos call site (uniform across builds; `Devices::RealOtos` bound
+unconditionally).** Runs once per cycle from the trailing `kPace` block,
+immediately after `odom_.integrate()`/`state_.pose` staging (this pair's
+order is a leftover from when a `Core::FakeOtos` needed to read THIS
+cycle's fresh pose — that consumer is gone (136-003), but the order stays
+since `Odometry::integrate()` reads neither `otos_` nor any `state_.otos*`
+field and vice versa, so reordering back would be a no-op change). There is
+**no `#ifdef` here**: the loop holds a plain `Devices::Otos&` and calls
+`otos_.tick(nowUs)` directly, publishing `state_.otos.present`/`connected`/
+`x`/`y`/`heading`/`v_x`/`v_y`/`omega`/`sampleTime` inline in
+`RobotLoop::cycle()` itself (124-009 — the former `applyOtosSample()` free
+function, `app/odometry.*`, predates the RobotState blackboard and no
+longer exists; this call site is now the single place that translates
+`otos_`'s own `connected()`/`present()`/`poseFresh()`/`pose()`/
+`sampleTime()` into the blackboard). `otos_` binds `Devices::RealOtos`
+unconditionally — the `#ifdef FAKE_OTOS` build-time alternative
+(`Core::FakeOtos`, a synthesizer reporting the dead-reckoned `Odometry`
+pose + `BodyKinematics`-fused wheel twist) was removed as dead code
+(136-003; zero robot JSON, CI script, or justfile recipe ever enabled the
+`FAKE_OTOS` build variant). The interface seam itself is kept
+(`boot_wiring.h`'s `Hal::Otos& otos_`) for a future real alternative. See
+[`devices/DESIGN.md`](../hardware/DESIGN.md) for the `Otos` interface /
+`RealOtos` split.
+
+**Predict-to-now estimation (`RobotLoop`'s `StateEstimator::update()`
+call, 117; 124-009 threads `state_` directly) — DELETED, 128 ticket 016
+(robot-state-pose-needs-exactly-one-writer.md): a per-cycle computation
+with no consumer. Kept below as dated history only.** Ran once per cycle
+from the trailing `kPace` block, immediately after `state_.pose` was
+staged and the Otos call site above had run (120 ticket 002 reordered
+which of the two stages first — see that paragraph above — `update()`'s
+own position in the schedule, relative to both being done, was
+unchanged). `StateEstimator::update(state_, now)` read `state_.wheelLeft`/
+`state_.wheelRight` (position, velocity, their own `sampleTime`) to
+refresh each wheel's peer `WheelEstimate` basis, and `state_.pose`
+(already fused by `Odometry`/`BodyKinematics::forward()` earlier the same
+cycle) plus `state_.otos` (when `present`) to refresh the body peer's
+`BodyEstimate` basis via the v1 complementary blend. `Types::RobotState`
+WAS `Motion::StateEstimator::Input` (ticket 007's alias) — no hand-copied
+intermediate struct existed any more, by the end. Pure computation over already-staged
+data — no I2C access, no sleep, bounded work, same posture
+`Odometry::integrate()` and the Otos call site above already keep in this
+same block.
+
+## 3. Constraints and Invariants
+
+- **Single-loop bus ownership:** every I2C transaction happens from
+  `RobotLoop::cycle()`'s own call sequence. No app module ever initiates bus
+  traffic from its own `tick()`/staging methods on its own timing — see the
+  system doc's "single-loop bus ownership" invariant (`docs/design/design.md`
+  §5). `Odometry::integrate()`, the `otos_.tick()` call site, and the
+  line/color alternation (124-009: both now plain inline blocks in
+  `RobotLoop::cycle()`'s own trailing pace block, not separate methods —
+  see §2's own "Otos call site"/"Line/color polling" paragraphs) are
+  called only from that block, never from inside a motor request→collect
+  window.
+- **The timing schedule is exactly `robot_loop.cpp`'s `runAndWait` calls:**
+  `grep 'runAndWait\|sleepUntil' app/robot_loop.cpp` must remain the
+  firmware's complete list of waits. A sleep hidden inside any other
+  function (a module's `tick()`, a handler, a helper) silently breaks the
+  cycle's timing budget and starves the CODAL fiber scheduler — the radio
+  looks dead when the loop fails to yield, even though nothing is wrong
+  with the RF.
+- **`runAndWait` bodies other than the final block never touch the bus and
+  never sleep:** they exist only to spend an already-mandatory clearance
+  window on other bounded work (comms pump, telemetry assembly, command
+  dispatch). Moving bus traffic into one of these bodies reintroduces the
+  shared-bus timing collisions a single-master I2C bus cannot tolerate.
+- **Command dispatch is bounded to at most one per cycle:** `Comms::pump()`
+  decodes at most one frame per call by construction (at most one
+  `readLine()` per transport, first transport to have something wins), so
+  `processMessage()` needs no separate "already handled" flag.
+- **No deadman — every `Move` is structurally self-bounding:**
+  `Motion::Planner::tick()` runs unconditionally once per cycle and drains
+  once the active `Move`'s stop condition or `timeout` fires and nothing
+  is pending — an emergent property of every queued `Move` carrying its
+  own bound, not a second, independently-timed staleness timer.
+  `Core::Deadman` does not exist in this tree. Do not add an ad hoc
+  watchdog anywhere in `app/`.
+- **Telemetry always carries the last staged snapshot, not a diff:** a
+  cycle that doesn't update a `Frame` field still sends whatever was last
+  staged. Nothing here is "only send on change" — a dropped or unread frame
+  never loses data because the next one repeats it.
+- **`Frame` fields written late in a cycle are read by the NEXT cycle's
+  emit, not lost:** pose/OTOS/line/color are staged at the end of the cycle
+  they are computed in, and picked up by the following cycle's
+  `updateTlm()` + `emit()`. This is deliberate — treat a one-cycle
+  staleness on those fields as normal, not a bug.
+- **Devices isolation still applies inside `app/`:** wire-plane `msg::*`
+  types are converted to/from `Devices::*` types only in `app/boot_
+  calibration.cpp`'s `toDeviceMotorConfig()` (130-002 relocated this out of
+  `main.cpp` alongside the rest of the composition root's boot-calibration
+  conversions — see `app/boot_wiring.h`'s own header); no other app module
+  should reach around that.
+- **Line/color are now sampled in steady state (115-005), OTOS is not the
+  only one any more.** The previous version of this note said the
+  opposite — `Preamble` detects presence at boot; `updateLineColor()` (§2
+  above) now also samples both in steady state, rate-limited and
+  alternating. There is still no full 3-way round-robin abstraction
+  (otos|line|color) — each sensor is its own bounded step, not a unified
+  scheduler class.
+- **HISTORICAL (pre-132-013) — config patches covered the curated Motor
+  (109-004) and Otos live-tuning messages, and the curated Estimator
+  live-tuning message (117), only.** `RobotLoop::handleConfig` replied
+  `ERR_UNIMPLEMENTED` for `DRIVETRAIN`/`WATCHDOG`/`NONE` (the drivetrain
+  live-tuning message had no on-robot fusion consumer). The planner
+  live-tuning message was GONE, not merely out of scope — 115-005 (gut
+  S1) deleted the type and `ConfigDelta`'s own `PLANNER` oneof arm
+  entirely, along with `Pilot`/`Motion::Executor`, the only things that
+  ever consumed it. The curated Otos live-tuning message (issue
+  `otos-calibration-config-message.md`) restored a RUNTIME path to
+  `Devices::Otos::setLinearScalar()`/`setAngularScalar()`/`setOffset()`/
+  `init()` — previously only ever called once at boot from baked
+  `boot_config` — applied immediately and synchronously inside
+  `handleConfig()` (still "the loop's own cycle" per the single-loop bus
+  ownership invariant above: a rare, command-triggered I2C/config
+  transaction sandwiched into the existing schedule, not a new per-cycle
+  bus consumer). The curated Estimator live-tuning message (117) merged
+  present `weight_heading_otos`/`weight_omega_otos`/`staleness_ms` fields
+  onto `StateEstimator`'s own live weight state — a pure in-memory update,
+  NOT an I2C transaction (unlike the OTOS branch above), and NOT persisted
+  into `persistedTuning_`/flash (Design Rationale Decision 4, overlay
+  `design.md`'s sibling — a reboot reverts to the baked JSON default).
+  SUPERSEDED, 132-013 (patch-surface retirement): `ConfigDelta` and every
+  message this bullet names are deleted outright, replaced by
+  `robot_config.proto`'s group/field wire arms (`SetConfigGroup`/
+  `applyGroup()`, `SetConfigField`/`applyField()`); `Core::StateEstimator`
+  itself was already deleted as dead code (128-016), so the ESTIMATOR
+  group now has no live consumer at all regardless of wire shape.
+
+## 4. Design
+
+**Why one loop.** `RobotLoop::cycle()` is deliberately one function with
+every bus transaction and every wait visible in call order, rather than a
+dispatch graph of modules each with their own timing. The alternative
+(subsystems/fibers each owning a slice of the schedule) hides the bus
+schedule and the sleeps inside layers, which makes both hard-realtime
+problems — bus discipline and fiber-scheduler yielding — undebuggable.
+Modules (`Drive`, `Odometry`, `Telemetry`, `Comms`, `Motion::Planner`,
+`Preamble`) were factored *out* of that one function only as passive,
+bounded helpers; none of them run their own timing loop.
+
+**The timing primitive.** `runAndWait(gap, body)` marks time, runs `body`,
+then sleeps until at least `gap` has elapsed since its own mark. Each block
+anchors to its *own* mark rather than a shared cycle-start mark, so a slow
+body degrades gracefully — its sleep shrinks toward (never below) 1ms
+instead of stacking on top of an unrelated deadline. The schedule has three
+such blocks: left-motor settle, right-motor settle, and a final
+perception+odometry+pace block. The two settle gaps are `kSettle` each;
+the final block does not take a gap at all — since 131-005 it targets an
+ABSOLUTE end-of-cycle deadline (`cycleStart + kCycle`), so whatever the
+earlier blocks' own jitter and rounding already spent is absorbed into
+this one final wait rather than compounding across all of them. (The
+older scheme, where every block computed its wait as a gap from its own
+entry mark and `kPace` was derived as `kCycle` minus the rest, is the
+diagnosed defect that produced a rock-stable 54ms delivered period at a
+50ms nominal.)
+
+There used to be a fourth block, a post-duty clearance gap (`kClear`)
+between the two motors. It was removed 2026-08-07 as measured-dead
+padding: the next transaction to the motor controller after a duty write
+is the NEXT cycle's encoder select, tens of ms later and long past any
+clearance deadline, so the window guarded nothing while costing 4.7ms
+every cycle. The two `kSettle` windows stay, but note they are not what
+makes the loop wait — `Devices::I2CBus::waitForClearance()` enforces the
+brick's select→read settle from `requestSample()`'s own `postClear`
+regardless, so zeroing `kSettle` measures identical wall-clock. The
+windows exist so that mandatory wait is spent running the comms pump
+instead of sleeping.
+
+`kCycle` is 32ms (~31Hz). `Telemetry::kPrimaryPeriod` (25ms) sits
+deliberately below it so every cycle emits exactly one primary frame
+(115-005's invariant, closing `kcycle-kprimaryperiod-mismatch.md`). That
+is now a correctness requirement, not just a tidy property: the pace
+block alternates line/colour by cycle parity, so an emit floor longer
+than one cycle aliases with that parity and one sensor disappears from
+the wire entirely (measured: `color_present 0` at a 40ms floor).
+
+The cost is measured and known: the nRF link is half duplex, so the
+faster outbound stream shrinks the window in which the robot can HEAR
+the host, and inbound commands start going missing over the relay
+(30/35 on `radio_bench_gate` vs 31/35 at half the rate). The loss is
+inbound only — outbound is 99.2% clean at both rates. The fix belongs
+inbound (sequence + NACK + retransmit), not in the telemetry rate; see
+`app/telemetry.h`'s comment and the linked issue.
+
+**Command dispatch.** `processMessage` reads the `Cmd` populated (or not)
+by this cycle's single `Comms::pump()` call and switches on `cmd_kind`:
+`MOVE` validates the envelope's shape (velocity variant present, stop
+variant present, `timeout > 0`) and the config-completeness gate, then
+delegates to `moveQueue_.enqueue()` (`replace=true` flushes pending and
+preempts the active `Move`; `replace=false` enqueues, or acks `ERR_FULL`
+past 4 pending); `STOP` stops `Drive` (immediate, safety-critical) and
+flushes `moveQueue_`; `CONFIG` merges present wire fields into each
+motor's *own* current gains (never blanket-copies one motor's gains onto
+the other — their calibration can legitimately differ) and applies
+`travel_calib` to whichever motor `side` names, or (OTOS arm) applies
+scale/offset/init directly. Every path that applies a command acks via
+`Telemetry::ack(corrId, errCode)` (115-005: a single ack slot, not a
+ring — see "Telemetry's ack slot" below); `moveQueue_` additionally emits
+a completion ack against `Move.id` (the same `Telemetry::ack()` call) when
+the active `Move` ends, whether by its stop condition or by `timeout` —
+the latter also sets `kFlagFaultMoveTimeout` (bit 15, see below).
+`Comms`'s dearmor path itself never replies synchronously — a malformed
+frame is silently counted (`Comms::malformedCount()`) and surfaced as a
+telemetry flags bit instead of answered inline. This keeps replies
+flowing through one channel (the ack slot) rather than two.
+
+**Telemetry has one send path (historical: it used to have two).** The
+primary frame (`msg::Telemetry`, ack ring + `flags` + pose/enc/vel/otos/
+line/color + `cycle_busy`/`cycle_period`, 123-004 — see below) rides a
+`ReplyEnvelope` through `Comms::sendReply()`. Through 123, a SECOND,
+independently-COBS+CRC-framed diagnostic frame (`msg::TelemetrySecondary`)
+also existed: not a `ReplyEnvelope` oneof arm, so `Telemetry` held its own
+`Transport&` pair and performed its own frame-and-broadcast for it
+(123-002 — base64 armor+broadcast before that), and `emit()` alternated
+between the two when both were due in the same call rather than always
+favoring primary (at the real loop period, ~40ms/118, primary is due on
+essentially every call, so an unconditional "primary wins ties" rule would
+have starved secondary to 0Hz). **124-009 deleted `TelemetrySecondary`
+outright** — the frame type, `emitSecondary()`, `Telemetry`'s own
+`Transport&` pair, and the alternation/tie-break logic are all gone, not
+merely unused (issue's own "Telemetry is a lean projection — and
+TelemetrySecondary dies"). `Telemetry` now holds a `Comms&` only (no
+direct transport references at all) and `emit()` is a plain "primary due
+since last send" gate — there is no second frame type to arbitrate against
+any more. See this section's own "AS OF 124" paragraph below for the full
+disposition.
+
+**`cycle_busy`/`cycle_period` loop-timing fields — landed on the PRIMARY
+frame (123-004, `Telemetry` fields 15/16, ADDITIVE).** Originally landed
+on the SECONDARY frame as an interim placement (122-003,
+`TelemetrySecondary` fields 11/12): the issue that motivated these
+(`telemetry-report-loop-cycle-duration.md`) always targeted the PRIMARY
+per-cycle frame, but at that time `msg::Telemetry`'s own
+`ReplyEnvelope`-wrapped worst case sat 1 B under the shared 186-byte
+base64-armored envelope budget, and the serial transport carried a
+second, tighter, independent ceiling underneath that budget (CODAL's
+`Serial` TX ring buffer caps at 254 usable bytes; the 186-byte budget's
+armored+CRLF wire line already consumed 252 of those) — raising the
+primary budget at all guaranteed mid-line truncation on serial.
+`TelemetrySecondary`'s own worst case had no such problem, so the two
+fields landed there first.
+
+Sprint 123's COBS+CRC binary framing (tickets 001/002) replaced the
+base64 armor's ~33% expansion with COBS+CRC's fixed ~4-byte overhead
+(CRC + one COBS code byte + the trailing `0x00` delimiter, independent of
+payload content), letting the envelope budget be recomputed from 186 to
+**240 bytes** (`wire.h`, `messages/DESIGN.md` §3) — restoring the primary
+frame's headroom. Ticket 004 then migrated `cycle_busy`/`cycle_period`
+onto the primary `Telemetry` frame (fields 15/16, `188 B` standalone /
+`194 B` wrapped as the `tlm` arm, 46 B under the new budget — see
+`docs/protocol-v4.md` §8.3) and marked `TelemetrySecondary`'s former
+fields 11/12 `reserved`, not reused (Open Question 4 resolved: remove
+from secondary rather than keep both, since two frames independently
+reporting the same fields at different cadences risks silent
+divergence with no benefit). Staged EXACTLY as before — RobotLoop's own
+`previousCycleStartUs_`/`everCycled_` bookkeeping (independent of
+`markTime()`'s `[ms]`-truncated `cycleStart` — a separate
+`clock_.nowMicros()` read gives the `[us]` resolution these diagnostics
+need) — only the destination frame moved, so every primary frame now
+carries this cycle's own fresh timing data instead of secondary's ~5 Hz
+sample (whichever cycle RobotLoop last staged before secondary happened
+to be the frame `emit()` sent).
+
+**Telemetry's ack ring (120 ticket 001, LANDED — replaces the 115-005
+single-slot design, which itself had replaced the original depth-3
+`AckEntry` ring).** Bench measurement at the real 40ms cycle / ~15Hz host
+read rate (`bench-single-ack-slot-observability-collapses-at-40ms.md`)
+showed the 115-005 single-slot design's own "rare at bench rates"
+assumption no longer holds: `move_protocol_bench.py` lost 12/43 checks,
+every miss a transient enqueue/STOP/CONFIG ack overwritten before the
+host's next read. `Telemetry::ack(corrId, errCode)` now pushes onto BOTH
+the pre-120 scalar pair (`ackCorr_`/`ackErr_`, UNCHANGED behavior — see
+below) AND a small, bounded ring (`ackRing_[kAckRingDepth]`, depth 4,
+`telemetry.h`) — a plain circular buffer (`pushAckRing()`,
+`telemetry.cpp`): while the ring has spare capacity the new entry lands
+in the next free slot; once full, the new entry overwrites the OLDEST
+slot and the head pointer advances, so only the single oldest entry is
+ever evicted, never a mid-ring one. `emitPrimary()` serializes the ring's
+CURRENT contents (oldest-to-newest) into the new, additive wire field
+(`telemetry.proto` field 14, `repeated AckEntry acks`) every call — the
+same "last staged snapshot, not a diff" contract every other `Frame`
+field already has (§3's own invariant, extended here): a ring entry
+persists across emits with no new `ack()` call, it is not cleared after
+being sent once.
+
+`ack_corr`/`ack_err` (the pre-120 scalar pair) and `flags` bit 5
+(`kFlagAckFresh`) keep their EXACT prior meaning — "the freshest ack" —
+for any reader that never looked past them; the ring is purely additive,
+so no existing host consumer needs to change to keep working. A command
+acked within the same primary period as 4 OTHER commands still overwrites
+the ring's oldest entry (a saturated-ring tradeoff, not the old
+single-slot tradeoff). `flags` bit 5 remains a ONE-SHOT pulse Telemetry
+tracks internally: true on the very next `emitPrimary()` call after ANY
+`ack()` push since the last emit, then cleared — this pulse governs ONLY
+the scalar pair; no equivalent freshness bit exists (or is needed) for
+the ring, since a ring entry is either genuinely present (a real,
+once-pushed ack) or not there at all — there is no "stale leftover value"
+ambiguity for a repeated field the way there is for a persisting scalar
+pair.
+
+Wire-size consequence (AS OF 120, pre-123 base64-armored budget):
+`Telemetry` standalone grows from 144 B to a worst-case 179 B (a full
+4-entry ring, each entry at its own declared bound — `corr_id` up to
+65535, `err` up to 7); wrapped as `ReplyEnvelope.body`'s `tlm` arm, the
+whole envelope's worst case grows from 153 B to **185 B**, exactly 1 B
+under the then-186-byte envelope budget — the tightest margin in the
+schema at that time.
+
+**AS OF 123 (historical — superseded by 124, below):** the envelope
+budget was recomputed to **240 bytes** (COBS+CRC replacing base64 armor,
+see §4's own `cycle_busy`/`cycle_period` note above and
+`messages/DESIGN.md` §3), and ticket 004 additively migrated
+`cycle_busy`/`cycle_period` (fields 15/16) onto this same frame:
+`Telemetry` standalone was **188 B**, wrapped `ReplyEnvelope` total
+**194 B** — **46 B** margin under the 240-byte budget, restored from the
+pre-123 1-B margin.
+
+**AS OF 124 (current) — the scalar ack slot is DELETED; the ring is the
+SOLE ack path; fields are packed fixed-point.** Sprint 124 ticket 008
+(issue §B4) deletes `ack_corr`/`ack_err` (the pre-120 scalar pair,
+`telemetry.proto` fields 5/6, now `reserved` — not reused) and `flags`
+bit 5 (`kFlagAckFresh`, now RESERVED — see the flags bit-string paragraph
+below): ring membership already means "really acked," so the separate
+"freshest ack" scalar and its freshness bit added nothing a ring scan
+didn't already have. `Telemetry::ack(corrId, errCode)` pushes ONLY to the
+ring now (`pushAckRing()`, `telemetry.cpp`) — no more dual push. Each ring
+element is a single packed `uint32_t` (`corr_id << 4 | err`, `wire.cpp`'s
+first real `FieldKind::kRepeatedScalar` use), not `msg::AckEntry`
+(deleted) — `corr_id` gets the upper 28 bits, `err` the low 4 (`ErrCode`'s
+own span tops out at `ERR_NOT_CONFIGURED`=8). Ticket 008 also switches
+`EncoderReading.position`/`velocity`, `OtosReading`'s six fields, and
+`Pose2D`/`BodyTwist3`'s fields from `float` to `sint32` + a GENERATED
+`(scale)` conversion (zigzag-encoded, options.proto) — a negative value
+now costs the varint width of its magnitude, not a sign-extended 10 B —
+and renames `EncoderReading.time`/`OtosReading.time` to `age` (an
+absolute clock value could never be packed small; `age` is the delta
+behind `Telemetry.now`, bounded to 255 ms). `EncoderReading.position_epoch`
+(ADDITIVE, field 4) is the position-rebaseline policy's own counter
+(sprint 124 architecture Decision 6) — see §2's own "Position-rebaseline
+policy" note and `robot_state.h`'s own `Wheel::positionEpoch` doc comment.
+Ticket 009 further wires `age` to genuine independent per-sample capture
+skew (`Devices::Motor::sampleTime()`/`Devices::Otos::sampleTime()`, ticket
+002's enabling change) in place of 008's honest-zero placeholder, and folds
+`TelemetrySecondary`'s deletion in (see this section's own paragraph
+above). The combined effect: `Telemetry` standalone/wrapped
+`ReplyEnvelope` shrinks to **130 B** (`wire.h`'s own regenerated
+`kReplyEnvelopeMaxEncodedSize` constant and static_assert — sprint 124's
+own ≤130 B gate) despite the ADDITIVE `position_epoch` field, comfortably
+under the 240-byte envelope budget. See
+[`docs/protocol-v5.md`](../../../docs/protocol-v5.md) §8 for the full
+wire-level field table and flags bit reference (supersedes the retired
+`docs/protocol-v4.md`).
+
+Host-side matcher (Architecture Step 7's open question, resolved):
+`SerialConnection.wait_for_ack()`/`NezhaProtocol.wait_for_ack()`
+(`src/host/robot_radio/io/serial_conn.py`,
+`src/host/robot_radio/robot/protocol.py`) scan the ring (via
+`_match_ack_in_frames()`), not a scalar slot — returning on the FIRST
+(frame, ring-entry) match found, scanning frames in arrival order and,
+within a frame, ring entries in wire order (oldest first). No freshness
+check applies to a ring scan. `TLMFrame.acks` exposes the full decoded
+ring to any caller that wants to inspect it directly (bench scripts,
+`tlm_log.py`) — since 124-008, this is the ONLY ack-observability field:
+`TLMFrame.ack`/`ack_corr`/`ack_err`/`ack_fresh` are DELETED host-side too
+(the wire fields they read no longer exist), not merely unused.
+
+**Hardware verification (2026-07-23, robot "tovez",
+`/dev/cu.usbmodem2121102`).** The ring itself is proven solid on real
+hardware: a dedicated rapid-fire N=5 back-to-back `move_twist()` enqueue
+test (`src/tests/bench/ack_ring_rapid_fire_bench.py`) passed all 5/5
+ack-observability checks on 3 separate runs (15/15 total), and
+`twist_drive.py`'s previously-always-missed `stop()` ack landed cleanly
+whenever the command itself reached the firmware. `move_protocol_bench.py`
+did NOT reach a clean 43/43 in this session (repeated runs: 38, 34, 33,
+30, 35 out of 43) — root-cause isolated via an A/B test against the
+UNMODIFIED pre-120 firmware+host code (commit `047555a5`, built in a
+throwaway `git worktree`), which showed the IDENTICAL failure signature
+(ack=None AND zero encoder movement — the envelope itself never reaching
+`RobotLoop::processMessage()`, not an ack-ring miss) at a similar rate.
+This is a pre-existing, out-of-scope bench-link reliability gap, filed as
+`bench-move-commands-intermittently-never-reach-firmware.md` — NOT a
+defect in the ack ring, which the isolated rapid-fire/twist_drive
+evidence above shows working exactly as designed whenever the underlying
+command actually arrives.
+
+**The `flags` bit-string (115-005 — replaces the old separate
+`fault_bits`/`event_bits`/nine-bool frame).** ONE `uint32` carries every
+status/fault/event/presence bit: bit 0 `kFlagOtosPresent` (OtosReading
+fresh THIS frame — chip detected AND this cycle's burst actually
+refreshed the cached pose, NOT the old pre-115 "chip ever detected"
+semantic), bit 1 `kFlagOtosConnected` (live bus health), bit 2 `kFlagActive`
+(motion in progress), bits 3/4 `kFlagConnLeft`/`kFlagConnRight` (motor bus
+connectivity), bit 5 RESERVED (124-008: formerly `kFlagAckFresh` — deleted
+along with the scalar ack slot it gated; ring membership already means
+"really acked," see this section's own "AS OF 124" paragraph above), bit 6
+`kFlagFaultI2CSafetyNet` (`I2CBus::clearanceSafetyNetCount() > 0` —
+**120-003, CONFIRMED via pyOCD/DBG trace against real hardware,
+2026-07-23** (robot "tovez", `/dev/cu.usbmodem2121102`): this is a
+CONTINUOUSLY LIVE, monotonically
+growing counter, NOT a boot-time one-shot latch — the prior DRAFT text
+here (and 118-001's own acceptance claim) was wrong, falsified by direct
+measurement. Raw `clearanceSafetyNetCount_` was sampled via a halted
+SWD read at multiple points: ~4.6s post-flash (already 97, not 1), ~8s
+post an SWD-triggered reset (167), and across two independent idle-window
+brackets (Δ243 over ~14s; Δ148 over ~8.6s) — in BOTH brackets the delta
+matches, EXACTLY, half of `Devices::Otos`'s own per-device `txnCount`
+delta (Δ486→243 bursts; Δ296→148 bursts), i.e. one trip per Otos burst
+read, 1:1, with zero residual attributable to either motor. Root cause:
+`Devices::Otos::readPositionVelocity()` (and its sibling register
+helpers, `readReg8()`/`readXYH()`) issue a register-select `write()`
+immediately followed by a `read()` on the SAME device with NO
+intervening loop-scheduled gap (unlike `NezhaMotor`'s split-phase
+`requestEncoder()`/`collectEncoder()`, which DOES cross a real
+`kSettle`-scheduled gap) — so `waitForClearance()` trips on every single
+Otos burst read, unconditionally, at Otos's own ~20ms read cadence,
+regardless of `moveQueue_.active()` (`Otos::tick()` runs every cycle
+either way). This is entirely unrelated to 118-001's loop-schedule
+restore, which is confirmed FULLY EFFECTIVE for its actual target: the
+motor's own split-phase path contributes ZERO measured trips in either
+an idle or a driving window. No code fix ships this ticket — making the
+bit literally clear during driving would require either redesigning
+`Otos`'s own I2C register-read pattern (a real hardware-timing change to
+a currently-working, bench-proven sensor path, out of this ticket's
+authorized file scope) or introducing a caller-intent exemption into the
+safety-net counting logic (a stakeholder-level policy decision about
+what counts as a "fault," not something to guess after 118-001 already
+guessed wrong once) — see
+`clasi/issues/i2c-safety-net-bit-conflates-otos-settle-wait-with-loop-schedule-health.md`
+for the candidate fix options filed for a future sprint. 118-001's own
+acceptance record (`clasi/sprints/done/118-loop-schedule-truth-firmware-loop-reorder-sim-cadence-parity/`)
+is corrected to cite this trace.), bit 7
+`kFlagFaultWedgeLatch` (`motorL_.wedged() || motorR_.wedged()`), bit 8
+`kFlagFaultI2CNak` (declared, not yet wired — no per-transaction NAK
+aggregate exists yet), bit 9 `kFlagFaultCommsMalformed`
+(`Comms::malformedCount() > 0`), bit 10 `kFlagEventDeadmanExpired` (116:
+ORPHANED — its producer, `Deadman::expired()`, was deleted along with
+`Core::Deadman`; nothing sets this bit any more, see §6), bit 11 RESERVED
+(125-002, telemetry-emit-policy-rebuild-spec.md Part 1 item 8: formerly the
+boot-ready event bit, `Preamble::done()`'s first-true transition — deleted
+outright, not merely orphaned like bit 10: it was a one-shot latch whose
+transition was unobservable by construction, and the `READY` cleartext line
+already announces boot completion), bit 12
+`kFlagEventConfigApplied` (declared, not yet wired), bits 13/14
+`kFlagLinePresent`/`kFlagColorPresent` (see §2's line/color polling note),
+bit 15 `kFlagFaultMoveTimeout` (116: wired — set on the cycle an active
+`Move` ends via `timeout` rather than its kind-specific stop condition),
+bit 16 `kFlagFaultShapingDisabled` (119 ticket 001,
+kill-the-silent-off-shaping-config-boundary.md, current condition per
+128: set on every cycle a `Move` is active AND `Motion::Planner::
+shaperConfigured()` is false — `RobotLoop::publishMoveResult()`'s own
+`planner_.active() && !planner_.shaperConfigured()` derivation — the
+loud off-state for a
+20x-turn-accuracy-delta feature that used to have a silent, invisible off
+state), bit 17 `kFlagFaultPositionClamped` (124-008, Decision 6's
+"bound-exceeded fallback": a wheel's position was clamped to
+`EncoderReading.position`'s own `(abs_max)` at the encode step rather than
+allowed to wrap — not the expected path, since `RobotLoop`'s own per-cycle
+rebaseline trigger at a 2000mm margin below the bound should prevent this
+in normal operation; purely observable evidence the defensive fallback
+engaged. Derived from `Types::RobotState::Health::positionClamped` inside
+`Telemetry::update()`, 124-009).
+Declaring a
+bit before it is wired is deliberate — it reserves the bit number for a
+future caller without renumbering. As of 124-009, `RobotLoop` never calls
+a flag-setting method directly at all (grep-enforceable:
+`grep setFlag src/firm/core/robot_loop.cpp` returns nothing) — `Telemetry::
+update(state)` derives every bit it can know from `Types::RobotState` in
+one place (superseding the former "`RobotLoop` assembles every bit ...
+via `Telemetry::setFlag(bit, active)` at the point in the cycle each
+condition becomes known" call-site-scattered pattern this paragraph used
+to describe); `kFlagFaultMoveTimeout`/`kFlagFaultShapingDisabled` are the
+one exception, set via `Telemetry::setLiveFlag(bit, active)` after
+`Motion::Planner::tick()` runs (their own defining condition isn't known
+at `update()` time — see `telemetry.h`'s own doc comment).
+
+**Boot contract.** `Preamble::step()` advances at most one not-yet-resolved
+device's own detection entry point per call, never sleeps, and never
+touches the bus more than that one call's leaf. `RobotLoop::boot()` owns
+the pacing sleep between `step()` calls and emits a boot telemetry frame
+each pass, so a host watching the wire can distinguish "still booting" from
+"dead" well before the command loop starts. A power-settle wait
+(`kPowerSettle`, ported unchanged from the retired `DeviceBus`) blocks the
+very first probe from racing the rails on power-up — it exists because the
+very first device probed (a motor's `begin()`) has no retry pacing of its
+own to lean on. A wall-clock defensive bound (`kMaxPreamble`) forces every
+remaining slot terminal if a leaf's own detection never resolves; this is a
+safety net against a future leaf regression, not the primary termination
+path (every slot already self-bounds its own retry count given step() is
+called with real elapsed time between calls).
+
+## 5. Interfaces
+
+### Exposes
+
+- **`RobotLoop::run()` / `boot()` / `cycle()`:** `run()` never returns —
+  `boot()` once, then `cycle()` forever. `boot()`/`cycle()` are exposed
+  separately so a host harness can step a bounded number of cycles and
+  inspect state between them; `cycle()` assumes every device already
+  resolved from a prior `boot()` (no readiness checks inside it).
+- **`Comms::pump(Cmd& out, uint32_t now)`:** non-blocking, reads at most one
+  `\n`-terminated line per call across both transports (124-005 — a plain
+  `bool` from `Transport::readLine()`, no more `FrameKind`), parses its
+  `<COMMAND>` prefix and dispatches by the generated command registry's
+  `binary` flag to either a binary decode (into `out`) or a cleartext
+  reply (`HELLO`/`PING`/`ID`/`VER`, answered inline, never populating
+  `out`); resets `out.status` to `kNone` at entry so a caller never sees
+  stale decode state. `now` ([ms], the caller's own current clock reading)
+  stamps `PONG:t=<ms>`'s field — `Comms` holds no `Devices::Clock&` of its
+  own.
+- **`Comms::sendReply(const msg::ReplyEnvelope&)`:** derives the outbound
+  wire verb (`TLM`/`OK`/`ERR`) from `reply.body_kind` (124-005 — no
+  separate command parameter; see §1's own "124-005" note), encodes,
+  CRC-then-COBS frames with that verb as both the CRC's scope-extension
+  input and the wire line's own `<COMMAND>':'` prefix (123-002/124-003 —
+  base64-armors before 123), and broadcasts on both transports via the
+  async/drop-on-full send path — never blocks the loop on backpressure.
+- **`Telemetry::update(state)`/`setLiveFlag`/`ack`/`emit(now)`** (124-009,
+  replacing `setFrame`/the public `setFlag`): `update(state)` is the ONE
+  assembly-point call — cheap, but called EXACTLY ONCE per cycle (unlike
+  the old `setFrame`/scattered-`setFlag` shape, which had no such bound);
+  `setLiveFlag`/`ack` remain cheap and callable any number of times per
+  cycle; `emit(now)` is the one call that actually sends — always the
+  single primary frame now (`TelemetrySecondary` is deleted, so there is
+  no "at most one of two frame types" choice left to make), bounded work,
+  never sleeps, never touches the I2C bus. See §4's own "RobotState
+  assembly + `Telemetry::update()`/`emit()`" paragraph above.
+- **`Telemetry::applyAction(Comms::TlmAction)`** (128-012): returns
+  whether the caller's next `emit()` call should force a frame; also the
+  ONE place `mode_` changes in response to a wire `TLM:` command. See
+  §4's own "TLM action application + STATUS projection" paragraph above.
+- **`Comms::updateStatus(state, tlm)`** (128-012): refreshes the snapshot
+  `sendStatus()` formats from, in one call — replaces the loop's own
+  former field-by-field `Comms::Status` assembly. See the same §4
+  paragraph.
+- **`Control::DifferentialDrive` (HISTORICAL as of 136-006 — this class
+  relocated out of `core/` into its own `control/` layer and was renamed
+  from `Core::DifferentialDrive`; see
+  [`control/DESIGN.md`](../control/DESIGN.md) for the current contract.
+  `RobotLoop` still owns and drives the one instance, which is why the
+  two responsibilities below stay documented from `core/`'s own point of
+  view) — two responsibilities, two independent lifecycles**
+  (supersedes every `setDuty()`/`Motion::WheelSink`
+  description below, which described a 122–127-era interim shape now
+  deleted — sprint 128 ticket 014):
+  1. **The bounded WHEELS command lifecycle** — `command(vLeft, vRight,
+     duration, moveId, now)` arms a time-bounded per-wheel velocity pair
+     (superseding any command already armed, no completion ack for the
+     superseded one); `estop()` halts now, zeroing targets and disarming
+     with NO completion ack for the discarded command (the ESTOP path,
+     also what `RobotLoop` uses when a MOVE takes motion over from
+     Drive); `owns()` reports whether an armed command is currently
+     running (i.e. whether Drive, not `Motion::Planner`, owns motion this
+     cycle); `takeCompletion(&moveId)` is the one-shot event for a
+     command that reached its deadline, latched until the loop acks it.
+  2. **Actuation** — `tick(speedLeft, speedRight)` converts commanded
+     wheel SPEED to duty via the per-wheel open-loop calibration
+     (`setDutyPerSpeed()`/`setWheelCorrection()`, config-supplied, no
+     defaults — an uncalibrated Drive refuses to write) and the crawl
+     shaper, then writes the two motor leaves; `update(state, now)`
+     expires an armed command whose deadline has passed (latching the
+     completion event) and publishes Drive's own targets into
+     `state.wheelLeft/Right.cmdVelocity` — but ONLY while Drive owns
+     motion (`owns()` true this cycle); when the planner owns it,
+     `update()` is a no-op on the blackboard, leaving `Motion::Planner::
+     update()` as the cycle's sole *decider* write. Must run AFTER
+     `Motion::Planner::update()` in the cycle (`robot_loop.cpp`'s own
+     ordering is what enforces "exactly one decider per cycle"). The full
+     invariant is **one decider plus one zero-only safety arbiter**
+     (133-001): `Core::RobotLoop` also writes this field, restricted to
+     `0.0f`, from `zeroUnownedMotion()` (every cycle, whenever neither
+     decider owns motion — Drive's `update()` deliberately stops
+     publishing after its command expires, and covering that gap is the
+     arbiter's job, not Drive's) and from `handleEstop()`. Stated in full
+     at `RobotLoop::publishWheels()` and in `robot_state.h`'s own
+     `cmdVelocity` field comment.
+  There is no controller inside `Drive` — duty is open-loop from
+  calibrated speed; closed-loop wheel control lives in `Motion::
+  Planner`'s own duty stage. `Drive` depends on nothing but
+  `Devices::Motor` and `Types::RobotState`. See `drive.h`'s own file
+  header for the exact current contract.
+- **`Motion::Odometry::integrate(leftPosition, rightPosition)`/
+  `pathLength()`:** (122-002, MOVED to `src/firm/motion/` — see
+  [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) for the current,
+  exact contract; no longer holds a `Devices::Motor&`, takes the
+  caller's current wheel positions as plain float parameters instead.)
+  `integrate()` — call once per cycle, after both motors' own `tick()`
+  has run that cycle; the caller (`RobotLoop`) reads each leaf's current
+  `position()` and passes both floats in; `Odometry` accumulates world
+  pose via midpoint-arc integration over `BodyKinematics::forward()`'s
+  per-cycle body-frame delta. `pathLength()` (116) is a read-only
+  accessor over a running total of `|distance|` that `integrate()`
+  already computes internally each cycle — the DISTANCE stop-condition's
+  source of truth.
+- **`otos_.tick(nowUs)` + inline `state_.otos.*` publish (124-009,
+  replacing the deleted `applyOtosSample(otos, now, frame)` free
+  function):** safe to call every cycle — a too-soon call given OTOS's own
+  internal rate limit is already a documented no-bus-traffic no-op.
+  `RobotLoop::cycle()` itself now carries the FULL reading (x, y, heading,
+  v_x, v_y, omega, `sampleTime()`) into `state_.otos` inline, only when
+  `present` — see §2's own "Otos call site" paragraph. Must not be called
+  from inside a motor request→collect window (bus-discipline is the
+  loop's job).
+- **`RobotLoop::updateLineColor(nowUs)`:** private, called once per cycle
+  from the `kPace` block — see §2's own doc comment for the full contract.
+- **`Motion::Planner::move(move, replace)`/`plannedStop(id)`/`estop()`/
+  `tick(state)`/`update(state)`/`active()`/`shaperConfigured()`:** (125–128
+  — the live motion decider, superseding `Motion::MoveQueue`, deleted as
+  dead code in sprint 128 ticket 014 after being confirmed to have zero
+  callers; see [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) §2/§4/§5
+  and `planner/planner.h`'s own doc comment for the current, exact
+  contract — this file does not re-derive it.) `move()` applies
+  `replace`/enqueue semantics; `tick(state)` profiles/shapes the active
+  Move's motion each cycle and returns a `Motion::TickResult` (completion/
+  timeout outcome `RobotLoop::publishMoveResult()` consumes);
+  `update(state)` writes `Types::RobotState::Wheel::cmdVelocity` directly
+  — no boundary interface, the blackboard field IS the boundary (128, see
+  `robot_state.h`'s own field comment); `active()` reports whether a Move
+  is currently in progress (feeds `state.command.moveActive` via
+  `RobotLoop::publishHealth()`'s own fresh read, `planner_.active() ||
+  drive_.owns()`).
+- **`Preamble::step()`/`done()`/per-device status accessors:** `step()`
+  never blocks; `done()` is true once every device has reached a terminal
+  state (present-and-ready or confirmed-absent).
+- **`Motion::StateEstimator::update(input, now)`/`wheelAt(wheel, t)`/
+  `bodyAt(t)`/`whereAmI(now)`/`wheelNow(wheel)`/`reset(x, y, heading)`/
+  `innovations()`/`setWeights(weights)`** (117, MOVED to `src/firm/motion/` at
+  122-002 — see [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) and
+  `state_estimator.h`'s own doc comment for the current, exact contract;
+  `update()` now takes a plain `Motion::StateEstimator::Input` struct
+  instead of `Core::Telemetry::Frame`, since this tree may not depend on
+  `app/` — `RobotLoop` copies the same fields it always read off
+  `frame_` into an `Input` and passes that instead, values unchanged):
+  `update()` — call once per cycle from the trailing `kPace` block, after
+  `frame_.pose` is staged; refreshes both wheel peers' and the body
+  peer's basis. `wheelAt`/`bodyAt` — pure ZOH extrapolation from the
+  current basis to an explicit query time `t`; no owned clock, hand-fed
+  `t` always, mirroring `Motion::StopCondition`'s own testability shape.
+  `whereAmI(now)` is exactly `bodyAt(now)`; `wheelNow(wheel)` returns the
+  wheel's raw basis with no extrapolation. `reset(x, y, heading)`
+  re-anchors the body peer's world pose only (wheel peers are untouched —
+  they track per-wheel distance, not world pose, the same reasoning
+  `Motion::Odometry::pathLength()` is untouched by `Odometry::reset()`).
+  `innovations()` returns the most recent OTOS-vs-predicted heading/omega
+  residual — computed for diagnostic/validation purposes even while its
+  fusion weight is 0, never fed back into the estimate itself at that
+  weight. `setWeights()` is `RobotLoop::handleConfig()`'s own entry point
+  for a live curated Estimator live-tuning message (§3 above, HISTORICAL/SUPERSEDED as of 132-013 — see that section's own note) — a plain in-memory update,
+  not a bus transaction. All of the above are pure computation: no I2C
+  access, no sleep, bounded per call.
+- **`Core::debugf(fmt, ...)`/`DBG_EVERY(n, ...)`/`DBG_MILLI(x)`
+  (`app/debug.h`/`.cpp`) + `Core::setDebugSink(Comms*)` + `Comms::
+  sendDebug(line)`** (129-003, `DBG`=18 — issue 05-dbg-debug-message-
+  channel-for-bench-and-sim.md; stakeholder, 2026-07-31: "Can we add
+  another response field so that you can send debug messages? ... It only
+  needs to get compiled in when you're on the bench or in SIM."): a
+  firmware→host debug message channel, compile-gated to bench/Sim builds
+  only. **Compiled in ONLY when `ROBOT_DEBUG` is defined** (a bench-only,
+  opt-in CMake option — `CMakeLists.txt`'s `option(ROBOT_DEBUG ...)`;
+  select via `cmake -DROBOT_DEBUG=ON` or `build.py --robot-debug`) **or
+  `HOST_BUILD`**
+  (`src/firm/platform/host/CMakeLists.txt` always defines it, so Sim/host tests always
+  have the channel). Neither is defined in the plain, shipped
+  `cmake .. -DROBOT_DEBUG=OFF` (the default) ARM build, so there
+  `debugf()`/`DBG_EVERY()`/`setDebugSink()` are inline no-ops and
+  `Comms::sendDebug()` does not exist at all — zero flash cost, zero wire
+  traffic (measured: 0-byte `.text` delta on the default build with this
+  channel's whole implementation present in the tree but compiled out;
+  see `debug.h`'s own file header for the exact gate). `debugf()` formats
+  a printf-style line and hands it to the installed sink as one cleartext
+  `"DBG:<line>"` wire line (`Comms::sendDebug()`, the same one-off
+  `sendReliable()` broadcast path `sendReady()`/`sendBanner()` use — never
+  the async, drop-on-full `send()` telemetry path). `setDebugSink()`
+  installs a single process-global `Comms*` sink — `main.cpp` wires it to
+  its own `comms` right after constructing it; `TestSim::SimHarness`'s
+  constructor does the same with its own `comms_` member. `DBG_MILLI(x)`
+  exists because newlib-nano's `printf`/`vsnprintf` has no float support
+  (`%f` silently emits nothing on ARM) — any `debugf()` call reporting a
+  float value must convert it to an integer milli-unit first and format
+  with `%ld`. `DBG_EVERY(n, ...)` throttles a per-cycle debug line to
+  every Nth call at that call site (a function-local static counter, one
+  per macro expansion). Host side: `serial_conn.py`'s `on_debug` callback
+  (routed straight off `_handle_text_line()`'s `DBG` branch, wrapped in
+  its own `try/except` so a bug in a caller-supplied handler can never
+  kill the reader thread — the abandoned prior session's own `_log`
+  `NameError` regression this exists to prevent) and `sim_loop.py`'s
+  `SimLoop.drain_debug_lines()`/`drain_pending_debug()` (via a new
+  `sim_drain_debug()` ctypes export, `sim_ctypes.cpp`).
+
+### Consumes
+
+- **`Devices::NezhaMotor`, `Devices::Otos`, `Devices::ColorSensorLeaf`,
+  `Devices::LineSensorLeaf`, `Devices::I2CBus`, `Devices::Clock`,
+  `Devices::Sleeper`:** the device leaves and time/bus seams `app/` drives
+  — see [devices/DESIGN.md](../hardware/DESIGN.md).
+- **`BodyKinematics::inverse()`/`forward()`:** stateless twist↔wheel math
+  — moved to `src/firm/motion/body_kinematics.{h,cpp}` at 122-001 (from
+  `src/firm/kinematics/`); `Motion::Planner` calls `inverse()`-equivalent
+  twist decomposition internally as part of its own profile/shape stages
+  (`planner/`, 125–128), while `RobotLoop::cycle()` still calls
+  `forward()` directly here in `app/` to fuse the two leaves' measured
+  velocities into `state_.pose.v_x/v_y/omega` (124-009 — formerly
+  `frame_.twist`/`updateTlm()`; `Drive::trackWidth()`'s own doc comment).
+  See [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) and
+  [`src/firm/kinematics/DESIGN.md`](../kinematics/DESIGN.md) (retired,
+  redirects to the current doc) for the full derivation.
+- **`msg::CommandEnvelope`/`ReplyEnvelope`/`Telemetry`,
+  `msg::wire::encode`/`decode`, `WireRuntime::cobsEncode`/`Decode`,
+  `crcCompute`/`Verify` (123 — the current framing primitives;
+  `WireRuntime::base64Encode`/`Decode` is retained but no longer called by
+  `app/`, see `messages/DESIGN.md` §3):** the wire schema and codec — see
+  [messages/DESIGN.md](../messages/DESIGN.md). `msg::TelemetrySecondary`
+  is DELETED outright (124-009, robot-state-blackboard-...md) — there is
+  no second top-level wire message any more.
+- **`SerialPort`, `Radio` (ARM builds only) — HISTORICAL, 136-005.** These
+  two classes, and the `SerialTransport`/`RadioTransport` adapters that
+  wrapped them into `Core::Transport`, are gone outright, not relocated.
+  `Platform::MicroBitSerialPort`/`MicroBitRadioLink`
+  (`platform/microbit/`) implement `Hal::Transport` directly now — see
+  [`platform/DESIGN.md`](../platform/DESIGN.md) and
+  [`hal/DESIGN.md`](../hal/DESIGN.md).
+- **`Motion::Planner`** (`src/firm/motion/planner/`, 125–128): the bounded-Move
+  stop/timeout/completion decision, profiling, and shaping — superseding
+  the deleted `Motion::StopCondition`/`Motion::MoveQueue` (116/122,
+  deleted 128 as dead code; see [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md)
+  §1's own "128" note for the deletion and
+  [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md), retired since 122,
+  for that stack's own historical derivation). `src/firm/motion/` contains
+  only the modules listed in
+  [`src/firm/motion/DESIGN.md`](../motion/DESIGN.md) §2.
+- **`Types::RobotState`** (124-007/009, `src/firm/types/robot_state.h`,
+  superseding this entry's former `Telemetry::Frame`/hand-copied
+  `Motion::StateEstimator::Input` description): the dependency-free
+  blackboard `RobotLoop` publishes each cycle and both
+  `Motion::StateEstimator::update(state_, now)` and
+  `Telemetry::update(state_)` read directly — `Motion::StateEstimator::
+  Input` is now a plain alias onto `Types::RobotState` (ticket 007), so
+  there is no hand-copied intermediate struct left at all (122-002's own
+  "StateEstimator may not depend on `app/`'s `Telemetry::Frame` type"
+  constraint is satisfied differently now: `RobotState` lives in
+  `src/firm/types/`, a dependency-free header both `src/firm/app` and
+  `src/firm/motion` may include, not an `app/`-owned type). `StateEstimator`
+  still does not hold its own leaf/bus references and does not read
+  `Devices::Motor`/`Devices::Otos` directly either way. The wire-plane
+  curated Estimator live-tuning message (HISTORICAL/SUPERSEDED as of
+  132-013, patch-surface retirement — see §3's own note) stopped
+  at `RobotLoop::handleConfig()` exactly like the curated Motor/Otos
+  live-tuning messages already did (devices/app isolation invariant
+  above, extended by analogy) — `StateEstimator`'s own `setWeights()`
+  takes a plain, Devices-local-style weights struct, never a `msg::*`
+  type.
+- **`Config::defaultEstimatorConfig()`** (117, `config/boot_config.h`):
+  fail-closed baked fusion-weight defaults (`weight_heading_otos =
+  weight_omega_otos = 0.0` this sprint, `staleness_ms`), constructed once
+  at boot in `main.cpp` and passed to `StateEstimator`'s constructor —
+  see [config/DESIGN.md](../config/DESIGN.md).
+
+## 6. Open Questions / Known Limitations
+
+- **HISTORICAL (pre-132-013) — the curated Motor and Otos live-tuning
+  messages (109-004) were live-appliable.** Only the curated
+  Drivetrain/Watchdog live-tuning messages still replied
+  `ERR_UNIMPLEMENTED` (no on-robot fusion consumer for the former; the
+  latter routed to `bb.streamWatchdogWindowIn` directly, not
+  `handleConfig`, per config.proto's own `CONFIG_WATCHDOG` comment); see
+  §3. The curated Planner live-tuning message was not a third "still
+  unimplemented" case — it no longer existed as a type at all (115-005).
+  SUPERSEDED, 132-013: `ConfigDelta` and every message this bullet names
+  are deleted outright — see §3's own note for the replacement surface.
+- **In-session pose reset has no wire verb yet.** `Odometry::reset()`
+  exists and is exercised by the host simulator's teleport-to-origin, but
+  no binary command arms it from the wire today.
+- **`kFlagFaultI2CNak` (bit 8) and `kFlagEventConfigApplied` (bit 12) are
+  declared but unwired** — reserved bit numbers with no live producer yet.
+  `kFlagFaultMoveTimeout` (bit 15) is now wired (116) — set on the cycle
+  an active `Move` ends via `timeout` rather than its stop condition.
+- **`kFlagEventDeadmanExpired` (bit 10) is orphaned by 116, not
+  reassigned.** Its sole producer, `Deadman::expired()`, was deleted along
+  with `Core::Deadman`; the bit constant still exists in `telemetry.h` (no
+  wire-shape change) but nothing in the tree calls
+  `Telemetry::setFlag(kFlagEventDeadmanExpired, ...)` any more, so it now
+  reads permanently 0. Left as declared-dead rather than deleted or
+  repurposed — this sprint's scope did not include a `flags` wire-shape
+  change, and reassigning a bit number to a new meaning without a version
+  signal would be a silent protocol break for any reader still checking
+  it. Whether to formally delete or repurpose this bit is open for a
+  future sprint.
+- **The pre-115 heading-PD/distance-trim/measurement-age-projection design
+  history (formerly documented at length in this file's own §2, plus
+  `motion/DESIGN.md`) is not carried forward here.** `Pilot`/
+  `Motion::Executor`/`HeadingSource` and everything they computed
+  (`heading_kp`/`heading_kd` cascade, `distance_kp` trim, `kDeadTime`
+  divergence-replan projection, `HeadingSource::headingLead()`) are deleted
+  wholesale by 115-005 — the git tag `pre-gut-motion-stack` is the
+  authoritative historical record if that design work is ever revisited,
+  not a summary re-derived from memory here.
+- **`StateEstimator`'s predictions are not exposed on the wire (117).**
+  Neither `msg::Telemetry` nor `msg::TelemetrySecondary` gained a field
+  for `whereAmI()`/`wheelNow()` output this sprint — validation runs
+  host-side against the raw `EncoderReading`/`OtosReading` fields already
+  telemetered (sprint 115), replaying the identical ZOH math in Python
+  over a captured TLM-log CSV. A future on-robot consumer (the
+  remaining-distance trajectory controller) will need `whereAmI()`
+  results live, in-process — that consumer calls the estimator directly
+  (same process, same cycle), not over the wire, so this gap may never
+  need closing; flagged as open only because it was an explicit sizing
+  choice, not an oversight.
+- **HISTORICAL (pre-132-013) — fusion weights set via the curated
+  Estimator live-tuning message were volatile, not persisted.** Unlike
+  the curated Motor/Otos live-tuning messages (114-004), a live-tuned
+  weight did not survive a reboot — it reverted to the baked JSON
+  default. This precedent (ESTIMATOR never persists) carries forward
+  unchanged into the 132-013 reshape (`config/persisted_tuning.h`'s own
+  doc comment) — still true today, now for the independent reason that
+  `install(ESTIMATOR)` has no live consumer at all (`Core::StateEstimator`
+  deleted, 128-016). Revisit once fake-OTOS/external-pose fusion (future
+  sprints) give these weights real, nonzero, bench-validated values worth
+  persisting.
+- **`Core::debugf()`'s installed sink is a single process-global pointer,
+  not per-instance.** Fine on real hardware (one board, one `Comms`) and
+  in every current Sim/host-test caller (one `TestSim::SimHarness` per
+  process). If a future test ever constructs more than one `SimHarness`
+  concurrently in the same process, only the most recently constructed
+  one's `Core::setDebugSink()` call wins — `debugf()` output from the
+  others is silently misrouted or dropped, not duplicated or errored.
+  Tickets 006/007 (the first real `debugf()` call sites) should keep this
+  in mind if they ever add multi-harness test scenarios; no such scenario
+  exists yet.
+
+
+---
+
+## Appendix — the platform/hardware/hal reorganization
+
+Three things changed here, and one deliberately did not.
+
+**`app/` → `core/`, `App::` → `Core::`.** "App" said nothing about what
+this layer does; "orchestration core" does. Pure rename, no file content
+beyond names.
+
+**`Drive` → `DifferentialDrive`.** The class took a scalar `trackWidth` in
+its constructor and computed `(targetRight_ - targetLeft_) / trackWidth_`
+— it was differential-drive-specific in everything but its name. The
+rename makes the constraint visible instead of leaving `MecanumDrive`
+looking like it could just be dropped in beside a generic-sounding
+`Drive`.
+
+**No `Drivetrain` interface was extracted, on purpose.** The proposal
+describes `DifferentialDrive` implementing "a small common drivetrain
+interface (tick, command a body twist, report wheel state)" that
+`MecanumDrive` implements alongside it. Two things block that here, and
+neither is fixed by writing the interface first:
+
+1. **The surface is not small.** `Core::RobotLoop` and
+   `Core::Configurator` drive this class through far more than three
+   verbs: `setControlGains()`, `setAdaptationBounds()`,
+   `setWheelCorrection()`, `setCrawlPulse()`, `setPositionErrorMax()`,
+   `setSpeedFloor()`, `setASteady()`, `biasLeft()`/`biasRight()`,
+   `pidLeft()`/`pidRight()`, `deficitLeft()`/`deficitRight()`,
+   `stallLeft()`/`stallRight()`, `calibrated()`, `trackWidth()`,
+   `owns()`, `takeover()`, `takeCompletion()`, `estop()`. An "interface"
+   with twenty-odd virtuals is the concrete class with extra steps.
+2. **There is no second implementation to write it against.**
+   `MecanumDrive` cannot exist until `Motion::Planner` stops inlining
+   differential algebra against a scalar track width (see
+   [`../kinematics/DESIGN.md`](../kinematics/DESIGN.md) §4 — roughly
+   fifteen sites in `planner.cpp`). An interface designed with no second
+   implementer is a guess about what the second one needs.
+
+The order that works is: generalize the planner, write `MecanumDrive`,
+and let the interface fall out of what the two genuinely share. What this
+reorganization delivers toward that is `Kinematics::Model` — the seam
+that project needs — and a name on this class that no longer hides the
+constraint.
+
+**`Core::FakeOtos` stayed here** (kept for history; the class itself is
+now gone, 136-003) rather than moving to `hardware/generic/`, where the
+proposal expected it. It was a synthetic `Hal::Otos` composed from
+`Motion::Odometry` and two `Hal::Motor&`s — motion is two layers ABOVE
+hardware, so filing it under `hardware/` would have inverted the
+layering. Rebasing it onto `Types::RobotState::pose` would have fixed the
+layering and changed behavior: `RobotLoop::cycle()` calls
+`odom_.integrate()` and then `otos_.tick()`, while `state_.pose` is not
+written until later in the cycle, so it would have started reporting the
+previous cycle's pose. 136-003 removed `FakeOtos` outright as dead code
+(zero robot JSON, CI script, or justfile recipe ever enabled the
+`FAKE_OTOS` build variant), which mooted the placement question — see
+[`../hal/DESIGN.md`](../hal/DESIGN.md) §4 for the (now historical)
+reasoning.
+
+
+---
+
+## Appendix — Robot: bus arbitration and RobotState extension
+
+The reorganization proposal asks for a `Robot` that formalizes what
+`Core::composeRobot()`/`Core::RobotGraph` already does, and leaves two
+questions open when it becomes concrete. Both were looked at; neither
+produced a code change, and here is why, so the next person does not have
+to re-derive it.
+
+### 1. Bus arbitration — who may touch I2C, and when
+
+**Answer: `Core::RobotLoop::cycle()` is the arbiter, by construction, and
+that is correct. `RobotGraph` is not, and should not become one.**
+
+The proposal's concern is that exclusivity today is "an emergent property
+of `RobotLoop`'s tick order" rather than an owned, documented rule. Half of
+that is right — it *is* `cycle()`'s ordering — but it is not emergent, it
+is the schedule's entire purpose, and it is visible in one function:
+
+```
+drive_.tick()                     -- writes both motors
+motorL_.requestSample()           -- L select write
+  runAndWait(kSettle, pump)       -- the settle window is NOT idle: comms
+motorL_.tick()                    -- L collect
+motorR_.requestSample()           -- R select write
+  runAndWait(kSettle, pump+route)
+motorR_.tick()                    -- R collect
+publishWheels()                   -- at L/R same-generation coherence
+  runAndWaitUntil(cycleStart, kCycle, ...)
+    otos_.tick()                  -- OTOS read
+    tickLineColor()               -- line on odd cycles, colour on even
+```
+
+Every bus transaction in the firmware appears in that list, in that order,
+on one cooperative fiber. Nothing else may start one: `hardware/DESIGN.md`'s
+"No leaf sleeps or blocks" invariant means a driver does exactly the bounded
+work its `tick()` is called for and returns.
+
+A runtime lock would add cost and hide the real rule. The rule is not
+"take the mutex", it is **"the loop hands out bus slots, and the Nezha's
+0x46 encoder register latches ONE pending read per select"** — which is a
+scheduling constraint, not a mutual-exclusion one. A lock cannot express it;
+the ordering above can, and does. `Platform::MicroBitI2CBus::inUse_`
+remains what it is: a diagnostic re-entrancy counter that proves the rule
+holds, not a lock that enforces it.
+
+Moving arbitration to `RobotGraph` would make this worse, not better.
+`RobotGraph` is a composition root — it constructs the graph and hands out
+references. Giving it scheduling authority would split "who owns the
+schedule" across two objects, which is exactly the smear the single-loop
+rebuild exists to prevent.
+
+**What is genuinely owed here is documentation, and this section is it.**
+
+### 2. `Types::RobotState` extension — inheritance vs. composition
+
+Not attempted, and the proposal says why better than a summary can: it is
+"the highest-blast-radius single change in this reorg", and every current
+consumer assumes the one concrete type.
+
+Two things found while doing the rest of the work bear on the eventual
+design:
+
+- `RobotState` is a **flat, dependency-free POD by deliberate design**, and
+  that is load-bearing: it is the one type both `core/` and `motion/` may
+  name, which is what lets `motion/` keep its no-upward-dependencies rule
+  (`Wheel::cmdVelocity` is the actuation boundary precisely because it is a
+  plain field on a plain struct). An inheritance hierarchy puts a vtable and
+  a base-class dependency into that shared floor.
+- A composition slot — a generic base plus an opaque robot-specific member
+  — keeps the POD property. It costs every consumer of the extra data a cast
+  or a variant, which is the trade to weigh, not something to decide as a
+  side effect of moving files.
+
+It needs its own design pass with a real second robot's requirements in
+hand, not a guess made during a reorganization.
