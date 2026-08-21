@@ -17,7 +17,8 @@ completes_issue: true
 ## Description
 
 Rewrite `src/tests/bench/radio_bench_gate.py` for v6, carrying over its
-intent unchanged (spec §11.3): banner-on-connect (now `device:` lowercase
+intent unchanged (spec §11.3): banner-on-connect (now `device` lowercase,
+space-separated
 per ticket 008's banner break), `HELLO`/`PING`/`ID`/`VER` answered, `WHEELS`
 start/stop with climbing encoders, `ok` and `done` both observed (via
 ticket 007's line-based ack observation, not the deleted ack ring), the
@@ -27,7 +28,7 @@ measurement against a stated loss budget — run over the relay, not USB.
 
 ## Acceptance Criteria
 
-- [ ] Banner check matches the new `device:NEZHA2:robot:<name>:<serial>`
+- [ ] Banner check matches the new `device NEZHA2 robot <name> <serial>`
       lowercase form.
 - [ ] `HELLO`/`PING`/`ID`/`VER`/`STATUS`/`HELP` all pass against the ASCII
       grammar.

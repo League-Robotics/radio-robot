@@ -19,11 +19,11 @@ completes_issue: true
 Add `GET`/`SET` ASCII verb handling to `Core::Comms`/`Core::Configurator`,
 alongside — not replacing — the existing binary config arms
 (`CONFIG`/`GET_CONFIG`/`SET_FIELD`/`CFG`). This is spec §13 migration stage
-1. `SET:<name>:<value>[:<id>]` looks up ticket 001's config field table,
+1. `SET <name> <value> [#<id>]` looks up ticket 001's config field table,
 validates NaN-before-range (`ERR_BADARG` before `ERR_RANGE`, spec
 §7.1/§7.4), applies now-or-next-boot per the field's own liveness, and
-replies `ok:<id>`/`err:<id>:<code>`. `GET:[<name>]` prints
-`get:<name>:<value>` for one field, or all 80 fields (one line each) for a
+replies `ok #<id>`/`err #<id> <code>`. `GET [<name>]` prints
+`get <name> <value>` for one field, or all 80 fields (one line each) for a
 bare `GET`. Outbound floats use the hand-rolled `formatFixed()` helper (spec
 §7.2), since `newlib-nano` has no `printf` float support; inbound uses
 `strtof`, already used elsewhere (`Comms::stageSeed`).
@@ -34,14 +34,14 @@ bare `GET`. Outbound floats use the hand-rolled `formatFixed()` helper (spec
       field is stored and immediately visible via `GET` even before a
       reboot (spec §7.1's collapse of the boot-only/live split into "now"
       vs. "next boot").
-- [ ] `SET` with a non-finite value is rejected `err:<id>:2` (`ERR_BADARG`)
+- [ ] `SET` with a non-finite value is rejected `err #<id> 2` (`ERR_BADARG`)
       BEFORE the range check (`ERR_RANGE`), per spec §7.1's explicit
       ordering (NaN compares false against both `<` and `>`, so an
       unchecked NaN would pass any bound check).
-- [ ] Bare `GET` returns all 80 declared fields, one `get:name:value` line
+- [ ] Bare `GET` returns all 80 declared fields, one `get name value` line
       each, values formatted via `formatFixed()` to six fractional digits,
       no exponent (spec §7.2, e.g. `0.020000`).
-- [ ] `GET:<name>` for one field returns exactly `get:<name>:<value>`.
+- [ ] `GET <name>` for one field returns exactly `get <name> <value>`.
 - [ ] Every field name matches its v5 `robot_config.proto` name verbatim
       (spec §7.3) — no robot JSON needs editing as a side effect of this
       ticket.

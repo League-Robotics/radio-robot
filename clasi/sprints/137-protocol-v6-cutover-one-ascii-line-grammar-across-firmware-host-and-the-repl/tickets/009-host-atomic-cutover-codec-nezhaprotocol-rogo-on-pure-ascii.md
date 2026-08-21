@@ -36,7 +36,7 @@ and pre-009 host cannot talk to post-008 firmware.
       including motion (`move`, `wheels`, `goto`, `stop`, `estop`, `seed`,
       `cal`) and session (`hello`, `ping`, `id`, `ver`, `status`, `help`)
       verbs.
-- [ ] `TLMFrame` construction comes from the ticket 005 `thdr:`/`t:` parse
+- [ ] `TLMFrame` construction comes from the ticket 005 `thdr`/`t` parse
       path, not the binary decode.
 - [ ] `rogo serve`/`rogo repl` and TestGUI's `binary_bridge.py` continue to
       work calling `NezhaProtocol` methods by name (no interface change
@@ -44,7 +44,8 @@ and pre-009 host cannot talk to post-008 firmware.
       existing bench-script smoke sequence against the sim.
 - [ ] Host role/banner detection (`serial_conn.py`) matches the verb
       case-insensitively for this release (spec §4.1's migration note) so a
-      stale v5 banner and the new `device:` banner are both recognized.
+      stale v5 banner and the new `device` banner (space-separated, spec
+      §4.1) are both recognized.
 - [ ] `mbdeploy`'s ROLE column (keys on the `NEZHA2` field, not the verb) is
       confirmed unaffected.
 

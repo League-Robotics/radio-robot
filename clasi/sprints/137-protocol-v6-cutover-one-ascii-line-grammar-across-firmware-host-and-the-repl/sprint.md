@@ -61,7 +61,7 @@ every ticket leaves the tree buildable and testable:
    generated 80-row config field table) alongside the existing binary
    config arms.
 2. Land the `TLM` subscription (`OFF`/`POSE`/`FULL`/`NOW`/`AUTO`/
-   `BUFFER`) and self-describing `thdr:`/`t:` frames alongside the
+   `BUFFER`) and self-describing `thdr`/`t` frames alongside the
    existing binary telemetry arm.
 3. Land `ok`/`err`/`done` reply lines (3× repeat for loss tolerance)
    alongside the existing ack ring.
@@ -246,7 +246,7 @@ planes alive.
   grammar — no more per-verb framing decision.
 - **Firmware telemetry assembly** (currently `Core::Telemetry`,
   packed-`sint32`/zigzag + always-on debug tail): changes to "emit
-  `thdr:`/`t:` ASCII lines sized to the active subscription mode
+  `thdr`/`t` ASCII lines sized to the active subscription mode
   (`POSE`/`FULL`), self-describing, no schema needed by the reader."
 - **Firmware configuration** (currently `Config::Robot` +
   `PersistedTuning` + `config_parity_capi` + the boot-only/live gating
@@ -267,11 +267,11 @@ planes alive.
   relay"), now calling the ASCII codec instead of the COBS+CRC one.
 - **Host protocol adapter** (`robot/protocol.py`'s `NezhaProtocol`):
   changes to build ASCII lines instead of `CommandEnvelope`/
-  `ReplyEnvelope` messages; `TLMFrame` becomes a `thdr:`/`t:` zip instead
+  `ReplyEnvelope` messages; `TLMFrame` becomes a `thdr`/`t` zip instead
   of a decoded protobuf message.
 - **REPL binding** (new, host-side — see Design Rationale): `p(line)`
   prints reply lines and returns `None`; `r.*` is a thin ergonomic
-  wrapper over the same `NezhaProtocol` table. `TLM:BUFFER` is this
+  wrapper over the same `NezhaProtocol` table. `TLM BUFFER` is this
   responsibility's own telemetry-handling policy (accumulate, don't
   push) — distinct from the push-by-default policy radio/UDP transports
   keep.
@@ -287,12 +287,12 @@ planes alive.
 | **Wire-Schema Declaration & Codegen** (`src/protos/`, `src/scripts/gen_messages.py`, reshaped) | Declares the verb table, the 80-row config field table, and the telemetry column tables once, and generates the matching firmware and host data tables. | Inside: the flat-table declarations and the generator. Outside: any wire-format *encoding* logic (that's the codec modules below) — this module only produces data tables, never touches bytes. | SUC-001, SUC-002, SUC-006 |
 | **Firmware ASCII Codec** (`src/firm/messages/`, new files alongside the existing generated structs) | Formats and parses one `<VERB>[:field]*\n` line against the generated tables, with no heap and no `std::string`. | Inside: `snprintf`/`strtol`/`strtof`-based line format/parse, bounded to `char[240]`. Outside: verb *semantics* (that's `Core::Comms`) and schema declaration (that's the codegen module above). | SUC-001, SUC-002, SUC-003, SUC-006 |
 | **Core::Comms** (`src/firm/core/comms.{h,cpp}`) | Dispatches one parsed ASCII line to the right firmware handler by verb, case, and arity. | Inside: verb lookup, direction/case enforcement, the relay control-plane carve-out, `ok`/`err`/`done` emission. Outside: telemetry assembly, config apply, motion execution — Comms calls into those, never duplicates their logic. | SUC-001, SUC-003, SUC-005 |
-| **Core::Telemetry** (`src/firm/core/telemetry.{h,cpp}`) | Assembles and emits `thdr:`/`t:` frames sized to the active `TLM` subscription mode. | Inside: `RobotState` → ASCII column projection, mode-driven column selection. Outside: transport delivery (Comms/the transports own that). | SUC-002 |
+| **Core::Telemetry** (`src/firm/core/telemetry.{h,cpp}`) | Assembles and emits `thdr`/`t` frames sized to the active `TLM` subscription mode. | Inside: `RobotState` → ASCII column projection, mode-driven column selection. Outside: transport delivery (Comms/the transports own that). | SUC-002 |
 | **Core::Configurator + config field table** (`src/firm/core/configurator.{h,cpp}`, `src/firm/config/`) | Applies a `SET`/reads a `GET` against the one generated field table, now-or-next-boot. | Inside: lookup, bounds/NaN check, apply-or-store. Outside: the boot-baking path (`Config::default*()`) stays a separate, unchanged responsibility — this module governs post-boot tuning only. | SUC-001 |
 | **Host Line Codec** (`src/host/robot_radio/io/wire_codec.py`, rewritten) | Encodes/decodes one ASCII line — bytes in, line out, and back. | Inside: line composition/parsing only. Outside: transport delivery (a separate module, below) and verb semantics (`NezhaProtocol`). | SUC-001, SUC-002, SUC-003, SUC-006 |
 | **Host Transport** (`src/host/robot_radio/io/serial_conn.py`) | Delivers whole lines over serial, UDP, or the radio relay. | Inside: the byte stream, reconnection/banner handling, transport selection. Outside: line composition (calls the Line Codec) and verb semantics. | SUC-001, SUC-002, SUC-003, SUC-006 |
 | **Host Protocol Adapter** (`src/host/robot_radio/robot/protocol.py`'s `NezhaProtocol`) | Builds and parses typed verb calls (`move`, `get`, `set`, `stop`, `estop`, …) over the ASCII codec. | Inside: the typed Python surface every host caller (bench scripts, TestGUI, MCP tools, REPL) uses. Outside: byte-level framing and delivery (delegates to the Line Codec / Transport). | SUC-001, SUC-002, SUC-003, SUC-005 |
-| **REPL Binding** (new: `src/host/robot_radio/io/repl.py` extended + a thin `r.*` wrapper) | Gives an interactive host session `p(line)`/`r.*` access to the same verb table, with buffered (not pushed) telemetry. | Inside: `p()`'s print-not-return contract, `r.*`'s ergonomic wrapper, `TLM:BUFFER` accumulation/drain. Outside: the underlying wire calls (delegates to `NezhaProtocol`). | SUC-004, SUC-006 |
+| **REPL Binding** (new: `src/host/robot_radio/io/repl.py` extended + a thin `r.*` wrapper) | Gives an interactive host session `p(line)`/`r.*` access to the same verb table, with buffered (not pushed) telemetry. | Inside: `p()`'s print-not-return contract, `r.*`'s ergonomic wrapper, `TLM BUFFER` accumulation/drain. Outside: the underlying wire calls (delegates to `NezhaProtocol`). | SUC-004, SUC-006 |
 | **Conformance Fixture** (`src/tests/fixtures/wire_golden_vectors.txt` + harnesses) | Proves the firmware codec, host codec, and REPL binding produce byte-identical wire output from one shared vector set. | Inside: vectors and the three assertion harnesses. Outside: nothing — this module only verifies, never implements, the wire. | SUC-006 |
 | **Bench/Sim Harnesses** (`src/tests/bench/`, `src/firm/platform/host/`) | Exercise the live protocol end-to-end, on the sim and on real hardware. | Inside: scenario scripts and the sim ABI's wire-facing calls. Outside: the protocol implementation itself. | SUC-003, SUC-007, SUC-008 |
 
@@ -440,15 +440,18 @@ persisted-tuning machinery (review R4) plus the 105 KB generated codec
   always has; any prior live-tuned-and-persisted value is gone, which is
   the same outcome a bench engineer already gets from any clean reflash
   today.
-- **Banner case break.** The `HELLO` reply verb lowercases from
-  `DEVICE:` to `device:` (spec §4.1). Since firmware and host cut over
-  together in tickets 008/009 with no intermediate mixed-version
-  deployment expected on this project's single-robot bench fleet, a
-  full one-release case-insensitive compatibility shim is not required
-  — but `serial_conn.py`'s banner classifier is kept case-insensitive as
-  a cheap defensive measure (costs nothing, catches a stale client).
-  `mbdeploy`'s ROLE column keys on the `NEZHA2` field text, not the
-  verb, so it is unaffected either way.
+- **Banner break.** The `HELLO` reply is rewritten twice over (spec
+  §4.1): the verb lowercases from `DEVICE:` to `device`, and the
+  separators become spaces (`device NEZHA2 robot <name> <serial>` —
+  stakeholder separator/id decision, 2026-08-20). Since firmware and
+  host cut over together in tickets 008/009 with no intermediate
+  mixed-version deployment expected on this project's single-robot
+  bench fleet, a full one-release compatibility shim is not required
+  — but `serial_conn.py`'s banner classifier is kept tolerant of both
+  shapes (either case, either separator) as a cheap defensive measure
+  (costs nothing, catches a stale client). `mbdeploy`'s ROLE column
+  keys on the `NEZHA2` token text, not the verb, so it is unaffected
+  either way.
 - **Deployment sequencing.** Tickets 001-007 land additively (old and
   new verbs coexist); tickets 008-009 are the one genuinely
   wire-breaking pair and must land back-to-back with nothing else
@@ -532,7 +535,7 @@ the source spec and is flagged to the stakeholder in this sprint's
 report** rather than silently assumed.
 
 A second consequence, caught in this document's own self-review: spec
-§6.1/§10.4 describe `TLM:BUFFER` as *firmware* behavior — "the control
+§6.1/§10.4 describe `TLM BUFFER` as *firmware* behavior — "the control
 loop appends frames to a bounded deque and prints nothing" — which
 presumes a robot-side REPL that this sprint does not build. With the
 REPL host-side instead, there is no robot-side "don't print" to
@@ -618,10 +621,10 @@ Parent: N/A (protocol-level capability, not a product-level UC)
 - **Preconditions**: Robot connected (USB or relay), boot-baked from its
   robot JSON.
 - **Main Flow**:
-  1. Engineer pushes `SET:<group>.<field>:<value>` for one field.
+  1. Engineer pushes `SET <group>.<field> <value>` for one field.
   2. Firmware validates (NaN before range), applies now-or-next-boot,
-     replies `ok:<id>` or `err:<id>:<code>`.
-  3. Engineer reads back via `GET:<group>.<field>` (never trusts the
+     replies `ok #<id>` or `err #<id> <code>`.
+  3. Engineer reads back via `GET <group>.<field>` (never trusts the
      `ok` alone, per `configuration-discipline.md`).
   4. Bare `GET` dumps all 80 fields — the same dump doubles as the
      read-back-vs-file acceptance test and a plain-terminal-readable
@@ -646,16 +649,16 @@ Parent: N/A
 - **Preconditions**: Robot connected, telemetry mode defaults per
   transport (`POSE` on radio/UDP, `BUFFER` on the REPL).
 - **Main Flow**:
-  1. Client sends `TLM:<mode>`.
-  2. Robot emits a fresh `thdr:` column header, then `t:` data lines at
+  1. Client sends `TLM <mode>`.
+  2. Robot emits a fresh `thdr` column header, then `t` data lines at
      the mode's own column count (9 for `POSE`, 30 for `FULL`).
   3. A client that reconnects mid-stream and missed the header sends
-     `TLM:NOW` to force one fresh frame.
+     `TLM NOW` to force one fresh frame.
 - **Postconditions**: `tlm_log.py`-style consumers can write a valid CSV
   by construction (header row, then data rows) with no separate schema.
 - **Acceptance Criteria**:
   - [ ] `POSE` frames are ~38 B, roughly half of today's binary frame.
-  - [ ] A mode change always emits a fresh `thdr:` before the next `t:`.
+  - [ ] A mode change always emits a fresh `thdr` before the next `t`.
   - [ ] Both pose sources (encoder odometry, OTOS) ride every frame in
         both modes, per spec §6.3's "divergence is the measurement"
         rationale.
@@ -670,8 +673,8 @@ Parent: N/A
 - **Preconditions**: Robot `ready` (has cleared `ERR_NOT_CONFIGURED`).
 - **Main Flow**:
   1. Client sends `MOVE`/`WHEELS`/`GOTO` with a unique id.
-  2. Robot replies `ok:<id>` (enqueued) — 3× repeat.
-  3. Robot later replies `done:<id>:<reason>` (`stop` or `timeout`) — 3×
+  2. Robot replies `ok #<id>` (enqueued) — 3× repeat.
+  3. Robot later replies `done #<id> <reason>` (`stop` or `timeout`) — 3×
      repeat — when the move actually finishes.
   4. Client halts with `ESTOP` (never `STOP` for a panic path, per
      `.claude/rules/playfield-testing.md`) and confirms the robot
@@ -680,7 +683,7 @@ Parent: N/A
   a single lost frame — the 3× repeat plus first-copy-wins de-dup covers
   the measured ~5% radio loss.
 - **Acceptance Criteria**:
-  - [ ] A reused id is rejected `err:<id>:11` (`ERR_DUPLICATE_ID`), never
+  - [ ] A reused id is rejected `err #<id> 11` (`ERR_DUPLICATE_ID`), never
         silently dropped (the v5 footgun this closes).
   - [ ] `ESTOP` never carries an id and is never acked — it cannot queue
         behind anything.
@@ -695,7 +698,7 @@ Parent: N/A
 - **Preconditions**: Host REPL connected to the robot over serial or the
   relay.
 - **Main Flow**:
-  1. Operator calls `p("PING")` and sees `pong:<now>` printed verbatim.
+  1. Operator calls `p("PING")` and sees `pong <now>` printed verbatim.
   2. Operator calls `r.move(v_x=150, stop_distance=400, timeout=5000)`
      and gets back a plain Python int (the move id).
   3. Operator calls `r.wait(<id>)` and gets `'stop'`/`'timeout'` back.
@@ -721,7 +724,7 @@ Parent: N/A
 - **Preconditions**: Two or more robots audible on the same radio
   channel/group.
 - **Main Flow**:
-  1. Robot A emits a `dbg:`/`t:`/any lowercase reply line.
+  1. Robot A emits a `dbg`/`t`/any lowercase reply line.
   2. Robot B hears it on the shared channel.
   3. Robot B's verb lookup is case-sensitive; the lowercase line matches
      no registered UPPERCASE command and is silently dropped —
@@ -822,13 +825,13 @@ Before tickets can be created, all of the following must be true:
 | 001 | Config field table generator (shared declaration -> firmware + host tables) | — |
 | 002 | Firmware `GET`/`SET` ASCII verbs (alongside existing binary config arms) | 001 |
 | 003 | Host `GET`/`SET` + configuration-discipline orphan-block audit | 002 |
-| 004 | Firmware telemetry column tables + `thdr:`/`t:` assembly + `TLM` subscription verb | 002 |
-| 005 | Host `thdr:`/`t:` parsing + `tlm_log.py` simplification | 004 |
+| 004 | Firmware telemetry column tables + `thdr`/`t` assembly + `TLM` subscription verb | 002 |
+| 005 | Host `thdr`/`t` parsing + `tlm_log.py` simplification | 004 |
 | 006 | Firmware `ok`/`err`/`done` reply lines (alongside existing ack ring) | 004 |
 | 007 | Host ack observation migrates to line-reading | 006 |
 | 008 | Firmware atomic cutover: ASCII-only dispatch, case-direction, motion verbs | 007 |
 | 009 | Host atomic cutover: codec, `NezhaProtocol`, `rogo` on pure ASCII | 008 |
-| 010 | REPL binding (`p()`/`r.*`, `TLM:BUFFER`) | 009 |
+| 010 | REPL binding (`p()`/`r.*`, `TLM BUFFER`) | 009 |
 | 011 | Golden-vector fixture rewrite (ASCII) + REPL fourth vector set — primary conformance gate | 010 |
 | 012 | Formatting-cost hardware measurement (`cyb` before/after) | 011 |
 | 013 | Delete the binary plane (protobuf codec, COBS/CRC, ack ring, persisted-tuning/parity/boot-live-split, orphan proto schema) | 012 |

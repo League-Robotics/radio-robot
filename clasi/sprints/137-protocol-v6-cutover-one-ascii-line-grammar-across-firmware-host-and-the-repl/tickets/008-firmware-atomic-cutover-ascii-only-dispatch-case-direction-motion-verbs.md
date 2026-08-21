@@ -30,19 +30,19 @@ Migration Concerns).
 
 ## Acceptance Criteria
 
-- [ ] `MOVE:<kind>:<a>:<b>:<c>:<stop>:<limit>:<timeout>:<id>` parses and
+- [ ] `MOVE <kind> <a> <b> <c> <stop> <limit> <timeout> #<id>` parses and
       dispatches per spec §5.1 (both `t` twist and `w` wheels kinds);
-      `WHEELS:<left>:<right>:<duration>[:<id>]` per §5.2 (duration required,
-      ceiling 5000 ms); `GOTO:<x>:<y>:<frame>:<speed>:<arrive>:<timeout>:
-      <id>` per §5.3; `STOP:<id>` and `ESTOP` per §5.4; `SEED:<x>:<y>:<h>
-      [:<id>]` per §5.5; `CAL[:<samples>][:<id>]` per §5.6.
+      `WHEELS <left> <right> <duration> [#<id>]` per §5.2 (duration required,
+      ceiling 5000 ms); `GOTO <x> <y> <frame> <speed> <arrive> <timeout>
+      #<id>` per §5.3; `STOP #<id>` and `ESTOP` per §5.4; `SEED <x> <y> <h>
+      [#<id>]` per §5.5; `CAL [<samples>] [#<id>]` per §5.6.
 - [ ] `ESTOP` halts now: zeroes wheel targets and clears the planner's
       active + pending queue in the same cycle, discarded entries get no
       `done`, carries no id, is never acked.
-- [ ] `STOP:<id>` is a planned stop: an ordinary queue entry, `ok:<id>` on
-      enqueue, `done:<id>:stop` when actually at rest.
+- [ ] `STOP #<id>` is a planned stop: an ordinary queue entry, `ok #<id>` on
+      enqueue, `done #<id> stop` when actually at rest.
 - [ ] A lowercase reply line heard on a shared channel (e.g. another
-      robot's `dbg:`/`t:`) is silently dropped and does NOT increment
+      robot's `dbg`/`t`) is silently dropped and does NOT increment
       `malformedCount_`/the malformed flag bit (spec §2.1, SUC-005) — verb
       lookup is case-sensitive.
 - [ ] An uppercase line with an unknown verb still increments the malformed
@@ -50,8 +50,9 @@ Migration Concerns).
       bad line."
 - [ ] v5's `replace` flag is dropped; preemption is `ESTOP` then a new
       `MOVE` (spec §5.1).
-- [ ] The banner reply lowercases `DEVICE:` -> `device:` (spec §4.1) — the
-      one byte-frozen string v6 breaks, called out explicitly.
+- [ ] The banner reply is rewritten per spec §4.1 — lowercase verb, space
+      separators (`device NEZHA2 robot <name> <serial>`) — the one
+      byte-frozen string v6 breaks, called out explicitly.
 - [ ] `HELLO`/`PING`/`ID`/`VER`/`STATUS`/`HELP` (spec §4) all move to the
       ASCII grammar in this same ticket, since they share `Core::Comms`'s
       dispatch table with the motion verbs.

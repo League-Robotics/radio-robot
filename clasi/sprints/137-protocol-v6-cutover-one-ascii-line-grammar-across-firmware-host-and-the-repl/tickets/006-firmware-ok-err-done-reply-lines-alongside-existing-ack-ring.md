@@ -16,7 +16,7 @@ completes_issue: true
 
 ## Description
 
-Add `ok:<id>`/`err:<id>:<code>`/`done:<id>:<reason>` reply-line emission to
+Add `ok #<id>`/`err #<id> <code>`/`done #<id> <reason>` reply-line emission to
 `Core::Comms`, alongside — not replacing — the existing ack ring. This is
 spec §13 migration stage 3. Each reply is sent three times on consecutive
 cycles (spec §8.1) so an outcome survives the measured ~5% radio loss
@@ -29,16 +29,16 @@ real, recorded footgun spec §8.2 closes).
 
 ## Acceptance Criteria
 
-- [ ] `ok:<id>` is emitted on acceptance (enqueue for a motion verb, or
+- [ ] `ok #<id>` is emitted on acceptance (enqueue for a motion verb, or
       immediate apply for `SET`), three times on consecutive cycles.
-- [ ] `err:<id>:<code>` is emitted on rejection, three times, using the code
+- [ ] `err #<id> <code>` is emitted on rejection, three times, using the code
       table in spec §8.3 (`ERR_UNKNOWN`=1, `ERR_BADARG`=2, `ERR_RANGE`=3,
       `ERR_FULL`=4, `ERR_UNIMPLEMENTED`=6, `ERR_NOT_CONFIGURED`=8,
       `ERR_BUSY`=10, `ERR_DUPLICATE_ID`=11).
-- [ ] `done:<id>:<reason>` is emitted when an enqueued thing finishes, three
+- [ ] `done #<id> <reason>` is emitted when an enqueued thing finishes, three
       times, `reason` ∈ `stop`/`timeout` — a plain word, not a flags-bit
       lookup.
-- [ ] A reused id within the session is rejected `err:<id>:11`
+- [ ] A reused id within the session is rejected `err #<id> 11`
       (`ERR_DUPLICATE_ID`), never silently dropped.
 - [ ] Id `0` means "no ack wanted" and is honored on any verb with an
       optional id — no `ok`/`err`/`done` is emitted for it.

@@ -1,6 +1,6 @@
 ---
 id: '010'
-title: REPL binding (p()/r.*, TLM:BUFFER)
+title: REPL binding (p()/r.*, TLM BUFFER)
 status: open
 use-cases: [SUC-004, SUC-006]
 depends-on: ['009']
@@ -12,7 +12,7 @@ completes_issue: true
 ---
 <!-- CLASI: Before changing code or making plans, review the SE process in CLAUDE.md -->
 
-# REPL binding (p()/r.*, TLM:BUFFER)
+# REPL binding (p()/r.*, TLM BUFFER)
 
 ## Description
 
@@ -33,7 +33,7 @@ would be echoed by the REPL with quotes, breaking "REPL stdout is
 byte-identical to the v6 wire" — spec §10.2). `r.*` is the ergonomic wrapper
 (`r.move(...)`, `r.get(...)`, `r.estop()`, etc.) returning typed Python
 values and raising on `err`. On this transport telemetry defaults to
-`TLM:BUFFER`: the host-side REPL binding buffers received frames in a
+`TLM BUFFER`: the host-side REPL binding buffers received frames in a
 bounded deque and prints nothing by default; `r.frames()` drains it,
 `r.frames(clear=False)` peeks. Per `sprint.md`'s Design Rationale second
 consequence, firmware (ticket 004) treats `BUFFER` identically to `POSE` —
@@ -50,8 +50,8 @@ host-side responsibility.
       raise on `err`.
 - [ ] `r.wait(<id>)` returns `'stop'`/`'timeout'` from the corresponding
       `done` line.
-- [ ] Telemetry buffers by default on this transport (`TLM:BUFFER`) — no
-      `t:`/`thdr:` output interleaves with the REPL prompt or with
+- [ ] Telemetry buffers by default on this transport (`TLM BUFFER`) — no
+      `t`/`thdr` output interleaves with the REPL prompt or with
       `p()`/`r.*` output during normal use.
 - [ ] `r.frames()` drains the buffer (newest last); `r.frames(clear=False)`
       peeks without draining.
@@ -74,5 +74,5 @@ host-side responsibility.
   output to the raw wire line for a representative vector set (a preview of
   ticket 011's full fourth vector set — do not duplicate that work, just
   smoke-test here); a buffered-telemetry test confirming no output during a
-  `move`+`wait` sequence with an active `TLM:FULL` subscription.
+  `move`+`wait` sequence with an active `TLM FULL` subscription.
 - **Verification command**: `uv run pytest src/tests -k repl`.

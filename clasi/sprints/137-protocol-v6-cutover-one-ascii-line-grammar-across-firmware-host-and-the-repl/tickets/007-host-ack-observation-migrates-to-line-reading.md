@@ -25,7 +25,7 @@ first-copy-wins de-duplication by id across the 3x repeat.
 ## Acceptance Criteria
 
 - [ ] Host outcome-tracking (`wait_for_ack`/equivalent) recognizes
-      `ok:<id>`/`err:<id>:<code>`/`done:<id>:<reason>` lines and resolves
+      `ok #<id>`/`err #<id> <code>`/`done #<id> <reason>` lines and resolves
       the corresponding pending call.
 - [ ] Repeated copies of the same `ok`/`err`/`done` (same id, same verb) are
       de-duplicated — first copy wins, repeats are silently ignored, not
@@ -40,8 +40,8 @@ first-copy-wins de-duplication by id across the 3x repeat.
 ## Testing
 
 - **Existing tests to run**: host ack/outcome-tracking suites.
-- **New tests to write**: a test feeding a triplicate `ok:7`/`ok:7`/`ok:7`
-  sequence and asserting exactly one resolution; a `done:7:stop` vs.
-  `done:7:timeout` distinction test.
+- **New tests to write**: a test feeding a triplicate `ok #7`/`ok #7`/`ok #7`
+  sequence and asserting exactly one resolution; a `done #7 stop` vs.
+  `done #7 timeout` distinction test.
 - **Verification command**: `uv run pytest src/tests -k "ack or outcome or
   protocol"`.

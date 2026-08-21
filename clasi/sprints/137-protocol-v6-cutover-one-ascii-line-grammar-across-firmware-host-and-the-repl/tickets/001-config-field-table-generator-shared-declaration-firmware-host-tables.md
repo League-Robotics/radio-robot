@@ -43,7 +43,7 @@ declaration producing two generated outputs, not the syntax chosen.
       table (`src/host/robot_radio/config/` or similar), for all three table
       kinds: verb table (30 rows, spec §3.1/§3.2), config field table (80
       rows, spec §7.3, names verbatim from v5's `robot_config.proto`), and
-      telemetry column tables (`POSE` 9 cols, `FULL` 30 cols, spec §6.3/§6.4).
+      telemetry column tables (`POSE` 9 cols, `FULL` 35 cols, spec §6.3/§6.4).
 - [ ] Field/column/verb names match spec §7.3/§6.3/§6.4/§3 exactly — a unit
       test enumerates the generated table and diffs it against the spec's
       own name lists.
@@ -74,6 +74,6 @@ declaration producing two generated outputs, not the syntax chosen.
 - **New tests to write**: a unit test asserting the generated config-field
   table has exactly 80 rows with names matching spec §7.3's group/field
   lists; a unit test asserting the generated telemetry column tables match
-  §6.3 (9 columns) and §6.4 (30 columns) in the documented order.
+  §6.3 (9 columns) and §6.4 (35 columns) in the documented order.
 - **Verification command**: `uv run pytest src/tests -k codegen`, plus a
   firmware build.
