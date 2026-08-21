@@ -71,7 +71,7 @@ requires-dist = [
     { name = "ipykernel", marker = "extra == 'dev'", specifier = ">=7.2.0" },
     { name = "ipython", marker = "extra == 'dev'", specifier = ">=8.39.0" },
     { name = "jupyter", marker = "extra == 'dev'", specifier = ">=1.1.1" },
-    { name = "mcp", specifier = ">=1.0" },
+    { name = "mcp", specifier = ">=1.0,<2" },
     { name = "msgpack", marker = "extra == 'daemon'", specifier = ">=1.0" },
     { name = "mss", marker = "extra == 'daemon'", specifier = ">=9.0" },
     { name = "numpy", specifier = ">=1.23" },

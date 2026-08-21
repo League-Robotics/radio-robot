@@ -109,7 +109,7 @@ import glob
 import queue
 import threading
 import time
-from typing import Any, TYPE_CHECKING
+from typing import Any, Callable, TYPE_CHECKING
 
 import serial
 
@@ -234,14 +234,31 @@ def _disable_hupcl(ser) -> None:
         pass
 
 
+# Protocol v6 GET/SET reply verbs (sprint 137 ticket 003) -- lowercase,
+# hand-maintained here, NOT a member of wire_commands.VERB_BY_NAME (that
+# registry is generated from protos/commands.proto's Verb enum, the v5
+# binary-plane schema; ticket 002's completion notes are explicit that
+# "GET"/"SET" are NOT v5 registry entries and commands.proto stays
+# untouched). This is the host-side mirror of firmware's own
+# Core::Comms::dispatchLine() interception: it matches the literal
+# strings "GET"/"SET" ahead of its kVerbTable registry lookup, so the
+# host's classifier gets the same early, out-of-registry check for the
+# REPLY verbs those wire lines come back as (spec §7.1: `get:name:value`,
+# `ok:id`, `err:id:code`). Deliberately excludes "done" -- ticket 002 never
+# emits it (that's ticket 006's `done:` reply-line work); adding it now
+# would be speculative.
+_V6_TEXT_REPLY_VERBS: frozenset[str] = frozenset({"get", "ok", "err"})
+
+
 def _split_wire_line(line: bytes) -> tuple[str | None, bytes]:
     """Parse one raw wire LINE into ``(verb, data)`` under protocol v5's
     uniform grammar (124-005, issue §1: the FIRST ``':'`` ends the command;
     everything after is data) -- the host-side mirror of
     ``Core::Comms::dispatchLine()`` (comms.cpp). ``verb`` is looked up
     against the generated registry (``robot_radio.io.wire_commands`` --
-    messages/commands.h's mirror); returns ``(None, b"")`` if the command
-    bytes are not valid ASCII or are not a registered verb at all.
+    messages/commands.h's mirror) OR the small hand-maintained v6 reply-verb
+    allowlist above; returns ``(None, b"")`` if the command bytes are not
+    valid ASCII or are not recognized by either.
 
     A colon-less line has its own trailing ``'\\r'`` stripped before the
     lookup (a raw terminal/relay sending ``"\\r\\n"`` line endings) -- a
@@ -254,7 +271,7 @@ def _split_wire_line(line: bytes) -> tuple[str | None, bytes]:
         command = command_bytes.decode("ascii")
     except UnicodeDecodeError:
         return None, b""
-    if command not in wire_commands.VERB_BY_NAME:
+    if command not in wire_commands.VERB_BY_NAME and command not in _V6_TEXT_REPLY_VERBS:
         return None, b""
     return command, data
 
@@ -471,6 +488,11 @@ class SerialConnection:
         # _reply_queues' corr-id matching. Without this they were parsed
         # correctly and then dropped on the floor, which reads from the
         # caller's side as a dead robot -- see send_cleartext().
+        #
+        # 137-003: protocol v6's GET/SET reply verbs (lowercase
+        # get/ok/err -- _V6_TEXT_REPLY_VERBS) route here too, via the same
+        # _handle_text_line() path -- NezhaProtocol.get()/.set() both call
+        # send_cleartext() with a full v6 wire line as `verb`.
         self._text_queue: queue.Queue = queue.Queue(maxsize=64)
 
         # Bounded TLM queue: drop oldest frame on overflow rather than blocking
@@ -965,6 +987,12 @@ class SerialConnection:
           synchronous DEVICE:/PONG: round trips connect() needs); dropped
           silently once classified, same "no listener registered" policy
           the pre-124 ``OK``/``ERR``/``CFG`` corr-id routing already used.
+        - A protocol v6 GET/SET reply verb (lowercase ``get``/``ok``/``err``,
+          ``_V6_TEXT_REPLY_VERBS`` -- sprint 137 ticket 003) → also routed
+          through ``_handle_text_line()``, exactly like a registered
+          CLEARTEXT verb. These are NOT in ``wire_commands.VERB_BY_NAME``
+          (see ``_V6_TEXT_REPLY_VERBS``'s own comment for why), so ``entry``
+          is ``None`` for them below -- treated as text, never binary.
         """
         if line.startswith(b"#"):
             return  # relay status/comment line -- not v5 grammar, leave as-is
@@ -974,8 +1002,8 @@ class SerialConnection:
             self.malformed_frame_count += 1
             return
 
-        entry = wire_commands.VERB_BY_NAME[command]
-        if entry.binary:
+        entry = wire_commands.VERB_BY_NAME.get(command)
+        if entry is not None and entry.binary:
             # Verbose RX hook: raw bytes (not text) for a binary line --
             # the FULL line, command prefix included (124-005: a consumer
             # like testgui/binary_bridge.py's render_log_line() needs the
@@ -1269,8 +1297,11 @@ class SerialConnection:
         self._ser = None
         return {"status": "disconnected", "port": port}
 
-    def send_cleartext(self, verb: str, read_timeout: int = 1500) -> list[str]:  # [ms]
-        """Send a bare cleartext verb and return the reply lines.
+    def send_cleartext(self, verb: str, read_timeout: int = 1500,  # [ms]
+                       stop_predicate: "Callable[[str], bool] | None" = None,
+                       ) -> list[str]:
+        """Send a bare cleartext verb (or a full v6 ``GET``/``SET`` line --
+        137-003, see below) and return the reply lines.
 
         Use this for HELLO/PING/ID/VER/STATUS/HELP -- NOT ``send()``, which
         appends a ``#<corr_id>`` suffix and matches the reply back by that
@@ -1279,11 +1310,27 @@ class SerialConnection:
         malformed AND the reply is unroutable: it returns ``[]`` for a robot
         that answered perfectly.
 
+        137-003 (protocol v6 ``GET``/``SET``): ``verb`` may also be a full
+        v6 command line (``"GET:wheel_control.pid_kp"``,
+        ``"SET:wheel_control.pid_kp:0.03:9"``) -- this method only ever
+        writes ``f"{verb}\\n"`` verbatim, so it has no opinion on what
+        ``verb`` contains. The v6 reply verbs (``get``/``ok``/``err``) land
+        in the SAME ``_text_queue`` a v5 cleartext reply would (see
+        ``_V6_TEXT_REPLY_VERBS``/``_handle_wire_line()``).
+
         Args:
-            verb: bare verb, no corr-id, no newline (e.g. ``"STATUS"``).
+            verb: bare verb or full wire line, no corr-id, no newline (e.g.
+                ``"STATUS"``, ``"GET:wheel_control.pid_kp"``).
             read_timeout: how long to collect replies. Some verbs answer
-                with several lines, so this always drains the full window
-                rather than stopping at the first line.
+                with several lines, so by default this always drains the
+                full window rather than stopping at the first line.
+            stop_predicate: if given, return as soon as a drained line
+                satisfies it, instead of always waiting out the full
+                ``read_timeout`` window -- 137-003's ``NezhaProtocol.get()``/
+                ``.set()`` use this so a single-field round trip does not
+                cost the full window every call. ``None`` (default)
+                preserves the original "always drain the window" behavior
+                for HELLO/PING/ID/VER/STATUS/HELP callers.
 
         Returns:
             The decoded reply lines, verb included, in arrival order.
@@ -1311,9 +1358,12 @@ class SerialConnection:
             if remaining <= 0:
                 break
             try:
-                lines.append(self._text_queue.get(timeout=min(remaining, 0.05)))
+                line = self._text_queue.get(timeout=min(remaining, 0.05))
             except queue.Empty:
                 continue
+            lines.append(line)
+            if stop_predicate is not None and stop_predicate(line):
+                break
         return lines
 
     def send(self, message: str, read_timeout: int = 500,  # [ms]

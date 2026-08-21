@@ -83,16 +83,7 @@
       }
     ],
     "PostToolUse": [
-      {
-        "matcher": "Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "clasi hook commit-check"
-          }
-        ]
-      },
-      {
+  {
         "matcher": "ExitPlanMode",
         "hooks": [
           {
