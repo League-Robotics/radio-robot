@@ -38,7 +38,9 @@ Migration Concerns).
       [#<id>]` per §5.5; `CAL [<samples>] [#<id>]` per §5.6.
 - [ ] `ESTOP` halts now: zeroes wheel targets and clears the planner's
       active + pending queue in the same cycle, discarded entries get no
-      `done`, carries no id, is never acked.
+      `done`, carries no id, is never acked — including the malformed case:
+      `ESTOP #5` gets no `err`, overriding §2's err-with-#id recovery rule
+      (spec D5; the panic stop never queues behind an outbound reply).
 - [ ] `STOP #<id>` is a planned stop: an ordinary queue entry, `ok #<id>` on
       enqueue, `done #<id> stop` when actually at rest.
 - [ ] A lowercase reply line heard on a shared channel (e.g. another
