@@ -244,8 +244,8 @@ message Connection {
   string device_announcement_name = 1;
   string serial_last_6             = 2;
 
-  // Radio channel (nRF frequency band, 0..83; group is fixed at 10 to match
-  // the RadioRelay -- platform/microbit/microbit_radio_link.h). BAKE-ONLY
+  // Radio channel (nRF frequency band, 0..83). Pairs with radio_group
+  // below -- the two are ONE address and must be read together. BAKE-ONLY
   // by design, not a wire target: re-tuning a live link drops it
   // (Platform::MicroBitRadioLink::setChannel()'s own note), and the
   // point of the field is that two robots sharing a bench NEVER share a
@@ -255,7 +255,39 @@ message Connection {
   // this field; main.cpp passes it to Radio::begin(). Absent field = proto3
   // zero = channel 0, the historical hard-coded value -- every existing
   // robot JSON keeps its behavior without an edit.
+  //
+  // 2026-08-30: group is NO LONGER fixed at 10. This comment previously read
+  // "group is fixed at 10 to match the RadioRelay"; that invariant is retired
+  // and 10 is now the one group the fleet assignment can never emit -- it is
+  // skipped precisely so a hand-dialled relay `!C <ch>`, which forces group
+  // 10 across channels 0-35, can never collide with an assigned address. See
+  // radio_group below.
   uint32 radio_channel = 3;  // [nRF frequency band]
+
+  // Radio group this robot listens/transmits on (uBit.radio.setGroup, 0..255).
+  // The other half of the address: radio_channel is the physical frequency,
+  // this is the address filter riding on it. Two robots may share a channel
+  // and stay mutually unintelligible via different groups, but they still
+  // share air.
+  //
+  // Added 2026-08-30. Both halves are STORED here and injected into the build
+  // at deploy time (pxt-nezha-diffdrive make_deploy.py emits kChannel and
+  // kGroup); the robot does NOT compute either from its board name at boot --
+  // explicit stakeholder direction, so the pair is visible in configuration
+  // rather than implied by silicon.
+  //
+  // Values are normally ASSIGNED from the board's five-letter micro:bit name
+  // (pxt-nezha-diffdrive docs/radio-addressing.md), which keeps name, channel
+  // and group in sync and yields odd channels 25..73 with groups 1..9 and
+  // 11..126. That assignment is a default, not a law: config always wins, and
+  // it must, because the five-letter name is 32 bits of DEVICEID reduced to
+  // 3125 values -- two boards CAN share a name, derive one address, and talk
+  // over each other invisibly. Overriding here is the only cure.
+  //
+  // Absent field = proto3 zero. Consumers that need the legacy fleet default
+  // must treat absent as 10 (the historical RadioRelay group), NOT as 0, so
+  // configs predating this field keep building byte-identically.
+  uint32 radio_group = 5;  // [CODAL radio group]
 
   // Fixed IPv4 address for the Planet X WiFi module (Ai-Thinker Ai-WB2-12F)
   // when this robot carries one. The bench DNS resolves each robot's name to
